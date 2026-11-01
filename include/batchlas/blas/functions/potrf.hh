@@ -50,6 +50,8 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 /// Checks only what no kernel can serve: non-negative extents, a square A and a
 /// valid @p uplo. It does not check the length of a non-empty `info` span.
 /// Called by the public potrf() before the selection key is built.
+/// @param[in] A     batch of matrices to be factorized; only its extents are read
+/// @param[in] uplo  triangle that will be factorized; must be `Uplo::Lower` or `Uplo::Upper`
 /// @throws batchlas::invalid_argument on negative extents, a non-square A or an
 ///         invalid @p uplo.
 /// @ingroup api_factorizations_lowlevel
@@ -81,9 +83,9 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// same value serves both potrf() overloads.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx   queue the factorization will run on (kernel selection reads its device)
-/// @param A     batch of n x n matrices to be factorized
-/// @param uplo  triangle that will be factorized
+/// @param[in] ctx   queue the factorization will run on (kernel selection reads its device)
+/// @param[in] A     batch of \f$n \times n\f$ matrices to be factorized; only its shape is read
+/// @param[in] uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf()
 /// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
@@ -102,15 +104,17 @@ BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
 /// are readable only after the returned event (or the queue) has been waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx        queue the kernels are enqueued on
-/// @param descrA     batch of n x n matrices (any `ld >= n`, any batch stride);
-///                   overwritten with the Cholesky factor
-/// @param uplo       triangle of A that holds the input and receives the factor
-/// @param workspace  device-accessible scratch of at least potrf_buffer_size() bytes
-/// @param info       per-item LAPACK status, one int32 per batch item: 0 on
-///                   success, i > 0 if the leading minor of order i is not
-///                   positive definite (that item's factor is incomplete).
-///                   An empty span means "not requested".
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] descrA     batch of \f$n \times n\f$ Hermitian positive-definite matrices
+///                           (any `ld >= n`, any batch stride); the @p uplo triangle is
+///                           overwritten with the Cholesky factor
+/// @param[in]     uplo       triangle of A that holds the input and receives the factor
+/// @param[out]    workspace  device-accessible scratch of at least potrf_buffer_size()
+///                           bytes; contents undefined on return
+/// @param[out]    info       per-item LAPACK status, one int32 per batch item: 0 on
+///                           success, \f$i > 0\f$ if the leading minor of order \f$i\f$ is
+///                           not positive definite (that item's factor is incomplete).
+///                           An empty span means "not requested".
 /// @return event of the last enqueued kernel
 /// @pre `descrA.rows() == descrA.cols()`
 /// @pre a non-empty @p info holds at least `descrA.batch_size()` elements; a
@@ -132,6 +136,14 @@ BATCHLAS_API Event potrf(Queue& ctx,
                      Span<int32_t> info);
 
 /// @brief potrf() without per-item status (`info` not requested).
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] descrA     batch of \f$n \times n\f$ Hermitian positive-definite matrices
+///                           (any `ld >= n`, any batch stride); the @p uplo triangle is
+///                           overwritten with the Cholesky factor
+/// @param[in]     uplo       triangle of A that holds the input and receives the factor
+/// @param[out]    workspace  device-accessible scratch of at least potrf_buffer_size()
+///                           bytes; contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types, which cannot
 // carry default arguments, so a default would not be part of the instantiation.
@@ -149,6 +161,14 @@ inline Event potrf(Queue& ctx,
 namespace batchlas::backend {
 
 /// @brief Vendor arm of potrf(); called by the public potrf(), not by users.
+/// @param[in]     ctx        queue the vendor call is enqueued on
+/// @param[in,out] descrA     batch of \f$n \times n\f$ Hermitian positive-definite matrices;
+///                           the @p uplo triangle is overwritten with the Cholesky factor
+/// @param[in]     uplo       triangle of A that holds the input and receives the factor
+/// @param[out]    workspace  scratch of at least potrf_vendor_buffer_size() bytes;
+///                           contents undefined on return
+/// @param[out]    info_out   per-item status as for potrf(), or an empty span
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 // Declaration only: the public potrf lives in src/ops/potrf/potrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
@@ -161,6 +181,10 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of potrf().
+/// @param[in] ctx   queue the vendor call will run on
+/// @param[in] A     batch of \f$n \times n\f$ matrices to be factorized; only its shape is read
+/// @param[in] uplo  triangle that will be factorized
+/// @return bytes to pass as the `workspace` span of potrf_vendor()
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,

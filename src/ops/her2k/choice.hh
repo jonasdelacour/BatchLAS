@@ -16,7 +16,7 @@
 namespace batchlas::ops::her2k {
 
 struct Triangular : select::NoFields<"triangular"> {};  ///< syr2k_triangular_tiles<T, Conjugate=true>; cfloat only
-struct Fold : select::NoFields<"fold"> {};      ///< one gemm of alpha op(A) op(B)^H into scratch + two-sided fold, chunked
+struct Fold : select::NoFields<"fold"> {};      ///< one gemm of \f$\alpha\,\mathrm{op}(A)\,\mathrm{op}(B)^H\f$ into scratch + two-sided fold, chunked
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::her2k_vendor (per-item ?her2k loop)
 
 using Her2kChoice = std::variant<Triangular, Fold, Vendor>;  ///< fieldless: tile, chunk, gemm kernel derived
@@ -32,7 +32,7 @@ constexpr auto candidates() {
 inline constexpr std::array<std::string_view, 3> last_resort{"fold", "triangular", "vendor"};  ///< nothing in the row runs
 inline constexpr select::OpSpec spec{Op::her2k, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: n = C's order, weight 2 (work ~ n^2 k batch); k = op(A)'s inner extent; batch.
+/// Keys: n = C's order, weight 2 (work \f$\sim n^2 k \cdot \mathit{batch}\f$); k = op(A)'s inner extent; batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};
 
 // The transcription grid: 127|128 and 1|2 straddle the old rule (fold iff batch >= 2 or n >= 128).
@@ -41,9 +41,9 @@ inline constexpr std::array<int, 5> grid_k{1, 8, 64, 512, 4096};  ///< k axis
 inline constexpr std::array<int, 7> grid_batch{1, 2, 3, 128, 1024, 8192, 32768};  ///< batch axis
 
 inline constexpr int kFoldWg = 256;  ///< fold_hermitian's work-group (expand_group_shape)
-inline constexpr int kTriangularWg = 256;  ///< syr2k_triangular_tiles' 16 x 16 work-group
+inline constexpr int kTriangularWg = 256;  ///< syr2k_triangular_tiles' \f$16 \times 16\f$ work-group
 template <typename T>
-constexpr std::int64_t triangular_slm_bytes() {  ///< four staged 8 x 128 operand tiles
+constexpr std::int64_t triangular_slm_bytes() {  ///< four staged \f$8 \times 128\f$ operand tiles
     return std::int64_t(4) * 8 * 128 * std::int64_t(sizeof(T));
 }
 

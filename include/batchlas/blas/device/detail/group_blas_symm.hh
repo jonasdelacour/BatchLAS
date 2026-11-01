@@ -8,6 +8,11 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic symmetric matrix-matrix product, one group-wide reduction per element of \f$C\f$; no operand checks.
+/// @param[in]     group    executor whose work-items share each reduction; every work-item must call
+/// @param[in]     a        single symmetric matrix \f$A\f$; only the `Tag::uplo` triangle is read
+/// @param[in,out] operand  `B` (read), `C` (read when scaled by \f$\beta\f$, overwritten with the result
+///                         by the group leader), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -40,6 +45,12 @@ inline constexpr void symm(const Group& group,
 
 namespace detail::subgroup {
 
+/// @brief Sub-group tiled symmetric matrix-matrix product: sub-groups stride over tiles of \f$C\f$ (`rows_per_sg` rows by sub-group-size columns); each lane owns one column of a tile.
+/// @param[in]     item       `nd_item` of the calling work-item; every work-item of the work-group must call
+/// @param[in]     a          single symmetric matrix \f$A\f$; only the `transform.uplo` triangle is read
+/// @param[in,out] operand    `B` (read), `C` (read when scaled by \f$\beta\f$, overwritten with the
+///                           result), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  side `A` multiplies from, stored triangle and hermitian flag
 template <typename Item, typename T>
 inline constexpr void symm(const Item& item,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -112,6 +123,13 @@ inline constexpr void symm(const Item& item,
     }
 }
 
+/// @brief Register-tiled symmetric matrix-matrix product staging \f$K\f$-tiles of both factors through local memory.
+/// @param[in]     item       `sycl::nd_item<3>` of the calling work-item; every work-item of the work-group must call
+/// @param[in]     a          single symmetric matrix \f$A\f$; only the `transform.uplo` triangle is read
+/// @param[in,out] operand    `B` (read), `C` (read when scaled by \f$\beta\f$, overwritten with the
+///                           result), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  side `A` multiplies from, stored triangle and hermitian flag
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void symm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -242,6 +260,11 @@ inline constexpr void symm_register_tiled(const Item& item,
 
 namespace detail {
 
+/// @brief Local memory, in elements of `T`, that dispatch_symm() can use for `Tag` and `Policy`.
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  rows \f$m \ge 0\f$ of `C`
+/// @param[in] col_extent  columns \f$n \ge 0\f$ of `C`
+/// @return element count of the register-tiled staging buffers, or 0 when that path cannot run
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -258,6 +281,13 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
     return 0;
 }
 
+/// @brief Validates the operands of a symmetric matrix-matrix product, then picks the register-tiled, sub-group or generic path.
+/// @param[in]     exec       executor (`sycl::group`, `sycl::sub_group` or an `nd_item`); every work-item must call
+/// @param[in]     a          single symmetric matrix \f$A\f$; only the `Tag::uplo` triangle is read
+/// @param[in,out] operand    `B` (read), `C` (read when scaled by \f$\beta\f$, overwritten with the
+///                           result), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of symm_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_symm(const Exec& exec,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -298,10 +328,13 @@ inline constexpr void dispatch_symm(const Exec& exec,
 /// @tparam SideV  side `A` multiplies from
 /// @tparam UploV  stored triangle of `A`
 /// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group      executor
-/// @param a          single square matrix, order `B.rows()` (Left) or `B.cols()` (Right)
-/// @param operand    `B`, `C` (same shape as `B`, not overlapping it), `alpha`, `beta`
-/// @param workspace  local memory of symm_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor; every work-item of it calls with the same arguments
+/// @param[in]     a          single symmetric \f$k \times k\f$ matrix, \f$k\f$ = `B.rows()` (Left) or
+///                           `B.cols()` (Right); only the `UploV` triangle is read
+/// @param[in,out] operand    `B` (read), `C` (same shape as `B`, not overlapping it; read when scaled
+///                           by \f$\beta\f$ and overwritten with the result), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of symm_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 /// @pre `C` holds finite values even when `beta == 0`.
 /// @note On the generic path each `C` element is written by the group leader; barrier before other work-items read `C`.
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -313,6 +346,14 @@ inline constexpr void symm(const Group& group,
 }
 
 /// @brief As symm(), with an explicit DeviceBlasPolicy.
+/// @tparam Policy  which device-BLAS paths may be taken
+/// @param[in]     group      executor; every work-item of it calls with the same arguments
+/// @param[in]     a          single symmetric \f$k \times k\f$ matrix, \f$k\f$ = `B.rows()` (Left) or
+///                           `B.cols()` (Right); only the `UploV` triangle is read
+/// @param[in,out] operand    `B` (read), `C` (same shape as `B`, not overlapping it; read when scaled
+///                           by \f$\beta\f$ and overwritten with the result), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of symm_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -326,9 +367,9 @@ inline constexpr void symm(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that symm() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param row_extent rows of `C`
-/// @param col_extent columns of `C`
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  rows \f$m \ge 0\f$ of `C`
+/// @param[in] col_extent  columns \f$n \ge 0\f$ of `C`
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
@@ -339,9 +380,10 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that symm() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param row_extent rows of `C`
-/// @param col_extent columns of `C`
+/// @tparam Policy  which device-BLAS paths the matching symm() call may take
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  rows \f$m \ge 0\f$ of `C`
+/// @param[in] col_extent  columns \f$n \ge 0\f$ of `C`
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
@@ -352,6 +394,16 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As symm(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor; every work-item of it calls with the same arguments
+/// @param[in]     a          single symmetric \f$k \times k\f$ matrix, \f$k\f$ = `b.rows()` (Left) or
+///                           `b.cols()` (Right); only the `UploV` triangle is read
+/// @param[in]     b          \f$m \times n\f$ matrix \f$B\f$
+/// @param[in,out] c          \f$m \times n\f$ matrix \f$C\f$, not overlapping `b`; read when scaled by
+///                           \f$\beta\f$ and overwritten with the result
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  local-memory scratch of symm_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -364,6 +416,17 @@ inline constexpr void symm(const Group& group,
 }
 
 /// @brief As symm(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @tparam Policy  which device-BLAS paths may be taken
+/// @param[in]     group      executor; every work-item of it calls with the same arguments
+/// @param[in]     a          single symmetric \f$k \times k\f$ matrix, \f$k\f$ = `b.rows()` (Left) or
+///                           `b.cols()` (Right); only the `UploV` triangle is read
+/// @param[in]     b          \f$m \times n\f$ matrix \f$B\f$
+/// @param[in,out] c          \f$m \times n\f$ matrix \f$C\f$, not overlapping `b`; read when scaled by
+///                           \f$\beta\f$ and overwritten with the result
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  local-memory scratch of symm_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,

@@ -18,10 +18,10 @@ decides instead. Branch results that never shipped:
 
 | Branch change | Result on sm_120 | Status |
 |---|---|---|
-| syev float blocked/two_stage edge 768 (sm_89: 448); sytrd nb 16 and ormqr WY 32 above n = 512; per-type latrd grid min-n (float 321, double/cfloat 257, cdouble 129) | float 512 b512 148.1 -> 103.9 ms; cfloat 1024 b64 365.5 -> 264.2 ms | not on main; the deep `syev.sm_120` table decides; benchviz `sytrd_nb` still mirrors sm_89's 48 |
-| potrf Blocked W = 64, nb = 64 up to n = 512 (sm_89: 128/128) | float vendor/blocked 0.78 -> 0.95 at n320 b1024, 1.26 -> 1.30 at n1024 b128 | not on main; `potrf_blocked_params` has no architecture term |
-| getrs `Algorithm::Tiny` (one sub-group partition per matrix, n <= 32, single precision) | tiny/vendor 0.20-0.58 at b32768 | not on main (`getrs_tiny.cc` absent) |
-| geqrf skinny register leg (n <= 8) and tile-bytes leaf width (float 72 B, cfloat 96 B per item, tiles <= 16 KiB, batch >= 2048) | float 64x8 native/vendor 0.34; 106-cell native geomean float 1.04 -> 0.54 | not on main (`geqrf_skinny.cc` absent) |
+| syev float blocked/two_stage edge 768 (sm_89: 448); sytrd nb 16 and ormqr WY 32 above \f$n = 512\f$; per-type latrd grid min-n (float 321, double/cfloat 257, cdouble 129) | float 512 b512 148.1 -> 103.9 ms; cfloat 1024 b64 365.5 -> 264.2 ms | not on main; the deep `syev.sm_120` table decides; benchviz `sytrd_nb` still mirrors sm_89's 48 |
+| potrf Blocked \f$W = 64\f$, \f$n_b = 64\f$ up to \f$n = 512\f$ (sm_89: 128/128) | float vendor/blocked 0.78 -> 0.95 at n320 b1024, 1.26 -> 1.30 at n1024 b128 | not on main; `potrf_blocked_params` has no architecture term |
+| getrs `Algorithm::Tiny` (one sub-group partition per matrix, \f$n \le 32\f$, single precision) | tiny/vendor 0.20-0.58 at b32768 | not on main (`getrs_tiny.cc` absent) |
+| geqrf skinny register leg (\f$n \le 8\f$) and tile-bytes leaf width (float 72 B, cfloat 96 B per item, tiles \f$\le 16\f$ KiB, batch \f$\ge 2048\f$) | float \f$64 \times 8\f$ native/vendor 0.34; 106-cell native geomean float 1.04 -> 0.54 | not on main (`geqrf_skinny.cc` absent) |
 
 ## icpx fast fp-model
 
@@ -37,13 +37,13 @@ precise.
 
 - `GemmRegister64x64K16WideKernel<complex<float>,true>` SASS: 1031 `CALL.REL` under the icpx default,
   0 calls and 1152 inline FFMA under precise. 4472 of 4539 kernels in the icpx images contained calls.
-- Only the flag toggled (fast -> precise): cfloat wide kernel 128^3 b8192 29.0 -> 3.75 ms; batchlas/vendor
-  cfloat gemm 128^3 6.54 -> 0.98; potrf cfloat LPanel n=256 13.87 -> 2.49 ms.
+- Only the flag toggled (fast -> precise): cfloat wide kernel \f$128^3\f$ b8192 29.0 -> 3.75 ms; batchlas/vendor
+  cfloat gemm \f$128^3\f$ 6.54 -> 0.98; potrf cfloat LPanel \f$n = 256\f$ 13.87 -> 2.49 ms.
 
 ### cfloat spmm under the precise fp model
 
 Precise slowed one kernel: the native CSR gather (`SpmmGatherKernel`,
-`src/ops/spmm/kernels/spmm_native.cc`) for cfloat, 5.51 -> 6.49 ms at n=16384, 16 nnz/row, nrhs=64,
+`src/ops/spmm/kernels/spmm_native.cc`) for cfloat, 5.51 -> 6.49 ms at \f$n = 16384\f$, 16 nnz/row, nrhs=64,
 batch=32 (cuSPARSE 5.76). The kernel is L2-bound; precise if-converts the 8-column block and issues the
 two 4-byte halves of every complex element at once, so both halves miss in L1 (ncu: L2 sectors 637M
 fast, 791M precise).
@@ -86,7 +86,7 @@ string and memoized per device; 0 means "not CUDA". `select::describe` names a C
 `sm_<cc>` (`src/select/select.cc`), which picks `tuned/<op>.sm_<cc>.txt`; a device with no table of its
 own borrows the nearest one with a one-time warning.
 
-`is_sm120_family` (120 <= cc < 130, `include/batchlas/util/sycl-device-queue.hh`) is not a routing
+`is_sm120_family` (\f$120 \le \mathrm{cc} < 130\f$, `include/batchlas/util/sycl-device-queue.hh`) is not a routing
 predicate. Its one use is the per-architecture register charge of the fused getrs launch
 ([LU getrs fused](#lu-getrs-fused)).
 
@@ -109,7 +109,7 @@ n512 0.76 -> 0.90; cfloat n128 1.00 -> 1.18, n256 0.78 -> 0.99.
 
 ## LU getrs fused
 
-`getrs_fused.cc` deals the nb x nb block-solve columns round-robin over the sub-groups (they all ran in
+`getrs_fused.cc` deals the \f$n_b \times n_b\f$ block-solve columns round-robin over the sub-groups (they all ran in
 sub-group 0 before). Architecture-independent. CTA arm, before -> after, ms (vendor): float n64 b16384
 nrhs 8 1.04 -> 0.77 (0.75); cfloat n512 b256 nrhs 8 1.92 -> 1.20 (1.40).
 
@@ -135,9 +135,8 @@ sm_89 row (it was charged the max of NoTrans and Trans); a `static_assert` keeps
 
 Effect on the sm_89 cap (margin +8, allocation rounded to 8), for every non-sm_120 device including
 `cuda_cc == 0`: cdouble NoTrans nrhs 2..4 1024 -> 896 lanes, double NoTrans nrhs 5..8 896 -> 768, double
-potrs nrhs 5..8 768 -> 640; the fused width reaches a cap only at n >= 1026. Only the potrs narrowing fixes
-a launch the driver would refuse (icpx double potrs nrhs 5-8: 92 registers, ceil(24/4) * 32 * 96 = 18432 >
-16384 at 768 lanes).
+potrs nrhs 5..8 768 -> 640; the fused width reaches a cap only at \f$n \ge 1026\f$. Only the potrs narrowing fixes
+a launch the driver would refuse (icpx double potrs nrhs 5-8: 92 registers, \f$\lceil 24/4 \rceil \cdot 32 \cdot 96 = 18432 > 16384\f$ at 768 lanes).
 
 Open: under icpx 2026.0 some standalone sm_89 counts already exceed the rows (double potrs nrhs 5-8 88 vs
 72 + 8; cfloat Trans nrhs 5-8 70 vs 56 + 8). An icpx build for a 4090 needs its own probe.
@@ -150,14 +149,14 @@ Lower, NoTrans, ld = n), `--warmup=3 --min_iters=8`, 3 alternating reps, medians
 ### trsm V1 ladder cap
 
 The V1 CTA kernel gives each lane one right-hand-side column, but lanes without a column still run the
-whole N-step recurrence. Its work-group ladder {256, 128, 64, 32} took the first rung with
+whole \f$N\f$-step recurrence. Its work-group ladder {256, 128, 64, 32} took the first rung with
 `batch * ceil(q / wg) >= 4 * CU`, which at saturated batch is always 256: a q=8 solve ran 248 dead lanes
 per group. `trsm_v1_ladder_wg` (`src/ops/trsm/trsm_native.hh`) now skips a rung more than half of whose
 lanes would have no column (`cand > 32 && cand / 2 >= q`). Architecture-independent and
 correctness-neutral (the group barrier stays).
 
 V1 alone, BASE -> capped, ms, batch 32768: float n32 q8 Left 0.994 -> 0.284; cfloat n32 q8 Left 1.551 ->
-0.44; float n32 q8 Right 1.042 -> 0.306 (cuBLAS 0.165). The q >= 256 shapes never reach a capped rung.
+0.44; float n32 q8 Right 1.042 -> 0.306 (cuBLAS 0.165). The \f$q \ge 256\f$ shapes never reach a capped rung.
 
 > **Note:** Measured on sm_120 only. On the 4090 small-q V1 geometry changes at saturated batch too;
 > re-measure before quoting a 4090 number.
@@ -166,9 +165,8 @@ V1 alone, BASE -> capped, ms, batch 32768: float n32 q8 Left 0.994 -> 0.284; cfl
 
 `sycl_trsm::trsm_native_sg_left_dispatch` (`src/ops/trsm/kernels/trsm_sg_left.cc`) is the trsm
 candidate `sg_left`: Side::Left, orders 1..32, sub-group 32 (`src/ops/trsm/choice.hh`); a pin above
-order 32 throws. Each lane is a (matrix, canonical row r) pair, so a sub-group holds 32/N matrices for N
-in {4, 8, 16, 32}. Each lane carries QC right-hand sides: 4 for q <= 4, 8 for q <= 8, otherwise 16
-(complex<double> caps at 8). Lane r holds row r of the canonical Lc; step s broadcasts x[s] from lane s
+order 32 throws. Each lane is a (matrix, canonical row \f$r\f$) pair, so a sub-group holds \f$32/N\f$ matrices for \f$N \in \{4, 8, 16, 32\}\f$. Each lane carries QC right-hand sides: 4 for \f$q \le 4\f$, 8 for \f$q \le 8\f$, otherwise 16
+(complex<double> caps at 8). Lane \f$r\f$ holds row \f$r\f$ of the canonical Lc; step \f$s\f$ broadcasts \f$x_s\f$ from lane \f$s\f$
 with `select_from_group`. No local memory, no barrier. The 24 (side, uplo, trans, diag) cases use V1's
 canonical fold (`trsm_canonical.hh`); the non-finite-reciprocal fallback to division is per matrix, an
 xor-butterfly over its N lanes. `blocked`'s diagonal solves run V1 (`trsm_native_v1_buckets`), not
@@ -176,15 +174,15 @@ xor-butterfly over its N lanes. `blocked`'s diagonal solves run V1 (`trsm_native
 
 Register decisions (`scripts/register_probe.sh`):
 
-- The step loop stops at the runtime order n (rows n..N-1 are identity padding). For complex N >= 16 and
-  for N = 32 with QC = 16 the loop is rolled (`#pragma unroll 1` with `break`): cfloat N=32 QC=16 drops
+- The step loop stops at the runtime order \f$n\f$ (rows \f$n, \dots, N-1\f$ are identity padding). For complex \f$N \ge 16\f$ and
+  for \f$N = 32\f$ with QC = 16 the loop is rolled (`#pragma unroll 1` with `break`): cfloat N=32 QC=16 drops
   from 168 to 77 registers, n32 q64 1.91 -> 1.39 ms. Elsewhere it is fully unrolled with `continue`. No
   variant spills.
 - The TU is built with `-pragma-unroll-threshold=262144`; without it the unrolled variants put x[] on the stack.
 
 V1-capped time over sub-group time at batch 32768 (above 1: sub-group faster); the deep
-`tuned/trsm.sm_120.txt` reproduces this shape (float `side=L trans=N` ranks `sg_left` first for q <= 83 at
-order 8, q <= 38 at 16, q <= 32 at 32):
+`tuned/trsm.sm_120.txt` reproduces this shape (float `side=L trans=N` ranks `sg_left` first for \f$q \le 83\f$ at
+order 8, \f$q \le 38\f$ at 16, \f$q \le 32\f$ at 32):
 
 | n \ q | 8 | 16 | 32 | 64 | 128 |
 |---|---|---|---|---|---|
@@ -218,21 +216,21 @@ early turns 15 red, all Left.
 | cfloat | 32 | 8 | 1.551 | 0.333 | 1.391 |
 | cfloat | 128 | 64 (b16384) | 8.613 | 5.921 | 140.6 |
 
-Over the 62-cell grid (n = 8..512, q in {8, 16, 32, 64, n}) the float geomean time/cuBLAS went 1.44 ->
-0.57 (cells above 1: 21 -> 0; closest float n=512 q=8/16 and n=256 q=8 at 0.96-0.97), cfloat 0.18 -> 0.09.
-Consumers followed: every posv cell (n = 4..128, nrhs 16 and 64) and every getrs `native:blocked` cell
-(n = 64..512, nrhs 16 and 64) beats the vendor composition.
+Over the 62-cell grid (\f$n = 8, \dots, 512\f$, \f$q \in \{8, 16, 32, 64, n\}\f$) the float geomean time/cuBLAS went 1.44 ->
+0.57 (cells above 1: 21 -> 0; closest float \f$n = 512\f$ q=8/16 and \f$n = 256\f$ q=8 at 0.96-0.97), cfloat 0.18 -> 0.09.
+Consumers followed: every posv cell (\f$n = 4, \dots, 128\f$, nrhs 16 and 64) and every getrs `native:blocked` cell
+(\f$n = 64, \dots, 512\f$, nrhs 16 and 64) beats the vendor composition.
 
 Open: Side::Right has no sub-group kernel and keeps the capped V1, which loses to cuBLAS when a solve has
 few rows (float n32 q8 b32768 0.305 vs 0.164 ms; n64 q8 1.007 vs 0.481). The deep table ranks `vendor`
-first there (orders 20-64 at q <= 8, order 32 from batch 8192). Rows 9..16 at orders 17..24 still lose
+first there (orders 20-64 at \f$q \le 8\f$, order 32 from batch 8192). Rows 9..16 at orders 17..24 still lose
 5-18%. A Side::Right sub-group kernel (each row of B is a Left solve with op(A)^T) would fix both.
 
 ## gemm (native register-tiled selector)
 
-The 16x16 (2x2 thread tile) and 32x32 (4x4) wide tiles, `wide:m=16:n=16:k=16` and
+The \f$16 \times 16\f$ (\f$2 \times 2\f$ thread tile) and \f$32 \times 32\f$ (\f$4 \times 4\f$) wide tiles, `wide:m=16:n=16:k=16` and
 `wide:m=32:n=32:k=16` in `wide_configs` (`src/ops/gemm/choice.hh`), came from this campaign: on the
-4090 the only complex register tile was 64x64, which at m = n = 32 computes 3/4 padding. They are
+4090 the only complex register tile was \f$64 \times 64\f$, which at \f$m = n = 32\f$ computes \f$3/4\f$ padding. They are
 ordinary candidates in every form; the sm_120 table times them, and gemm measurements are owned by
 [gemm.md](gemm.md). Tests: `SmallWideNNTilesMatchTiled16` (ragged m, n, k from 1 to 257, sub-view ld,
 both betas), `SmallWideTilesRunTheirTransposedForms`, `SmallWideBetaZeroNeverReadsC` and
@@ -241,12 +239,12 @@ both betas), `SmallWideTilesRunTheirTransposedForms`, `SmallWideBetaZeroNeverRea
 The branch's selector findings, for reading the deep table (batch 32768, time/vendor):
 
 - One 64-thread group per tile walks k serially, so at deep k the small tiles need more tiles in flight
-  than the older kernels: float 16 tile wins from 2048 tiles at k >= 768 (16x16x1024: 0.92 at 2048 tiles,
-  1.71 at 1024), the float 32 tile from 1536 tiles at k >= 512; cfloat wins at 1024.
-- complex<double> NN favours the tile with the most groups in flight (16x16 >= 32x32 >= 64x64) whenever
-  max(m,n,k) > 8 (64x64x16 b16384: 0.82 / 0.81 / 0.90); Direct wins at 8^3.
-- k-split (2-4 slices of k with an SLM reduction) never beat the unsplit tiles, and a 128x64 or K = 32
-  64x64 tile for large cfloat was 1.28-1.55 against 1.11-1.17. Rejected.
+  than the older kernels: float 16 tile wins from 2048 tiles at \f$k \ge 768\f$ (\f$16 \times 16 \times 1024\f$: 0.92 at 2048 tiles,
+  1.71 at 1024), the float 32 tile from 1536 tiles at \f$k \ge 512\f$; cfloat wins at 1024.
+- complex<double> NN favours the tile with the most groups in flight (\f$16 \times 16 \ge 32 \times 32 \ge 64 \times 64\f$) whenever
+  \f$\max(m,n,k) > 8\f$ (\f$64 \times 64 \times 16\f$ b16384: 0.82 / 0.81 / 0.90); Direct wins at \f$8^3\f$.
+- k-split (2-4 slices of k with an SLM reduction) never beat the unsplit tiles, and a \f$128 \times 64\f$ or \f$K = 32\f$
+  \f$64 \times 64\f$ tile for large cfloat was 1.28-1.55 against 1.11-1.17. Rejected.
 
-Open: large cfloat squares (m = n = 128..1024) stay 1.10-1.18x behind cuBLAS; there is no large complex
+Open: large cfloat squares (\f$m = n = 128, \dots, 1024\f$) stay 1.10-1.18x behind cuBLAS; there is no large complex
 tile.

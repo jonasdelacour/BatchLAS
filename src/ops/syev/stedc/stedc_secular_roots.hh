@@ -140,8 +140,8 @@ BATCHLAS_SECULAR_LINKAGE T sec_solve_ext_roc(const int32_t dd,
 
     // dd == 1 has no second pole: prev_index would be -1 and D(prev_index)
     // would read out of bounds. With a single pole the secular equation
-    // 1/p + z0^2/(D0 - x) = 0 solves exactly as x = D0 + p*z0^2. D is updated
-    // in place to the denominator D0 - x = -p*z0^2, matching what the general
+    // \f$1/p + z_0^2/(D_0 - x) = 0\f$ solves exactly as \f$x = D_0 + p z_0^2\f$. D is updated
+    // in place to the denominator \f$D_0 - x = -p z_0^2\f$, matching what the general
     // path leaves behind via apply_shift_to_poles.
     if(dd <= 1)
     {

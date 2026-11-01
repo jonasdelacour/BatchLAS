@@ -26,6 +26,10 @@ using group_type_t = std::remove_cv_t<std::remove_reference_t<Group>>;
 template <typename Group>
 inline constexpr bool is_sub_group_v = std::is_same_v<group_type_t<Group>, sycl::sub_group>;
 
+/// @brief Broadcasts the leader's `value` through `sg_leader_broadcast` (ADL) or `portable::group_broadcast`. Collective.
+/// @param[in] group  group, sub-group or sub-group partition; every work-item must reach the call
+/// @param[in] value  this work-item's value; only the leader's is used
+/// @return           the leader's @p value, on every work-item
 template <typename Group, typename T>
 inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
     if constexpr (requires { sg_leader_broadcast(group, value); }) {
@@ -46,6 +50,11 @@ inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
 /// No barrier and no broadcast: other work-items do not see side effects until
 /// the caller synchronises.
 /// @tparam Group  any type with `leader()`: a SYCL group, sub-group, or sub-group partition
+/// @tparam Fn     callable type, invoked as `std::invoke(fn, args...)`
+/// @tparam Args   argument types, perfectly forwarded
+/// @param[in] group  group whose leader work-item makes the call
+/// @param[in] fn     callable invoked on the leader only
+/// @param[in,out] args  arguments perfectly forwarded to @p fn on the leader; @p fn may modify lvalue-reference arguments
 template <typename Group, typename Fn, typename... Args>
 inline constexpr void invoke_one(const Group& group, Fn&& fn, Args&&... args) {
     if (group.leader()) {
@@ -58,6 +67,11 @@ inline constexpr void invoke_one(const Group& group, Fn&& fn, Args&&... args) {
 /// Uses the group's `sg_leader_broadcast` when one is found by ADL (sub-group
 /// partitions), else `batchlas::portable::group_broadcast` (group-collectives.hh).
 /// @pre `T` is trivially copyable.
+/// @tparam Group  any type with `leader()`: a SYCL group, sub-group, or sub-group partition
+/// @tparam T      broadcast value type; trivially copyable
+/// @param[in] group  group to broadcast across; every work-item must reach the call
+/// @param[in] value  this work-item's value; only the leader's is used
+/// @return the leader's @p value, on every work-item
 template <typename Group, typename T>
 inline constexpr T broadcast_from_leader(const Group& group, T value) {
     static_assert(std::is_trivially_copyable_v<T>,
@@ -68,6 +82,12 @@ inline constexpr T broadcast_from_leader(const Group& group, T value) {
 /// @brief Calls `fn(args...)` on the leader and returns its result on every work-item. Collective.
 /// @return the leader's result; non-leaders contribute a value-initialised placeholder that is discarded
 /// @pre the result type is trivially copyable.
+/// @tparam Group  any type with `leader()`: a SYCL group, sub-group, or sub-group partition
+/// @tparam Fn     callable type; its result type must be trivially copyable
+/// @tparam Args   argument types, perfectly forwarded
+/// @param[in] group  group whose leader makes the call; every work-item must reach it
+/// @param[in] fn     callable invoked on the leader only
+/// @param[in,out] args  arguments perfectly forwarded to @p fn on the leader; @p fn may modify lvalue-reference arguments
 template <typename Group, typename Fn, typename... Args>
 inline constexpr auto invoke_one_broadcast(const Group& group, Fn&& fn, Args&&... args)
     -> std::invoke_result_t<Fn, Args...> {

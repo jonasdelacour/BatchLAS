@@ -28,7 +28,7 @@ inline WyPin wy_pin() {
     return result;
 }
 
-// The trmm only where its tile kernel is enabled and ahead: real types, ib <= 64.
+// The trmm only where its tile kernel is enabled and ahead: real types, \f$ib \le 64\f$.
 // evidence: docs/perf/qr.md#ormqr-wy-trmm-gate
 template <Backend B, typename T>
 inline bool wy_trmm_applicable(int ib) {

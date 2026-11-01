@@ -21,7 +21,7 @@ namespace batchlas::ops::gemm {
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
 struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
-/// gemm_reg, float only: m x n x k tile, k unroll u (128x128 u4: predicated copy_async pipeline; aligned = u1);
+/// gemm_reg, float only: \f$m \times n \times k\f$ tile, k unroll u (128x128 u4: predicated copy_async pipeline; aligned = u1);
 /// must name a reg_configs entry instantiating the call's form, and max_wg must cover its threads().
 struct Reg {
     int m = 0, n = 0, k = 0, u = 1;
@@ -31,7 +31,7 @@ struct Reg {
     static Reg from(std::array<int, 4> v) { return {v[0], v[1], v[2], v[3]}; }
     bool operator==(const Reg&) const = default;
 };
-/// gemm_wide, every scalar: 16-byte-granule m x n x k tiles; must name a wide_configs entry that
+/// gemm_wide, every scalar: 16-byte-granule \f$m \times n \times k\f$ tiles; must name a wide_configs entry that
 /// instantiates the call's form, and max_wg must cover its threads().
 struct Wide {
     int m = 0, n = 0, k = 0;
@@ -41,7 +41,7 @@ struct Wide {
     static Wide from(std::array<int, 3> v) { return {v[0], v[1], v[2]}; }
     bool operator==(const Wide&) const = default;
 };
-/// gemm_splitk, every scalar: wide host tile m x n x k (splitk_host) over s k-slices, then one reduction.
+/// gemm_splitk, every scalar: wide host tile \f$m \times n \times k\f$ (splitk_host) over s k-slices, then one reduction.
 struct SplitK {
     int m = 0, n = 0, k = 0, s = 0;
     static constexpr std::string_view name = "splitk";
@@ -183,7 +183,7 @@ constexpr bool wide_serves(const WideCfg& c, int a, int b) {
     else return wide_compiles<T>(c, a == 0 ? 0 : 2, b == 0 ? 0 : 2);
 }
 
-/// Shared stages of a wide config's k x (m + n) tile: two for wide v2 (wide_v2_row) and for a
+/// Shared stages of a wide config's \f$k \times (m + n)\f$ tile: two for wide v2 (wide_v2_row) and for a
 /// transposed tile other than 64x64 whose two stages fit 40 KiB; else one.
 template <typename T>
 constexpr int wide_stages(const WideCfg& c) {
@@ -206,7 +206,7 @@ inline constexpr int kSmallWg = 128;
 inline constexpr int kSmallTiledMaxDim = 56;  // float NN above 32: one matrix per (NB/4)^2 lanes
 
 /// The work-group `small` launches: the batched kernel's 128 lanes, or the float NN tiled leg's
-/// (NB/4)^2 with NB = 48 or 56 (small_batched.hh).
+/// \f$(NB/4)^2\f$ with NB = 48 or 56 (small_batched.hh).
 template <typename T>
 constexpr int small_wg(bool nn, int max_dim) {
     if (!std::is_same_v<T, float> || !nn || max_dim <= 32 || max_dim > kSmallTiledMaxDim) return kSmallWg;
@@ -226,8 +226,8 @@ constexpr bool small_needs_sg32(bool nn, int max_dim) {
 /// small's ceiling for T: 32 for a 16-byte scalar (small_batched.hh's kSmallMaxDimFor says why).
 template <typename T>
 constexpr int small_max_dim() { return sizeof(T) >= 16 ? 32 : kSmallMaxDim; }
-/// Local memory small asks for: 128 / (2 NB) slots of NB x (NB + 1), NB the bucket of max_dim, or
-/// the float NN tiled leg's 2 NB (NB + 4) (gemm_kernels.cc static_asserts both).
+/// Local memory small asks for: \f$128 / (2\,NB)\f$ slots of \f$NB \times (NB + 1)\f$, NB the bucket of max_dim, or
+/// the float NN tiled leg's \f$2\,NB\,(NB + 4)\f$ (gemm_kernels.cc static_asserts both).
 template <typename T>
 constexpr std::int64_t small_slm_bytes(bool nn, int max_dim) {
     if (std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim) {
@@ -282,20 +282,20 @@ inline constexpr std::array<std::string_view, 2> last_resort{"direct", "vendor"}
 inline constexpr select::OpSpec spec{Op::gemm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
 /// Table keys: ta, tb (N|T|C; C folds to T for a real scalar) and layout (packed = A, B, C
-/// contiguous with 16-byte bases) exact; m, n, k, batch log, each weight 1 (work ~ m n k batch).
+/// contiguous with 16-byte bases) exact; m, n, k, batch log, each weight 1 (work \f$\sim m n k \cdot\mathit{batch}\f$).
 inline constexpr std::array<std::string_view, 7> key_names{"ta:exact", "tb:exact", "layout:exact", "m:log",
                                                            "n:log",    "k:log",    "batch:log"};
 
 /// The tuner's demand-driven grid; the transcriber (tuned/README.md) spells it again. Squares for
 /// every form and both layouts; panels and skinny shapes for the issued forms only, packed panels
-/// from m, n >= 128. `evidence: docs/design/flat-kernel-selection.md#phase-3-grids`
+/// from \f$m, n \ge 128\f$. `evidence: docs/design/flat-kernel-selection.md#phase-3-grids`
 inline constexpr std::array<int, 14> grid_square{8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024};
 inline constexpr std::array<int, 7> grid_panel_mn{32, 64, 128, 256, 512, 1024, 2048};
 inline constexpr std::array<int, 6> grid_panel_k{8, 16, 32, 64, 96, 128};
 inline constexpr std::array<int, 6> grid_skinny_mn{64, 128, 256, 512, 1024, 2048};
 inline constexpr std::array<int, 2> grid_skinny_k{256, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};
-/// Large k (not transcribed for sm_89): Gram m = n squares, and 32 x skinny both ways; panel forms, strided.
+/// Large k (not transcribed for sm_89): Gram \f$m = n\f$ squares, and \f$32 \times\f$ skinny both ways; panel forms, strided.
 inline constexpr std::array<int, 3> grid_gram_mn{16, 32, 64};
 inline constexpr std::array<int, 3> grid_gram_k{1024, 2048, 4096};
 inline constexpr std::array<int, 1> grid_large_skinny_k{2048};

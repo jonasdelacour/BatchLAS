@@ -8,6 +8,14 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic triangular matrix-matrix product, one group-wide reduction per element of \f$C\f$; no operand checks.
+///
+/// Elements are visited in an order that never overwrites an entry of `B` a later element still reads,
+/// so `B` and `C` may be the same view.
+/// @param[in]     group    executor whose work-items share each reduction; every work-item must call
+/// @param[in]     a        single triangular matrix \f$A\f$; only the `Tag::uplo` triangle is read (not its diagonal when `Tag::diag` is `Unit`)
+/// @param[in,out] operand  `B` (read), `C` (read when scaled by \f$\beta\f$, overwritten with the result
+///                         by the group leader), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void trmm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -55,6 +63,12 @@ inline constexpr void trmm(const Group& group,
 
 namespace detail::subgroup {
 
+/// @brief Sub-group tiled triangular matrix-matrix product: sub-groups stride over tiles of \f$C\f$ (`rows_per_sg` rows by sub-group-size columns); each lane owns one column of a tile.
+/// @param[in]     item       `nd_item` of the calling work-item; every work-item of the work-group must call
+/// @param[in]     a          single triangular matrix \f$A\f$; only the `transform.uplo` triangle is read (not its diagonal when `transform.diag` is `Unit`)
+/// @param[in,out] operand    `B` (read; must not overlap `C`), `C` (read when scaled by \f$\beta\f$,
+///                           overwritten with the result), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  side, stored triangle, \f$\mathrm{op}(\cdot)\f$ and diagonal kind of \f$A\f$
 template <typename Item, typename T>
 inline constexpr void trmm(const Item& item,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -152,6 +166,13 @@ inline constexpr void trmm(const Item& item,
     }
 }
 
+/// @brief Register-tiled triangular matrix-matrix product staging \f$K\f$-tiles of both factors through local memory.
+/// @param[in]     item       `sycl::nd_item<3>` of the calling work-item; every work-item of the work-group must call
+/// @param[in]     a          single triangular matrix \f$A\f$; only the `transform.uplo` triangle is read (not its diagonal when `transform.diag` is `Unit`)
+/// @param[in,out] operand    `B` (read; must not overlap `C`), `C` (read when scaled by \f$\beta\f$,
+///                           overwritten with the result), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  side, stored triangle, \f$\mathrm{op}(\cdot)\f$ and diagonal kind of \f$A\f$
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void trmm_register_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -294,6 +315,12 @@ inline constexpr void trmm_register_tiled(const Item& item,
 
 namespace detail {
 
+/// @brief Local memory, in elements of `T`, that dispatch_trmm() can use for `Tag` and `Policy`.
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  \f$m\f$, rows of `C`; \f$m \ge 0\f$
+/// @param[in] col_extent  \f$n\f$, columns of `C`; \f$n \ge 0\f$
+/// @param[in] aliased     `B` and `C` overlap; no staged path then runs, so this returns 0
+/// @return element count of the register-tiled staging buffers, or 0 when that path cannot run
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -311,6 +338,15 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
     return 0;
 }
 
+/// @brief Validates the operands of a triangular matrix-matrix product, then picks the register-tiled, sub-group or generic path.
+///
+/// Overlapping `B` and `C` always take the generic path.
+/// @param[in]     exec       executor (`sycl::group`, `sycl::sub_group` or an `nd_item`); every work-item must call
+/// @param[in]     a          single triangular matrix \f$A\f$; only the `Tag::uplo` triangle is read (not its diagonal when `Tag::diag` is `Unit`)
+/// @param[in,out] operand    `B` (read; may be the same view as `C`), `C` (read when scaled by \f$\beta\f$,
+///                           overwritten with the result), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of trmm_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_trmm(const Exec& exec,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -347,21 +383,22 @@ inline constexpr void dispatch_trmm(const Exec& exec,
 
 /// @brief Triangular matrix-matrix product \f$ C := \alpha\,\mathrm{op}(A)\,B + \beta\,C \f$ (Left) or \f$ C := \alpha\,B\,\mathrm{op}(A) + \beta\,C \f$ (Right).
 ///
-/// Unlike BLAS `trmm` it has a separate output and a `beta`. `B` and `C` may
-/// overlap: the generic path orders its traversal so no entry is overwritten
-/// before it is read, and overlap disables both fast paths. The fast paths
+/// Unlike BLAS `trmm` it has a separate output and a `beta`. `B` and `C` may be
+/// the same view (in place): the generic path orders its traversal so no entry is
+/// overwritten before it is read, and overlap disables both fast paths. Partial
+/// overlap is not supported. The fast paths
 /// (`float`, an `nd_item` executor; the register-tiled one also an
 /// `nd_item<3>`, 256 work-items and a workspace) are otherwise as for gemm().
 /// @tparam SideV   side `A` multiplies from
 /// @tparam UploV   stored triangle of `A`
-/// @tparam TransV  op() applied to `A`
+/// @tparam TransV  \f$\mathrm{op}(\cdot)\f$ applied to `A`
 /// @tparam DiagV   `Unit`: the diagonal is taken as 1
 /// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group      executor
-/// @param a          single square triangular matrix, order `B.rows()` (Left) or `B.cols()` (Right)
-/// @param operand    `B`, `C` (same shape as `B`), `alpha`, `beta`
-/// @param workspace  local memory of trmm_workspace_elements() elements, or `nullptr`
-/// @pre `C` holds finite values even when `beta == 0`.
+/// @param[in] group          executor. With `nd_item<3>` and no register-tiled path, every work-group computes all of `C` (no tile-group guard, unlike gemm()), so launch a single group in dimensions 1 and 2.
+/// @param[in] a              single triangular matrix, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right) for an \f$m \times n\f$ `B`; read only
+/// @param[in,out] operand    `B` (\f$m \times n\f$, read; may be the same view as `C` for an in-place product, no other overlap), `C` (same shape as `B`, read and overwritten with the result), `alpha`, `beta`
+/// @param[out] workspace     local-memory scratch of trmm_workspace_elements() elements (contents undefined on return), or `nullptr`
+/// @pre `C` holds finite values even when \f$\beta = 0\f$.
 /// @note On the generic path each `C` element is written by the group leader; barrier before other work-items read `C`.
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -377,6 +414,11 @@ inline constexpr void trmm(const Group& group,
 }
 
 /// @brief As trmm(), with an explicit DeviceBlasPolicy.
+/// @tparam Policy  `Auto` (any eligible path), `Generic` (only the group-reduction path) or `Subgroup16`/`Subgroup32` (the sub-group kernel only at that sub-group size; the tiled kernels ignore the size)
+/// @param[in] group          executor; every work-item must call
+/// @param[in] a              single triangular matrix, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right) for an \f$m \times n\f$ `B`; read only
+/// @param[in,out] operand    `B` (\f$m \times n\f$, read; may be the same view as `C` for an in-place product, no other overlap), `C` (same shape as `B`, read and overwritten with the result), `alpha`, `beta`
+/// @param[out] workspace     local-memory scratch of trmm_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -397,10 +439,10 @@ inline constexpr void trmm(const Group& group,
 /// register-tiled path. When the result is 0 pass `nullptr`.
 /// @trap `T` is the LAST template parameter here, after the four mode parameters,
 ///       unlike every other `*_workspace_elements` and unlike the policy overload.
-/// @param launch      description of the launch the call runs in
-/// @param row_extent  rows of `C`
-/// @param col_extent  columns of `C`
-/// @param aliased     `B` and `C` overlap; the call then takes no staged path, so this returns 0
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  \f$m\f$, rows of `C`; \f$m \ge 0\f$
+/// @param[in] col_extent  \f$n\f$, columns of `C`; \f$n \ge 0\f$
+/// @param[in] aliased     `B` and `C` overlap; the call then takes no staged path, so this returns 0
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <Side SideV = Side::Left,
@@ -416,10 +458,10 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that trmm() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param row_extent rows of `C`
-/// @param col_extent columns of `C`
-/// @param aliased `B` and `C` overlap; the call then takes no staged path, so this returns 0
+/// @param[in] launch      description of the launch the call runs in
+/// @param[in] row_extent  \f$m\f$, rows of `C`; \f$m \ge 0\f$
+/// @param[in] col_extent  \f$n\f$, columns of `C`; \f$n \ge 0\f$
+/// @param[in] aliased     `B` and `C` overlap; the call then takes no staged path, so this returns 0
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T,
@@ -436,6 +478,13 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As trmm(), with the operands passed separately instead of in an operand struct.
+/// @param[in] group          executor; every work-item must call
+/// @param[in] a              single triangular matrix, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); read only
+/// @param[in] b              \f$m \times n\f$ matrix, read; it may be the same view as `c` (in-place, overwritten), but no other overlap is supported
+/// @param[in,out] c          \f$m \times n\f$ matrix, read (scaled by \f$\beta\f$) and overwritten with the result
+/// @param[in] alpha          scalar \f$\alpha\f$ applied to the product
+/// @param[in] beta           scalar \f$\beta\f$ applied to the input `C`; 0 still reads `C`
+/// @param[out] workspace     local-memory scratch of trmm_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -453,6 +502,14 @@ inline constexpr void trmm(const Group& group,
 }
 
 /// @brief As trmm(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @tparam Policy  `Auto` (any eligible path), `Generic` (only the group-reduction path) or `Subgroup16`/`Subgroup32` (the sub-group kernel only at that sub-group size; the tiled kernels ignore the size)
+/// @param[in] group          executor; every work-item must call
+/// @param[in] a              single triangular matrix, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); read only
+/// @param[in] b              \f$m \times n\f$ matrix, read; it may be the same view as `c` (in-place, overwritten), but no other overlap is supported
+/// @param[in,out] c          \f$m \times n\f$ matrix, read (scaled by \f$\beta\f$) and overwritten with the result
+/// @param[in] alpha          scalar \f$\alpha\f$ applied to the product
+/// @param[in] beta           scalar \f$\beta\f$ applied to the input `C`; 0 still reads `C`
+/// @param[out] workspace     local-memory scratch of trmm_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,

@@ -11,7 +11,7 @@
 
 namespace batchlas::ops::sysv {
 
-struct Cta : select::NoFields<"cta"> {};          ///< sysv_cta_dispatch: fused factor + solve, n <= 32
+struct Cta : select::NoFields<"cta"> {};          ///< sysv_cta_dispatch: fused factor + solve, \f$n \le 32\f$
 struct Compose : select::NoFields<"compose"> {};  ///< public sytrf + sytrs; any homogeneous batch
 
 using SysvChoice = std::variant<Cta, Compose>;  ///< no vendor family: a `vendor` pin warns and runs Auto
@@ -23,7 +23,7 @@ inline constexpr std::array<std::string_view, 1> kLastResort{"compose"};
 
 inline constexpr select::OpSpec spec{Op::sysv, select::Lib::none, select::Rules{kLastResort}};
 
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:3", "nrhs:log", "batch:log"};  ///< n^3/3 + 2 n^2 nrhs
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:3", "nrhs:log", "batch:log"};  ///< \f$n^3/3 + 2 n^2 \cdot \mathit{nrhs}\f$
 
 /// The transcriber's grid: both sides of the CTA ceiling (32|33), log-spaced elsewhere.
 inline constexpr std::array<int, 16> grid_n{1, 2, 4, 8, 12, 16, 24, 32, 33, 48, 64, 128, 256, 512, 1024, 2048};

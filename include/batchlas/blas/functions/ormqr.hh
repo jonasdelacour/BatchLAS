@@ -58,9 +58,9 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 
 /// @brief Batched multiplication by the orthogonal/unitary Q from geqrf().
 ///
-/// As LAPACK `?ormqr` / `?unmqr`. A holds, below its diagonal, the
-/// \f$ k = \min(A_{rows}, A_{cols}) \f$ reflectors that geqrf() wrote, with
-/// \f$ Q = H_1 \cdots H_k \f$ of order `A.rows()`. For every batch item C is
+/// As LAPACK `?ormqr` / `?unmqr`. A (\f$m \times n\f$) holds, below its diagonal, the
+/// \f$ k = \min(m, n) \f$ reflectors that geqrf() wrote, with
+/// \f$ Q = H_1 \cdots H_k \f$ of order \f$m\f$ (`A.rows()`). For every batch item C is
 /// overwritten with
 /// \f$ \mathrm{op}(Q)\, C \f$ (`Side::Left`) or \f$ C\, \mathrm{op}(Q) \f$
 /// (`Side::Right`), where \f$ \mathrm{op}(Q) \f$ is Q for `NoTrans` and
@@ -76,16 +76,18 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 /// waits for everything already submitted to @p ctx.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx              queue the kernels are enqueued on
-/// @param A                batch of geqrf() outputs holding the reflectors; not modified
-/// @param C                batch of matrices to multiply; overwritten with the product
-/// @param side             apply Q from the left or the right
-/// @param trans            apply Q (`NoTrans`) or its (conjugate) transpose
-/// @param tau              reflector scalars from geqrf(), `k * batch` elements
-/// @param workspace        device-accessible scratch of at least ormqr_buffer_size() bytes,
-///                         sized with the same @p block_size_hint
-/// @param block_size_hint  WY panel width for the blocked kernel; 0 lets the tuning
-///                         table choose. Clamped to [1, k]; ignored by the vendor kernel.
+/// @param[in]     ctx              queue the kernels are enqueued on
+/// @param[in]     A                batch of \f$m \times n\f$ geqrf() outputs holding the reflectors;
+///                                 not modified
+/// @param[in,out] C                batch of matrices to multiply (\f$m\f$ rows for `Side::Left`,
+///                                 \f$m\f$ columns for `Side::Right`); overwritten with the product
+/// @param[in]     side             apply Q from the left or the right
+/// @param[in]     trans            apply Q (`NoTrans`) or its (conjugate) transpose
+/// @param[in]     tau              reflector scalars from geqrf(), `k * batch` elements
+/// @param[out]    workspace        device-accessible scratch of at least ormqr_buffer_size() bytes,
+///                                 sized with the same @p block_size_hint; contents undefined on return
+/// @param[in]     block_size_hint  WY panel width for the blocked kernel; 0 lets the tuning
+///                                 table choose. Clamped to \f$[1, k]\f$; ignored by the vendor kernel.
 /// @return event of the last enqueued kernel
 /// @pre `A.rows() == C.rows()` for `Side::Left`, `A.rows() == C.cols()` for
 ///      `Side::Right`, and A and C share a batch size
@@ -113,6 +115,14 @@ BATCHLAS_API Event ormqr(Queue& ctx,
 /// Makes the same kernel choice and block width as ormqr() from the same inputs, so
 /// the result is valid for a call with the same arguments and @p block_size_hint.
 /// `evidence: docs/perf/qr.md#ormqr-one-route-resolution-for-the-call-and-its-size-query`
+/// @param[in] ctx              queue the ormqr() call will run on (kernel selection reads its device)
+/// @param[in] A                batch of \f$m \times n\f$ reflectors the call will get; only the shape is read
+/// @param[in] C                batch of matrices the call will multiply; only the shape is read
+/// @param[in] side             the call's `Side`
+/// @param[in] trans            the call's `Transpose`
+/// @param[in] tau              the call's reflector scalars; contents not read
+/// @param[in] block_size_hint  the call's WY panel width hint (0 = tuning table)
+/// @return bytes to pass as the `workspace` span of ormqr()
 /// @ingroup api_qr_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
@@ -128,6 +138,15 @@ BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
 namespace batchlas::backend {
 
 /// @brief Vendor arm of ormqr() (cuSOLVER / rocSOLVER / LAPACKE); not for direct use.
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in]     A          batch of \f$m \times n\f$ geqrf() outputs holding the reflectors
+/// @param[in,out] C          batch of matrices to multiply; overwritten with the product
+/// @param[in]     side       apply Q from the left or the right
+/// @param[in]     trans      apply Q (`NoTrans`) or its (conjugate) transpose
+/// @param[in]     tau        reflector scalars from geqrf(), `k * batch` elements
+/// @param[out]    workspace  scratch of at least ormqr_vendor_buffer_size() bytes; contents undefined
+///                           on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr_vendor(Queue& ctx,
@@ -139,6 +158,13 @@ BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 Span<std::byte> workspace);
 
 /// @brief Workspace query of the vendor arm of ormqr().
+/// @param[in] ctx    queue the call will run on
+/// @param[in] A      batch of \f$m \times n\f$ reflectors the call will get; only the shape is read
+/// @param[in] C      batch of matrices the call will multiply; only the shape is read
+/// @param[in] side   the call's `Side`
+/// @param[in] trans  the call's `Transpose`
+/// @param[in] tau    the call's reflector scalars; contents not read
+/// @return bytes to pass as the `workspace` span of backend::ormqr_vendor()
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,

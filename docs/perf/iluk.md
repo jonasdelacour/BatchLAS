@@ -19,7 +19,7 @@ On a 2D Laplacian they cross near 32 items. Re-measure before moving the thresho
 - The batch loop is parallel; each item touches only its own slice.
 - No allocation in the inner loop: `candidates` is caller-owned scratch; pattern and values are flat
   CSR-style arrays; `col_to_slot` (`-1` outside the pattern) replaces a binary search.
-- Row `j < i` is final when row `i` eliminates against it, so its scale is read, not re-derived.
+- Row \f$j < i\f$ is final when row \f$i\f$ eliminates against it, so its scale is read, not re-derived.
 - `iluk_buffer_size` sizes against item 0 only (an upper bound, since the numeric phase only prunes);
   walking every item would page-migrate per item on unified memory.
 - Sort ties break by column, so host and device keep the same fill.

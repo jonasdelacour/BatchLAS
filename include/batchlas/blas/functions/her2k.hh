@@ -35,8 +35,8 @@ using her2k_vendor = Event(Queue&,
 
 /// @brief Batched Hermitian rank-2k update.
 ///
-/// For every batch item computes, with `A` and `B` n x k (`NoTrans`) or k x n
-/// (`ConjTrans`) and `C` Hermitian n x n,
+/// For every batch item computes, with `A` and `B` \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$
+/// (`ConjTrans`) and `C` Hermitian \f$n \times n\f$,
 /// \f[ C := \alpha A B^H + \bar\alpha B A^H + \beta C \quad (\texttt{NoTrans}) \f]
 /// \f[ C := \alpha A^H B + \bar\alpha B^H A + \beta C \quad (\texttt{ConjTrans}) \f]
 /// Only the triangle of `C` named by `uplo` is written; the other is left as it
@@ -44,7 +44,7 @@ using her2k_vendor = Event(Queue&,
 ///
 /// The second term is the conjugate transpose of the first, not a copy with the
 /// operands swapped; that is what makes the sum Hermitian for any complex
-/// `alpha`, and is the whole difference from syr2k. `beta` scales an
+/// \f$\alpha\f$, and is the whole difference from syr2k. \f$\beta\f$ scales an
 /// already-Hermitian `C` and so is real. Also callable as
 /// `her2k(ctx, A, B, C, Her2kOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
@@ -56,14 +56,16 @@ using her2k_vendor = Event(Queue&,
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
-/// @param ctx     queue the work is enqueued on
-/// @param A       batch of n x k (NoTrans) or k x n (ConjTrans) matrices; not modified
-/// @param B       batch with the same shape as `A`; not modified
-/// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
-/// @param alpha   complex scale of \f$A B^H\f$ (its conjugate scales the mirror term)
-/// @param beta    real scale of the input `C`
-/// @param uplo    which triangle of `C` is written
-/// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$ (`ConjTrans`)
+///                        matrices; not modified
+/// @param[in]     B       batch with the same shape as `A`; not modified
+/// @param[in,out] C       batch of Hermitian \f$n \times n\f$ matrices; the `uplo` triangle is read
+///                        scaled by \f$\beta\f$ and overwritten with the result, the other is untouched
+/// @param[in]     alpha   complex scale \f$\alpha\f$ of \f$A B^H\f$ (\f$\bar\alpha\f$ scales the mirror term)
+/// @param[in]     beta    real scale \f$\beta\f$ of the input `C`
+/// @param[in]     uplo    which triangle of `C` is read and written
+/// @param[in]     transA  `Transpose::NoTrans` or `Transpose::ConjTrans`, applied to `A` and `B`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
@@ -96,6 +98,19 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of her2k (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::her2k calls it. Same arguments and semantics.
+/// @tparam Back  backend whose vendor library runs the call
+/// @tparam T     `std::complex<float>` or `std::complex<double>`
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$ (`ConjTrans`)
+///                        matrices; not modified
+/// @param[in]     B       batch with the same shape as `A`; not modified
+/// @param[in,out] C       batch of Hermitian \f$n \times n\f$ matrices; the `uplo` triangle is read
+///                        scaled by \f$\beta\f$ and overwritten with the result
+/// @param[in]     alpha   complex scale \f$\alpha\f$ of \f$A B^H\f$ (\f$\bar\alpha\f$ scales the mirror term)
+/// @param[in]     beta    real scale \f$\beta\f$ of the input `C`
+/// @param[in]     uplo    which triangle of `C` is read and written
+/// @param[in]     transA  `Transpose::NoTrans` or `Transpose::ConjTrans`, applied to `A` and `B`
+/// @return event of the last enqueued vendor call; `C` is valid once it completes
 /// @ingroup api_dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event her2k_vendor(Queue& ctx,

@@ -22,7 +22,7 @@ BATCHLAS_API void reload_settings();
 }
 
 /// @brief True when `v` is exactly one of `1`, `true`, `TRUE`, `on`, `ON`.
-/// @param v the variable's value (`std::getenv(...)`), not its name; `nullptr` means unset
+/// @param[in] v the variable's value (`std::getenv(...)`), not its name; `nullptr` means unset
 /// @return false for an unset variable and for every other spelling
 /// @ingroup api_config_lowlevel
 // Takes the VALUE. A name-taking overload once existed and made env_truthy("BATCHLAS_X") silently
@@ -37,7 +37,7 @@ inline bool env_truthy(const char* v) {
 ///
 /// Not `!env_truthy(v)`: an unset variable is neither truthy nor falsy, which lets a caller
 /// distinguish "forced off" from "not specified".
-/// @param v the variable's value, or `nullptr` when unset
+/// @param[in] v the variable's value, or `nullptr` when unset
 /// @return false for an unset variable and for every other spelling
 /// @ingroup api_config_lowlevel
 // A knob that wants "Off"/"No" must case-fold its own value (sytrd_sb2st_hh.cc does); do not
@@ -49,8 +49,8 @@ inline bool env_falsy(const char* v) {
 }
 
 /// @brief The integer value of environment variable `name`.
-/// @param name     the variable's name
-/// @param fallback returned when the variable is unset or `std::stoi` rejects it
+/// @param[in] name     the variable's name
+/// @param[in] fallback returned when the variable is unset or `std::stoi` rejects it
 /// @return the parsed value; note that `std::stoi` accepts a numeric prefix (`"16x"` is 16)
 /// @ingroup api_config_lowlevel
 inline int env_int_or(const char* name, int fallback) {
@@ -63,12 +63,13 @@ inline int env_int_or(const char* name, int fallback) {
     }
 }
 
-/// @brief As env_int_or(), but a value <= 0 also yields `fallback`.
+/// @brief As env_int_or(), but a non-positive parsed value (\f$\le 0\f$) also yields `fallback`.
 ///
 /// The shape of every kernel-geometry knob: a forced work-group count, tile width or sub-group
 /// count is meaningless at zero or below.
-/// @param name     the variable's name
-/// @param fallback returned when unset, unparseable or non-positive
+/// @param[in] name     the variable's name
+/// @param[in] fallback returned when unset, unparseable or non-positive
+/// @return the parsed value when it is positive, else `fallback`
 /// @ingroup api_config_lowlevel
 inline int env_positive_int_or(const char* name, int fallback) {
     const int v = env_int_or(name, fallback);
@@ -76,6 +77,9 @@ inline int env_positive_int_or(const char* name, int fallback) {
 }
 
 /// @brief The value of environment variable `name`, or `fallback` when it is unset or empty.
+/// @param[in] name     the variable's name
+/// @param[in] fallback returned when the variable is unset or set to the empty string
+/// @return the variable's value, copied, or `fallback`
 /// @ingroup api_config_lowlevel
 inline std::string env_string_or(const char* name, const std::string& fallback) {
     const char* v = std::getenv(name);
@@ -105,9 +109,9 @@ inline std::string env_string_or(const char* name, const std::string& fallback) 
 class ScopedEnvVar {
 public:
     /// @brief Pin `name` to `value` for the scope.
-    /// @param name  the variable's name
-    /// @param value the value to set, or `nullptr` to unset the variable for the duration (which
-    ///              asks for the automatic route regardless of the surrounding environment)
+    /// @param[in] name  the variable's name; borrowed, must outlive the object
+    /// @param[in] value the value to set, or `nullptr` to unset the variable for the duration (which
+    ///                  asks for the automatic route regardless of the surrounding environment)
     ScopedEnvVar(const char* name, const char* value) : name_(name) {
         if (const char* old = std::getenv(name_)) {
             old_value_ = old;

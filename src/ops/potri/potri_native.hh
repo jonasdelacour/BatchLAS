@@ -14,11 +14,11 @@
 
 namespace batchlas::sycl_potri {
 
-// Potri: A's uplo triangle := A^-1's from the factor. Trtri: each nb x nb diagonal block := its inverse.
-// Lauum: A := X^H X (Lower) or X X^H (Upper) from the triangular X in A's uplo triangle.
+// Potri: A's uplo triangle := \f$A^{-1}\f$'s from the factor. Trtri: each \f$nb \times nb\f$ diagonal block := its inverse.
+// Lauum: \f$A := X^H X\f$ (Lower) or \f$X X^H\f$ (Upper) from the triangular X in A's uplo triangle.
 enum class CtaMode : int { Potri = 0, Trtri = 1, Lauum = 2 };
 
-// TS x TS register tiles, one per lower-triangle tile, at most kCtaTiles per work-item of kCtaMaxWg.
+// \f$TS \times TS\f$ register tiles, one per lower-triangle tile, at most kCtaTiles per work-item of kCtaMaxWg.
 template <typename T>
 inline constexpr int kCtaTs = sizeof(T) > 8 ? 2 : 4;
 inline constexpr int kCtaTiles = 2;
@@ -78,7 +78,7 @@ BATCHLAS_INTERNAL_API Event potri_finish(Queue& ctx, const MatrixView<T, MatrixF
 
 }  // namespace batchlas::sycl_potri
 
-// The blocked family (kernels/potri_blocked.cc): trtri then lauum on nb x nb blocks.
+// The blocked family (kernels/potri_blocked.cc): trtri then lauum on \f$nb \times nb\f$ blocks.
 namespace batchlas::ops::potri::blocked {
 
 template <class T>

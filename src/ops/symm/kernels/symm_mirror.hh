@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// symm / hemm `mirror`: C = alpha A B + beta C (Left) or alpha B A + beta C (Right), A read from its
+// symm / hemm `mirror`: \f$C = \alpha A B + \beta C\f$ (Left) or \f$\alpha B A + \beta C\f$ (Right), A read from its
 // `uplo` triangle only (Herm: conjugate mirror, real diagonal). At most `chunk` items per launch.
 
 #include <src/util/internal-api.hh>

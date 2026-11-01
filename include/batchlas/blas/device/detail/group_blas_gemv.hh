@@ -7,6 +7,9 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief The barrier scope of an executor: an `nd_item`'s work-group, otherwise the executor itself.
+/// @param[in] group  executor (`sycl::group`, `sycl::sub_group` or an `nd_item`)
+/// @return the group to pass to `sycl::group_barrier`
 template <typename Group>
 inline constexpr auto gemv_work_group(const Group& group) {
     if constexpr (detail::NdItemLike<Group>) {
@@ -23,11 +26,19 @@ struct GemvTransposeWorkspace {
     T x[kMaxTile];
 };
 
+/// @brief Offset of entry (`row`, `col`) in the padded GemvTransposeWorkspace matrix tile.
+/// @param[in] row  row within the tile, \f$0 \le \mathit{row} < 32\f$
+/// @param[in] col  column within the tile, \f$0 \le \mathit{col} < 32\f$
+/// @return linear offset with a row pitch of \f$32 + 1\f$ (padded against bank conflicts)
 template <typename T>
 inline constexpr int gemv_transpose_tile_index(int row, int col) {
     return row * (GemvTransposeWorkspace<T>::kMaxTile + 1) + col;
 }
 
+/// @brief Tile edge the staged gemv path uses for this executor and policy.
+/// @param[in] group   executor or DeviceBlasLaunchInfo; its local size bounds the tile
+/// @param[in] policy  `Generic` disables tiling; `Subgroup16`/`Subgroup32` force that tile; `Auto` takes the largest that fits
+/// @return 32 or 16, or 0 when the staged path does not apply
 template <typename Group>
 inline constexpr int gemv_tiled_tile_size(const Group& group, DeviceBlasPolicy policy) {
     const int local_size = detail::group_local_linear_range(group);
@@ -49,6 +60,11 @@ inline constexpr int gemv_tiled_tile_size(const Group& group, DeviceBlasPolicy p
     return 0;
 }
 
+/// @brief Whether the staged gemv path applies to `a` (NoTrans only, both extents at least the tile).
+/// @param[in] group   executor; its local size bounds the tile
+/// @param[in] a       the matrix \f$A\f$ the call will read; only its extents are inspected
+/// @param[in] policy  kernel policy, see gemv_tiled_tile_size()
+/// @return true when gemv_tiled() may run
 template <typename Tag, typename Group, typename T>
 inline constexpr bool can_use_tiled_gemv(const Group& group,
                                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -64,6 +80,12 @@ inline constexpr bool can_use_tiled_gemv(const Group& group,
     }
 }
 
+/// @brief Whether the staged gemv path applies to an \f$m \times n\f$ matrix (NoTrans only, both extents at least the tile).
+/// @param[in] group   executor or DeviceBlasLaunchInfo; its local size bounds the tile
+/// @param[in] rows    \f$m\f$, rows of \f$A\f$
+/// @param[in] cols    \f$n\f$, columns of \f$A\f$
+/// @param[in] policy  kernel policy, see gemv_tiled_tile_size()
+/// @return true when gemv_tiled() may run
 template <typename Tag, typename Group>
 inline constexpr bool can_use_tiled_gemv(const Group& group,
                                          int rows,
@@ -81,6 +103,12 @@ inline constexpr bool can_use_tiled_gemv(const Group& group,
     }
 }
 
+/// @brief NoTrans gemv staging \f$A\f$ and \f$x\f$ through local memory one tile at a time.
+/// @param[in]     group          executor; every work-item must call
+/// @param[in]     a              single \f$m \times n\f$ matrix \f$A\f$; read only
+/// @param[in,out] operand        `x` (read), `y` (scaled by \f$\beta\f$, then accumulated into), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     tile           tile edge from gemv_tiled_tile_size(), 16 or 32
+/// @param[out]    workspace_ptr  local memory holding a GemvTransposeWorkspace; contents undefined on return
 template <typename Group, typename T>
 inline void gemv_tiled(const Group& group,
                        const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -128,6 +156,10 @@ inline void gemv_tiled(const Group& group,
     }
 }
 
+/// @brief Generic gemv: a group reduction per output element, or one work-item per output when the inner extent is below the group size.
+/// @param[in]     group    executor; every work-item must call
+/// @param[in]     a        single \f$m \times n\f$ matrix \f$A\f$; read only
+/// @param[in,out] operand  `x` (read), `y` (read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -164,6 +196,11 @@ inline constexpr void gemv(const Group& group,
 
 namespace detail {
 
+/// @brief Local-memory elements of `T` that dispatch_gemv() can use under `Policy`.
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] rows    rows \f$m\f$ of `A`; \f$m \ge 0\f$
+/// @param[in] cols    columns \f$n\f$ of `A`; \f$n \ge 0\f$
+/// @return element count, or 0 when no staged path applies
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int rows,
@@ -175,6 +212,11 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
     return 0;
 }
 
+/// @brief Validates the operands and runs gemv_tiled() when eligible, else the generic gemv.
+/// @param[in]     group      executor; every work-item must call
+/// @param[in]     a          single \f$m \times n\f$ matrix \f$A\f$; read only
+/// @param[in,out] operand    `x` (read), `y` (read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local memory of gemv_workspace_elements() elements, or `nullptr`; contents undefined on return
 template <typename Tag, DeviceBlasPolicy Policy, typename Group, typename T>
 inline void dispatch_gemv(const Group& group,
                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -200,13 +242,15 @@ inline void dispatch_gemv(const Group& group,
 /// through local memory tile by tile; otherwise each output element is a
 /// group reduction (or one work-item's loop when the inner extent is smaller
 /// than the group).
-/// @tparam TransV  op() applied to `A`
+/// @tparam TransV  \f$\mathrm{op}(\cdot)\f$ applied to `A`
 /// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item` (unwrapped to its work-group); every work-item must call
-/// @param group      executor
-/// @param a          single m x n matrix
-/// @param operand    `x` (length of op(A)'s columns), `y` (length of op(A)'s rows), `alpha`, `beta`
-/// @param workspace  local memory of gemv_workspace_elements() elements, or `nullptr`
-/// @pre `y` holds finite values even when `beta == 0`; `y` does not alias `x` or `A`.
+/// @param[in]     group      executor; every work-item of it makes the call
+/// @param[in]     a          single \f$m \times n\f$ matrix \f$A\f$
+/// @param[in,out] operand    `x` (read; length of \f$\mathrm{op}(A)\f$'s columns), `y` (read and overwritten
+///                           with the result; length of \f$\mathrm{op}(A)\f$'s rows), `alpha`, `beta`
+/// @param[out]    workspace  local memory of gemv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
+/// @pre `y` holds finite values even when \f$\beta = 0\f$; `y` does not alias `x` or `A`.
 /// @note Issue a group barrier before other work-items read `y`.
 /// @see @ref design_device_group_blas
 template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -218,6 +262,12 @@ inline constexpr void gemv(const Group& group,
 }
 
 /// @brief As gemv(), with an explicit DeviceBlasPolicy.
+/// @tparam Policy  kernel family to use; `Generic` never stages through local memory
+/// @param[in]     group      executor; every work-item of it makes the call
+/// @param[in]     a          single \f$m \times n\f$ matrix \f$A\f$
+/// @param[in,out] operand    `x` (read), `y` (read and overwritten with the result), `alpha`, `beta`
+/// @param[out]    workspace  local memory of gemv_workspace_elements() elements for `Policy`, or
+///                           `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy,
           Transpose TransV = Transpose::NoTrans,
           typename Group,
@@ -230,9 +280,9 @@ inline constexpr void gemv(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that gemv() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param rows rows of `A`
-/// @param cols columns of `A`
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] rows    rows \f$m\f$ of `A`; \f$m \ge 0\f$
+/// @param[in] cols    columns \f$n\f$ of `A`; \f$n \ge 0\f$
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Transpose TransV = Transpose::NoTrans>
@@ -243,9 +293,9 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that gemv() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param rows rows of `A`
-/// @param cols columns of `A`
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] rows    rows \f$m\f$ of `A`; \f$m \ge 0\f$
+/// @param[in] cols    columns \f$n\f$ of `A`; \f$n \ge 0\f$
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Transpose TransV = Transpose::NoTrans>
@@ -256,6 +306,15 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As gemv(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor; every work-item of it makes the call
+/// @param[in]     a          single \f$m \times n\f$ matrix \f$A\f$
+/// @param[in]     x          input vector, length of \f$\mathrm{op}(A)\f$'s columns
+/// @param[in,out] y          vector of length of \f$\mathrm{op}(A)\f$'s rows; read (scaled by \f$\beta\f$,
+///                           even when \f$\beta = 0\f$) and overwritten with the result
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input `y`
+/// @param[out]    workspace  local memory of gemv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -268,6 +327,15 @@ inline constexpr void gemv(const Group& group,
 }
 
 /// @brief As gemv(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor; every work-item of it makes the call
+/// @param[in]     a          single \f$m \times n\f$ matrix \f$A\f$
+/// @param[in]     x          input vector, length of \f$\mathrm{op}(A)\f$'s columns
+/// @param[in,out] y          vector of length of \f$\mathrm{op}(A)\f$'s rows; read (scaled by \f$\beta\f$,
+///                           even when \f$\beta = 0\f$) and overwritten with the result
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input `y`
+/// @param[out]    workspace  local memory of gemv_workspace_elements() elements for `Policy`, or
+///                           `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy,
           Transpose TransV = Transpose::NoTrans,
           typename Group,

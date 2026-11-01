@@ -25,7 +25,7 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 - **Any queue:** both families and the trsm pair run on a CPU queue (NETLIB: blocked's children go to
   CBLAS). Every potri launch is one-dimensional, so the batch never lands on CUDA grid y or z
   (`BatchBeyondTheGridYLimitIsCovered`, 70001 items).
-- **Consumers:** gfn2 Broyden (n = 16), EEQ (n = N + 1), optimize.
+- **Consumers:** gfn2 Broyden (\f$n = 16\f$), EEQ (\f$n = N + 1\f$), optimize.
 
 ## potri selection {#potri-selection}
 
@@ -38,10 +38,10 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 register tiles fit two per work-item at 512 work-items. sm_89: float 152, double and cfloat 108,
 cdouble 76; the OpenCL CPU device admits 176 for float. With no table the last-resort order is
 `blocked`, then `cta`. Keys `dtype`, `n:log:3`, `batch:log`; no `uplo` key (Upper runs the same
-kernels on `L = U^H`). nb = 32 won no cell and is not a candidate.
+kernels on `L = U^H`). \f$\mathrm{nb} = 32\f$ won no cell and is not a candidate.
 
 **Tables.** `tuned/potri.sm_89.txt` float and cfloat are `deep` (2026-10-26, RTX 4090 GPU 1, 177
-cells). cta wins every cell it can run; blocked:nb=64 above its ceiling; float nb=128 from n ~ 330.
+cells). cta wins every cell it can run; blocked:nb=64 above its ceiling; float nb=128 from \f$n \approx 330\f$.
 double and cdouble, cells over the 8 GiB operand cap, and all of `tuned/potri.sm_120.txt` are
 `transcribed` from those rankings (run lines `transcribed-f517330f`, `-gap`). Bracketing cells, batch
 2048, ms (runner-up in brackets):
@@ -63,10 +63,10 @@ position.
 **cta** (`kernels/potri_cta.cc`, one work-group per item): the block sits in a tile padded to TS (4;
 2 for cdouble) with an odd leading dimension; strict lower holds `M = L diag(L)^-1`, upper holds
 `P = diag(L) L^-1` transposed, so the solve never overwrites what it reads. trti2 is right-looking by
-TS pivots: one barrier per tile row, then a rank-TS update per tile (2 TS^2 local loads per TS^3
+TS pivots: one barrier per tile row, then a rank-\f$\mathrm{TS}\f$ update per tile (\f$2\,\mathrm{TS}^2\f$ local loads per \f$\mathrm{TS}^3\f$
 multiply-adds; a per-pivot version was instruction-bound). lauu2 then accumulates `X^H X` in the same
 register tiles and stores coalesced, `full` mirroring in the same pass. A zero-diagonal item returns
-early, unchanged. Modes `Trtri` (every nb x nb diagonal block) and `Lauum` (one block) serve blocked.
+early, unchanged. Modes `Trtri` (every \f$\mathrm{nb} \times \mathrm{nb}\f$ diagonal block) and `Lauum` (one block) serve blocked.
 
 **blocked:nb** (`kernels/potri_blocked.cc`), LAPACK's blocked loops on public ops (each child takes its
 own table):
@@ -75,7 +75,7 @@ own table):
 - lauum: trmm + gemm into `W`, copy back, `Lauum` on the diagonal block, then herk (complex) / syrk
   (real).
 - `W` is one `n x nb` panel per item; the batch runs in parts (`tuning::blocked_chunk_items`, potrf's
-  rule), so the cdouble corner (n = 512, batch 32768) needs 64 MiB, not the identity solve's 137 GB. At
+  rule), so the cdouble corner (\f$n = 512\f$, batch 32768) needs 64 MiB, not the identity solve's 137 GB. At
   `n <= nb` it is one cta `Potri` launch and no workspace. `potri_finish` zeroes the diagonal's
   imaginary part and mirrors for `full`.
 - A failed item stays unchanged without a host round trip (`sycl_potri::Stash`): the `Trtri` launch
@@ -86,17 +86,17 @@ own table):
 ## potri measured against the identity solve {#potri-measured-against-the-identity-solve}
 
 sm_89, 2026-10-26, `batchlas_tune potri` custom protocol (cold L2, arms alternated): float 40 cells
-geomean 2.75x (1.43x-5.19x), cfloat 38 cells 2.97x (one tie, 0.96x at n = 6, b = 8192). The old fused
-family (n <= 8) lost to cta by 1.6x-4.0x everywhere. Raw JSONL: the job's `perf-potri/ab/`.
+geomean 2.75x (1.43x-5.19x), cfloat 38 cells 2.97x (one tie, 0.96x at \f$n = 6\f$, batch 8192). The old fused
+family (\f$n \le 8\f$) lost to cta by 1.6x-4.0x everywhere. Raw JSONL: the job's `perf-potri/ab/`.
 
 ## potri: what the tests pin {#potri-what-the-tests-pin}
 
 `tests/potri_tests.cc`: `A * A^-1 = I` through `batchlas::verify` on Auto and each pinned candidate,
-both triangles, orders through the tile width and both block orders up to n = 300; graded spectra
-(1e3 float/cfloat, 1e6 double/cdouble); padded `ld`/stride with a poisoned unreferenced triangle;
+both triangles, orders through the tile width and both block orders up to \f$n = 300\f$; graded spectra
+(\f$10^3\f$ float/cfloat, \f$10^6\f$ double/cdouble); padded `ld`/stride with a poisoned unreferenced triangle;
 complex data; the bit-for-bit `full` mirror; `info` with the failed item unchanged and the rest
 bit-identical on every family; workspace per family; a forced three-item chunk; the cta pin at its
-ceiling (graded) and refused one past it; 1024 identical items bit-identical (n = 37, 100); a
+ceiling (graded) and refused one past it; 1024 identical items bit-identical (\f$n = 37, 100\f$); a
 70001-item batch; a short `info` span refused; and `reached` coverage rows (blocked's children exactly
 trmm, gemm, herk/syrk; cta's none).
 

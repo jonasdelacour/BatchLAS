@@ -81,6 +81,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `MatrixFormat::` prefix; `"MatrixFormat(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(MatrixFormat v) {
         switch (v) {
@@ -122,6 +125,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Backend::` prefix; `"Backend(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Backend v) {
         switch (v) {
@@ -151,6 +157,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `BackendLibrary::` prefix; `"BackendLibrary(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(BackendLibrary v) {
         switch (v) {
@@ -168,14 +177,17 @@ namespace batchlas {
         return "BackendLibrary(?)";
     }
 
-    /// @brief The operator op() applied to an operand: op(A) = A, A^T or A^H.
+    /// @brief The operator \f$\mathrm{op}(\cdot)\f$ applied to an operand: \f$\mathrm{op}(A) = A\f$, \f$A^T\f$ or \f$A^H\f$.
     enum class Transpose {
-        NoTrans,   ///< op(A) = A.
-        Trans,     ///< op(A) = A^T.
-        ConjTrans  ///< op(A) = A^H (the same as Trans for real scalars).
+        NoTrans,   ///< \f$\mathrm{op}(A) = A\f$.
+        Trans,     ///< \f$\mathrm{op}(A) = A^T\f$.
+        ConjTrans  ///< \f$\mathrm{op}(A) = A^H\f$ (the same as Trans for real scalars).
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Transpose::` prefix; `"Transpose(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Transpose v) {
         switch (v) {
@@ -193,6 +205,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `JobType::` prefix; `"JobType(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(JobType v) {
         switch (v) {
@@ -204,27 +219,30 @@ namespace batchlas {
 
     /// @brief Which singular vectors gesvd computes for one factor (LAPACK `jobu` / `jobvt`).
     ///
-    /// For an m x n input with k = min(m, n):
-    /// | Value  | LAPACK | U       | V^H     |
+    /// For an \f$m \times n\f$ input with \f$k = \min(m, n)\f$:
+    /// | Value  | LAPACK | \f$U\f$ | \f$V^H\f$ |
     /// | ------ | ------ | ------- | ------- |
     /// | `None` | 'N'    | not computed; its MatrixView is not touched | same |
-    /// | `All`  | 'A'    | m x m   | n x n   |
-    /// | `Thin` | 'S'    | m x k, the first k left vectors | k x n, the first k right vectors, conjugated |
+    /// | `All`  | 'A'    | \f$m \times m\f$ | \f$n \times n\f$ |
+    /// | `Thin` | 'S'    | \f$m \times k\f$, the first \f$k\f$ left vectors | \f$k \times n\f$, the first \f$k\f$ right vectors, conjugated |
     ///
-    /// Thin and All differ on at most one side: for m <= n a thin U is the full U,
-    /// for m >= n a thin V^H is the full V^H, and for square input they coincide on
+    /// Thin and All differ on at most one side: for \f$m \le n\f$ a thin \f$U\f$ is the full \f$U\f$,
+    /// for \f$m \ge n\f$ a thin \f$V^H\f$ is the full \f$V^H\f$, and for square input they coincide on
     /// both. Entry points canonicalise with canonical_jobu() / canonical_jobvh().
-    /// LAPACK's 'O' (overwrite A) is not offered.
+    /// LAPACK's 'O' (overwrite \f$A\f$) is not offered.
     /// @see @ref design_gesvd
     // Append new enumerators only: benchmarks pass jobs as ints, so the ordinals are stable API.
     // evidence: docs/design/gesvd.md#gesvd-design-why-svdvectorsthin-exists
     enum class SvdVectors {
         None,  ///< Do not compute this factor.
         All,   ///< Full square factor (LAPACK 'A').
-        Thin   ///< Economy factor with k = min(m, n) vectors (LAPACK 'S').
+        Thin   ///< Economy factor with \f$k = \min(m, n)\f$ vectors (LAPACK 'S').
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `SvdVectors::` prefix; `"SvdVectors(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SvdVectors v) {
         switch (v) {
@@ -235,34 +253,34 @@ namespace batchlas {
         return "SvdVectors(?)";
     }
 
-    /// @brief Number of columns of U that @p job writes.
-    /// @param job  the U job
-    /// @param m    rows of the input
-    /// @param k    min(m, n)
-    /// @return m for All, k for Thin, 0 for None (nothing is written)
+    /// @brief Number of columns of \f$U\f$ that @p job writes.
+    /// @param[in] job  the \f$U\f$ job
+    /// @param[in] m    number of rows \f$m\f$ of the \f$m \times n\f$ input
+    /// @param[in] k    \f$k = \min(m, n)\f$
+    /// @return \f$m\f$ for All, \f$k\f$ for Thin, 0 for None (nothing is written)
     /// @ingroup api_enums_lowlevel
     inline constexpr int64_t svd_u_cols(SvdVectors job, int64_t m, int64_t k) {
         return job == SvdVectors::All ? m : (job == SvdVectors::Thin ? k : 0);
     }
 
-    /// @brief Number of rows of V^H that @p job writes.
-    /// @param job  the V^H job
-    /// @param n    columns of the input
-    /// @param k    min(m, n)
-    /// @return n for All, k for Thin, 0 for None (nothing is written)
+    /// @brief Number of rows of \f$V^H\f$ that @p job writes.
+    /// @param[in] job  the \f$V^H\f$ job
+    /// @param[in] n    number of columns \f$n\f$ of the \f$m \times n\f$ input
+    /// @param[in] k    \f$k = \min(m, n)\f$
+    /// @return \f$n\f$ for All, \f$k\f$ for Thin, 0 for None (nothing is written)
     /// @ingroup api_enums_lowlevel
     inline constexpr int64_t svd_vh_rows(SvdVectors job, int64_t n, int64_t k) {
         return job == SvdVectors::All ? n : (job == SvdVectors::Thin ? k : 0);
     }
 
-    /// @brief Rewrites a U job of Thin to All when both request the same shape (k == m).
+    /// @brief Rewrites a \f$U\f$ job of Thin to All when both request the same shape (\f$k = m\f$).
     ///
     /// A kernel that cannot produce a genuinely thin factor then still serves every
     /// Thin request that asks for nothing smaller.
-    /// @param job  the requested U job
-    /// @param m    rows of the input
-    /// @param k    min(m, n)
-    /// @return All if @p job is Thin and k == m, otherwise @p job
+    /// @param[in] job  the requested \f$U\f$ job
+    /// @param[in] m    number of rows \f$m\f$ of the \f$m \times n\f$ input
+    /// @param[in] k    \f$k = \min(m, n)\f$
+    /// @return All if @p job is Thin and \f$k = m\f$, otherwise @p job
     /// @trap Call once per entry point and pass the result on: a `*_buffer_size` and
     ///       its run path must canonicalise identically, or the workspace is sized
     ///       for a different computation than the one performed.
@@ -271,11 +289,11 @@ namespace batchlas {
         return (job == SvdVectors::Thin && k == m) ? SvdVectors::All : job;
     }
 
-    /// @brief Rewrites a V^H job of Thin to All when both request the same shape (k == n).
-    /// @param job  the requested V^H job
-    /// @param n    columns of the input
-    /// @param k    min(m, n)
-    /// @return All if @p job is Thin and k == n, otherwise @p job
+    /// @brief Rewrites a \f$V^H\f$ job of Thin to All when both request the same shape (\f$k = n\f$).
+    /// @param[in] job  the requested \f$V^H\f$ job
+    /// @param[in] n    number of columns \f$n\f$ of the \f$m \times n\f$ input
+    /// @param[in] k    \f$k = \min(m, n)\f$
+    /// @return All if @p job is Thin and \f$k = n\f$, otherwise @p job
     /// @see canonical_jobu() for the calling rule.
     /// @ingroup api_enums_lowlevel
     inline constexpr SvdVectors canonical_jobvh(SvdVectors job, int64_t n, int64_t k) {
@@ -286,11 +304,14 @@ namespace batchlas {
     /// @trap In an option struct write `PotrfOptions{}`, never a bare `{}`: `{}` can
     ///       select the positional overload, whose `Uplo{}` is `Upper`.
     enum class Uplo {
-        Upper,  ///< The upper triangle (i <= j).
-        Lower   ///< The lower triangle (i >= j).
+        Upper,  ///< The upper triangle (\f$a_{ij}\f$ with \f$i \le j\f$).
+        Lower   ///< The lower triangle (\f$a_{ij}\f$ with \f$i \ge j\f$).
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Uplo::` prefix; `"Uplo(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Uplo v) {
         switch (v) {
@@ -307,6 +328,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Diag::` prefix; `"Diag(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Diag v) {
         switch (v) {
@@ -316,13 +340,16 @@ namespace batchlas {
         return "Diag(?)";
     }
 
-    /// @brief Side on which a special operand multiplies: op(A) * B or B * op(A).
+    /// @brief Side on which a special operand multiplies: \f$\mathrm{op}(A) \, B\f$ or \f$B \, \mathrm{op}(A)\f$.
     enum class Side {
         Left,   ///< The special operand is on the left.
         Right   ///< The special operand is on the right.
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Side::` prefix; `"Side(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Side v) {
         switch (v) {
@@ -339,6 +366,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `SortOrder::` prefix; `"SortOrder(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SortOrder v) {
         switch (v) {
@@ -355,6 +385,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `ApplyOrder::` prefix; `"ApplyOrder(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(ApplyOrder v) {
         switch (v) {
@@ -366,7 +399,7 @@ namespace batchlas {
 
     /// @brief Algorithm family of the partial symmetric/Hermitian eigensolver `syevx`.
     ///
-    /// `Auto` picks on matrix format, n, batch size and jobz; the number of requested
+    /// `Auto` picks on matrix format, \f$n\f$, batch size and jobz; the number of requested
     /// eigenpairs enters no threshold (`syevx_select_algorithm`). Set per call through SyevxParams::method, or
     /// process-wide through `BATCHLAS_SYEVX_ALGORITHM`
     /// (`auto|direct|direct_subset|filtered|lobpcg`). **The environment variable wins**
@@ -382,14 +415,17 @@ namespace batchlas {
     /// `syevx_buffer_size` resolve the choice identically.
     /// @see @ref perf_syevx for the routing thresholds, @ref design_syevx for the tiers.
     enum class SyevxAlgorithm {
-        Auto,           ///< Heuristic selection on format, n, batch size and jobz (the default).
-        Direct,         ///< Full syev on a copy of A, then select the requested eigenpairs.
+        Auto,           ///< Heuristic selection on format, \f$n\f$, batch size and jobz (the default).
+        Direct,         ///< Full syev on a copy of \f$A\f$, then select the requested eigenpairs.
         DirectSubset,   ///< Two-stage reduction, bisection + inverse iteration on the subset (real, dense).
         Filtered,       ///< Chebyshev-filtered subspace iteration (dense and CSR); only when asked for.
         LOBPCG          ///< Locally Optimal Block Preconditioned Conjugate Gradient; the CSR default.
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `SyevxAlgorithm::` prefix; `"SyevxAlgorithm(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxAlgorithm v) {
         switch (v) {
@@ -406,7 +442,7 @@ namespace batchlas {
     ///
     /// `Extremal` (the default) returns `neigs` eigenpairs from one end, chosen by
     /// SyevxParams::find_largest: descending for the largest, ascending for the
-    /// smallest. It is the Index range [n-neigs, n-1] or [0, neigs-1] and is
+    /// smallest. It is the Index range \f$[n - \mathrm{neigs},\, n - 1]\f$ or \f$[0,\, \mathrm{neigs} - 1]\f$ and is
     /// normalised to one internally.
     /// @note Deliberately not `EigenRangeType`, whose natural default `All` means
     ///       "every eigenvalue"; that type stays the tridiagonal-layer vocabulary.
@@ -414,11 +450,14 @@ namespace batchlas {
     // evidence: docs/design/syevx.md#syevx-range-syevxselect-rather-than-eigenrangetype
     enum class SyevxSelect {
         Extremal,  ///< `neigs` eigenpairs from one end; SyevxParams::find_largest picks the end.
-        Index,     ///< SyevxParams::il .. iu inclusive, 0-based in the ascending spectrum.
-        Value      ///< Every eigenvalue in the half-open interval (vl, vu].
+        Index,     ///< Indices \f$[\mathrm{il}, \mathrm{iu}]\f$ (SyevxParams::il, SyevxParams::iu) inclusive, 0-based in the ascending spectrum.
+        Value      ///< Every eigenvalue \f$\lambda\f$ in the half-open interval \f$(\mathrm{vl}, \mathrm{vu}]\f$ (SyevxParams::vl, SyevxParams::vu).
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `SyevxSelect::` prefix; `"SyevxSelect(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxSelect v) {
         switch (v) {
@@ -438,8 +477,7 @@ namespace batchlas {
     /// otherwise `None`. Unlike SyevxAlgorithm, **the environment variable only
     /// supplies the default** and never overrides an explicit request.
     ///
-    /// @ingroup api_enums_lowlevel
-    /// The two Jacobi forms are different operators. `Jacobi` approximates A^{-1},
+    /// The two Jacobi forms are different operators. `Jacobi` approximates \f$A^{-1}\f$,
     /// so, like ILU(k), it is valid only for the smallest eigenpairs and
     /// `find_largest` is rejected with it; on a batch item whose diagonal is not
     /// uniformly positive it falls back to the identity. `JacobiShifted` shifts by
@@ -450,12 +488,15 @@ namespace batchlas {
     enum class SyevxPreconditioner {
         Auto,           ///< ILU(k) if configured, else the environment default, else None.
         None,           ///< Unpreconditioned.
-        Jacobi,         ///< diag(A)^{-1}; dense and CSR, smallest eigenpairs only.
-        JacobiShifted,  ///< (diag(A) - lambda I)^{-1}; dense and CSR, either end.
+        Jacobi,         ///< \f$\mathrm{diag}(A)^{-1}\f$; dense and CSR, smallest eigenpairs only.
+        JacobiShifted,  ///< \f$(\mathrm{diag}(A) - \lambda I)^{-1}\f$ at the current Ritz value \f$\lambda\f$; dense and CSR, either end.
         ILUK            ///< Supplied or syevx-built ILU(k) factor; CSR, smallest eigenpairs only.
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `SyevxPreconditioner::` prefix; `"SyevxPreconditioner(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxPreconditioner v) {
         switch (v) {
@@ -481,6 +522,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `OrthoAlgorithm::` prefix; `"OrthoAlgorithm(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(OrthoAlgorithm v) {
         switch (v) {
@@ -516,6 +560,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `ComputePrecision::` prefix; `"ComputePrecision(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(ComputePrecision v) {
         switch (v) {
@@ -529,13 +576,16 @@ namespace batchlas {
         return "ComputePrecision(?)";
     }
 
-    /// @brief How a VectorView is reinterpreted as a MatrixView: 1 x n or n x 1.
+    /// @brief How a VectorView is reinterpreted as a MatrixView: \f$1 \times n\f$ or \f$n \times 1\f$.
     enum class VectorOrientation {
-        Row,     ///< A 1 x n matrix; `ld` is the vector's `inc`.
-        Column   ///< An n x 1 matrix; requires `inc == 1`.
+        Row,     ///< A \f$1 \times n\f$ matrix; `ld` is the vector's `inc`.
+        Column   ///< An \f$n \times 1\f$ matrix; requires `inc == 1`.
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `VectorOrientation::` prefix; `"VectorOrientation(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(VectorOrientation v) {
         switch (v) {
@@ -547,14 +597,17 @@ namespace batchlas {
 
     /// @brief Matrix norm computed by `norm` and used by the condition estimators.
     enum class NormType {
-        Frobenius, ///< sqrt(sum |a_ij|^2).
-        One,       ///< Maximum absolute column sum.
-        Inf,       ///< Maximum absolute row sum.
-        Max,       ///< Maximum absolute entry (not a consistent norm).
-        Spectral   ///< Largest singular value; symmetric/Hermitian input only.
+        Frobenius, ///< \f$\lVert A \rVert_F = \sqrt{\sum_{i,j} \lvert a_{ij} \rvert^2}\f$.
+        One,       ///< Maximum absolute column sum, \f$\lVert A \rVert_1 = \max_j \sum_i \lvert a_{ij} \rvert\f$.
+        Inf,       ///< Maximum absolute row sum, \f$\lVert A \rVert_\infty = \max_i \sum_j \lvert a_{ij} \rvert\f$.
+        Max,       ///< Maximum absolute entry, \f$\max_{i,j} \lvert a_{ij} \rvert\f$ (not a consistent norm).
+        Spectral   ///< Largest singular value, \f$\lVert A \rVert_2 = \sigma_{\max}(A)\f$; symmetric/Hermitian input only.
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `NormType::` prefix; `"NormType(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(NormType v) {
         switch (v) {
@@ -577,6 +630,9 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @param[in] v  enumerator to spell
+    /// @return the enumerator name without the `Layout::` prefix; `"Layout(?)"` for a value
+    ///         outside the enumeration
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Layout v) {
         switch (v) {
@@ -589,8 +645,11 @@ namespace batchlas {
     /// @brief Prints any BatchLAS enum as its enumerator spelling, via its to_string().
     ///
     /// Found by ADL. The printed text can be pasted back into source.
-    /// @param os     output stream
-    /// @param value  enumerator to print
+    /// @tparam CharT   character type of the stream
+    /// @tparam Traits  character traits of the stream
+    /// @tparam E       any enum type with a to_string() overload found by ADL
+    /// @param[in,out] os     output stream; the spelling is appended to it
+    /// @param[in]     value  enumerator to print
     /// @return @p os
     /// @ingroup api_enums_lowlevel
     // Templated on the stream so this header needs only <iosfwd>; it is pulled into device code.

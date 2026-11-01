@@ -66,10 +66,10 @@ Event for_each_chunk(Queue& q, int batch, int chunk, F&& f) {
 }
 
 /// Fold a dense rank-k product P into the referenced triangle of a Hermitian C:
-/// C = P + beta C, or for TwoSided C = P + P^H + beta C. alpha A B^H and conj(alpha) B A^H are
+/// \f$C = P + \beta C\f$, or for TwoSided \f$C = P + P^H + \beta C\f$. \f$\alpha A B^H\f$ and \f$\bar\alpha B A^H\f$ are
 /// conjugate transposes of each other, so one gemm and a mirrored read give her2k both terms.
 /// The other triangle is neither read nor written; the diagonal is real on exit, and its
-/// imaginary part is not an input (beta is real and C = C^H).
+/// imaginary part is not an input (\f$\beta\f$ is real and \f$C = C^H\f$).
 template <typename T, bool TwoSided>
 Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, Uplo uplo) {
     using real_t = float_t<T>;
@@ -114,8 +114,8 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
 }
 
 /// The dense symmetric (Conjugate = false) or Hermitian (true) copy of A's `uplo` triangle in a
-/// workspace lease, times B through the public gemm: C = alpha A B + beta C (Left) or
-/// alpha B A + beta C (Right). Chunked so each chunk's scratch fits; @pre expansion_chunk >= 1.
+/// workspace lease, times B through the public gemm: \f$C = \alpha A B + \beta C\f$ (Left) or
+/// \f$\alpha B A + \beta C\f$ (Right). Chunked so each chunk's scratch fits; @pre expansion_chunk >= 1.
 // The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on first
 // touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while enqueued.
 template <Backend B, typename T, bool Conjugate>
@@ -147,8 +147,8 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm_, const MV<T>& C_, T
     });
 }
 
-/// herk (TwoSided = false, Bop = A) and her2k (true): one gemm of op(A) op(Bop)^H over the whole
-/// n x n product into scratch, then fold_hermitian. The gemm cannot target C: it would write both
+/// herk (TwoSided = false, Bop = A) and her2k (true): one gemm of \f$\mathrm{op}(A)\,\mathrm{op}(\mathtt{Bop})^H\f$ over the whole
+/// \f$n \times n\f$ product into scratch, then fold_hermitian. The gemm cannot target C: it would write both
 /// triangles. Chunked as expand_gemm; @pre expansion_chunk >= 1.
 template <Backend B, typename T, bool TwoSided>
 Event gemm_fold(Queue& q, const MV<T>& A_, const MV<T>& Bop_, const MV<T>& C_, T alpha, float_t<T> beta, Uplo uplo,

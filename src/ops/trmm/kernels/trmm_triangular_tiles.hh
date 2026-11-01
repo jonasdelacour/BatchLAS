@@ -3,7 +3,7 @@
 
 // Batched Side::Left TRMM that skips the zero half of A with a loop bound, not a mask: an output
 // tile rooted at row m0 reduces only over the p its triangle reaches, and only the k-tile on the
-// diagonal is masked (in the A staging). The saving is (R+1)/2R for R = m/TileM row tiles, not 2x,
+// diagonal is masked (in the A staging). The saving is \f$\frac{R+1}{2R}\f$ for \f$R = m/\mathrm{TileM}\f$ row tiles, not 2x,
 // so the row tile is sized to m (trmm_row_tile). Layout and swizzle follow syrk_gram_tiles.hh.
 // evidence: docs/perf/level3.md#trmm-triangular-tiles-kernel-design
 
@@ -290,7 +290,7 @@ BATCHLAS_UNROLL_FULL
 }
 
 // Everything the kernel needs from the problem, independent of scalar type and
-// of the queue. Left side only: the right-side product C = alpha * B * op(A)
+// of the queue. Left side only: the right-side product \f$C = \alpha B\,\mathrm{op}(A)\f$
 // puts the triangle on the column index, which is a different k-loop bound and
 // a different staging assignment, not a transpose of this one.
 template <typename T>

@@ -13,7 +13,7 @@
 
 namespace batchlas::ops::trmm {
 
-struct Triangular : select::NoFields<"triangular"> {};  ///< trmm_triangular_tiles: Side::Left; tile grid <= 65535
+struct Triangular : select::NoFields<"triangular"> {};  ///< trmm_triangular_tiles: Side::Left; tile grid \f$\le 65535\f$
 struct Expand : select::NoFields<"expand"> {};          ///< expand_triangular + the public gemm; scratch must fit
 struct Vendor : select::NoFields<"vendor"> {};          ///< backend::trmm_vendor (cublas?trmm loop)
 
@@ -27,10 +27,10 @@ inline constexpr std::array<std::string_view, 3> last_resort{"expand", "triangul
 inline constexpr select::OpSpec spec{Op::trmm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
 inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< both natives: batch in grid z; 65536 throws
-inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular: row x column tiles in grid y
+inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular: row \f$\times\f$ column tiles in grid y
 inline constexpr int kNativeWg = 256;  ///< widest native work-group: the 128-row tile, the expansion
 
-/// Keys: side exact; order = A.rows(), weight 2 (work ~ order^2 q batch); q = B.cols() (Left) or B.rows() (Right).
+/// Keys: side exact; order = A.rows(), weight 2 (work \f$\sim \mathit{order}^2 q \cdot \mathit{batch}\f$); q = B.cols() (Left) or B.rows() (Right).
 inline constexpr std::array<std::string_view, 4> key_names{"side:exact", "order:log:2", "q:log", "batch:log"};
 
 // The transcription grid (tuned/README.md); the transcribed rule read only the side.

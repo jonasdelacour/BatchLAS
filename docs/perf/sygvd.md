@@ -4,8 +4,8 @@
 
 `sygvd` solves the generalized Hermitian-definite eigenproblem LAPACK `?sygvd` / `?hegvd` solves, for a
 batch. `sygst` is its reduction step, also public. The consumer is gfn2-xTB's SCC loop: every iteration
-solves \f$ H C = S C \varepsilon \f$ (itype 1, `jobz = V`, `uplo = U`) per molecule, for n of about
-240 to 1200, with the overlap S fixed per geometry.
+solves \f$ H C = S C \varepsilon \f$ (itype 1, `jobz = V`, `uplo = U`) per molecule, for \f$n\f$ of about
+240 to 1200, with the overlap \f$S\f$ fixed per geometry.
 
 ## The API {#sygvd-api}
 
@@ -22,8 +22,8 @@ solves \f$ H C = S C \varepsilon \f$ (itype 1, `jobz = V`, `uplo = U`) per molec
   vendor library takes a factored B.
 - **`hegst`, `hegvd`** are the complex spellings, with the same backend-deducing overloads
   (`hegvd(ctx, ...)`).
-- **`info`** follows LAPACK. 0 is success. i in 1..n means syev did not converge. n + i means the leading
-  minor of order i of `B` is not positive definite. For that item `A`, `B` and `W` are then unspecified;
+- **`info`** follows LAPACK. 0 is success. \f$1 \le i \le n\f$ means syev did not converge. \f$n + i\f$ means the leading
+  minor of order \f$i\f$ of `B` is not positive definite. For that item `A`, `B` and `W` are then unspecified;
   the other items are unaffected (bit-identical to a batch without the failure, per family). On
   `compose` the failed item's `B` triangle is replaced by the identity before `sygst`, so its eigenvalues
   are those of `A` and finite. A partial factor (NaN from a negative pivot) would otherwise flow into
@@ -52,32 +52,32 @@ float and cfloat rows are measured, the rest transcribed ([sygst: measured](#syg
 `transcribed-ab235065`). The CPU has no table; the last-resort order puts `vendor` first.
 
 > **Warning:** `compose` before `vendor` on the GPU (sygvd) is an untimed hypothesis from the shape of
-> the vendor call (a per-item loop at batch >= 128). The vendor may win at small batch and large n.
+> the vendor call (a per-item loop at batch >= 128). The vendor may win at small batch and large \f$n\f$.
 
 ## sygst: the blocked family {#sygst-the-blocked-family}
 
 `blocked:nb=<32|64|128|256>` is LAPACK's `dsygst` / `zhegst` (`src/ops/sygst/kernels/sygst_blocked.cc`, `blocked_range`).
 It works in place on the `uplo` triangle of `A` and never hermitizes it: every read goes through the
 named triangles, so the other triangle, `ld` pads and inter-item gaps keep their bits. Per block of
-`nb` columns (`kb` the block's order, `m` the trailing order):
+`nb` columns (\f$k_b\f$ the block's order, \f$m\f$ the trailing order):
 
 - **itype 1** (\f$ L^{-1} A L^{-H} \f$; Upper is the transposed schedule): the diagonal kernel reduces
   \f$ A_{11} \f$ and writes the Hermitian \f$ C_{11} \f$ to workspace `H`; `trsm` (Right,
   \f$ L_{11}^{-H} \f$) on \f$ P = A_{21} \f$; `gemm` \f$ P \mathrel{-}= \tfrac12 L_{21} H \f$;
   `her2k` / `syr2k` on \f$ A_{22} \f$; the same `gemm`; `trsm` (Left, \f$ L_{22} \f$) on the panel.
 - **itypes 2 and 3** (\f$ L^H A L \f$): a mirror kernel copies \f$ A_{22} \f$ into `H`; `trmm` writes
-  \f$ W = A_{21} L_{11} \f$ out of place (n x nb workspace); `gemm` \f$ W \mathrel{+}= \tfrac12 H L_{21} \f$,
+  \f$ W = A_{21} L_{11} \f$ out of place (\f$n \times \mathrm{nb}\f$ workspace); `gemm` \f$ W \mathrel{+}= \tfrac12 H L_{21} \f$,
   `her2k`, the `gemm` again; `trmm` writes \f$ A_{21} = L_{22}^H W \f$; the diagonal kernel reduces
   \f$ A_{22} \f$.
 
 LAPACK's `hemm` / `symm` became `gemm` against `H`: the `symm` table sends the tall float shape to
 cuBLAS's per-item loop (float n = 128, batch 256: 2.23 ms against 0.44 ms with `gemm`). A diagonal
 block wider than 32 recurses at a quarter of its order (at least 32). `nb` is a family field because
-the best block grows with n.
+the best block grows with \f$n\f$.
 
-**The diagonal kernel** (`src/ops/sygst/kernels/sygst_diag.cc`) gives each column of a kb <= 32 block one
+**The diagonal kernel** (`src/ops/sygst/kernels/sygst_diag.cc`) gives each column of a \f$k_b \le 32\f$ block one
 work-item with the column in registers; `F` and a transpose buffer sit in shared memory, read as
-16-byte packs. Up to 128 columns share a work-group (several items at kb < 32); orders 32, 16 and 8
+16-byte packs. Up to 128 columns share a work-group (several items at \f$k_b < 32\f$); orders 32, 16 and 8
 are compile-time instances (float n = 32, batch 8192: 0.20 ms, `twosided` 0.21 ms).
 
 **Chunking:** potrf's L2 chunk (`blocked_chunk`, `BLOCKED_L2_CHUNK_PERCENT`), but never fewer than
@@ -138,9 +138,9 @@ Each applied alone, `sygvd_tests` run on CUDA and NETLIB, all four types (2026-1
 | break | red set |
 |---|---|
 | diagonal solve `<` to `<=` / product `>` to `>=` (`sygst_diag.cc`) | definition for that itype only; saturating; sygvd. complex<double> green (one element per pack cannot reach the guard) |
-| mirror kernel without `conj` | complex only: definition itypes 2, 3 (n >= 48), itype 1 (n >= 65, nb >= 64 recursion) |
-| a half update's sign, or a `trmm` transpose, per itype and triangle | definition for that itype and triangle at n >= 33 (48) only; saturating |
-| the wide diagonal block recurses at kb - 1 | definition only, nb 64-256 |
+| mirror kernel without `conj` | complex only: definition itypes 2, 3 (\f$n \ge 48\f$), itype 1 (\f$n \ge 65\f$, \f$\mathrm{nb} \ge 64\f$ recursion) |
+| a half update's sign, or a `trmm` transpose, per itype and triangle | definition for that itype and triangle at \f$n \ge 33\f$ (48) only; saturating |
+| the wide diagonal block recurses at \f$k_b - 1\f$ | definition only, nb 64-256 |
 | a pass offsets B by A's batch stride | aborts in saturating's forced 100-item passes only |
 | the diagonal kernel stores the whole block | definition and saturating, from the poison check |
 | packed work-groups overlap by one item | saturating and sygvd's bit-identity case; definition for types with few items per group |
@@ -150,7 +150,7 @@ Each applied alone, `sygvd_tests` run on CUDA and NETLIB, all four types (2026-1
 All sizes come from `BumpAllocator::measuring()`; `*_buffer_size` makes the same choices as the call.
 `compose` holds potrf's per-item status and, for itype 3 with vectors, an `n x n` product per item, plus
 one scratch region of `max(potrf, sygst, syev)` bytes the children take in turn. `blocked` needs per pass
-two pointer arrays, an nb x nb `H` and (itypes 2, 3) an n x nb `W` per item; a single diagonal block
+two pointer arrays, an \f$\mathrm{nb} \times \mathrm{nb}\f$ `H` and (itypes 2, 3) an \f$n \times \mathrm{nb}\f$ `W` per item; a single diagonal block
 needs none. `twosided` itype 1 needs none; itypes 2 and 3 one `n x n` product per item. The cuSOLVER
 vendor needs one `lwork` buffer and, without a caller `info`, an int per item.
 
@@ -167,7 +167,7 @@ vendor needs one `lwork` buffer and, without a caller `info`, an int per item.
 
 - `sygst` against its definition for every family, itype and triangle; `blocked` at every `nb` at
   orders straddling each edge (8, 16, 32, nb, a two-level recursion at n = 260), on a badly scaled
-  B = D S D against a slack of 32. A's storage outside its triangle and all of B keep their bits.
+  \f$B = D S D\f$ against a slack of 32. A's storage outside its triangle and all of B keep their bits.
 - 1024 identical items bit-identical to item 0, forced 100-item passes
   (`BATCHLAS_TUNE_L2_CHUNK_ITEMS` bypasses the 4 x CU floor), exact workspace, a workspace one byte
   short throws.

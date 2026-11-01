@@ -53,7 +53,7 @@ anything under `include/batchlas/util`) run the full suite.
 
 The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `steqr_tests` and
 `consumer_package_tests`; `BATCHLAS_SLOW_CASES_<name>` moves single cases to a `<name>_slow`
-entry (`sytrd_sb2st_tests_slow`: BANDR1 at n=256). `ctest -LE slow`
+entry (`sytrd_sb2st_tests_slow`: BANDR1 at \f$n = 256\f$). `ctest -LE slow`
 is a broad check, not a pre-push gate. Label a test `slow` past about 15 s.
 
 ## The sub-group partition layer
@@ -115,7 +115,7 @@ BATCHLAS_TEST_FLOAT_TYPE=float ./build/tests/steqr_tests   # skip double/complex
 | | `complex` | both complex types |
 
 The two combine. `BATCHLAS_TEST_BACKEND=CUDA` is the largest lever: NETLIB instantiations run host
-O(n^3) reference solves (most of `steqr_tests` runtime).
+\f$O(n^3)\f$ reference solves (most of `steqr_tests` runtime).
 
 > **Warning:** both filters are `GTEST_SKIP()`s. Case list and pass count look unchanged while the
 > filtered coverage is gone, and startup is not cut. An unrecognised value skips every case:
@@ -133,7 +133,7 @@ A launch that finds no device image for its kernel ("No kernel named ...") fails
    small batch and large batch at small `n`. A shared-local-memory kernel still needs one
    saturating-batch case at small `n` (agent guide §8).
 2. **Watch the reference solve.** `Matrix::Zeros(n, n, batch)` plus `syev` / `ritz_values` /
-   `batchlas::verify::eigenvalues` cost O(n^3)·batch on the host for NETLIB instantiations; the
+   `batchlas::verify::eigenvalues` cost \f$O(n^3) \cdot \text{batch}\f$ on the host for NETLIB instantiations; the
    reference, not the kernel, usually makes a test slow.
 3. If every test body starts with `using float_type = typename base_type<T>::type;` and computes
    only in `float_type`, the complex instantiations are bit-identical re-runs. Use

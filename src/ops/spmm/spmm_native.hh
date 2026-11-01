@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Native batched CSR SpMM, C = alpha*op(A)*op(B) + beta*C. TRAPS: A.nnz() is the batch-max
-// CAPACITY (bound loops by row_offsets); beta == 0 never reads C, alpha == 0 still scales C;
+// Native batched CSR SpMM, \f$C = \alpha \cdot \mathrm{op}(A) \cdot \mathrm{op}(B) + \beta \cdot C\f$. TRAPS: A.nnz() is the batch-max
+// CAPACITY (bound loops by row_offsets); \f$\beta = 0\f$ never reads C, \f$\alpha = 0\f$ still scales C;
 // no __restrict__ (LOBPCG slices alias); the scatter is not bitwise-repeatable.
 // evidence: docs/perf/spmm.md#spmm-the-kernel-contract
 

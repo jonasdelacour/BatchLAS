@@ -39,10 +39,10 @@ using symm_vendor = Event(Queue&,
 /// \f[ C := \alpha A B + \beta C \quad (\texttt{Side::Left}), \qquad
 ///     C := \alpha B A + \beta C \quad (\texttt{Side::Right}) \f]
 /// with `A` symmetric: only the triangle named by `uplo` is read and the other
-/// is taken to be its transpose. `B` and `C` are m x n; `A` is m x m (Left) or
-/// n x n (Right).
+/// is taken to be its transpose. `B` and `C` are \f$m \times n\f$; `A` is \f$m \times m\f$ (Left) or
+/// \f$n \times n\f$ (Right).
 ///
-/// Constrained to real `T`; the complex spelling is hemm. Also callable as
+/// Real or complex-symmetric `T` (no conjugate); the Hermitian spelling is hemm. Also callable as
 /// `symm(ctx, A, B, C, SymmOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
 ///
@@ -53,21 +53,23 @@ using symm_vendor = Event(Queue&,
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `float`, `double`, or complex: complex-symmetric A (no conjugate; that is hemm)
-/// @param ctx    queue the work is enqueued on
-/// @param A      batch of symmetric matrices; only the `uplo` triangle is read
-/// @param B      batch of m x n matrices; not modified
-/// @param C      batch of m x n matrices; input scaled by `beta`, overwritten with the result
-/// @param alpha  scale of the product
-/// @param beta   scale of the input `C`
-/// @param side   whether `A` multiplies from the left or the right
-/// @param uplo   which triangle of `A` holds the data
+/// @param[in]     ctx    queue the work is enqueued on
+/// @param[in]     A      batch of symmetric \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right)
+///                       matrices; only the `uplo` triangle is read
+/// @param[in]     B      batch of \f$m \times n\f$ matrices; not modified
+/// @param[in,out] C      batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+///                       with the result
+/// @param[in]     alpha  scale \f$\alpha\f$ of the product
+/// @param[in]     beta   scale \f$\beta\f$ of the input `C`
+/// @param[in]     side   whether `A` multiplies from the left or the right
+/// @param[in]     uplo   which triangle of `A` holds the data
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_SYMM_ROUTE` names
 ///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
 ///         instead fall back to the tuned choice with a warning)
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
-///         (a heterogeneous batch: every family takes one (n, k) per launch)
+///         (a heterogeneous batch: every family takes one \f$(m, n)\f$ per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` or `Backend::ROCM` on a GPU, with homogeneous operands,
 ///         and one item's expansion scratch that fits (the `expand` choice chunks the batch;
@@ -97,6 +99,19 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of symm (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::symm calls it. Same arguments and semantics.
+/// @tparam Back  backend whose vendor library runs the call
+/// @tparam T     `float`, `double`, or complex (complex-symmetric `A`, no conjugate)
+/// @param[in]     ctx    queue the work is enqueued on
+/// @param[in]     A      batch of symmetric \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right)
+///                       matrices; only the `uplo` triangle is read
+/// @param[in]     B      batch of \f$m \times n\f$ matrices; not modified
+/// @param[in,out] C      batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+///                       with the result
+/// @param[in]     alpha  scale \f$\alpha\f$ of the product
+/// @param[in]     beta   scale \f$\beta\f$ of the input `C`
+/// @param[in]     side   whether `A` multiplies from the left or the right
+/// @param[in]     uplo   which triangle of `A` holds the data
+/// @return event of the last enqueued vendor call; `C` is valid once it completes
 /// @ingroup api_dispatch
 template <Backend Back, FloatingOrComplexScalar T>
 BATCHLAS_API Event symm_vendor(Queue& ctx,

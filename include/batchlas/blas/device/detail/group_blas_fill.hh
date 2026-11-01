@@ -10,9 +10,9 @@ namespace batchlas::device {
 
 /// @brief Sets every element of `x` to `value`, cooperatively across `group`.
 /// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group  executor whose work-items share the elements
-/// @param x      single vector (`batch_size() == 1`), written in place
-/// @param value  fill value
+/// @param[in]  group  executor whose work-items share the elements
+/// @param[out] x      single vector (`batch_size() == 1`); every element is set to `value`
+/// @param[in]  value  fill value
 template <typename Group, typename T>
 inline constexpr void fill(const Group& group,
                            const VectorView<T>& x,
@@ -27,9 +27,11 @@ inline constexpr void fill(const Group& group,
 }
 
 /// @brief Sets every element of the dense matrix `a` to `value`; the padding rows between `a.rows()` and `a.ld()` are not touched.
-/// @param group  executor whose work-items share the elements
-/// @param a      single matrix, written in place
-/// @param value  fill value
+/// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param[in]  group  executor whose work-items share the elements
+/// @param[out] a      single matrix; all \f$m \times n\f$ elements (\f$m\f$ = `a.rows()`,
+///                    \f$n\f$ = `a.cols()`) are set to `value`
+/// @param[in]  value  fill value
 template <typename Group, typename T>
 inline constexpr void fill(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,

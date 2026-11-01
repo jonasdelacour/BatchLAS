@@ -21,8 +21,8 @@ row of `tuned/gemv.<device>.txt` that `can_run` admits; last resort `vendor`, th
 | `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no GPU term (builds for `native_cpu`) |
 | `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()` |
 
-The native term refuses a heterogeneous `A`, negative extents and `batch < 1`, and requires x and y
-to match A in batch and length ([shape builder contract](#gemv-the-shape-builder-contract));
+The native term refuses a heterogeneous \f$A\f$, negative extents and `batch < 1`, and requires
+\f$x\f$ and \f$y\f$ to match \f$A\f$ in batch and length ([shape builder contract](#gemv-the-shape-builder-contract));
 `m == 0 || n == 0` quick-returns. `has_sg32` comes from `sycl::info::device::sub_group_sizes` via
 `Device::supports_sub_group_size`; `get_property(MAX_SUB_GROUP_SIZE)` returns `sub_group_sizes()[0]`
 and is wrong both ways, and a `reqd_sub_group_size(32)` launch on a device without 32 aborts.
@@ -53,7 +53,8 @@ zero local memory; the hand-rolled shuffle ladder beats `sycl::reduce_over_group
 
 ### The cdouble window in the tables
 
-Keys are `trans:exact out:log red:log batch:log`; `out`/`red` are the y/x lengths and swap with
+Keys are `trans:exact out:log red:log batch:log`; `out`/`red` are the
+\f$y\f$/\f$x\f$ lengths and swap with
 `transA`; ConjTrans folds to `T`. The grid straddles every edge (`out` 255/256, `red` 63/64 and
 352/353, `batch` 319/320). On sm_89 (transcribed), `cta` ranks first only for `complex<double>`,
 `trans=T`, `64 <= red <= 352`, `out >= 256`, `batch >= 320`; every other row ranks `vendor` first.
@@ -87,8 +88,8 @@ means body 1, so body 4 serves `out_len <= 16`. Needs sub-group 32 (false on `na
 
 cuBLAS `gemvStridedBatched` runs at 94–105% of the roof on 90 of 92 cells (all types, both
 `transA`, `n` 32…2048, `batch` 64…65536): parity is the achievable result. The exception is
-`complex<double>` transposed: 325 GB/s at 256×256 against 936–967 for the other types at matched
-bytes, unchanged by `ld` padding; the native CTA body reads 936–941 GB/s for all four types.
+`complex<double>` transposed: 325 GB/s at \f$256 \times 256\f$ against 936–967 for the other types at
+matched bytes, unchanged by `ld` padding; the native CTA body reads 936–941 GB/s for all four types.
 
 ### The cdouble window boundaries
 
@@ -144,11 +145,12 @@ at 32; a warp effect, not a bytes effect. After: 24 cells min 0.60, median 1.16.
 
 ## GEMV: the shape builder contract
 
-* **The native term of `can_run` is the only agreement check:** homogeneous `A`, `batch >= 1`, x and y
-  matching A in batch, `X.size() == red_len`, `Y.size() == out_len`. The public entry validates
-  nothing; a non-conforming call goes to `vendor`, or throws `NoRouteError` vendor-free.
+* **The native term of `can_run` is the only agreement check:** homogeneous \f$A\f$, `batch >= 1`,
+  \f$x\f$ and \f$y\f$ matching \f$A\f$ in batch, `X.size() == red_len`, `Y.size() == out_len`.
+  The public entry validates nothing; a non-conforming call goes to `vendor`, or throws `NoRouteError` vendor-free.
 * **`can_run` reads metadata only**, never `data_ptr()`.
-* **Lengths swap with `transA`**; table keys use `red_len`/`out_len`, coverage `m`/`n` are A's stored extents.
+* **Lengths swap with `transA`**; table keys use `red_len`/`out_len`, coverage `m`/`n` are the stored
+  extents of \f$A\f$.
 * **`transA` is part of `coverage.cc`'s `variant_key`**; dropping it merges bodies 1 and 2/3.
 * **Only `A` can be heterogeneous.**
 

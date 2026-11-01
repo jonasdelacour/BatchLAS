@@ -2,11 +2,12 @@
 #pragma once
 
 /// @file
-/// @brief Tuning constants, bucketed by problem order n, with runtime `BATCHLAS_TUNE_*`
+/// @brief Tuning constants, bucketed by problem order \f$n\f$, with runtime `BATCHLAS_TUNE_*`
 /// overrides.
 ///
-/// Each knob has five constants (`_TINY` n <= 64, `_SMALL` <= 128, `_MEDIUM` <= 256, `_LARGE`
-/// <= 512, `_XLARGE` above), a constexpr table `<knob>_default_for_n(n)`, and a runtime accessor
+/// Each knob has five constants (`_TINY` \f$n \le 64\f$, `_SMALL` \f$n \le 128\f$, `_MEDIUM`
+/// \f$n \le 256\f$, `_LARGE` \f$n \le 512\f$, `_XLARGE` above), a constexpr table
+/// `<knob>_default_for_n(n)`, and a runtime accessor
 /// `<knob>_for_n(n)` that consults its `BATCHLAS_TUNE_*` override first. The constants were
 /// measured on sm_89 in float only.
 /// @warning Do not change a `BATCHLAS_TUNE_*` variable between a `*_buffer_size()` query and its
@@ -30,8 +31,9 @@ namespace detail {
 ///
 /// Unset, empty, unparseable, trailing garbage (`"16x"`), non-positive or out-of-range values all
 /// yield `fallback`, the compiled constant.
-/// @param captured the captured `BATCHLAS_TUNE_*` value from settings()
-/// @param fallback the compiled constant for this n
+/// @param[in] captured  the captured `BATCHLAS_TUNE_*` value from settings()
+/// @param[in] fallback  value returned when @p captured is unusable (normally the compiled constant)
+/// @return the parsed override, or @p fallback
 /// @ingroup api_config_lowlevel
 // strtol stays HERE, not in settings.cc: env_int_or reads "16x" as 16, exactly what a retune
 // harness types. evidence: docs/perf/tuning.md#tuning-runtime-overrides-of-the-constants
@@ -135,7 +137,9 @@ inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 8;
 
 // Compile-time tables (constexpr): the bucket constant for n, no override.
 
-/// @brief Compiled `ORMQR_BLOCK_SIZE_*` bucket for n (no override).
+/// @brief Compiled `ORMQR_BLOCK_SIZE_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
 /// @ingroup api_config_lowlevel
 inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {
     if (n <= 64) return ORMQR_BLOCK_SIZE_TINY;
@@ -145,6 +149,10 @@ inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {
     return ORMQR_BLOCK_SIZE_XLARGE;
 }
 
+/// @brief Compiled `GEBRD_BLOCK_SIZE_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {
     if (n <= 64) return GEBRD_BLOCK_SIZE_TINY;
     if (n <= 128) return GEBRD_BLOCK_SIZE_SMALL;
@@ -153,6 +161,10 @@ inline constexpr int32_t gebrd_block_size_default_for_n(int32_t n) {
     return GEBRD_BLOCK_SIZE_XLARGE;
 }
 
+/// @brief Compiled `SB2ST_BACK_TILE_*` bucket for \f$n\f$ (no override); 0 means the heuristic.
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t sb2st_back_tile_default_for_n(int32_t n) {
     if (n <= 64) return SB2ST_BACK_TILE_TINY;
     if (n <= 128) return SB2ST_BACK_TILE_SMALL;
@@ -161,6 +173,10 @@ inline constexpr int32_t sb2st_back_tile_default_for_n(int32_t n) {
     return SB2ST_BACK_TILE_XLARGE;
 }
 
+/// @brief Compiled `SB2ST_BACK_SUBS_*` bucket for \f$n\f$ (no override); 0 means the heuristic.
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t sb2st_back_subs_default_for_n(int32_t n) {
     if (n <= 64) return SB2ST_BACK_SUBS_TINY;
     if (n <= 128) return SB2ST_BACK_SUBS_SMALL;
@@ -169,6 +185,10 @@ inline constexpr int32_t sb2st_back_subs_default_for_n(int32_t n) {
     return SB2ST_BACK_SUBS_XLARGE;
 }
 
+/// @brief Compiled `SY2SB_ORMQR_NB_*` bucket for \f$n\f$ (no override); 0 means the shape gate.
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t sy2sb_ormqr_nb_default_for_n(int32_t n) {
     if (n <= 64) return SY2SB_ORMQR_NB_TINY;
     if (n <= 128) return SY2SB_ORMQR_NB_SMALL;
@@ -177,6 +197,10 @@ inline constexpr int32_t sy2sb_ormqr_nb_default_for_n(int32_t n) {
     return SY2SB_ORMQR_NB_XLARGE;
 }
 
+/// @brief Compiled `SYTRD_BLOCK_SIZE_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {
     if (n <= 64) return SYTRD_BLOCK_SIZE_TINY;
     if (n <= 128) return SYTRD_BLOCK_SIZE_SMALL;
@@ -185,6 +209,10 @@ inline constexpr int32_t sytrd_block_size_default_for_n(int32_t n) {
     return SYTRD_BLOCK_SIZE_XLARGE;
 }
 
+/// @brief Compiled `LATRD_LOWER_PANEL_WG_HINT_*` bucket for \f$n\f$ (no override); 0 means none.
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t latrd_lower_panel_wg_hint_default_for_n(int32_t n) {
     if (n <= 64) return LATRD_LOWER_PANEL_WG_HINT_TINY;
     if (n <= 128) return LATRD_LOWER_PANEL_WG_HINT_SMALL;
@@ -193,6 +221,10 @@ inline constexpr int32_t latrd_lower_panel_wg_hint_default_for_n(int32_t n) {
     return LATRD_LOWER_PANEL_WG_HINT_XLARGE;
 }
 
+/// @brief Compiled `STEDC_RECURSION_THRESHOLD_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t stedc_recursion_threshold_default_for_n(int32_t n) {
     if (n <= 64) return STEDC_RECURSION_THRESHOLD_TINY;
     if (n <= 128) return STEDC_RECURSION_THRESHOLD_SMALL;
@@ -201,6 +233,10 @@ inline constexpr int32_t stedc_recursion_threshold_default_for_n(int32_t n) {
     return STEDC_RECURSION_THRESHOLD_XLARGE;
 }
 
+/// @brief Compiled `STEDC_MERGE_VARIANT_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t stedc_merge_variant_default_for_n(int32_t n) {
     if (n <= 64) return STEDC_MERGE_VARIANT_TINY;
     if (n <= 128) return STEDC_MERGE_VARIANT_SMALL;
@@ -209,6 +245,10 @@ inline constexpr int32_t stedc_merge_variant_default_for_n(int32_t n) {
     return STEDC_MERGE_VARIANT_XLARGE;
 }
 
+/// @brief Compiled `STEDC_THREADS_PER_ROOT_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t stedc_threads_per_root_default_for_n(int32_t n) {
     if (n <= 64) return STEDC_THREADS_PER_ROOT_TINY;
     if (n <= 128) return STEDC_THREADS_PER_ROOT_SMALL;
@@ -217,6 +257,10 @@ inline constexpr int32_t stedc_threads_per_root_default_for_n(int32_t n) {
     return STEDC_THREADS_PER_ROOT_XLARGE;
 }
 
+/// @brief Compiled `STEDC_WG_MULTIPLIER_*` bucket for \f$n\f$ (no override).
+/// @param[in] n  problem order \f$n\f$
+/// @return the bucket constant for \f$n\f$
+/// @ingroup api_config_lowlevel
 inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
     if (n <= 64) return STEDC_WG_MULTIPLIER_TINY;
     if (n <= 128) return STEDC_WG_MULTIPLIER_SMALL;
@@ -228,67 +272,84 @@ inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
 // Runtime accessors: what production code calls. Each consults its BATCHLAS_TUNE_* override
 // through settings() first and falls back to the table above.
 
-/// @brief ormqr WY block width for order n; override `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE`.
+/// @brief ormqr WY block width for order \f$n\f$; override `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else ormqr_block_size_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t ormqr_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.ormqr_block_size,  // BATCHLAS_TUNE_ORMQR_BLOCK_SIZE
                                        ormqr_block_size_default_for_n(n));
 }
 
-/// @brief gebrd panel width for order n; override `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE`.
+/// @brief gebrd panel width for order \f$n\f$; override `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else gebrd_block_size_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t gebrd_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.gebrd_block_size,  // BATCHLAS_TUNE_GEBRD_BLOCK_SIZE
                                        gebrd_block_size_default_for_n(n));
 }
 
-/// @brief sb2st wave back-transform tile for order n, or 0 for "keep the call site's heuristic";
+/// @brief sb2st wave back-transform tile for order \f$n\f$, or 0 for "keep the call site's heuristic";
 /// override `BATCHLAS_TUNE_SB2ST_BACK_TILE`.
 /// @note 0 is reachable only from the compiled constant: the override forces a geometry, never
 ///       auto. The same holds for sb2st_back_subs_for_n() and sy2sb_ormqr_nb_for_n().
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else sb2st_back_tile_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t sb2st_back_tile_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sb2st_back_tile,  // BATCHLAS_TUNE_SB2ST_BACK_TILE
                                        sb2st_back_tile_default_for_n(n));
 }
 
-/// @brief sb2st wave back-transform sub-group count for order n, or 0 for the heuristic;
+/// @brief sb2st wave back-transform sub-group count for order \f$n\f$, or 0 for the heuristic;
 /// override `BATCHLAS_TUNE_SB2ST_BACK_SUBS`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else sb2st_back_subs_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t sb2st_back_subs_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sb2st_back_subs,  // BATCHLAS_TUNE_SB2ST_BACK_SUBS
                                        sb2st_back_subs_default_for_n(n));
 }
 
-/// @brief sy2sb back-transform WY width for order n, or 0 for the shape gate; override
+/// @brief sy2sb back-transform WY width for order \f$n\f$, or 0 for the shape gate; override
 /// `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else sy2sb_ormqr_nb_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sy2sb_ormqr_nb,  // BATCHLAS_TUNE_SY2SB_ORMQR_NB
                                        sy2sb_ormqr_nb_default_for_n(n));
 }
 
-/// @brief sytrd panel width for order n; override `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
+/// @brief sytrd panel width for order \f$n\f$; override `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else sytrd_block_size_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t sytrd_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sytrd_block_size,  // BATCHLAS_TUNE_SYTRD_BLOCK_SIZE
                                        sytrd_block_size_default_for_n(n));
 }
 
-/// @brief latrd lower-panel work-group size hint for order n, 0 for none; override
+/// @brief latrd lower-panel work-group size hint for order \f$n\f$, 0 for none; override
 /// `BATCHLAS_TUNE_LATRD_WG_HINT`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else latrd_lower_panel_wg_hint_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.latrd_wg_hint,  // BATCHLAS_TUNE_LATRD_WG_HINT
                                        latrd_lower_panel_wg_hint_default_for_n(n));
 }
 
-/// @brief latrd_lower_panel_wg_hint_for_n() at n = 256, for the legacy path.
+/// @brief latrd_lower_panel_wg_hint_for_n() at \f$n = 256\f$, for the legacy path.
+/// @return the work-group size hint, 0 for none
 /// @ingroup api_config_lowlevel
 inline int32_t latrd_lower_panel_wg_hint() { return latrd_lower_panel_wg_hint_for_n(256); }
 
-/// @brief Whether sytrd fuses the panel update at order n. No `BATCHLAS_TUNE_*` override; see
+/// @brief Whether sytrd fuses the panel update at order \f$n\f$. No `BATCHLAS_TUNE_*` override; see
 /// SelectionSettings::sytrd_fuse_panel_update.
+/// @param[in] n  problem order \f$n\f$
+/// @return true when the `SYTRD_FUSE_PANEL_UPDATE_*` bucket for \f$n\f$ is nonzero
 /// @ingroup api_config_lowlevel
 inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
     if (n <= 64) return SYTRD_FUSE_PANEL_UPDATE_TINY != 0;
@@ -298,16 +359,20 @@ inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
     return SYTRD_FUSE_PANEL_UPDATE_XLARGE != 0;
 }
 
-/// @brief stedc leaf size for order n; override `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`.
+/// @brief stedc leaf size for order \f$n\f$; override `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`.
 /// @note 32 is the CTA invariant (sub-group width), not a tuning result.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else stedc_recursion_threshold_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t stedc_recursion_threshold_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_recursion_threshold,  // BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD
                                        stedc_recursion_threshold_default_for_n(n));
 }
 
-/// @brief stedc merge variant for order n, as a StedcMergeVariant value (1 Fused, 2 FusedCta);
+/// @brief stedc merge variant for order \f$n\f$, as a StedcMergeVariant value (1 Fused, 2 FusedCta);
 /// override `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else stedc_merge_variant_default_for_n()
 /// @ingroup api_config_lowlevel
 // Callers cast to StedcMergeVariant unchecked; 0 (Auto) would re-enter tuning resolution, so it
 // must stay unreachable (it is: non-positive overrides fall back).
@@ -316,16 +381,20 @@ inline int32_t stedc_merge_variant_for_n(int32_t n) {
                                        stedc_merge_variant_default_for_n(n));
 }
 
-/// @brief stedc secular-solve threads per root for order n; override
+/// @brief stedc secular-solve threads per root for order \f$n\f$; override
 /// `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else stedc_threads_per_root_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t stedc_threads_per_root_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_threads_per_root,  // BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT
                                        stedc_threads_per_root_default_for_n(n));
 }
 
-/// @brief stedc merge work-group multiplier for order n; override
+/// @brief stedc merge work-group multiplier for order \f$n\f$; override
 /// `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`.
+/// @param[in] n  problem order \f$n\f$
+/// @return the override if it is a positive integer, else stedc_wg_multiplier_default_for_n()
 /// @ingroup api_config_lowlevel
 inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_wg_multiplier,  // BATCHLAS_TUNE_STEDC_WG_MULTIPLIER
@@ -346,12 +415,24 @@ inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE = 1;
 /// @brief Items per chunk for a multi-kernel blocked driver over @p batch items.
 ///
 /// The chunk holds @p percent % of @p l2_bytes of @p item_bytes items, rounded
-/// up to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` x @p compute_units.
+/// up to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE`
+/// \f$\times\f$ @p compute_units. With \f$p\f$ = @p percent, \f$L\f$ = @p l2_bytes,
+/// \f$s\f$ = @p item_bytes and \f$c\f$ = @p compute_units that is
+/// \f$c \max\!\left(m, \left\lceil p L / (100\, s\, c) \right\rceil\right)\f$ items with
+/// \f$m\f$ = `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE`, up to integer truncation.
 /// The driver runs parts of that size and the last part takes the remainder, so no part is smaller
 /// than a chunk and the largest is `chunk + batch % chunk`. `BATCHLAS_TUNE_L2_CHUNK_PERCENT` overrides
 /// @p percent for every op; `BATCHLAS_TUNE_L2_CHUNK_ITEMS` forces the chunk size as given.
-/// @param percent the op's `*_L2_CHUNK_PERCENT`; 0 or less: no chunking
-/// @return @p batch (one part) below two chunks, at a percent of 0, or when the device reports no cache
+/// @param[in] batch          number of batch items the driver runs
+/// @param[in] item_bytes     bytes one item occupies; \f$\le 0\f$ disables chunking,
+///                           unless `BATCHLAS_TUNE_L2_CHUNK_ITEMS` is set
+/// @param[in] l2_bytes       device L2 cache size in bytes; \f$\le 0\f$ (no cache reported)
+///                           disables chunking, unless `BATCHLAS_TUNE_L2_CHUNK_ITEMS` is set
+/// @param[in] compute_units  device compute-unit count; \f$\le 0\f$ is treated as 1
+/// @param[in] percent        the op's `*_L2_CHUNK_PERCENT`; \f$\le 0\f$ means no chunking unless
+///                           `BATCHLAS_TUNE_L2_CHUNK_PERCENT` or `BATCHLAS_TUNE_L2_CHUNK_ITEMS` is set
+/// @return the chunk size, or @p batch (one part) when \f$\mathit{batch} < 2 \cdot \mathit{chunk}\f$,
+///         at a percent of 0, or when the device reports no cache
 /// @ingroup api_config_lowlevel
 inline int64_t blocked_chunk_items(int64_t batch, int64_t item_bytes, int64_t l2_bytes,
                                    int64_t compute_units, int64_t percent = BLOCKED_L2_CHUNK_PERCENT) {

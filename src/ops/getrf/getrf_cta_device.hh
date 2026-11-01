@@ -63,7 +63,7 @@ inline constexpr int kLuRedSlots = 32;
 // a launch failure -- so the launcher derives the two together and asserts the pairing.
 enum class LuScope { SubGroup, WorkGroup };
 
-// LAPACK ?GETF2 on an m x n tile, in place, for `kmax` (not min(m, n)) steps.
+// LAPACK ?GETF2 on an \f$m \times n\f$ tile, in place, for `kmax` (not \f$\min(m, n)\f$) steps.
 // `piv_base` is the panel's first GLOBAL row index, so ipiv and info come out global
 // and 1-based with no fix-up pass. `info_item` is READ as well as written
 // (first-failure-wins across panels), so both launchers zero it beforehand.

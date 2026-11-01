@@ -114,7 +114,7 @@ The solver iterates on maximal blocks \f$[s, t]\f$ with \f$e_j \neq 0\f$ for
   \f$i \ge b\f$ as the block end, and continues after it.
 
 Inside a block the QL window \f$[\ell, m]\f$ shrinks after each step: with \f$m\f$ the first zero
-in \f$e_\ell, \dots\f$, the eigenvalue \f$d_\ell\f$ has converged if \f$m = \ell\f$, a 2x2 block
+in \f$e_\ell, \dots\f$, the eigenvalue \f$d_\ell\f$ has converged if \f$m = \ell\f$, a \f$2 \times 2\f$ block
 is solved exactly if \f$m = \ell + 1\f$, and otherwise one implicit step runs on \f$[\ell, m]\f$.
 
 ### CTA control flow on one matrix
@@ -167,7 +167,7 @@ g_i &= c_i r_i^{\star} - c_{i-1} e_i ;
 A warp holds several chunks of \f$P\f$ lanes, one tridiagonal each. In the nested loop above,
 chunks realign only at loop exits, so the warp pays the slowest chunk's sweep count per
 eigenvalue. `steqr_cta_solve_flat` hoists the sweep out of the nest: each chunk settles (opens a
-block, deflates, advances, solves 2x2 blocks) until it has a sweep \f$[\ell, m]\f$ or is done, then
+block, deflates, advances, solves \f$2 \times 2\f$ blocks) until it has a sweep \f$[\ell, m]\f$ or is done, then
 every chunk with a sweep chases in the same pass. The per-chunk operation sequence is unchanged,
 so results are bitwise equal to the nested solver. It ships where `kSteqrCtaFlatPays` holds
 (\f$P = 16\f$, or \f$P = 8\f$ in FP64); the measurements are in

@@ -48,8 +48,10 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 ///
 /// Checks only non-negative extents. Squareness and the pivot span's length are
 /// checked by the option overloads, not here: this positional entry point factors
-/// an m x n view whole (the native cta and blocked kernels, and the NETLIB and
+/// an \f$m \times n\f$ view whole (the native cta and blocked kernels, and the NETLIB and
 /// ROCm vendors, take it; cuBLAS does not).
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] A  batch of \f$m \times n\f$ matrices getrf() will get; only the extents are read
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_factorizations_lowlevel
 // Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
@@ -68,13 +70,13 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 
 /// @brief Batched LU factorization with partial pivoting.
 ///
-/// For every batch item computes \f$ A = P L U \f$ with L unit lower triangular
-/// and U upper triangular, and overwrites A with L (below the diagonal, unit
-/// diagonal implied) and U (on and above it), as LAPACK `?getrf`.
+/// For every batch item computes \f$ A = P L U \f$ with \f$L\f$ unit lower triangular
+/// and \f$U\f$ upper triangular, and overwrites A with \f$L\f$ (below the diagonal, unit
+/// diagonal implied) and \f$U\f$ (on and above it), as LAPACK `?getrf`.
 ///
 /// **Pivot format.** @p pivots is typed `int64_t`, but on the GPU backends and
-/// every native kernel it holds *packed 1-based int32* indices: item b's row
-/// interchange i (row i was swapped with row `ipiv[i]`) is the int32 at index
+/// every native kernel it holds *packed 1-based int32* indices: item \f$b\f$'s row
+/// interchange \f$i\f$ (row \f$i\f$ was swapped with row `ipiv[i]`) is the int32 at index
 /// `b * n + i` of the span's bytes reinterpreted as `int32_t`. The NETLIB
 /// backend writes genuine 1-based int64 instead. Pass the span unchanged to
 /// getrs() / getri() on the same backend; do not read or compare the entries
@@ -86,16 +88,19 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// is waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n matrices; overwritten with L and U. An m x n batch is
-///                    factored whole, min(m, n) pivots per item packed at stride min(m, n),
-///                    by the native kernels on a GPU queue and by the NETLIB and ROCm vendors
-/// @param pivots      pivot output, at least `min(m, n) * batch` `int64_t` elements
-/// @param workspace   device-accessible scratch of at least getrf_buffer_size() bytes
-/// @param info        per-item LAPACK status, one int32 per batch item: 0 on
-///                    success, i > 0 if U(i,i) is exactly zero (1-based; the
-///                    factorization completed but U is singular). Empty span =
-///                    not requested.
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] A          batch of \f$n \times n\f$ matrices; overwritten with \f$L\f$ and \f$U\f$.
+///                           An \f$m \times n\f$ batch is factored whole, \f$\min(m, n)\f$ pivots per
+///                           item packed at stride \f$\min(m, n)\f$, by the native kernels on a GPU
+///                           queue and by the NETLIB and ROCm vendors
+/// @param[out]    pivots     pivot output in the format above, at least `min(m, n) * batch`
+///                           `int64_t` elements
+/// @param[out]    workspace  device-accessible scratch of at least getrf_buffer_size() bytes;
+///                           contents undefined on return
+/// @param[out]    info       per-item LAPACK status, one int32 per batch item: 0 on
+///                           success, \f$i > 0\f$ if \f$U_{ii}\f$ is exactly zero (1-based; the
+///                           factorization completed but \f$U\f$ is singular). Empty span =
+///                           not requested.
 /// @return event of the last enqueued kernel
 /// @pre `A.rows() == A.cols()` (checked by the option overloads only)
 /// @pre `pivots.size() >= A.rows() * A.batch_size()` (checked by the option overloads only)
@@ -115,6 +120,11 @@ BATCHLAS_API Event getrf(Queue& ctx,
                          Span<int32_t> info);
 
 /// @brief getrf() without per-item status (`info` not requested).
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] A          batch of \f$n \times n\f$ matrices; overwritten with \f$L\f$ and \f$U\f$
+/// @param[out]    pivots     pivot output in getrf()'s format, at least `min(m, n) * batch` elements
+/// @param[out]    workspace  scratch of at least getrf_buffer_size() bytes; contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend B, typename T>
@@ -126,8 +136,8 @@ inline Event getrf(Queue& ctx,
 }
 
 /// @brief Workspace, in bytes, that getrf() needs for this shape on this queue.
-/// @param ctx  queue the factorization will run on (kernel selection reads its device)
-/// @param A    batch of n x n matrices to be factorized
+/// @param[in] ctx  queue the factorization will run on (kernel selection reads its device)
+/// @param[in] A    batch of \f$n \times n\f$ matrices to be factorized; only the shape is read
 /// @return bytes to pass as the `workspace` span of getrf()
 /// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
@@ -141,6 +151,13 @@ namespace batchlas::backend {
 
 /// @brief Vendor arm of getrf(); called by getrf() when it selects the `vendor`
 ///        kernel family, not by users.
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] A          batch of matrices; overwritten with \f$L\f$ and \f$U\f$ as in getrf()
+/// @param[out]    pivots     pivot output in getrf()'s backend format
+/// @param[out]    workspace  scratch of at least getrf_vendor_buffer_size() bytes; contents undefined
+///                           on return
+/// @param[out]    info_out   per-item LAPACK status as getrf()'s `info`; empty means not requested
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 // DECLARATION ONLY: the public getrf is defined in src/ops/getrf/getrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
@@ -153,6 +170,9 @@ BATCHLAS_API Event getrf_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of getrf().
+/// @param[in] ctx  queue the call will run on
+/// @param[in] A    batch of matrices the call will get; only the shape is read
+/// @return bytes to pass as the `workspace` span of backend::getrf_vendor()
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_vendor_buffer_size(Queue& ctx,

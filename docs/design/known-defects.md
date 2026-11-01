@@ -75,19 +75,19 @@ refusals are deleted (guard `GemvVendorRefusalTest.ComplexDoubleVendorRunsOnCuda
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 
 Fixed 2026-10-26 in the drivers: `sytrd_cta`'s tile load reads only the named triangle (serving
-`syev_cta` Upper, `syev_blocked` Lower at n <= 32 and `gesvd_cta` Upper), and `sytrd_sy2sb` uses
+`syev_cta` Upper, `syev_blocked` Lower at \f$n \le 32\f$ and `gesvd_cta` Upper), and `sytrd_sy2sb` uses
 LAPACK's lower-only two-sided update. The remaining Upper-on-`blocked`/`two_stage` and
-Lower-on-`syev_cta` paths go through an O(n^2) mirror that reads only the named triangle. Guards:
+Lower-on-`syev_cta` paths go through an \f$O(n^2)\f$ mirror that reads only the named triangle. Guards:
 `SyevTest.AutoIgnoresUnreferencedTriangle` (+ heavy `AutoReadsOnlyTheNamedTriangleAtLargeN`),
 `SyevCandidates.OtherTriangleIsNeverRead`,
 `GesvdCandidates.HermitianFamiliesIgnoreTheUnreferencedTriangle`. Gap: `OtherTriangleIsNeverRead`
-stops at n = 40, one short sy2sb panel. The double two-stage cost (1.34x at n = 480, untuned FP64
+stops at \f$n = 40\f$, one short sy2sb panel. The double two-stage cost (1.34x at \f$n = 480\f$, untuned FP64
 symm rows) was accepted.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
-Fixed 2026-10-22: on CUDA `can_run(vendor)` is the binding's envelope (`max(m, n) <= 32`, packed A
-and U, no thin factor, not values-only non-square); false on ROCm. Guard:
+Fixed 2026-10-22: on CUDA `can_run(vendor)` is the binding's envelope (`max(m, n) <= 32`, packed \f$A\f$
+and \f$U\f$, no thin factor, not values-only non-square); false on ROCm. Guard:
 `GesvdCandidates.VendorPinRunsInsideItsEnvelope`.
 
 ## Defect 16: `ormqr` blocked throws at batch > 65535 {#defect-16-blocked-qr-past-the-grid}
@@ -100,7 +100,7 @@ Fixed. Blocked geqrf/ormqr past 65535 items returned silent wrong answers for it
 
 ## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 
-Open (vendor behaviour). Complex `transB == ConjTrans` with one row of B returns an unchecked error
+Open (vendor behaviour). Complex `transB == ConjTrans` with one row of \f$B\f$ returns an unchecked error
 status and leaves `C` unwritten, so the CUDA vendor `can_run` refuses it (`src/ops/spmm/spmm.cc`).
 cuSPARSE also mishandles operands off their natural alignment; alignment is a pointer property, not
 a selection key, so `spmm_tests` skips misaligned cases unless the route is pinned `native`.
@@ -110,7 +110,7 @@ a selection key, so `spmm_tests` skips misaligned cases unless the route is pinn
 Open. CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag` is true only for
 `Blocked`, `src/ops/gesvd/kernels/gesvd_blocked.cc:72-74`), and `build_bidiag_vectors` forms
 \f$u_i = B v_i / \sigma_i\f$, scaling the error of \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$:
-\f$\max|U^T U - I|\f$ reaches \f$\varepsilon\kappa^2\f$ (V stays at 1.5e-6 in float). Same root as
+\f$\max|U^T U - I|\f$ reaches \f$\varepsilon\kappa^2\f$ (\f$V\f$ stays at \f$1.5 \times 10^{-6}\f$ in float). Same root as
 [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa). Reached under
 Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89. Red:
 `GesvdTest.CtaProviderCoversAllJobCombinations`, float and double, in `tests/known-failures.txt`.
@@ -140,7 +140,7 @@ per kernel (the tiny-solver tables were tuned unbounded) and re-pinned kernel ha
 
 Open outside the capped part loops. A `parallel_for` over a plain `sycl::range<3>` with the batch in
 dimension 0 is rounded up by DPC++ (`__pf_kernel_wrapper`), here to 65536, past CUDA's 65535 grid:
-pinned blocked gesvd (float, n = 40) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:170`,
+pinned blocked gesvd (float, \f$n = 40\f$) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:170`,
 `src/kernels/common/larft_wy.hh:262`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
 `src/ops/syev/kernels/uplo_mirror.cc:29`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
 `src/ops/syev/sytrd/sytrd_sy2sb.cc:126`. **Workaround:** the blocked geqrf, orgqr, ormqr, gesvd and
@@ -171,7 +171,7 @@ exposed the same way.
 
 Fixed 2026-10-09; kept because the symptom points at the wrong component. `syevx` Smallest returned
 0 for some eigenvalues when the projected solve ran `jacobi` or `vendor`, which suggested a vendor
-`ld > n` bug; the real cause was null P columns (exact-zero coefficients) adding a 0 eigenvalue to
+`ld > n` bug; the real cause was null \f$P\f$ columns (exact-zero coefficients) adding a 0 eigenvalue to
 \f$S^T A S\f$. The deflation kernel (`src/ops/syevx/kernels/syevx_lobpcg.cc`) now puts the sentinel on
 every column at or after `block_vectors` with \f$\lVert s_c\rVert^2 \le (n\varepsilon)^2\f$. Guards:
 `Pinned/SyevxProjectedSyevRouteTest.SmallestDenseMatchesReferenceSyev/*` (`tests/syevx_tests.cc`).
@@ -185,20 +185,20 @@ runs of the test binary; never alone or serially (commit `ae08b7ea`, 2026-08-12,
 date). The cause was never located and may have gone with later changes to the drivers or the arena.
 
 - **Repro and guards:** `LinalgTyped.ComposedQrRepeatsAcrossCallsAndQueues` (the composition) and
-  `LinalgTyped.QrRepeatsAcrossCallsAndQueues` (the wrapper; adds an out-of-order queue and checks A
+  `LinalgTyped.QrRepeatsAcrossCallsAndQueues` (the wrapper; adds an out-of-order queue and checks \f$A\f$
   is untouched), `tests/linalg_layer_tests.cc`: four shapes and batch counts (one at batch 1030, the
   first repeated) on the fixture, a fresh, a NETLIB queue and the fixture again; float, double,
   complex; padded ld and stride. Under a `BATCHLAS_GEQRF_ROUTE`/`ORGQR_ROUTE` pin the NETLIB leg is
   skipped (a native pin cannot run there).
 - **CPU** (2026-10-30, threadripper02, OpenCL CPU): 180/180 over 5 rounds of 4 concurrent binaries.
 - **GPU** (2026-10-30, JRHNBR, RTX 4090, DPC++ CUDA, one GPU shared by all copies), every process
-  `--gtest_repeat=3`: 4 concurrent copies x 10 rounds of the composed test on the default routes,
+  `--gtest_repeat=3`: 4 concurrent copies \f$\times\f$ 10 rounds of the composed test on the default routes,
   geqrf/orgqr pinned `blocked`/`blocked`, `cta`/`blocked` and `vendor`/`vendor`: 160/160 pass;
-  8 concurrent x 15 rounds, default and `blocked`/`blocked`: 240/240; 4 concurrent whole
-  `linalg_layer_tests` binaries x 10 rounds: 40/40. With the wrapper and both tests, the same four
-  route settings x 4 concurrent x 10 rounds: 160/160; 8 concurrent x 10: 80/80; 4 whole binaries
-  x 10: 40/40.
-- **If it returns:** the 2026-08 notes ruled out freed pages, uninitialised Q/R and scratch
+  8 concurrent \f$\times\f$ 15 rounds, default and `blocked`/`blocked`: 240/240; 4 concurrent whole
+  `linalg_layer_tests` binaries \f$\times\f$ 10 rounds: 40/40. With the wrapper and both tests, the same four
+  route settings \f$\times\f$ 4 concurrent \f$\times\f$ 10 rounds: 160/160; 8 concurrent \f$\times\f$ 10: 80/80; 4 whole binaries
+  \f$\times\f$ 10: 40/40.
+- **If it returns:** the 2026-08 notes ruled out freed pages, uninitialised \f$Q\f$/\f$R\f$ and scratch
   lifetime; suspect vendor work run inline on `get_native`'s stream (`src/sycl/impl.hh` `run_native`)
   or a missing dependency in the blocked drivers' chunk loops.
 
@@ -213,7 +213,7 @@ then fix the kernel and drop the mirror, or record the failure here.
 ## lanczos returned a spectrum about three times too wide
 
 Fixed 2026-10-30 on the CPU device (acpp OpenMP); GPU confirmation pending. Toeplitz
-tridiag(-5, 2, -5), n = 64, float, returned eigenvalues over about [-28, 32] for the exact [-8, 12],
+\f$\mathrm{tridiag}(-5, 2, -5)\f$, \f$n = 64\f$, float, returned eigenvalues over about \f$[-28, 32]\f$ for the exact \f$[-8, 12]\f$,
 at batch 1 too, while \f$V\f$ stayed orthonormal: the recorded \f$T\f$ was not \f$V^T A V\f$.
 `lanczos_iteration` re-orthogonalized the pair \f$[v_{it-1}, v_{it}]\f$ after their alphas and
 betas were recorded, and `ortho` returns an orthonormal basis of the span, not the input vectors:
