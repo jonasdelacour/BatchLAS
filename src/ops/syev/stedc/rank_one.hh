@@ -36,4 +36,11 @@ __attribute__((always_inline)) inline bool negligible_weight(T beta, T zn, Defla
     return !(std::abs(beta * zn) > t.tol);
 }
 
+// P (column_map, lazy: Q moves only in the back-transform); compaction and Pi share storage.
+template <typename IndexView> struct MergePermutations {
+    IndexView column_map;
+    IndexView compaction;
+    IndexView final_order;
+};
+
 } // namespace batchlas::tridiag
