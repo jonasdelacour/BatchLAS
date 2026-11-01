@@ -146,6 +146,8 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
     Impl part;
 
     BATCHLAS_DLA_INLINE explicit Partition(sycl::sub_group sg) : part(sg) {}
+    struct Wrap {};
+    BATCHLAS_DLA_INLINE Partition(Wrap, Impl p) : part(p) {}  // adopt an existing partition object
     BATCHLAS_DLA_INLINE int lid() const {
         if constexpr (std::is_same_v<Impl, sycl::sub_group>) return static_cast<int>(part.get_local_linear_id()) & (P - 1);
         else return static_cast<int>(part.get_local_linear_id());
@@ -158,6 +160,31 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
+    }
+    // The whole sub-group this partition lives in.
+    BATCHLAS_DLA_INLINE sycl::sub_group sub() const {
+        if constexpr (std::is_same_v<Impl, sycl::sub_group>) return part;
+        else return part.sg;
+    }
+    // COLLECTIVE: lane `src`'s v to every lane of the partition; `src` must be
+    // partition-uniform and every lane must reach the call. Complex moves as two reals.
+    // Plain `inline`, not BATCHLAS_DLA_INLINE: inlined early, the source's real view lands
+    // ahead of the shuffles and complex posv_tiny reschedules; this inlines when the hand
+    // helper (tiny_bcast) did.
+    template <class T> inline T bcast(T v, std::uint32_t src) const {
+        using A = Arith<T>;
+        if constexpr (A::is_complex) return A::make(bcast_real(A::re(v), src), bcast_real(A::im(v), src));
+        else return bcast_real(v, src);
+    }
+
+  private:
+    template <class R> inline R bcast_real(R v, std::uint32_t src) const {
+        if constexpr (std::is_same_v<Impl, sycl::sub_group>) {
+            const auto base = static_cast<std::uint32_t>(part.get_local_linear_id()) & ~std::uint32_t(P - 1);
+            return sycl::select_from_group(part, v, base + src);
+        } else {
+            return select_from_group(part, v, src);  // ADL: SubGroupPartition (src/kernels/common)
+        }
     }
 };
 

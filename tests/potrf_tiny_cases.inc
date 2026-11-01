@@ -589,8 +589,9 @@ TEST(PotrfTinySource, IsBarrierAndLocalMemoryFree) {
             << "` in code: the tier's whole argument is that it has no memory to order "
                "and nothing to synchronise. Offending line: " << offending;
     }
-    // Anti-vacuity: the scan must be able to find something that IS there.
-    EXPECT_FALSE(FirstTinySourceLineWith(path, "select_from_group").empty())
+    // Anti-vacuity: the scan must be able to find something that IS there. The recurrence is
+    // v2::potf2_lower now; v2::Shuffle is the broadcast that keeps it barrier-free.
+    EXPECT_FALSE(FirstTinySourceLineWith(path, "v2::Shuffle").empty())
         << "the source scan found nothing at all -- check BATCHLAS_POTRF_TINY_CC_PATH";
 }
 #endif  // BATCHLAS_POTRF_TINY_CC_PATH
