@@ -25,11 +25,14 @@ __attribute__((always_inline)) inline Annihilation<T> annihilate(T f, T g) {
     return {{res.c, res.s}, res.r};
 }
 
-// annihilate with rsqrt + one Newton step in range (float); out of range, and for double,
-// the scaled annihilate. g == 0 gives exactly (1, 0, f), by select. steqr_cta_device.hh:34
+// The CTA bulge chase's annihilate: in range (float), rsqrt + one Newton step instead of sqrt
+// and two divisions; out of range (NaN included), and for double, the scaled annihilate.
+// evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 template <typename T>
 __attribute__((always_inline)) inline Annihilation<T> annihilate_fast(T f, T g) {
     if constexpr (std::is_same_v<T, float>) {
+        // |f|, |g| in (sqrt(safmin), sqrt(safmax/2)) keeps f^2 + g^2 finite and normal. g == 0
+        // gives exactly (1, 0, f) by the final select, so an identity rotation does not diverge.
         const bool gz = (g == T(0));
         const T f_abs = sycl::fabs(f);
         const T g_abs = sycl::fabs(g);
@@ -41,6 +44,7 @@ __attribute__((always_inline)) inline Annihilation<T> annihilate_fast(T f, T g) 
         if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
             const T t = f * f + g * g;
             T inv = sycl::rsqrt(t);
+            // One fused Newton step brings the hardware estimate below 0.5 ulp.
             inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
             const T d = sycl::sqrt(t);
             const T signed_inv = sycl::copysign(inv, f);
@@ -63,7 +67,7 @@ __attribute__((always_inline)) inline Annihilation<T> annihilate_fast(T f, T g) 
 template <typename T> struct Sym2x2 {
     T a, b, c;
 
-    // R A R^T.  steqr_cta_device.hh:403-405
+    // R A R^T, the EXP chase's similarity.
     __attribute__((always_inline)) constexpr Sym2x2 congruence(Givens<T> R) const {
         const T c1 = R.c, sigma = -R.s;
         return {c1 * (c1 * a - b * sigma) - sigma * (b * c1 - sigma * c),
@@ -72,7 +76,7 @@ template <typename T> struct Sym2x2 {
     }
 
     // R^T A R = [[a - delta, b_next], [b_next, c + delta]]:
-    // rho = s(a - c) + 2cb, delta = s rho, b_next = c rho - b.  steqr_cta_device.hh:514-518
+    // rho = s(a - c) + 2cb, delta = s rho, b_next = c rho - b (the PG identity of pg_rotation).
     struct Transfer { T delta, b_next; };
     __attribute__((always_inline)) constexpr Transfer transfer(Givens<T> R) const {
         const T rho = (a - c) * R.s + T(2) * R.c * b;

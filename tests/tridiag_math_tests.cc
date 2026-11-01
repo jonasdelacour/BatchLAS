@@ -7,7 +7,6 @@
 #include <src/ops/syev/stedc/rank_one.hh>
 #include <src/ops/syev/stedc/secular_equation.hh>
 #include <src/ops/syev/steqr/ql_chase.hh>
-#include <src/ops/syev/steqr/steqr_cta_device.hh>
 #include <src/ops/syev/tridiag/tridiag_math.hh>
 
 #include <array>
@@ -16,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 using namespace batchlas;
@@ -48,7 +48,43 @@ struct Sampler {
     T any(int i) { return (i % 3 == 0) ? uniform() : graded((i % 3 == 1) ? (sizeof(T) == 4 ? 15 : 30) : 3); }
 };
 
-// Copy of steqr_cta_device.hh:395-410 (EXP chase step), returning every value it produces.
+// Frozen copy of cta_lartg (steqr_cta_device.hh:33-69 at 9268775f), which annihilate_fast replaced.
+template <typename T>
+struct CtaRotation {
+    T c, s, r;
+};
+template <typename T>
+CtaRotation<T> cta_lartg(const T f, const T g) {
+    if constexpr (std::is_same_v<T, float>) {
+        const bool gz = (g == T(0));
+        const T f_abs = sycl::fabs(f);
+        const T g_abs = sycl::fabs(g);
+        const T rtmin = sycl::sqrt(detail::safmin<T>());
+        const T rtmax = sycl::sqrt(detail::safmax<T>() / T(2));
+        T c = T(1), s = T(0), r = f;
+        if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
+            const T t = f * f + g * g;
+            T inv = sycl::rsqrt(t);
+            inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
+            const T d = sycl::sqrt(t);
+            const T signed_inv = sycl::copysign(inv, f);
+            c = f_abs * inv;
+            s = g * signed_inv;
+            r = sycl::copysign(d, f);
+        } else if (!gz) {
+            const auto res = detail::lartg(f, g);
+            c = res.c;
+            s = res.s;
+            r = res.r;
+        }
+        return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
+    } else {
+        const auto res = detail::lartg(f, g);
+        return {res.c, res.s, res.r};
+    }
+}
+
+// Copy of steqr_cta_device.hh:395-410 at 9268775f (EXP chase step), returning every value it produces.
 template <typename T>
 std::array<T, 8> exp_inline(T x, T y, T di, T ei, T dj, T ej) {
     const auto [c1, s1, r1] = cta_lartg(x, y);
@@ -62,7 +98,7 @@ std::array<T, 8> exp_inline(T x, T y, T di, T ei, T dj, T ej) {
     return {c1, sigma, di_new, dj_new, ei_new, ej_new, e_hi_new, bulge_new};
 }
 
-// Copy of steqr_cta_device.hh:499-520 (PG chase step) on the carried (g, c, s, p).
+// Copy of steqr_cta_device.hh:499-520 at 9268775f (PG chase step) on the carried (g, c, s, p).
 template <typename T>
 std::array<T, 4> pg_inline(T& g, T& c, T& s, T& p, T ei, T di, T dip1) {
     const T f = s * ei;
@@ -360,7 +396,7 @@ TYPED_TEST(TridiagMath, AnnihilateEdgeCases) {
             EXPECT_LE(std::fabs(-(long double)a.R.s * fl + (long double)a.R.c * gl) / std::fabs(r), 4 * eps<T>());
         }
     }
-    // Out of range annihilate_fast falls back to annihilate exactly; in range both are cta_lartg's.
+    // Out of range annihilate_fast falls back to annihilate exactly; in range both are the frozen cta_lartg's.
     Sampler<T> rng;
     for (int i = 0; i < 100000; ++i) {
         const T f = rng.graded(sizeof(T) == 4 ? 40 : 320), g = rng.graded(sizeof(T) == 4 ? 40 : 320);

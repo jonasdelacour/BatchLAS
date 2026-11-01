@@ -12,7 +12,7 @@ namespace batchlas::tridiag {
 template <typename T> struct ChaseState { T pivot, bulge; };
 
 // EXP: [[d_hi, e_mid], [e_mid, d_lo]] <- R A R^T, e_hi = r, e_below <- c e_below, and the new
-// bulge -s e_below one plane up.  exp_rotation: steqr_cta_device.hh:395-410
+// bulge -s e_below one plane up.
 template <typename T> struct ExpRotation {
     Givens<T> R;
     T d_hi, d_lo, e_mid, e_below, e_hi, bulge;
@@ -34,7 +34,7 @@ __attribute__((always_inline)) inline ExpRotation<T> exp_rotation(ChaseState<T> 
 template <typename T> struct PgCarry { Givens<T> prev; T g, p; };
 
 // PG: R from (g, s_prev e_lo); then the transfer rho = s(d_lo - (d_hi - p)) + 2c(c_prev e_lo),
-// p = s rho, d_hi <- d_hi - p_old + p, next g = c rho - c_prev e_lo, e_hi = r.  steqr_cta_device.hh:500-518
+// p = s rho, d_hi <- d_hi - p_old + p, next g = c rho - c_prev e_lo, e_hi = r.
 template <typename T> struct PgRotation { Givens<T> R; T d_hi, e_hi; PgCarry<T> next; };
 
 template <typename T>
