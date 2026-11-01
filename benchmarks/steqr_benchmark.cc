@@ -4,14 +4,23 @@
 #include <benchmarks/bench_utils.hh>
 #include <batchlas/backend_config.h>
 #include <algorithm>
+#include <iostream>
+#include <string>
+#include <vector>
 
 using namespace batchlas;
+
+namespace {
+SteqrUpdateScheme g_scheme = SteqrUpdateScheme::EXP;              // --scheme=exp|pg
+SteqrShiftStrategy g_shift = SteqrShiftStrategy::Wilkinson;       // --shift=wilkinson|lapack
+}
 
 // Batched STEQR benchmark
 // Args:
 //   [n, batch]
 //   [n, batch, n_sweeps, transpose]
-//   [n, batch, n_sweeps, wg_multiplier, shift_kind]
+//   [n, batch, n_sweeps, wg_multiplier, shift_kind]   (shift_kind 1 = Wilkinson, else Lapack)
+// Flags: --scheme=exp|pg (default exp), --shift=wilkinson|lapack (default for rows without shift_kind)
 template <typename T, Backend B>
 static void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
@@ -33,13 +42,13 @@ static void BM_STEQR(minibench::State& state) {
     const bool use_tuned_schema = (arg4 != 0);
     const bool transpose = use_tuned_schema ? false : static_cast<bool>(arg3);
     const size_t wg_multiplier = use_tuned_schema ? arg3 : size_t(0);  // 0: library-tuned
-    const int shift_kind = use_tuned_schema ? static_cast<int>(arg4) : 1;
+    const bool wilkinson = use_tuned_schema ? (arg4 == 1) : (g_shift == SteqrShiftStrategy::Wilkinson);
 
     SteqrParams<T> params;
     params.max_sweeps = n_sweeps;
     params.cta_wg_size_multiplier = wg_multiplier;
-    params.cta_shift_strategy = (shift_kind == 1) ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
-    params.cta_update_scheme = SteqrUpdateScheme::EXP;
+    params.cta_shift_strategy = wilkinson ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
+    params.cta_update_scheme = g_scheme;
     params.back_transform = false;
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;
@@ -77,4 +86,34 @@ static void BM_STEQR(minibench::State& state) {
 
 BATCHLAS_REGISTER_BENCHMARK(BM_STEQR, SteqrBenchSizes);
 
-MINI_BENCHMARK_MAIN();
+int main(int argc, char** argv) {
+    try {
+        std::vector<std::string> forwarded{argv[0]};
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg(argv[i]);
+            if (arg == "--scheme=exp") {
+                g_scheme = SteqrUpdateScheme::EXP;
+            } else if (arg == "--scheme=pg") {
+                g_scheme = SteqrUpdateScheme::PG;
+            } else if (arg == "--shift=wilkinson") {
+                g_shift = SteqrShiftStrategy::Wilkinson;
+            } else if (arg == "--shift=lapack") {
+                g_shift = SteqrShiftStrategy::Lapack;
+            } else if (arg.starts_with("--scheme") || arg.starts_with("--shift")) {
+                throw batchlas::invalid_argument("steqr_benchmark: use --scheme=exp|pg and --shift=wilkinson|lapack");
+            } else {
+                if (arg == "--help" || arg == "-h")
+                    std::cout << "steqr_benchmark options:\n"
+                              << "  --scheme=exp|pg           CTA update scheme (default exp)\n"
+                              << "  --shift=wilkinson|lapack  CTA shift when shift_kind is not given (default wilkinson)\n\n";
+                forwarded.push_back(arg);
+            }
+        }
+        std::vector<char*> forwarded_argv;
+        for (auto& s : forwarded) forwarded_argv.push_back(s.data());
+        return minibench::MiniBenchMain(static_cast<int>(forwarded_argv.size()), forwarded_argv.data());
+    } catch (const std::exception& ex) {
+        std::cerr << "steqr_benchmark: " << ex.what() << "\n";
+        return 2;
+    }
+}

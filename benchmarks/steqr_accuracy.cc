@@ -49,7 +49,38 @@ struct Options {
     std::string cta_shift = "wilkinson"; // lapack | wilkinson
     std::string output = "output/accuracy/steqr_accuracy.csv";
     std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
+    bool vectors = false;  // --vectors: fill z_hash from each item's eigenvectors
+    bool hash_only = false;  // --hash-only: skip the LAPACKE reference and cond (relerr, cond NaN)
+    StedcParams<double> stedc;  // --stedc-* knobs; 0 / Auto keeps the tuned value
 };
+
+StedcMergeVariant parse_merge_variant(const std::string& value) {
+    const auto key = to_lower(value);
+    if (key == "auto") return StedcMergeVariant::Auto;
+    if (key == "0" || key == "baseline") return StedcMergeVariant::Baseline;
+    if (key == "1" || key == "fused") return StedcMergeVariant::Fused;
+    if (key == "2" || key == "fusedcta" || key == "fused_cta") return StedcMergeVariant::FusedCta;
+    throw batchlas::invalid_argument("Invalid --stedc-variant value (use auto, baseline, fused or fusedcta)");
+}
+
+StedcAlgorithm parse_stedc_algorithm(const std::string& value) {
+    const auto key = to_lower(value);
+    if (key == "auto") return StedcAlgorithm::Auto;
+    if (key == "levels") return StedcAlgorithm::Levels;
+    if (key == "recursive") return StedcAlgorithm::Recursive;
+    throw batchlas::invalid_argument("Invalid --stedc-algorithm value (use auto, levels or recursive)");
+}
+
+template <typename Real>
+StedcParams<Real> stedc_params(const Options& opt) {
+    StedcParams<Real> p{};
+    p.algorithm = opt.stedc.algorithm;
+    p.merge_variant = opt.stedc.merge_variant;
+    p.recursion_threshold = opt.stedc.recursion_threshold;
+    p.secular_threads_per_root = opt.stedc.secular_threads_per_root;
+    p.secular_cta_wg_size_multiplier = opt.stedc.secular_cta_wg_size_multiplier;
+    return p;
+}
 
 Options parse_args(int argc, char** argv) {
     Options opt;
@@ -64,6 +95,20 @@ Options parse_args(int argc, char** argv) {
 
         if (arg.starts_with("--inputs")) {
             opt.inputs = get_value(arg);
+        } else if (arg == "--vectors") {
+            opt.vectors = true;
+        } else if (arg == "--hash-only") {
+            opt.hash_only = true;
+        } else if (arg.starts_with("--stedc-algorithm")) {
+            opt.stedc.algorithm = parse_stedc_algorithm(get_value(arg));
+        } else if (arg.starts_with("--stedc-variant")) {
+            opt.stedc.merge_variant = parse_merge_variant(get_value(arg));
+        } else if (arg.starts_with("--stedc-leaf")) {
+            opt.stedc.recursion_threshold = std::stoll(get_value(arg));
+        } else if (arg.starts_with("--stedc-tpr")) {
+            opt.stedc.secular_threads_per_root = std::stoi(get_value(arg));
+        } else if (arg.starts_with("--stedc-wgm")) {
+            opt.stedc.secular_cta_wg_size_multiplier = std::stoi(get_value(arg));
         } else if (arg.starts_with("--impl")) {
             opt.impl = get_value(arg);
         } else if (arg.starts_with("--scheme")) {
@@ -113,7 +158,13 @@ Options parse_args(int argc, char** argv) {
                       << "  --max-sweeps N\n"
                       << "  --cta-shift lapack|wilkinson\n"
                       << "  --output PATH\n"
-                      << "  --inputs DIR  (write each chunk's input on first use, read it on later runs)\n";
+                      << "  --inputs DIR  (write each chunk's input on first use, read it on later runs)\n"
+                      << "  --vectors     (z_hash column: FNV-1a of each item's eigenvectors)\n"
+                      << "  --hash-only   (no LAPACKE reference or cond: relerr and cond are NaN)\n"
+                      << "  --stedc-algorithm auto|levels|recursive\n"
+                      << "  --stedc-variant auto|baseline|fused|fusedcta\n"
+                      << "  --stedc-leaf N --stedc-tpr N --stedc-wgm N  (0 = tuned; BATCHLAS_TUNE_STEDC_* also apply)\n"
+                      << "Prints one hash_total line per impl after the run (accuracy::RunHashes).\n";
             std::exit(0);
         }
     }
@@ -247,11 +298,12 @@ int run_accuracy(const Options& opt) {
         return 4;
     }
 
-    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,relerr,log10_relerr,input_hash\n";
+    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,relerr,log10_relerr,input_hash,w_hash,z_hash\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
+    accuracy::RunHashes run_hashes;
     int sample_id = 0;
     for (int bin_idx = 0; bin_idx < bins; ++bin_idx) {
         const double target_log10 = (bins == 1) ? opt.log10_cond_min
@@ -312,12 +364,18 @@ int run_accuracy(const Options& opt) {
         params.sort_order = SortOrder::Ascending;
         params.cta_shift_strategy = parse_shift_strategy(opt.cta_shift);
 
+        std::vector<std::pair<std::string, std::vector<std::string>>> z_hashes;
+        auto hash_vectors = [&](const char* impl_name) {
+            q->wait();
+            if (opt.vectors) z_hashes.emplace_back(impl_name, accuracy::item_hashes(eigvects.view()));
+        };
+
         if (run_steqr) {
             params.max_sweeps = 10;
             UnifiedVector<std::byte> ws(
                 steqr_buffer_size<Real>(*q, d, e, eigs_steqr, JobType::EigenVectors, params));
             (void)steqr<B, Real>(*q, d, e, eigs_steqr, ws.to_span(), JobType::EigenVectors, params, eigvects);
-            q->wait();
+            hash_vectors("steqr");
         }
         if (run_cta) {
             params.max_sweeps = opt.max_sweeps;
@@ -325,7 +383,7 @@ int run_accuracy(const Options& opt) {
             UnifiedVector<std::byte> ws(
                 steqr_cta_buffer_size<Real>(*q, d, e, eigs_cta, JobType::EigenVectors, params));
             (void)steqr_cta<B, Real>(*q, d, e, eigs_cta, ws.to_span(), JobType::EigenVectors, params, eigvects);
-            q->wait();
+            hash_vectors(cta_impl_name);
         }
         if (run_cuda_syev) {
             auto dense_vendor = dense_A.clone();
@@ -335,9 +393,10 @@ int run_accuracy(const Options& opt) {
             (void)batchlas::ops::syev::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor, eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         }
         if (run_stedc) {
-            UnifiedVector<std::byte> ws(
-                stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, StedcParams<Real>{}));
-            (void)stedc<B, Real>(*q, d, e, eigs_stedc, ws.to_span(), JobType::EigenVectors, StedcParams<Real>{}, eigvects);
+            const auto stedc_p = stedc_params<Real>(opt);
+            UnifiedVector<std::byte> ws(stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, stedc_p));
+            (void)stedc<B, Real>(*q, d, e, eigs_stedc, ws.to_span(), JobType::EigenVectors, stedc_p, eigvects);
+            hash_vectors("stedc");
         }
         q->wait();
 
@@ -363,14 +422,17 @@ int run_accuracy(const Options& opt) {
         if (run_netlib_sterf) call_lapack_variant(eigs_netlib_sterf, "LAPACKE_xsterf", call_lapack_sterf<Real>);
         if (run_netlib_stedc) call_lapack_variant(eigs_netlib_stedc, "LAPACKE_xstedc", call_lapack_stedc<Real>);
 
-        const auto ref_eigs = lapacke_ref_eigs(dense_A);
+        const auto ref_eigs = opt.hash_only ? UnifiedVector<double>(static_cast<std::size_t>(n) * cur_batch,
+                                                                    std::numeric_limits<double>::quiet_NaN())
+                                            : lapacke_ref_eigs(dense_A);
         UnifiedVector<float> eigs_ssyev32;
         if constexpr (std::is_same_v<Real, float>) {
             if (run_netlib32) {
                 eigs_ssyev32 = lapacke_ssyev_eigs(dense_A);
             }
         }
-        const auto conds = cond<B>(*q, dense_A, NormType::Spectral);
+        const auto conds = opt.hash_only ? UnifiedVector<Real>(cur_batch, std::numeric_limits<Real>::quiet_NaN())
+                                         : cond<B>(*q, dense_A, NormType::Spectral);
         q->wait();
 
         for (int b = 0; b < cur_batch; ++b) {
@@ -384,6 +446,11 @@ int run_accuracy(const Options& opt) {
             std::sort(ref_vals.begin(), ref_vals.end());
 
             auto write_row = [&](const VectorView<Real>& eigs, const char* impl_name) {
+                const std::string w_hash = accuracy::item_hashes(eigs.batch_item(b))[0];
+                std::string z_hash;
+                for (const auto& [name, hashes] : z_hashes)
+                    if (name == impl_name) z_hash = hashes[static_cast<std::size_t>(b)];
+                run_hashes.add(std::string(impl_name) + "," + std::to_string(n) + "," + opt.dtype, w_hash, z_hash);
                 std::vector<double> est_vals(static_cast<std::size_t>(n));
                 for (int i = 0; i < n; ++i) {
                     est_vals[static_cast<std::size_t>(i)] = static_cast<double>(eigs(i, b));
@@ -412,7 +479,9 @@ int run_accuracy(const Options& opt) {
                     << log10_cond << ","
                     << max_rel << ","
                     << log10_rel << ","
-                    << in_hash[static_cast<std::size_t>(b)] << "\n";
+                    << in_hash[static_cast<std::size_t>(b)] << ","
+                    << w_hash << ","
+                    << z_hash << "\n";
             };
 
             if (run_steqr) {
@@ -448,6 +517,7 @@ int run_accuracy(const Options& opt) {
         }
     }
 
+    run_hashes.print(std::cout);
     return 0;
 #endif
 }

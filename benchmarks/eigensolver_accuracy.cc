@@ -232,6 +232,8 @@ double max_relative_eig_error(const std::vector<double>& ref_sorted,
     return max_rel;
 }
 
+accuracy::RunHashes g_run_hashes;  // one hash_total line per impl at exit
+
 template <Backend B, typename Real>
 void emit_metrics_rows(std::ofstream& out,
                        Queue& q,
@@ -261,6 +263,8 @@ void emit_metrics_rows(std::ofstream& out,
 
     const double n_scale = static_cast<double>(n);
     const auto in_hash = accuracy::input_hashes(A);
+    const auto w_hash = accuracy::item_hashes(evals);
+    const auto z_hash = accuracy::item_hashes(Z);
 
     for (int b = 0; b < batch; ++b) {
         const double cond = static_cast<double>(conds[static_cast<size_t>(b)]);
@@ -330,7 +334,11 @@ void emit_metrics_rows(std::ofstream& out,
             << log10_R << ","
             << log10_O << ","
             << log10_rel << ","
-            << in_hash[static_cast<size_t>(b)] << "\n";
+            << in_hash[static_cast<size_t>(b)] << ","
+            << w_hash[static_cast<size_t>(b)] << ","
+            << z_hash[static_cast<size_t>(b)] << "\n";
+        g_run_hashes.add(std::string(impl_name) + "," + std::to_string(n) + "," + opt.dtype,
+                         w_hash[static_cast<size_t>(b)], z_hash[static_cast<size_t>(b)]);
     }
 }
 
@@ -374,7 +382,7 @@ int run_accuracy(const Options& opt) {
         return 4;
     }
 
-    out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr,input_hash\n";
+    out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr,input_hash,w_hash,z_hash\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -703,6 +711,7 @@ int run_accuracy(const Options& opt) {
         }
     }
 
+    g_run_hashes.print(std::cout);
     return 0;
 #endif
 }
