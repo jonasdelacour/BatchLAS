@@ -277,7 +277,8 @@ TYPED_TEST(TseReal, GttrfGttrsBothBranchesAndPivotFloor) {
         const v2::Thread th{};
         const std::ptrdiff_t o = std::ptrdiff_t(b) * n;
         const auto vdl = v2::vec(dl + o, n - 1), vd = v2::vec(dd + o, n), vdu = v2::vec(du + o, n - 1);
-        const auto vdu2 = v2::vec(du2 + o, n - 2), vp = v2::vec(piv + o, n - 1), vx = v2::vec(x + o, n);
+        const auto vdu2 = v2::vec(du2 + o, n - 2), vx = v2::vec(x + o, n);
+        const auto vp = v2::vec(piv + o, n - 1);
         v2::gttrf(th, vdl, vd, vdu, vdu2, vp, tol);
         v2::gttrs(th, vdl, vd, vdu, vdu2, vp, vx);
     });
@@ -432,7 +433,8 @@ void level1_extras(Dev& dev, int wg, int groups, int items_per_group, MakeEx mak
             ss += std::norm(xi), xx += std::norm(xi), yy += std::norm(yi);
             if constexpr (is_cplx<T>) xy += std::conj(xi) * yi;
             else xy += xi * yi;
-            const LD<T> yp = yi * LD<T>(ph), sc = std::abs(xi) + std::abs(yi);
+            const LD<T> yp = yi * LD<T>(ph);
+            const long double sc = std::abs(xi) + std::abs(yi);
             const T* qb = gq.data() + std::size_t(b) * 3 * n;
             worst = std::max({worst, rel(qb[i], xi / (long double)dv, std::abs(xi)), rel(qb[n + i], (long double)c * xi - (long double)s * yp, sc),
                               rel(qb[2 * n + i], (long double)s * xi + (long double)c * yp, sc)});
