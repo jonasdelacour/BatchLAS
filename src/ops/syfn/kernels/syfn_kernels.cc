@@ -6,6 +6,8 @@
 
 #include <src/ops/syfn/syfn_native.hh>
 
+#include <batchlas/blas/device/v2/ext/sygst-sygvd-syfn.hh>
+
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -17,6 +19,8 @@
 
 namespace batchlas {
 namespace ops::syfn {
+
+namespace v2 = batchlas::device::v2;
 
 template <Backend B, class T>
 struct WeightsKernel {};
@@ -79,7 +83,7 @@ Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* 
     q->parallel_for<ZeroKernel<B, T>>(sycl::range<1>(size_t(n * n * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * n), e = l % (n * n);
         if (mask && !mask[b]) return;  // I3
-        fp[b * sf + (e / n) * ldf + e % n] = T(0);
+        v2::laset_at(fp[b * sf + (e / n) * ldf + e % n], int(e % n), int(e / n), v2::Zero{}, v2::Zero{});  // ?LASET 0, 0
     });
     return q.get_event();
 }
@@ -104,7 +108,7 @@ void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<flo
     q->parallel_for<ScaleKernel<B, T>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * m), e = l % (n * m), i = e % n, j = e / n;
         if (mask && !mask[b]) return;  // I3
-        yp[l] = vp[b * sv + j * ldv + i] * gp[b * m + j];
+        yp[l] = v2::dgmm_at(vp[b * sv + j * ldv + i], gp[b * m + j]);  // Y = V diag(g), right ?DGMM
     });
 }
 
