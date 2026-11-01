@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Test inputs on the library's own generators (MatrixView::fill_*).
+// Test inputs on the library's own generators (MatrixView::fill_*), and a host-side input hash.
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/no_route.hh>
@@ -16,6 +16,16 @@
 #include <type_traits>
 
 namespace test_support {
+
+/// A well-spread value in [-1, 1] per (item, element, salt), a splitmix-style hash on the host: distinct
+/// pivots in every item of the getrf and getrs mask tests.
+inline double spread(std::size_t item, std::size_t e, int salt) {
+    std::uint64_t h = (item * 0x9E3779B97F4A7C15ull) ^ (e * 0xC2B2AE3D27D4EB4Full) ^ std::uint64_t(salt * 7919);
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 32;
+    return double(int(h % 2001) - 1000) / 1000.0;
+}
 
 /// The graded cases' condition number: 1e6 in double precision, 1e3 in single (potrs, potri, syfn).
 template <typename T>
