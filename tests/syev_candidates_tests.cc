@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -56,10 +57,7 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 bool is_small(const C& c) {
     return std::holds_alternative<sy::Cta>(c) || std::holds_alternative<sy::CtaFused>(c) ||
@@ -207,33 +205,14 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // The outermost syev trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("syev ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no syev trace line in: " + err + ">";
+    return test_support::traced_line("syev", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("syev", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 std::vector<std::pair<std::string, std::string>> tables_without_syev() {
     std::vector<std::pair<std::string, std::string>> files;

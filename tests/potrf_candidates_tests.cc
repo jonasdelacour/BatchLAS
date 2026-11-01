@@ -19,6 +19,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potrf/choice.hh>
@@ -53,10 +54,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 // Hermitian and strictly diagonally dominant, so PD with condition number below 8. Every
 // off-diagonal entry has a nonzero imaginary part. O(n^2), so the wide tiers' ceilings stay

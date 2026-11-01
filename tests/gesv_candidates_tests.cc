@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -55,10 +56,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 // A and B at padded lds and strides that are not ld*cols; the pads hold a large finite value a
 // kernel would happily consume. A is diagonally dominant with its rows cyclically shifted by an
@@ -183,9 +181,7 @@ std::string traced_choice(F&& run, std::string* all = nullptr) {
     return "<no gesv trace line in: " + err + ">";
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

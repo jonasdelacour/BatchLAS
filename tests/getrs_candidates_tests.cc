@@ -19,6 +19,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -59,10 +60,7 @@ constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 const char* trans_s(Transpose t) { return t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C"); }
 
 struct Spec {
@@ -193,28 +191,11 @@ void expect_solved(Queue& ctx, Sys<T>& p, const std::string& what, const std::ve
 // The outermost getrs trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("getrs ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no getrs trace line in: " + err + ">";
+    return test_support::traced_line("getrs", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("getrs", std::forward<F>(run), all);
 }
 
 // The old predicate (route_getrs.hh at 424a45bc), restated by hand from its source so the
@@ -230,9 +211,7 @@ std::string old_auto(const std::string& dtype, long n, long nrhs, long batch, bo
     return cta_fits ? "cta" : "blocked";
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

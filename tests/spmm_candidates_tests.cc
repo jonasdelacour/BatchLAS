@@ -17,6 +17,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <src/ops/spmm/choice.hh>
 #include <src/ops/spmm/spmm_native.hh>
@@ -56,10 +57,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 const char* tr_s(Transpose t) { return t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C"); }
 constexpr Transpose kAllTrans[3] = {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans};
@@ -244,9 +242,7 @@ std::string traced_choice(F&& run, std::string* all = nullptr, bool* threw = nul
     return tail.substr(0, tail.find(' '));
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

@@ -19,6 +19,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <src/ops/geqrf/geqrf_native.hh>
 #include <src/ops/geqrf/can_run.hh>
@@ -55,10 +56,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 struct Spec {
     int m = 8, n = 8, batch = 3;
@@ -156,33 +154,14 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // The outermost geqrf trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("geqrf ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no geqrf trace line in: " + err + ">";
+    return test_support::traced_line("geqrf", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("geqrf", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

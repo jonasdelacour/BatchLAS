@@ -19,6 +19,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -56,10 +57,7 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 // The transcribed preference (route_getri.hh at 424a45bc, the transcribed commit): Blocked for
 // float from order 128 and cfloat from order 256, the vendor otherwise. Written from the deleted
@@ -158,33 +156,14 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // The outermost getri trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("getri ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no getri trace line in: " + err + ">";
+    return test_support::traced_line("getri", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("getri", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 // The embedded tables with getri's replaced by one synthetic table for `dev`.
 void install_getri_table(const std::string& dtype, const std::string& dev, const std::string& rows) {
