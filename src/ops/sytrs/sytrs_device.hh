@@ -6,6 +6,7 @@
 // The fused tiers solve one right-hand side per sub-group with lane i owning logical rows i, i + 32,
 // ... in registers: the gather, both sweeps (broadcast form, no reduction) and the scatter take no
 // barrier. The blocked tier converts into workspace and hands the sweeps to the public trsm.
+// The sweeps and ?syconv are device LA v2 ops (include/batchlas/blas/device/v2/ext/sytrf-sytrs.hh).
 // evidence: docs/perf/sytrf.md#sytrs-the-converted-solve
 
 #include <src/ops/sytrf/sytrf_device.hh>
@@ -49,26 +50,6 @@ inline bool piv_list_valid(const int* ps, int n) {
     return true;
 }
 
-// ?syconv on column j: the interchanges of the steps after j, in step order (a 2 x 2 step at k
-// swaps row k + 1). The 2 x 2 off-diagonal of a block starting at j moves to e[j] (when e is set).
-template <typename D, typename Acc>
-inline void convert_column(const Acc& L, const int* ps, int n, int j, D* e) {
-    for (int k = 0; k < n;) {
-        const int v = ps[k];
-        if (v > 0) {
-            if (k > j) swap(L(k, j), L(v - 1, j));
-            k += 1;
-        } else {
-            if (k == j) {
-                if (e != nullptr) e[j] = L(j + 1, j);
-                L(j + 1, j) = zero<D>();
-            }
-            if (k > j) swap(L(k + 1, j), L(-v - 1, j));
-            k += 2;
-        }
-    }
-}
-
 // The interchanges composed into one gather (y[t] = b[perm[t]]), and each row's block kind.
 inline void build_perm(const int* ps, int n, int* perm, int* kind) {
     for (int t = 0; t < n; ++t) perm[t] = t;
@@ -85,24 +66,23 @@ inline void build_perm(const int* ps, int n, int* perm, int* kind) {
     }
 }
 
-// Validation, conversion and the permutation for one item, `nl` lanes; `bar` is the group barrier.
+// Validation, ?syconv (v2::syconv_col per column) and the permutation for one item on `ex`.
 // An invalid list leaves L as staged, perm the identity and every kind 1 x 1; the caller writes NaN.
-template <typename D, typename Acc, typename Bar>
-inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind, D* e, int lid, int nl, int* flag,
-                        Bar&& bar) {
-    if (lid == 0) *flag = piv_list_valid(ps, n) ? 1 : 0;
-    bar();
+template <typename D, typename Acc>
+inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind, D* e, const v2::RtGroup& ex, int* flag) {
+    if (ex.leader()) *flag = piv_list_valid(ps, n) ? 1 : 0;
+    ex.barrier();
     const bool ok = *flag != 0;
     if (ok) {
-        for (int j = lid; j < n; j += nl) convert_column<D>(L, ps, n, j, e);
-        if (lid == 0) build_perm(ps, n, perm, kind);
+        v2::for_range(ex, {0, n}, [&](int j) { v2::syconv_col<D>(L, ps, n, j, e); });
+        if (ex.leader()) build_perm(ps, n, perm, kind);
     } else {
-        for (int t = lid; t < n; t += nl) {
+        v2::for_range(ex, {0, n}, [&](int t) {
             perm[t] = t;
             kind[t] = 0;
-        }
+        });
     }
-    bar();
+    ex.barrier();
     return ok;
 }
 
@@ -111,19 +91,20 @@ inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind
 // Walking j down, sigma gains one interchange per block start, applied by lane 0 in O(1) through
 // its inverse; every read and write of a column is then one pass instead of one swap per step.
 // kind must be build_perm's for a valid list.
-template <typename D, typename Dst, typename Src, typename Bar>
+template <typename D, typename Dst, typename Src>
 inline void convert_gather(const Dst& W, const Src& G, int n, const int* ps, const int* kind, int* sig, int* inv,
-                           int lid, int nl, Bar&& bar) {
-    for (int t = lid; t < n; t += nl) {
+                           const v2::RtGroup& ex) {
+    v2::for_range(ex, {0, n}, [&](int t) {
         sig[t] = t;
         inv[t] = t;
-    }
-    bar();
+    });
+    ex.barrier();
     for (int j = n - 1; j >= 0; --j) {
         const bool two = kind[j] == 1;
-        for (int t = j + 1 + lid; t < n; t += nl) W(t, j) = two && t == j + 1 ? zero<D>() : G(sig[t], j);
-        bar();
-        if (lid == 0 && kind[j] != 2) {
+        v2::map_range(ex, v2::col_of(W, j), {j + 1, n},
+                      [&](int t) { return two && t == j + 1 ? v2::sfp::zero<D>() : G(sig[t], j); });
+        ex.barrier();
+        if (ex.leader() && kind[j] != 2) {
             const int a = two ? j + 1 : j, b = (ps[j] > 0 ? ps[j] : -ps[j]) - 1;
             if (a != b) {
                 const int ia = inv[a], ib = inv[b];
@@ -133,74 +114,23 @@ inline void convert_gather(const Dst& W, const Src& G, int n, const int* ps, con
                 inv[b] = ia;
             }
         }
-        bar();
+        ex.barrier();
     }
 }
 
-// Row t of D^-1 x for a block of kind kd: x is row t's value, xp its 2 x 2 partner's, dtt and dpp
-// their diagonals, off the block's off-diagonal. ?sytrs's arithmetic, so both rows of a block agree.
+// Row t of D^-1 x for a block of kind kd (v2::ldl_dsolve_row): ?sytrs's arithmetic, so both rows
+// of a block agree.
 template <typename D>
 inline D d_solve_row(int kd, D x, D xp, D dtt, D dpp, D off) {
-    using namespace sycl_device;
-    if (kd == 0) return dev_mul(x, dev_recip(dtt));
-    const D akm1 = dev_div(kd == 1 ? dtt : dpp, off);
-    const D ak = dev_div(kd == 1 ? dpp : dtt, off);
-    const D denom = dev_sub(dev_mul(akm1, ak), dev_one<D>());
-    const D bkm1 = dev_div(kd == 1 ? x : xp, off);
-    const D bk = dev_div(kd == 1 ? xp : x, off);
-    return kd == 1 ? dev_div(dev_sub(dev_mul(ak, bkm1), bk), denom) : dev_div(dev_sub(dev_mul(akm1, bk), bkm1), denom);
-}
-
-// Logical row k of a register-resident vector, to every lane. Collective.
-template <int R, typename D, typename SG>
-inline D row_bcast(const SG& sg, const D (&x)[R], int k) {
-    D v = x[0];
-    BATCHLAS_UNROLL_FULL
-    for (int r = 1; r < R; ++r)
-        if ((k >> 5) == r) v = x[r];
-    return batchlas::portable::group_broadcast(sg, v, k & 31);
+    return v2::ldl_dsolve_row(kd, x, xp, dtt, dpp, off);
 }
 
 // L w = y, w := D^-1 w, L^T z = w on one sub-group; x[r] holds logical row lane + 32 r. Collective.
 template <int R, typename D, typename SG>
 inline void ldl_solve_regs(const SG& sg, int lane, const Staged<D>& S, D (&x)[R]) {
-    using namespace sycl_device;
-    const int n = S.n;
-    for (int k = 0; k + 1 < n; ++k) {
-        const D xk = row_bcast<R>(sg, x, k);
-        BATCHLAS_UNROLL_FULL
-        for (int r = 0; r < R; ++r) {
-            const int t = lane + 32 * r;
-            if (t > k && t < n) x[r] = dev_sub(x[r], dev_mul(S(t, k), xk));
-        }
-    }
-    D up[R], dn[R];
-    BATCHLAS_UNROLL_FULL
-    for (int r = 0; r < R; ++r) {
-        up[r] = batchlas::portable::shift_group_left(sg, x[r], 1);
-        dn[r] = batchlas::portable::shift_group_right(sg, x[r], 1);
-        const D hi = batchlas::portable::group_broadcast(sg, x[r + 1 < R ? r + 1 : r], 0);
-        const D lo = batchlas::portable::group_broadcast(sg, x[r > 0 ? r - 1 : 0], 31);
-        if (lane == 31 && r + 1 < R) up[r] = hi;
-        if (lane == 0 && r > 0) dn[r] = lo;
-    }
-    BATCHLAS_UNROLL_FULL
-    for (int r = 0; r < R; ++r) {
-        const int t = lane + 32 * r;
-        if (t >= n) continue;
-        const int kd = S.kind[t];
-        const int p = kd == 1 ? t + 1 : kd == 2 ? t - 1 : t;
-        const D off = kd == 1 ? S.e[t] : kd == 2 ? S.e[t - 1] : dev_one<D>();
-        x[r] = d_solve_row(kd, x[r], kd == 1 ? up[r] : dn[r], S(t, t), S(p, p), off);
-    }
-    for (int i = n - 1; i > 0; --i) {
-        const D xi = row_bcast<R>(sg, x, i);
-        BATCHLAS_UNROLL_FULL
-        for (int r = 0; r < R; ++r) {
-            const int t = lane + 32 * r;
-            if (t < i) x[r] = dev_sub(x[r], dev_mul(S(i, t), xi));
-        }
-    }
+    v2::trsv_frag<Uplo::Lower, Transpose::NoTrans, Diag::Unit>(sg, lane, S, S.n, x);
+    v2::ldl_dsolve_frag<R>(sg, lane, S, S.kind, S.e, S.n, x);
+    v2::trsv_frag<Uplo::Lower, Transpose::Trans, Diag::Unit>(sg, lane, S, S.n, x);
 }
 
 // Every right-hand side of one item, sub-group `sgid` of `nsg` taking columns sgid, sgid + nsg, ...
@@ -213,7 +143,7 @@ inline void solve_columns(const SG& sg, int lane, int sgid, int nsg, const Stage
     for (int c = sgid; c < nrhs; c += nsg) {
         D* const col = bb + static_cast<std::ptrdiff_t>(c) * ldb;
         if (!ok) {
-            for (int t = lane; t < n; t += 32) col[t] = nan_of<D>();
+            v2::fill(v2::SubGroup<32>{sg}, nan_of<D>(), v2::vec(col, n), {0, n});
             continue;
         }
         D x[R];
@@ -222,7 +152,7 @@ inline void solve_columns(const SG& sg, int lane, int sgid, int nsg, const Stage
         for (int r = 0; r < R; ++r) {
             const int t = lane + 32 * r;
             row[r] = t < n ? (rev ? n - 1 - S.perm[t] : S.perm[t]) : 0;
-            x[r] = t < n ? col[row[r]] : zero<D>();
+            x[r] = t < n ? col[row[r]] : v2::sfp::zero<D>();
         }
         ldl_solve_regs<R>(sg, lane, S, x);
         BATCHLAS_UNROLL_FULL

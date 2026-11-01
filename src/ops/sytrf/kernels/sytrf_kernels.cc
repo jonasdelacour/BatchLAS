@@ -40,9 +40,7 @@ template <typename T> class SytrfBlockedTrailKernel;
 
 namespace {
 
-using sytrf_device::Group;
-using sytrf_device::Tile;
-using sytrf_device::Vec;
+namespace v2 = batchlas::device::v2;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -120,37 +118,32 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 D* const tp = &slm[0];
                 int* const pp = &slm_piv[0];
-                const Group<R> g{it, &red[0], &red[1], &redi[0], lane, kSytrfCtaWg, /*sg_only=*/true};
-                const Tile<D> G{ap + b * stra, lda, n, upper};
-                const Tile<D> S{tp, kLdt, n, false};
-                for (int idx = lid; idx < n * n; idx += wg) {
-                    const int i = idx % n, j = idx / n;
-                    if (i >= j) S(i, j) = G(i, j);
-                }
-                sycl::group_barrier(it.get_group());
+                const v2::RtGroup all{it, lid, wg};
+                const v2::RtGroup g{it, lane, kSytrfCtaWg, /*sg_only=*/true};
+                const v2::ArgMaxScratch<R> am{&red[0], &redi[0]};
+                const auto G = v2::rev_mat(ap + b * stra, lda, n, upper);
+                const auto S = v2::rev_mat(tp, kLdt, n, false);
+                v2::lacpy_flat<Uplo::Lower>(all, G, S, n);
+                all.barrier();
                 if (sgid == 0) {
                     int* const gp = piv + b * n;
-                    const int st = sytrf_device::ldl_factor(S, n, upper, g, [&](int k, int v) {
+                    const int st = sytrf_device::ldl_factor(S, n, upper, g, am, [&](int k, int v) {
                         gp[k] = v;
                         pp[k] = v;
                     });
-                    for (int idx = lane; idx < n * n; idx += kSytrfCtaWg) {
-                        const int i = idx % n, j = idx / n;
-                        if (i >= j) G(i, j) = S(i, j);
-                    }
+                    v2::lacpy_flat<Uplo::Lower>(g, S, G, n);
                     if (lane == 0) {
                         info[b] = st;
                         pp[4 * kN + 1] = st;
                     }
                 }
                 if (bp == nullptr) return;
-                sycl::group_barrier(it.get_group());
+                all.barrier();
                 if (pp[4 * kN + 1] != 0) return;
                 const sytrf_device::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
-                for (int k = lid; k < n; k += wg) L.ps[k] = sytrf_device::logical_piv(pp[upper ? n - 1 - k : k], n, upper);
-                auto bar = [&] { sycl::group_barrier(it.get_group()); };
-                bar();
-                const bool ok = sytrf_device::ldl_convert<D>(L, n, L.ps, L.perm, L.kind, L.e, lid, wg, pp + 4 * kN, bar);
+                v2::for_range(all, {0, n}, [&](int k) { L.ps[k] = sytrf_device::logical_piv(pp[upper ? n - 1 - k : k], n, upper); });
+                all.barrier();
+                const bool ok = sytrf_device::ldl_convert<D>(L, n, L.ps, L.perm, L.kind, L.e, all, pp + 4 * kN);
                 sytrf_device::solve_columns<1>(sg, lane, sgid, nsg, L, ok, upper, bp + b * strb, ldb, nrhs);
             });
     });
@@ -222,10 +215,11 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
                 if (mask != nullptr && mask[b] == 0) return;
-                const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
-                const Tile<D> G{ap + b * stra, lda, n, upper};
+                const v2::RtGroup g{it, lid, wg};
+                const auto G = v2::rev_mat(ap + b * stra, lda, n, upper);
                 int* const gp = piv + b * n;
-                const int st = sytrf_device::ldl_factor(G, n, upper, g, [&](int k, int v) { gp[k] = v; });
+                const int st = sytrf_device::ldl_factor(G, n, upper, g, v2::ArgMaxScratch<R>{&red[0], &redi[0]},
+                                                        [&](int k, int v) { gp[k] = v; });
                 if (lid == 0) info[b] = st;
             });
     });
@@ -264,11 +258,12 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const std::ptrdiff_t b = grp / nrhs, c = grp % nrhs;
                 if (mask != nullptr && mask[b] == 0) return;
                 if (skip_info != nullptr && skip_info[b] != 0) return;
-                const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
-                const Tile<D> G{ap + b * stra, lda, n, upper};
-                const Vec<D> x{bp + b * strb + c * ldb, n, upper};
+                const v2::RtGroup g{it, lid, wg};
+                const auto G = v2::rev_mat(ap + b * stra, lda, n, upper);
+                const sytrf_device::Vec<D> x{bp + b * strb + c * ldb, n, upper};
                 const int* const gp = piv + b * n;
-                sytrf_device::ldl_solve(G, n, upper, x, g, [&](int k) { return gp[k]; });
+                sytrf_device::ldl_solve(G, n, upper, x, g, v2::SumScratch<R>{&red[0], &red[wg / 32]},
+                                        [&](int k) { return gp[k]; });
             });
     });
     return ctx.get_event();
@@ -328,14 +323,15 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
-                if (mask != nullptr && mask[b] == 0) return;  // I1: before g.bar()
-                const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before g.barrier()
+                const v2::RtGroup g{it, lid, wg};
+                const v2::ArgMaxScratch<R> am{&red[0], &redi[0]};
                 D* const item = ap + b * stra;
-                const Tile<D> S{item, lda, n, upper};
+                const auto S = v2::rev_mat(item, lda, n, upper);
                 int* const gp = piv + b * n;
                 const int first = state[2 * b], end = state[2 * b + 1];
                 int st = info[b];
-                g.bar();
+                g.barrier();
                 sytrf_device::ldl_undo(S, first, end, g, [&](int j, bool& two) {
                     const int raw = gp[upper ? n - 1 - j : j];
                     two = raw < 0;
@@ -345,14 +341,14 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 if (tail) {
                     const int sub = n - end;
                     const int off = upper ? 0 : end;
-                    const Tile<D> T2{item + off + static_cast<std::ptrdiff_t>(off) * lda, lda, sub, upper};
-                    const int t = sub > 0 ? sytrf_device::ldl_factor(T2, sub, upper, g, [&](int k, int v) {
+                    const auto T2 = v2::rev_mat(item + off + static_cast<std::ptrdiff_t>(off) * lda, lda, sub, upper);
+                    const int t = sub > 0 ? sytrf_device::ldl_factor(T2, sub, upper, g, am, [&](int k, int v) {
                         gp[k + off] = v > 0 ? v + off : v - off;
                     }) : 0;
                     if (st == 0 && t > 0) st = t + off;
                 } else {
-                    const sytrf_device::WTile<D> W{wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper};
-                    const int e = sytrf_device::ldl_panel(S, W, n, k0, nb, end, upper, g, st,
+                    const auto W = sytrf_device::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                    const int e = sytrf_device::ldl_panel(S, W, n, k0, nb, end, upper, g, am, st,
                                                           [&](int k, int v) { gp[k] = v; });
                     if (lid == 0) {
                         state[2 * b] = end;
@@ -385,24 +381,20 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                 const std::ptrdiff_t b = grp / nblk;
                 if (mask != nullptr && mask[b] == 0) return;
                 const int t = static_cast<int>(grp % nblk);
-                const Tile<D> S{ap + b * stra, lda, n, upper};
-                const sytrf_device::WTile<D> W{wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper};
+                const v2::RtGroup ex{it, lid, wg};
+                const auto S = v2::rev_mat(ap + b * stra, lda, n, upper);
+                const auto W = sytrf_device::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                const auto L = v2::cols_from(S, k0);
                 const int rank = state[2 * b + 1] - k0;
-                auto upd = [&](int i, int j) {
-                    D acc = S(i, j);
-                    for (int l = 0; l < rank; ++l) acc = sycl_device::dev_sub(acc, sycl_device::dev_mul(S(i, k0 + l), W(j, l)));
-                    S(i, j) = acc;
-                };
-                if (t == nblk - 1) {
-                    if (rank == nb)
-                        for (int i = kt - 1 + lid; i < n; i += wg) upd(i, kt - 1);
+                if (t == nblk - 1) {  // column kt - 1 -= L W(kt - 1, :)^T
+                    if (rank == nb) {
+                        const auto c = v2::col_of(S, kt - 1);
+                        v2::gemv_sub(ex, L, v2::row_of(W, kt - 1), c, c, {kt - 1, n}, 0, rank);
+                    }
                     return;
                 }
                 const int j0 = kt + t * ub, jb = sycl::min(ub, n - j0);
-                for (int idx = lid; idx < jb * jb; idx += wg) {
-                    const int i = j0 + idx % jb, j = j0 + idx / jb;
-                    if (i >= j) upd(i, j);
-                }
+                v2::gemmt_block_sub<Uplo::Lower>(ex, L, W, S, j0, jb, rank);
             });
     });
 }
