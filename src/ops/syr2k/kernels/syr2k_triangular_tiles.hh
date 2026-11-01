@@ -7,9 +7,11 @@
 // Products are issued sequentially, not interleaved, to keep one fragment pair
 // live (occupancy). Diagonal tiles alias the bj-side tiles to the bi-side ones
 // (block-uniform, no divergence) and mask their epilogue.
+// Components: v2 ext/l3-triangular-tiles.hh (PacketStager, frag_ld4 + ger_acc, epilogue_tri_packets).
 // evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
 #include <src/kernels/common/triangular_tiles.hh>
+#include <batchlas/blas/device/v2/ext/l3-triangular-tiles.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
@@ -25,6 +27,8 @@
 #include <cstdint>
 
 namespace batchlas::backend::detail {
+
+namespace dla = batchlas::device::v2;
 
 template <typename T, bool TransOperand, bool AlignedFastPath, bool Conjugate>
 class Syr2kTriangularTilesKernel;
@@ -66,13 +70,15 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
     constexpr int TileN = kTriangularTile;
     constexpr int TileK = kTriangularTileK;
     constexpr int ThreadTile = 8;                  // rows and cols per thread
-    constexpr int Band = ThreadTile / 2;           // 4: the vectorized band width
     constexpr int LocalRows = TileM / ThreadTile;  // 16
     constexpr int LocalCols = TileN / ThreadTile;  // 16
     constexpr int Threads = LocalRows * LocalCols; // 256
     constexpr int Stride = TileM;
-
-    static_assert(TileM * TileK == 4 * Threads, "staging assumes one vector per thread");
+    // A thread's 8 rows (and 8 columns): two 4-wide bands, 64 apart.
+    using Lanes = dla::Bands4<ThreadTile / 4, TileM / 2, 4>;
+    // Staging walks the output index for NoTrans (contiguous in an n x k operand); Trans walks
+    // k, contiguous in a k x n one, and transposes on the way into shared.
+    using Stager = dla::PacketStager<TileM, TileK, Threads, TransOperand, AlignedFastPath>;
 
     const int n = static_cast<int>(C.rows());
     const int k = TransOperand ? static_cast<int>(A.rows()) : static_cast<int>(A.cols());
@@ -115,7 +121,7 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
 
                 int bi = 0;
                 int bj = 0;
-                triangular_tile_decode(static_cast<int>(item.get_group(1)), bi, bj);
+                dla::tri_tile_decode(static_cast<int>(item.get_group(1)), bi, bj);
                 const bool on_diagonal = bi == bj;
 
                 const int m0 = (lower ? bi : bj) * TileM;
@@ -131,80 +137,22 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
                 T* san = on_diagonal ? sam : shared + 2 * TileK * Stride;
                 T* sbn = on_diagonal ? sbm : shared + 3 * TileK * Stride;
 
-                T accum[ThreadTile][ThreadTile];
-BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < ThreadTile; ++i) {
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < ThreadTile; ++j) {
-                        accum[i][j] = T(0);
-                    }
-                }
+                dla::RegTile<T, ThreadTile, ThreadTile> acc;
+                dla::fill_tile(acc, T(0));
 
-                // Staging coordinates. NoTrans walks the output row index,
-                // which is the contiguous direction of a column-major n x k
-                // operand; Trans walks k, which is the contiguous direction of
-                // a k x n one and has to be transposed on the way into shared.
-                const int s_row = TransOperand ? tid / 2 : (tid % 32) * 4;
-                const int s_l = TransOperand ? (tid % 2) * 4 : tid / 32;
+                const Stager stage(tid);
+                // her2k stages A scaled (Conjugate only), so both products share one alpha.
+                const dla::StageScale<T, Conjugate> scale_a{a_scale};
+                // her2k: op(X) op(Y)^H conjugates the column factor (NoTrans) or the row one.
+                constexpr bool kConjR = Conjugate && TransOperand;
+                constexpr bool kConjC = Conjugate && !TransOperand;
 
                 for (int k0 = 0; k0 < k; k0 += TileK) {
-                    // A shared tile is always filled to its full 128x8, with
-                    // zeros outside the matrix, so the inner loop below needs
-                    // no bounds checks at all.
-                    // her2k stages A scaled (Conjugate only), so both products share one alpha.
-                    auto stage = [&](const T* src, int ld, T* dst, int row0, bool scaled) {
-                        auto sc = [&](T v) {
-                            if constexpr (Conjugate) return scaled ? a_scale * v : v;
-                            else return v;
-                        };
-                        if constexpr (TransOperand) {
-                            const int row = row0 + s_row;
-                            if constexpr (AlignedFastPath) {
-                                const TileVec4<T> v =
-                                    tile_load4(src + (k0 + s_l) +
-                                               static_cast<std::ptrdiff_t>(row) * ld);
-BATCHLAS_UNROLL_FULL
-                                for (int i = 0; i < 4; ++i) {
-                                    dst[(s_l + i) * Stride + s_row] = sc(v.v[i]);
-                                }
-                            } else {
-BATCHLAS_UNROLL_FULL
-                                for (int i = 0; i < 4; ++i) {
-                                    const int gk = k0 + s_l + i;
-                                    dst[(s_l + i) * Stride + s_row] =
-                                        (gk < k && row < n)
-                                        ? sc(src[gk + static_cast<std::ptrdiff_t>(row) * ld])
-                                        : T(0);
-                                }
-                            }
-                        } else {
-                            const int gk = k0 + s_l;
-                            if constexpr (AlignedFastPath) {
-                                TileVec4<T> v = tile_load4(src + (row0 + s_row) +
-                                                           static_cast<std::ptrdiff_t>(gk) * ld);
-                                if constexpr (Conjugate) {
-BATCHLAS_UNROLL_FULL
-                                    for (int i = 0; i < 4; ++i) v.v[i] = sc(v.v[i]);
-                                }
-                                tile_store4(&dst[s_l * Stride + s_row], v);
-                            } else {
-BATCHLAS_UNROLL_FULL
-                                for (int i = 0; i < 4; ++i) {
-                                    const int row = row0 + s_row + i;
-                                    dst[s_l * Stride + s_row + i] =
-                                        (row < n && gk < k)
-                                        ? sc(src[row + static_cast<std::ptrdiff_t>(gk) * ld])
-                                        : T(0);
-                                }
-                            }
-                        }
-                    };
-
-                    stage(Ab, lda, sam, m0, true);
-                    stage(Bb, ldb, sbm, m0, false);
+                    stage(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, sam, m0, scale_a});
+                    stage(k0, n, k, dla::Panel<T>{Bb, ldb, sbm, m0});
                     if (!on_diagonal) {
-                        stage(Ab, lda, san, n0, true);
-                        stage(Bb, ldb, sbn, n0, false);
+                        stage(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, san, n0, scale_a});
+                        stage(k0, n, k, dla::Panel<T>{Bb, ldb, sbn, n0});
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 
@@ -214,85 +162,20 @@ BATCHLAS_UNROLL_FULL
                         for (int product = 0; product < 2; ++product) {
                             const T* srow = product == 0 ? sam : sbm;
                             const T* scol = product == 0 ? sbn : san;
-                            const TileVec4<T> r0 = tile_load4(&srow[kk * Stride + ty * Band]);
-                            const TileVec4<T> r1 = tile_load4(&srow[kk * Stride + 64 + ty * Band]);
-                            const TileVec4<T> c0 = tile_load4(&scol[kk * Stride + tx * Band]);
-                            const TileVec4<T> c1 = tile_load4(&scol[kk * Stride + 64 + tx * Band]);
-                            // her2k: op(X) op(Y)^H conjugates the column factor (NoTrans) or the row one.
-                            constexpr bool kConjR = Conjugate && TransOperand;
-                            constexpr bool kConjC = Conjugate && !TransOperand;
-                            const T rf[ThreadTile] = {conj_if<kConjR>(r0.v[0]), conj_if<kConjR>(r0.v[1]),
-                                                      conj_if<kConjR>(r0.v[2]), conj_if<kConjR>(r0.v[3]),
-                                                      conj_if<kConjR>(r1.v[0]), conj_if<kConjR>(r1.v[1]),
-                                                      conj_if<kConjR>(r1.v[2]), conj_if<kConjR>(r1.v[3])};
-                            const T cf[ThreadTile] = {conj_if<kConjC>(c0.v[0]), conj_if<kConjC>(c0.v[1]),
-                                                      conj_if<kConjC>(c0.v[2]), conj_if<kConjC>(c0.v[3]),
-                                                      conj_if<kConjC>(c1.v[0]), conj_if<kConjC>(c1.v[1]),
-                                                      conj_if<kConjC>(c1.v[2]), conj_if<kConjC>(c1.v[3])};
-BATCHLAS_UNROLL_FULL
-                            for (int i = 0; i < ThreadTile; ++i) {
-BATCHLAS_UNROLL_FULL
-                                for (int j = 0; j < ThreadTile; ++j) {
-                                    accum[i][j] = accumulate(accum[i][j], rf[i], cf[j]);
-                                }
-                            }
+                            dla::Frag<T, ThreadTile> rf;
+                            dla::Frag<T, ThreadTile> cf;
+                            dla::frag_ld4<Lanes, kConjR>(rf, srow + kk * Stride, ty);
+                            dla::frag_ld4<Lanes, kConjC>(cf, scol + kk * Stride, tx);
+                            dla::ger_acc(acc, rf, cf);
                         }
                     }
                     item.barrier(sycl::access::fence_space::local_space);
                 }
 
-                // Epilogue. Off the diagonal every element of the tile is in
-                // the requested triangle, so a whole 4-row band is one 128-bit
-                // access; on the diagonal the mask makes the band partial and
-                // the stores go one at a time.
-                auto store_element = [&](int row, int col, T value) {
-                    if (row >= n || col >= n) {
-                        return;
-                    }
-                    if (on_diagonal && (lower ? row < col : row > col)) {
-                        return;
-                    }
-                    T* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
-                    T out = beta == T(0) ? alpha * value : alpha * value + beta * *p;
-                    if constexpr (Conjugate) {
-                        if (row == col) out = T(out.real(), typename T::value_type(0));  // Hermitian diagonal
-                    }
-                    *p = out;
-                };
-
-BATCHLAS_UNROLL_FULL
-                for (int band = 0; band < 2; ++band) {
-                    const int gm = m0 + band * 64 + ty * Band;
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < ThreadTile; ++j) {
-                        const int gn = n0 + (j < Band ? tx * Band + j : 64 + tx * Band + j - Band);
-                        if constexpr (AlignedFastPath) {
-                            if (!on_diagonal) {
-                                T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
-                                TileVec4<T> out;
-                                if (beta == T(0)) {
-BATCHLAS_UNROLL_FULL
-                                    for (int i = 0; i < 4; ++i) {
-                                        out.v[i] = alpha * accum[band * Band + i][j];
-                                    }
-                                } else {
-                                    const TileVec4<T> prior = tile_load4(const_cast<const T*>(p));
-BATCHLAS_UNROLL_FULL
-                                    for (int i = 0; i < 4; ++i) {
-                                        out.v[i] = alpha * accum[band * Band + i][j] +
-                                            beta * prior.v[i];
-                                    }
-                                }
-                                tile_store4(p, out);
-                                continue;
-                            }
-                        }
-BATCHLAS_UNROLL_FULL
-                        for (int i = 0; i < 4; ++i) {
-                            store_element(gm + i, gn, accum[band * Band + i][j]);
-                        }
-                    }
-                }
+                // Off the diagonal a 4-row band is one 128-bit access; on it the
+                // triangle mask makes the band partial and the stores go one at a time.
+                dla::epilogue_tri_packets<AlignedFastPath, Lanes, Lanes>(
+                    dla::TriMask<Conjugate>{on_diagonal, lower}, acc, Cb, ldc, m0, n0, ty, tx, n, alpha, beta);
             });
     });
 

@@ -13,6 +13,7 @@
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/linalg-impl.hh>
+#include <batchlas/blas/device/v2/ext/l3-triangular-tiles.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
@@ -323,7 +324,7 @@ template <typename T, bool Right>
 class SymmMirrorTiledKernel;
 
 // double: gemm's tiled kernel (tiled_general.hh) with the symmetric operand read element by element
-// from its named triangle (storage coordinates: lower means row >= col is stored).
+// from its named triangle (v2 sym_at; storage coordinates: lower means row >= col is stored).
 template <typename T, bool Right>
 Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, bool lower) {
     constexpr int Tile = ops::mirror::tile<T>();
@@ -351,11 +352,7 @@ Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T 
                 const int col = static_cast<int>(item.get_group(2)) * Tile + lc;
                 const T* a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
                 const T* b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-                auto sym = [&](int r, int c) {
-                    const bool named = lower ? r >= c : r <= c;
-                    return named ? a_item[r + static_cast<std::ptrdiff_t>(c) * lda]
-                                 : a_item[c + static_cast<std::ptrdiff_t>(r) * lda];
-                };
+                auto sym = [&](int r, int c) { return batchlas::device::v2::sym_at(a_item, lda, r, c, lower); };
                 auto dense = [&](int r, int c) { return b_item[r + static_cast<std::ptrdiff_t>(c) * ldb]; };
                 T sum = T(0);
                 for (int kk0 = 0; kk0 < k; kk0 += Tile) {

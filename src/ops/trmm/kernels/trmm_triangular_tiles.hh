@@ -5,9 +5,12 @@
 // tile rooted at row m0 reduces only over the p its triangle reaches, and only the k-tile on the
 // diagonal is masked (in the A staging). The saving is (R+1)/2R for R = m/TileM row tiles, not 2x,
 // so the row tile is sized to m (trmm_row_tile). Layout and swizzle follow syrk_gram_tiles.hh.
+// Components: v2 ext/l3-triangular-tiles.hh (stage_swz_kc/cc + trmat_op_at, frag_ld4 + ger_acc,
+// epilogue_cm).
 // evidence: docs/perf/level3.md#trmm-triangular-tiles-kernel-design
 
 #include <src/kernels/common/triangular_tiles.hh>
+#include <batchlas/blas/device/v2/ext/l3-triangular-tiles.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
@@ -26,6 +29,8 @@
 #include <batchlas/settings.hh>
 
 namespace batchlas::backend::detail {
+
+namespace dla = batchlas::device::v2;
 
 inline constexpr int kTrmmTileN = 128;
 inline constexpr int kTrmmTileK = 16;
@@ -65,19 +70,14 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     constexpr int Threads = LocalRows * LocalCols;
     constexpr int SA = TileM;                    // aligned strides
     constexpr int SB = TileN;
-    constexpr int PacksA = TileM / 4;
-    constexpr int PacksB = TileN / 4;
-    constexpr int BandsR = ThreadRows / 4;
-    constexpr int BandsC = ThreadCols / 4;
-    constexpr int BandSpanR = TileM / BandsR;
-    constexpr int BandSpanC = TileN / BandsC;
-    constexpr int PacketsA = TileK * PacksA;
-    constexpr int PacketsB = TileK * PacksB;
+    // A lane's rows (columns): ThreadRows / 4 bands of 4, one band per TileM / bands rows.
+    using RowBands = dla::Bands4<ThreadRows / 4, TileM / (ThreadRows / 4), 4>;
+    using ColBands = dla::Bands4<ThreadCols / 4, TileN / (ThreadCols / 4), 4>;
+    using SwA = dla::Swizzle<TileM / 4>;
+    using SwB = dla::Swizzle<TileN / 4>;
 
     static_assert(ThreadRows % 4 == 0 && ThreadCols % 4 == 0, "fragments are 4-wide bands");
     static_assert(TileM % TileK == 0, "the diagonal tile has to fall on a k boundary");
-    static_assert((PacksA & (PacksA - 1)) == 0 && (PacksB & (PacksB - 1)) == 0,
-                  "the swizzle needs a power-of-two packet count");
 
     const int m = static_cast<int>(C.rows());
     const int n = static_cast<int>(C.cols());
@@ -136,21 +136,8 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                 T* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
                 T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
 
-                auto swizzle_a = [](int packet, int pp) {
-                    return packet ^ ((pp >> 2) & (PacksA - 1));
-                };
-                auto swizzle_b = [](int packet, int pp) {
-                    return packet ^ ((pp >> 2) & (PacksB - 1));
-                };
-
-                T accum[ThreadRows][ThreadCols];
-BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < ThreadRows; ++i) {
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < ThreadCols; ++j) {
-                        accum[i][j] = T(0);
-                    }
-                }
+                dla::RegTile<T, ThreadRows, ThreadCols> acc;
+                dla::fill_tile(acc, T(0));
 
                 // The whole point: an output tile rooted at row m0 reads only
                 // the part of the reduction its triangle can reach.
@@ -159,130 +146,40 @@ BATCHLAS_UNROLL_FULL
 
                 for (int p0 = p_begin; p0 < p_end; p0 += TileK) {
                     // op(A) tile with triangle, unit diagonal and edges resolved here, so the
-                    // inner loop sees a dense tile. Staging follows op(A)'s contiguous direction.
+                    // inner loop sees a dense tile. Staging follows op(A)'s contiguous direction;
+                    // NoTrans stores one 128-bit packet of four adjacent rows (single stores
+                    // would hit 8 banks).
                     if (transposed) {
-                        for (int flat = tid; flat < PacketsA; flat += Threads) {
-                            const int i = m0 + flat / (TileK / 4);
-                            const int pp0 = (flat % (TileK / 4)) * 4;
-                            const int ii = i - m0;
-                            const int phys = (swizzle_a(ii >> 2, pp0) << 2) | (ii & 3);
-BATCHLAS_UNROLL_FULL
-                            for (int e = 0; e < 4; ++e) {
-                                const int p = p0 + pp0 + e;
-                                T value = T(0);
-                                if (i < m && p < m) {
-                                    // ConjTrans: conjugate on the way in; a unit diagonal is a literal 1.
-                                    if (i == p) {
-                                        value = unit
-                                            ? T(1)
-                                            : conjugated
-                                                ? batchlas::device::detail::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
-                                                : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
-                                    } else if (lower_eff ? (p < i) : (p > i)) {
-                                        const T raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
-                                        value = conjugated ? batchlas::device::detail::conj(raw) : raw;
-                                    }
-                                }
-                                sa[(pp0 + e) * SA + phys] = value;
-                            }
-                        }
+                        dla::stage_swz_kc<TileM, TileK, Threads>(sa, tid, m0, p0, [&](int i, int p) {
+                            return dla::trmat_op_at<true>(Ab, lda, m, i, p, lower_eff, unit, conjugated);
+                        });
                     } else {
-                    for (int flat = tid; flat < PacketsA; flat += Threads) {
-                        const int pp = flat / PacksA;
-                        const int ii0 = (flat % PacksA) * 4;
-                        const int p = p0 + pp;
-                        const int phys = swizzle_a(ii0 >> 2, pp) << 2;
-                        // One 128-bit store of four adjacent rows: single stores would hit 8 banks.
-                        TileVec4<T> packet;
-BATCHLAS_UNROLL_FULL
-                        for (int e = 0; e < 4; ++e) {
-                            const int i = m0 + ii0 + e;
-                            T value = T(0);
-                            if (i < m && p < m) {
-                                if (i == p) {
-                                    value = unit
-                                        ? T(1)
-                                        : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
-                                } else if (lower_eff ? (p < i) : (p > i)) {
-                                    value = Ab[i + static_cast<std::ptrdiff_t>(p) * lda];
-                                }
-                            }
-                            packet.v[e] = value;
-                        }
-                        tile_store4(&sa[pp * SA + phys], packet);
+                        dla::stage_swz_cc<TileM, TileK, Threads, true>(sa, tid, m0, p0, [&](int i, int p) {
+                            return dla::trmat_op_at<false>(Ab, lda, m, i, p, lower_eff, unit, conjugated);
+                        });
                     }
-                    }
-
-                    // B: reduction rows [p0, p0+TileK) against columns
-                    // [n0, n0+TileN). B is contiguous down its row index, so a
-                    // thread takes four adjacent reduction rows of one column.
-                    for (int flat = tid; flat < PacketsB; flat += Threads) {
-                        const int col = flat / (TileK / 4);
-                        const int pp0 = (flat % (TileK / 4)) * 4;
-                        const int j = n0 + col;
-                        const int phys = (swizzle_b(col >> 2, pp0) << 2) | (col & 3);
-BATCHLAS_UNROLL_FULL
-                        for (int e = 0; e < 4; ++e) {
-                            const int p = p0 + pp0 + e;
-                            sb[(pp0 + e) * SB + phys] =
-                                (j < n && p < m)
-                                ? Bb[p + static_cast<std::ptrdiff_t>(j) * ldb]
-                                : T(0);
-                        }
-                    }
+                    // B: reduction rows [p0, p0+TileK) against columns [n0, n0+TileN); B is
+                    // contiguous down its row index, so a thread takes four adjacent reduction
+                    // rows of one column.
+                    dla::stage_swz_kc<TileN, TileK, Threads>(sb, tid, n0, p0, [&](int j, int p) {
+                        return (j < n && p < m) ? Bb[p + static_cast<std::ptrdiff_t>(j) * ldb] : T(0);
+                    });
                     item.barrier(sycl::access::fence_space::local_space);
 
 #pragma unroll 4
                     for (int p = 0; p < TileK; ++p) {
-                        const T* rowa = &sa[p * SA];
-                        const T* rowb = &sb[p * SB];
-                        T af[ThreadRows];
-                        T bf[ThreadCols];
-BATCHLAS_UNROLL_FULL
-                        for (int b = 0; b < BandsR; ++b) {
-                            const TileVec4<T> v =
-                                tile_load4(rowa + (swizzle_a(b * (BandSpanR / 4) + tr, p) << 2));
-BATCHLAS_UNROLL_FULL
-                            for (int e = 0; e < 4; ++e) {
-                                af[b * 4 + e] = v.v[e];
-                            }
-                        }
-BATCHLAS_UNROLL_FULL
-                        for (int b = 0; b < BandsC; ++b) {
-                            const TileVec4<T> v =
-                                tile_load4(rowb + (swizzle_b(b * (BandSpanC / 4) + tc, p) << 2));
-BATCHLAS_UNROLL_FULL
-                            for (int e = 0; e < 4; ++e) {
-                                bf[b * 4 + e] = v.v[e];
-                            }
-                        }
-BATCHLAS_UNROLL_FULL
-                        for (int i = 0; i < ThreadRows; ++i) {
-BATCHLAS_UNROLL_FULL
-                            for (int j = 0; j < ThreadCols; ++j) {
-                                accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
-                            }
-                        }
+                        dla::Frag<T, ThreadRows> af;
+                        dla::Frag<T, ThreadCols> bf;
+                        dla::frag_ld4<RowBands, false, SwA>(af, &sa[p * SA], tr, p);
+                        dla::frag_ld4<ColBands, false, SwB>(bf, &sb[p * SB], tc, p);
+                        dla::ger_acc(acc, af, bf);
                     }
                     item.barrier(sycl::access::fence_space::local_space);
                 }
 
                 // TRMM overwrites C; there is no beta, so nothing here reads it.
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < ThreadCols; ++j) {
-                    const int col = n0 + (j / 4) * BandSpanC + tc * 4 + (j % 4);
-                    if (col >= n) {
-                        continue;
-                    }
-BATCHLAS_UNROLL_FULL
-                    for (int i = 0; i < ThreadRows; ++i) {
-                        const int row = m0 + (i / 4) * BandSpanR + tr * 4 + (i % 4);
-                        if (row >= m) {
-                            continue;
-                        }
-                        Cb[row + static_cast<std::ptrdiff_t>(col) * ldc] = alpha * accum[i][j];
-                    }
-                }
+                dla::epilogue_cm<RowBands, ColBands>(dla::FullMask{}, acc, Cb, ldc, m0, n0, tr, tc, m, n, alpha,
+                                                     dla::Zero{});
             });
     });
 
