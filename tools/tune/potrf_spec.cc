@@ -109,6 +109,9 @@ public:
         // common "src/ops/potrf/potrf.cc"
         // family: tiny "src/kernels/common/tiny_device.hh"
         // family: blocked "src/ops/potrf/kernels/symmetric_product_fold.hh" "src/ops/trsm/trsm_native.hh"
+        // family: cta "include/batchlas/blas/device/v2/ext/potrf-cta-lpanel.hh"
+        // family: lpanel "include/batchlas/blas/device/v2/ext/potrf-cta-lpanel.hh"
+        // family: blocked "include/batchlas/blas/device/v2/ext/potrf-cta-lpanel.hh"
         // blocked's batch chunk comes from tuning_params.hh (blocked_chunk_items).
         // family: blocked "include/batchlas/tuning_params.hh"
         // kernel-deps-end
