@@ -38,7 +38,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                bool sort_desc,
                                Span<int32_t> fail_flags,
                                const std::uint8_t* mask) {
-    const Real eps = std::numeric_limits<Real>::epsilon();
+    constexpr Real eps = std::numeric_limits<Real>::epsilon();
     const Real tolmul = sycl::fmax(Real(10), sycl::fmin(Real(100), sycl::pow(eps, Real(-0.125))));
     const Real tol = tolmul * eps;
     const int32_t maxitr = 6; // LAPACK DBDSQR default
@@ -57,7 +57,10 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
         const bool accumulate_u = u.rows() > 0 && u.cols() == n;
         const bool accumulate_vh = vh.rows() == n && vh.cols() > 0;
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
+        // Explicit captures in the legacy kernel's argument order (the order sets the PTX
+        // parameter layout, which the SASS-parity gate compares against).
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [mask, fail, D, nn, E, maxit, tol, accumulate_u, U,
+                                                                   accumulate_vh, Vh, out, descending](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             // I3. The host fold below reads every flag, so an inactive item writes the
             // neutral "converged" and nothing else.

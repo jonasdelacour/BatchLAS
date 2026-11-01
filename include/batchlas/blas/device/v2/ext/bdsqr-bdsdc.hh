@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 #include <batchlas/blas/device/v2/level1.hh>
 #include <batchlas/blas/matrix.hh>
@@ -52,20 +53,120 @@ BATCHLAS_DLA_INLINE SMat<T, M> trans(const Mat<T, R, C, Ld, M, L>& a) {
     return {a.p, Dyn{a.cols()}, Dyn{a.rows()}, Dyn{int(a.ld)}, Dyn{1}};
 }
 
-// x(start + k * step) for k < n.
-template <class T, class N, class Inc, Mem M, class L>
-BATCHLAS_DLA_INLINE Vec<T, Dyn, Dyn, M, L> slice(const Vec<T, N, Inc, M, L>& v, int start, int n, int step) {
-    return {v.p + start * int(v.inc), Dyn{n}, Dyn{int(v.inc) * step}};
+// Lazy operands: each element is the parent's own element expression, so an address is computed
+// exactly once, as the parent computes it (no folded pointer + stride the optimiser re-versions).
+template <class V> using operand_value_t = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
+
+// v(start + k * step) for k < n.
+template <class V> struct Sliced {
+    using value_type = operand_value_t<V>;
+    using layout = Cyclic;
+    V v;
+    int start;
+    Dyn n;
+    int step;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int k) const { return v(start + k * step); }
+    BATCHLAS_DLA_INLINE int size() const { return int(n); }
+};
+template <class V> BATCHLAS_DLA_INLINE Sliced<V> slice(const V& v, int start, int n, int step) {
+    return {v, start, Dyn{n}, step};
 }
 
-// Item b of a v1 view without batch_item(): the batch term is int64 as in the views' own
-// operator(); a matrix keeps the view's (capacity) rows and cols, not per-item active extents.
-template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE Vec<T, Dyn, Dyn, M> vec_item(const VectorView<T>& v, int b) {
-    return {v.data_ptr() + static_cast<std::int64_t>(b) * v.stride(), Dyn{v.size()}, Dyn{v.inc()}};
+// Column j / row i of a matrix operand, first n elements.
+template <class Mx> struct MatCol {
+    using value_type = std::remove_cvref_t<decltype(std::declval<const Mx&>()(0, 0))>;
+    using layout = Cyclic;
+    Mx a;
+    int j;
+    Dyn n;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return a(i, j); }
+    BATCHLAS_DLA_INLINE int size() const { return int(n); }
+    BATCHLAS_DLA_INLINE MatCol head(int k) const { return {a, j, Dyn{k}}; }
+};
+template <class Mx> struct MatRow {
+    using value_type = std::remove_cvref_t<decltype(std::declval<const Mx&>()(0, 0))>;
+    using layout = Cyclic;
+    Mx a;
+    int i;
+    Dyn n;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int j) const { return a(i, j); }
+    BATCHLAS_DLA_INLINE int size() const { return int(n); }
+    BATCHLAS_DLA_INLINE MatRow head(int k) const { return {a, i, Dyn{k}}; }
+};
+template <class Self> struct LazyLines {
+    BATCHLAS_DLA_INLINE MatCol<Self> col(int j) const {
+        const Self& s = static_cast<const Self&>(*this);
+        return {s, j, Dyn{s.rows()}};
+    }
+    BATCHLAS_DLA_INLINE MatRow<Self> row(int i) const {
+        const Self& s = static_cast<const Self&>(*this);
+        return {s, i, Dyn{s.cols()}};
+    }
+};
+
+// Item b of a v1 view, addressed with the view's own expression: VectorView::at is
+// p[(int64) i * inc + (int64) b * stride], KernelMatrixView is p[(int64) b * stride + j * ld + i].
+// A matrix keeps the view's (capacity) rows and cols, not per-item active extents.
+template <class T, Mem M = Mem::Global> struct VVec {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int b;
+    int stride;
+    Dyn n;
+    Dyn inc;
+    BATCHLAS_DLA_INLINE T& operator()(int i) const {
+        return p[static_cast<std::int64_t>(i) * int(inc) + static_cast<std::int64_t>(b) * stride];
+    }
+    BATCHLAS_DLA_INLINE int size() const { return int(n); }
+    BATCHLAS_DLA_INLINE VVec head(int k) const { return {p, b, stride, Dyn{k}, inc}; }
+};
+template <class T, Mem M = Mem::Global> struct VMat : LazyLines<VMat<T, M>> {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int b;
+    int stride;
+    Dyn m;
+    Dyn n;
+    Dyn ld;
+    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return p[static_cast<std::int64_t>(b) * stride + j * int(ld) + i]; }
+    BATCHLAS_DLA_INLINE int rows() const { return int(m); }
+    BATCHLAS_DLA_INLINE int cols() const { return int(n); }
+    // The leading r x c block (same addressing as the item).
+    BATCHLAS_DLA_INLINE VMat lead(int r, int c) const { return {{}, p, b, stride, Dyn{r}, Dyn{c}, ld}; }
+};
+template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE VVec<T, M> vec_item(const VectorView<T>& v, int b) {
+    return {v.data_ptr(), b, v.stride(), Dyn{v.size()}, Dyn{v.inc()}};
 }
 template <Mem M = Mem::Global, class T>
-BATCHLAS_DLA_INLINE Mat<T, Dyn, Dyn, Dyn, M> mat_item(const KernelMatrixView<T, MatrixFormat::Dense>& a, int b) {
-    return {a.data() + static_cast<std::int64_t>(b) * a.stride(), Dyn{a.rows()}, Dyn{a.cols()}, Dyn{a.ld()}};
+BATCHLAS_DLA_INLINE VMat<T, M> mat_item(const KernelMatrixView<T, MatrixFormat::Dense>& a, int b) {
+    return {{}, a.data(), b, a.stride(), Dyn{a.rows()}, Dyn{a.cols()}, Dyn{a.ld()}};
+}
+
+// A^T without a copy: (i, j) = a(j, i).
+template <class Mx> struct Trans : LazyLines<Trans<Mx>> {
+    Mx a;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return a(j, i); }
+    BATCHLAS_DLA_INLINE int rows() const { return a.cols(); }
+    BATCHLAS_DLA_INLINE int cols() const { return a.rows(); }
+};
+template <class T, Mem M> BATCHLAS_DLA_INLINE Trans<VMat<T, M>> trans(const VMat<T, M>& a) { return {{}, a}; }
+
+// a where `first`, else b, chosen at every element (a runtime choice between two same-shape
+// operands, e.g. V = Vh^T or U, as the select the hand-written kernels make).
+template <class A, class B> struct Pick : LazyLines<Pick<A, B>> {
+    bool first;
+    A a;
+    B b;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return first ? a(i, j) : b(i, j); }
+    BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
+    BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
+};
+template <class A, class B> BATCHLAS_DLA_INLINE Pick<A, B> pick(bool first, const A& a, const B& b) {
+    return {{}, first, a, b};
 }
 
 // ---- elementwise -------------------------------------------------------------------------
@@ -113,16 +214,49 @@ BATCHLAS_DLA_INLINE void dgmv(const Ex& ex, A alpha_, const D& d, const X& x, co
     });
 }
 
+// y := alpha diag(d) x when `on` (a deferred dgmv for dgmv_many).
+template <class A, class D, class X, class Y> struct DgmvIf {
+    bool on;
+    A alpha;
+    D d;
+    X x;
+    Y y;
+};
+template <class A, class D, class X, class Y>
+BATCHLAS_DLA_INLINE DgmvIf<A, D, X, Y> dgmv_if(bool on, A alpha, const D& d, const X& x, const Y& y) {
+    return {on, alpha, d, x, y};
+}
+// Every enabled dgmv_if in one pass over i < first.y.size() (the outputs share their length).
+template <class Ex, class Op0, class... Ops> BATCHLAS_DLA_INLINE void dgmv_many(const Ex& ex, const Op0& op0, const Ops&... ops) {
+    auto one = [](const auto& op, int i) {
+        using T = elem_t<decltype(op.y)>;
+        if (op.on) op.y(i) = tag_mul(as_tag(op.alpha), Arith<T>::mul(static_cast<T>(op.d(i)), static_cast<T>(op.x(i))));
+    };
+    for_each_owned(ex, op0.y.size(), [&](int i) {
+        one(op0, i);
+        (one(ops, i), ...);
+    });
+}
+
 // x(i) := 0 where pred(i); true when pred held for every i < x.size().
 template <Scope S = Scope::Auto, class Ex, class X, class P>
 BATCHLAS_DLA_INLINE bool zero_if(const Ex& ex, const X& x, P&& pred) {
     using T = elem_t<X>;
-    int all = 1;
-    for_each_owned(ex, x.size(), [&](int i) {
-        if (pred(i)) x(i) = Arith<T>::zero();
-        else all = 0;
-    });
-    return detail::scope_reduce<S>(ex, all, sycl::minimum<int>()) != 0;
+    if constexpr (is_thread_v<Ex>) {
+        bool all = true;
+        for (int i = 0; i < x.size(); ++i) {
+            if (pred(i)) x(i) = Arith<T>::zero();
+            else all = false;
+        }
+        return all;
+    } else {
+        int all = 1;
+        for_each_owned(ex, x.size(), [&](int i) {
+            if (pred(i)) x(i) = Arith<T>::zero();
+            else all = 0;
+        });
+        return detail::scope_reduce<S>(ex, all, sycl::minimum<int>()) != 0;
+    }
 }
 
 // ---- plane rotations -----------------------------------------------------------------------
@@ -222,9 +356,7 @@ BATCHLAS_DLA_INLINE auto sumsq_many(const Ex& ex, const X0& x0, const Xs&... xs)
     using A = Arith<T>;
     using R = real_t<T>;
     constexpr int K = 1 + sizeof...(Xs);
-    std::array<R, K> acc;
-#pragma unroll
-    for (int k = 0; k < K; ++k) acc[k] = R(0);
+    std::array<R, K> acc{};
     auto add = [](R& a, T v) {
         if constexpr (A::is_complex) {
             a += A::re(v) * A::re(v);
@@ -238,9 +370,10 @@ BATCHLAS_DLA_INLINE auto sumsq_many(const Ex& ex, const X0& x0, const Xs&... xs)
         add(acc[k++], x0(i));
         (add(acc[k++], xs(i)), ...);
     });
-#pragma unroll
-    for (int k = 0; k < K; ++k) acc[k] = detail::scope_reduce<S>(ex, acc[k]);
-    return acc;
+    // One reduction per operand, in order (a braced list evaluates left to right).
+    return [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return std::array<R, K>{detail::scope_reduce<S>(ex, acc[I])...};
+    }(std::make_index_sequence<K>{});
 }
 
 // ---- sorting -------------------------------------------------------------------------------

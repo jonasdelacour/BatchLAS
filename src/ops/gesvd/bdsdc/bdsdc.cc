@@ -109,16 +109,16 @@ void bdsdc_build_gk(Queue& ctx,
         const int32_t nn = n;
         const int32_t N = 2 * n;
         h.parallel_for<BdsdcBuildGk<B, T>>(
-            sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
             const v2::Thread th{};
-            const auto gd = v2::vec_item(GD, b);
+            const auto gd = v2::vec_item(GD, b).head(N);
             const auto ge = v2::vec_item(GE, b);
             const auto gs = v2::vec_item(GS, b);
             v2::fill(th, v2::Zero{}, gd);
             // off-diagonal f[2k] = d_k (couples v_k,u_k), f[2k+1] = e_k (couples u_k,v_{k+1})
-            v2::interleave(th, v2::vec_item(D, b), v2::vec_item(E, b).head(nn - 1), ge);
+            v2::interleave(th, v2::vec_item(D, b).head(nn), v2::vec_item(E, b).head(nn - 1), ge);
             gs(0) = T(1);
             for (int32_t i = 0; i < N - 1; ++i) {
                 const T fi = ge(i);
@@ -218,8 +218,8 @@ void bdsdc_extract_vectors(Queue& ctx,
             const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
             const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
             // Vh is V^T: row i holds v_i. Signs undo the off-diagonal normalisation.
-            if (wv) v2::dgmv(wg, pinv, sv, zv, v2::mat_item(Vh, b).row(i).head(nn));
-            if (wu) v2::dgmv(wg, qinv, su, zu, v2::mat_item(U, b).col(i).head(nn));
+            v2::dgmv_many(wg, v2::dgmv_if(wv, pinv, sv, zv, v2::mat_item(Vh, b).row(i).head(nn)),
+                          v2::dgmv_if(wu, qinv, su, zu, v2::mat_item(U, b).col(i).head(nn)));
         });
     });
 }
@@ -255,13 +255,13 @@ void bdsdc_repair_degenerate(Queue& ctx,
         // discard informative sigma). Values keep gebrd's eps*||A|| floor.
         // evidence: docs/perf/gesvd.md#gesvd-bdsdc-the-repair-threshold-from-the-resolution-limit
         constexpr T kOrthTarget = T(1e-3);
-        const T tol_factor =
+        constexpr T tol_factor =
             (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
 
         batchlas::impl::parallel_for<BdsdcRepair<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),
                               sycl::range<1>(kGroup)),
-            [=](sycl::nd_item<1> it) {
+            [mask, sig, nn, wv, wu, Vh, U](sycl::nd_item<1> it) {
             const v2::WorkGroup<kGroup> wg{it};
             const v2::Thread th{};  // the uniform scalar prologue, replicated on every item
             const int32_t b = static_cast<int32_t>(it.get_group(0));
@@ -273,12 +273,12 @@ void bdsdc_repair_degenerate(Queue& ctx,
             if (ndeg == 0) return;
 
             // Basis vector t is column t of Q: Q = V (= Vh^T) for which == 0, Q = U for which == 1.
-            const auto vq = v2::trans(v2::mat_item(Vh, b).sub(0, 0, nn, nn));
-            const auto uq = v2::as_smat(v2::mat_item(U, b).sub(0, 0, nn, nn));
+            const auto vq = v2::trans(v2::mat_item(Vh, b).lead(nn, nn));
+            const auto uq = v2::mat_item(U, b).lead(nn, nn);
             for (int32_t which = 0; which < 2; ++which) {
                 if (which == 0 && !wv) continue;
                 if (which == 1 && !wu) continue;
-                const v2::SMat<T> Q = (which == 0) ? vq : uq;
+                const auto Q = v2::pick(which == 0, vq, uq);
 
                 for (int32_t j = 0; j < nn; ++j) {
                     if (sb(j) > tol) continue;
