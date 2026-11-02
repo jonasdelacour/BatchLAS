@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Native batched GEMV: five kernel bodies, the work-group ladder they share, and
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
+// The bodies are device LA v2 op sequences (partial dot, lane fold, fused epilogue)
+// that keep the hand code's fma chain, int64 index arithmetic and shuffle trees.
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies
 
 #include <src/ops/gemv/gemv_native.hh>
 
+#include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -20,14 +23,13 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/blas/device/v2/ext/gemv-native.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas::sycl_gemv {
 
+namespace v2 = batchlas::device::v2;
 using sycl_device::DevMap;
-using sycl_device::dev_conj;
-using sycl_device::dev_is_complex_v;
-using sycl_device::fma_acc;
 
 namespace {
 
@@ -50,22 +52,42 @@ inline int gemv_wg_ladder(int64_t work_units, int max_wg, int cu,
     return wg;
 }
 
-// A sub-group sum, hand-rolled rather than sycl::reduce_over_group, which puts
-// static shared memory into the kernel. Afterwards LANE 0 alone holds the total.
-template <typename SG, typename D>
-inline D sg_sum(const SG& sg, D v) {
-    if constexpr (dev_is_complex_v<D>) {
-        auto re = v.re, im = v.im;
-        for (int off = 16; off > 0; off >>= 1) {
-            re += sycl::shift_group_left(sg, re, off);
-            im += sycl::shift_group_left(sg, im, off);
-        }
-        return D{re, im};
-    } else {
-        for (int off = 16; off > 0; off >>= 1) v += sycl::shift_group_left(sg, v, off);
-        return v;
+// One launch's batched operands, re-typed to the device scalar D at the pointer
+// boundary. NO __restrict__ ON ANY OF THEM: ortho.cc passes views into the same
+// allocation, and __restrict__ is a promise about the object. Item b's views keep
+// the hand code's int64 index arithmetic (v2::WideMat / WideVec).
+// The alpha == 0 / beta == 0 flags are NOT members: each kernel captures them as
+// top-level bools. A bool inside this by-value struct is tested where it is used, so
+// beta's flag sat in a register across the dot loop (GemvDirectTKernel<double>: REG
+// 36 -> 40 in the sm_89 SASS gate); a top-level bool is an entry-block predicate.
+// `beta_zero` is what keeps y unread when beta == 0; y may be uninitialised.
+template <typename T>
+struct GemvOperands {
+    using D = typename DevMap<T>::type;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+
+    const D* a;
+    const D* x;
+    D* y;
+    int64_t lda, stride_a, xinc, stride_x, yinc, stride_y;
+    int m, n;
+    D alpha, beta;
+
+    GemvOperands(const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X,
+                 const VectorView<T>& Y, T alpha_, T beta_)
+        : a(reinterpret_cast<const D*>(A.data_ptr())),
+          x(reinterpret_cast<const D*>(X.data_ptr())),
+          y(reinterpret_cast<D*>(Y.data_ptr())),
+          lda(A.ld()), stride_a(A.stride()), xinc(X.inc()), stride_x(X.stride()),
+          yinc(Y.inc()), stride_y(Y.stride()), m(A.rows()), n(A.cols()) {
+        __builtin_memcpy(&alpha, &alpha_, sizeof(D));
+        __builtin_memcpy(&beta, &beta_, sizeof(D));
     }
-}
+
+    v2::WideMat<const D> mat(int64_t b) const { return v2::wide_mat(a + b * stride_a, m, n, lda); }
+    v2::WideVec<const D> xvec(int64_t b, int len) const { return v2::wide_vec(x + b * stride_x, len, xinc); }
+    v2::WideVec<D> yvec(int64_t b, int len) const { return v2::wide_vec(y + b * stride_y, len, yinc); }
+};
 
 template <typename T> class GemvDirectNKernel;
 template <typename T> class GemvDirectTKernel;
@@ -179,10 +201,8 @@ Event gemv_direct_notrans(Queue& ctx,
                           const VectorView<T>& Y,
                           T alpha, T beta, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     const int m = A.rows();
-    const int n = A.cols();
     const int batch = A.batch_size();
 
     const int64_t items = static_cast<int64_t>(m) * batch;
@@ -194,29 +214,8 @@ Event gemv_direct_notrans(Queue& ctx,
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
-        // NO __restrict__ ON ANY OF THESE: ortho.cc passes views into the same
-        // allocation, and __restrict__ is a promise about the object.
-        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
-        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
-        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
-
-        const int64_t lda = A.ld();
-        const int64_t stride_a = A.stride();
-        const int64_t xinc = X.inc();
-        const int64_t stride_x = X.stride();
-        const int64_t yinc = Y.inc();
-        const int64_t stride_y = Y.stride();
-
-        D alpha_d, beta_d;
-        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
-        __builtin_memcpy(&beta_d, &beta, sizeof(D));
-
-        // `beta_zero` is what keeps y unread when beta == 0; y may be uninitialised.
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
-
-        const int out_len = m;
-        const int red_len = n;
+        const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const int64_t total = items;
 
         batchlas::impl::parallel_for<GemvDirectNKernel<T>>(h,
@@ -226,27 +225,17 @@ Event gemv_direct_notrans(Queue& ctx,
                 const int64_t gid = static_cast<int64_t>(it.get_global_linear_id());
                 if (gid >= total) return;
 
-                const int64_t b = gid / out_len;
+                const int64_t b = gid / op.m;
                 if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item's y is untouched
-                const int i = static_cast<int>(gid - b * out_len);
+                const int i = static_cast<int>(gid - b * op.m);
 
-                const D* Ab = a_ptr + b * stride_a;
-                const D* xb = x_ptr + b * stride_x;
-                D* yb = y_ptr + b * stride_y;
-
+                // y(i) := alpha A(i, :) x + beta y(i); alpha == 0 skips the dot.
+                const auto Ai = op.mat(b).row(i);
+                const auto xb = op.xvec(b, op.n);
+                const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero) {
-                    for (int j = 0; j < red_len; ++j) {
-                        fma_acc(acc, Ab[i + static_cast<int64_t>(j) * lda],
-                                xb[static_cast<int64_t>(j) * xinc]);
-                    }
-                }
-
-                // fma into an exact zero addend is the product, rounded once.
-                D out{};
-                fma_acc(out, alpha_d, acc);
-                if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(i) * yinc]);
-                yb[static_cast<int64_t>(i) * yinc] = out;
+                if (!alpha_zero) acc = v2::dot_owned_fma(v2::Thread{}, Ai, xb);
+                v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(i));
             });
     });
 
@@ -265,12 +254,9 @@ Event gemv_seg_notrans(Queue& ctx,
                        const VectorView<T>& Y,
                        T alpha, T beta, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     constexpr int kSg = 32;
 
-    const int m = A.rows();
-    const int n = A.cols();
     const int batch = A.batch_size();
 
     const auto dev = ctx.device();
@@ -281,28 +267,8 @@ Event gemv_seg_notrans(Queue& ctx,
     const int64_t groups = (static_cast<int64_t>(batch) + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        // NO __restrict__, for body 1's aliasing reason.
-        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
-        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
-        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
-
-        const int64_t lda = A.ld();
-        const int64_t stride_a = A.stride();
-        const int64_t xinc = X.inc();
-        const int64_t stride_x = X.stride();
-        const int64_t yinc = Y.inc();
-        const int64_t stride_y = Y.stride();
-
-        D alpha_d, beta_d;
-        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
-        __builtin_memcpy(&beta_d, &beta, sizeof(D));
-
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
-
-        const int seg = m;                    // out_len
-        constexpr int wlanes = W;
-        const int red_len = n;
+        const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const int64_t nbatch = batch;
         const int sgs = sgs_per_wg;
 
@@ -320,41 +286,19 @@ Event gemv_seg_notrans(Queue& ctx,
                 // sub-group's item, so the mask test is uniform too.
                 if (b >= nbatch || (mask != nullptr && mask[b] == 0)) return;
 
+                // Lane = (row i, member jsub of W): member jsub takes j = jsub, jsub + W, ...
+                const int seg = op.m;
                 const int i = lane % seg;
                 const int jsub = lane / seg;
 
-                const D* Ab = a_ptr + b * stride_a;
-                const D* xb = x_ptr + b * stride_x;
-                D* yb = y_ptr + b * stride_y;
-
+                const auto Ai = op.mat(b).row(i);
+                const auto xb = op.xvec(b, op.n);
+                const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero && jsub < wlanes) {
-                    for (int j = jsub; j < red_len; j += wlanes) {
-                        fma_acc(acc, Ab[i + static_cast<int64_t>(j) * lda],
-                                xb[static_cast<int64_t>(j) * xinc]);
-                    }
-                }
-
-                if constexpr (dev_is_complex_v<D>) {
-                    auto re = acc.re, im = acc.im;
-                    for (int w = wlanes >> 1; w >= 1; w >>= 1) {
-                        const int off = seg * w;
-                        re += sycl::shift_group_left(sg, re, off);
-                        im += sycl::shift_group_left(sg, im, off);
-                    }
-                    acc = D{re, im};
-                } else {
-                    for (int w = wlanes >> 1; w >= 1; w >>= 1) {
-                        acc += sycl::shift_group_left(sg, acc, seg * w);
-                    }
-                }
-
-                if (lane < seg) {
-                    D out{};
-                    fma_acc(out, alpha_d, acc);
-                    if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(i) * yinc]);
-                    yb[static_cast<int64_t>(i) * yinc] = out;
-                }
+                if (!alpha_zero && jsub < W) acc = v2::dot_owned_fma(v2::Member<W>{jsub}, Ai, xb);
+                acc = v2::fold_down<W>(sg, acc, v2::Dyn{seg});  // lanes i + seg*t onto lane i
+                if (lane < seg)
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(i));
             });
     });
 
@@ -371,9 +315,7 @@ Event gemv_direct_trans(Queue& ctx,
                         const VectorView<T>& Y,
                         T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
-    const int m = A.rows();
     const int n = A.cols();
     const int batch = A.batch_size();
 
@@ -386,27 +328,9 @@ Event gemv_direct_trans(Queue& ctx,
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
-        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
-        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
-
-        const int64_t lda = A.ld();
-        const int64_t stride_a = A.stride();
-        const int64_t xinc = X.inc();
-        const int64_t stride_x = X.stride();
-        const int64_t yinc = Y.inc();
-        const int64_t stride_y = Y.stride();
-
-        D alpha_d, beta_d;
-        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
-        __builtin_memcpy(&beta_d, &beta, sizeof(D));
-
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
+        const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
-
-        const int out_len = n;
-        const int red_len = m;
         const int64_t total = items;
 
         batchlas::impl::parallel_for<GemvDirectTKernel<T>>(h,
@@ -416,29 +340,17 @@ Event gemv_direct_trans(Queue& ctx,
                 const int64_t gid = static_cast<int64_t>(it.get_global_linear_id());
                 if (gid >= total) return;
 
-                const int64_t b = gid / out_len;
+                const int64_t b = gid / op.n;
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                const int j = static_cast<int>(gid - b * out_len);
+                const int j = static_cast<int>(gid - b * op.n);
 
-                const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
-                const D* xb = x_ptr + b * stride_x;
-                D* yb = y_ptr + b * stride_y;
-
+                // y(j) := alpha op(A)(j, :) x + beta y(j), op(A)(j, :) = conj?(A(:, j))^T.
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) {
-                    for (int i = 0; i < red_len; ++i) {
-                        D av = Acol[i];
-                        if constexpr (dev_is_complex_v<D>) {
-                            if (conj) av = dev_conj(av);
-                        }
-                        fma_acc(acc, av, xb[static_cast<int64_t>(i) * xinc]);
-                    }
-                }
-
-                D out{};
-                fma_acc(out, alpha_d, acc);
-                if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(j) * yinc]);
-                yb[static_cast<int64_t>(j) * yinc] = out;
+                if (!alpha_zero) acc = v2::dot_owned_fma(v2::Thread{}, Aj, xb);
+                v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
@@ -446,9 +358,9 @@ Event gemv_direct_trans(Queue& ctx,
 }
 
 // BODY 3 -- `cta`, transA != NoTrans, GPU with an ENUMERATED sub-group
-// size of 32. One 32-lane sub-group per output element, folded through sg_sum,
-// lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM, and has to be: a
-// shuffle reached by only some lanes of a sub-group is UB.
+// size of 32. One 32-lane sub-group per output element, folded through
+// v2::leader_sum, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
+// and has to be: a shuffle reached by only some lanes of a sub-group is UB.
 template <typename T>
 Event gemv_cta_trans(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -456,11 +368,9 @@ Event gemv_cta_trans(Queue& ctx,
                      const VectorView<T>& Y,
                      T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     constexpr int kSg = 32;
 
-    const int m = A.rows();
     const int n = A.cols();
     const int batch = A.batch_size();
 
@@ -476,27 +386,9 @@ Event gemv_cta_trans(Queue& ctx,
     const int64_t groups = (items + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
-        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
-        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
-
-        const int64_t lda = A.ld();
-        const int64_t stride_a = A.stride();
-        const int64_t xinc = X.inc();
-        const int64_t stride_x = X.stride();
-        const int64_t yinc = Y.inc();
-        const int64_t stride_y = Y.stride();
-
-        D alpha_d, beta_d;
-        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
-        __builtin_memcpy(&beta_d, &beta, sizeof(D));
-
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
+        const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
-
-        const int out_len = n;
-        const int red_len = m;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
@@ -504,43 +396,29 @@ Event gemv_cta_trans(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
-                const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
+                const v2::SubGroup<kSg> team{it.get_sub_group()};
                 const int64_t sg_out =
                     static_cast<int64_t>(it.get_group_linear_id()) * sgs +
-                    static_cast<int64_t>(sg.get_group_linear_id());
+                    static_cast<int64_t>(team.sg.get_group_linear_id());
 
                 // SUB-GROUP UNIFORM: all 32 lanes return here, or none.
                 if (sg_out >= total) return;
 
                 // b is the sub-group's (one output's) item: this return is uniform as well.
-                const int64_t b = sg_out / out_len;
+                const int64_t b = sg_out / op.n;
                 if (mask != nullptr && mask[b] == 0) return;
-                const int j = static_cast<int>(sg_out - b * out_len);
+                const int j = static_cast<int>(sg_out - b * op.n);
 
-                const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
-                const D* xb = x_ptr + b * stride_x;
-                D* yb = y_ptr + b * stride_y;
-
+                // The team's partial dots, a shift-down fold (no shared memory, unlike
+                // reduce_over_group), and the leader alone writes y(j).
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) {
-                    for (int i = lane; i < red_len; i += kSg) {
-                        D av = Acol[i];
-                        if constexpr (dev_is_complex_v<D>) {
-                            if (conj) av = dev_conj(av);
-                        }
-                        fma_acc(acc, av, xb[static_cast<int64_t>(i) * xinc]);
-                    }
-                }
-
-                acc = sg_sum(sg, acc);
-
-                if (lane == 0) {
-                    D out{};
-                    fma_acc(out, alpha_d, acc);
-                    if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(j) * yinc]);
-                    yb[static_cast<int64_t>(j) * yinc] = out;
-                }
+                if (!alpha_zero) acc = v2::dot_owned_fma(team, Aj, xb);
+                acc = v2::leader_sum(team, acc);
+                if (team.leader())
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
@@ -564,13 +442,11 @@ Event gemv_seg_trans(Queue& ctx,
                      const VectorView<T>& Y,
                      T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "W must be a power of two in [2, 32]");
 
     constexpr int kSg = 32;
     constexpr int kLanes = kSg / W;          // L -- lanes per output
 
-    const int m = A.rows();
     const int n = A.cols();
     const int batch = A.batch_size();
 
@@ -587,28 +463,9 @@ Event gemv_seg_trans(Queue& ctx,
     const int64_t groups = (sub_groups + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        // NO __restrict__, for body 1's aliasing reason.
-        const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
-        const D* x_ptr = reinterpret_cast<const D*>(X.data_ptr());
-        D* y_ptr = reinterpret_cast<D*>(Y.data_ptr());
-
-        const int64_t lda = A.ld();
-        const int64_t stride_a = A.stride();
-        const int64_t xinc = X.inc();
-        const int64_t stride_x = X.stride();
-        const int64_t yinc = Y.inc();
-        const int64_t stride_y = Y.stride();
-
-        D alpha_d, beta_d;
-        __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
-        __builtin_memcpy(&beta_d, &beta, sizeof(D));
-
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
+        const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
-
-        const int out_len = n;
-        const int red_len = m;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
@@ -617,7 +474,6 @@ Event gemv_seg_trans(Queue& ctx,
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
                 const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int64_t sg_id =
                     static_cast<int64_t>(it.get_group_linear_id()) * sgs +
                     static_cast<int64_t>(sg.get_group_linear_id());
@@ -626,8 +482,10 @@ Event gemv_seg_trans(Queue& ctx,
                 // SUB-GROUP UNIFORM: all 32 lanes return here, or none.
                 if (base >= total) return;
 
-                const int s = lane % kLanes;         // slice of the reduction
-                const int o = lane / kLanes;         // which of the W outputs
+                // W teams of L lanes: team o owns output base + o, its lane team.lid()
+                // owns the reduction slice i = team.lid() mod L.
+                const v2::Partition<kLanes> team{sg};
+                const int o = static_cast<int>(sg.get_local_linear_id()) / kLanes;
 
                 const int64_t sg_out = base + o;
                 // MASKED, NOT RETURNED. A tail sub-group is partially in range, and its W
@@ -636,45 +494,19 @@ Event gemv_seg_trans(Queue& ctx,
                 // CLAMPED, so an inactive group forms no out-of-range address.
                 const int64_t sg_out_c = in_range ? sg_out : (total - 1);
 
-                const int64_t b = sg_out_c / out_len;
-                const int j = static_cast<int>(sg_out_c - b * out_len);
+                const int64_t b = sg_out_c / op.n;
+                const int j = static_cast<int>(sg_out_c - b * op.n);
                 const bool active = in_range && (mask == nullptr || mask[b] != 0);
 
-                const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
-                const D* xb = x_ptr + b * stride_x;
-                D* yb = y_ptr + b * stride_y;
-
+                // L is compile-time, so the owned-slice loop unrolls -- W's point.
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero && active) {
-                    // kLanes is compile-time, so this loop unrolls -- W's point.
-                    for (int i = s; i < red_len; i += kLanes) {
-                        D av = Acol[i];
-                        if constexpr (dev_is_complex_v<D>) {
-                            if (conj) av = dev_conj(av);
-                        }
-                        fma_acc(acc, av, xb[static_cast<int64_t>(i) * xinc]);
-                    }
-                }
-
-                if constexpr (dev_is_complex_v<D>) {
-                    auto re = acc.re, im = acc.im;
-                    for (int off = kLanes >> 1; off >= 1; off >>= 1) {
-                        re += sycl::shift_group_left(sg, re, off);
-                        im += sycl::shift_group_left(sg, im, off);
-                    }
-                    acc = D{re, im};
-                } else {
-                    for (int off = kLanes >> 1; off >= 1; off >>= 1) {
-                        acc += sycl::shift_group_left(sg, acc, off);
-                    }
-                }
-
-                if (s == 0 && active) {
-                    D out{};
-                    fma_acc(out, alpha_d, acc);
-                    if (!beta_zero) fma_acc(out, beta_d, yb[static_cast<int64_t>(j) * yinc]);
-                    yb[static_cast<int64_t>(j) * yinc] = out;
-                }
+                if (!alpha_zero && active) acc = v2::dot_owned_fma(team, Aj, xb);
+                acc = v2::leader_sum(team, acc);
+                if (team.leader() && active)
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
