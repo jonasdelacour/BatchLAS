@@ -181,20 +181,20 @@ namespace batchlas {
                     const Range window{l, block.last};
                     mark_negligible(t, window);
                     const int32_t m = first_split(t, window);
-                    const WindowAction action = classify(l, m, sweep_budget);
+                    const WindowTest w = classify(l, m, sweep_budget);
 
-                    if (action == WindowAction::Converged1) {
+                    if (w.converged1) {
                         l += 1;
                         advanced = true;
                         break;
                     }
-                    if (action == WindowAction::Exact2x2) {
+                    if (w.exact2x2) {
                         solve_exact_2x2(t, qcache, l);
                         l += 2;
                         advanced = true;
                         break;
                     }
-                    if (action == WindowAction::OutOfBudget) {
+                    if (w.no_budget) {
                         failed = true;
                         break;
                     }
@@ -265,13 +265,13 @@ namespace batchlas {
                     const Range window{l, open.block.last};
                     mark_negligible(t, window);
                     m = first_split(t, window);
-                    const WindowAction action = classify(l, m, sweep_budget);
-                    if (action == WindowAction::Converged1) {
+                    const WindowTest w = classify(l, m, sweep_budget);
+                    if (w.converged1) {
                         l += 1;
-                    } else if (action == WindowAction::Exact2x2) {
+                    } else if (w.exact2x2) {
                         solve_exact_2x2(t, qcache, l);
                         l += 2;
-                    } else if (action == WindowAction::OutOfBudget) {
+                    } else if (w.no_budget) {
                         failed = true;
                     } else {
                         break;
@@ -350,11 +350,12 @@ namespace batchlas {
                     const Range window{active ? l : t.n, open.block.last};
                     mark_negligible(t, window);
                     const int32_t mm = first_split(t, window);
-                    const WindowAction action = classify(l, mm, sweep_budget);
-                    const bool adv1 = active && action == WindowAction::Converged1;
-                    const bool adv2 = active && action == WindowAction::Exact2x2;
-                    const bool sweep = active && action == WindowAction::Sweep;
-                    failed = failed || (active && action == WindowAction::OutOfBudget);
+                    const WindowTest w = classify(l, mm, sweep_budget);
+                    const bool adv1 = active && w.converged1;
+                    const bool adv2 = active && w.exact2x2;
+                    const bool want = active && !adv1 && !adv2;
+                    const bool sweep = want && !w.no_budget;
+                    failed = failed || (want && w.no_budget);
                     m = sweep ? mm : m;
                     ready = ready || sweep;
 

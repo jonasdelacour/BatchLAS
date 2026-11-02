@@ -169,14 +169,14 @@ __attribute__((always_inline)) inline void close_block(TridiagLanes<T, P, Part>&
     }
 }
 
-// What the window [l, m] (m the first split at or after l) needs next.
-enum class WindowAction { Converged1, Exact2x2, Sweep, OutOfBudget };
+// What window [l, m] (m the first split at or after l) needs next, tested in field order, else a
+// sweep. Named predicates, not an enum: an inlined enum classifier lowers to a BRX jump table.
+struct WindowTest {
+    bool converged1, exact2x2, no_budget;
+};
 
-__attribute__((always_inline)) inline WindowAction classify(int32_t l, int32_t m, int32_t budget) {
-    if (m == l) return WindowAction::Converged1;
-    if (m == l + 1) return WindowAction::Exact2x2;
-    if (budget <= 0) return WindowAction::OutOfBudget;
-    return WindowAction::Sweep;
+__attribute__((always_inline)) inline WindowTest classify(int32_t l, int32_t m, int32_t budget) {
+    return {m == l, m == l + 1, budget <= 0};
 }
 
 // (lambda1, lambda2, R) = eig [[d_l, e_l], [e_l, d_l+1]], e_l := 0, Z <- Z R^T on (l, l+1).
@@ -201,9 +201,8 @@ __attribute__((always_inline)) inline void solve_exact_2x2(TridiagLanes<T, P, Pa
 // the leading 2x2, the seed pair is (d_m - sigma, e_{m-1}), and for each plane (lo, hi) =
 // (k-1, k), k = m down to l+1, R annihilates the pair, [[d_hi, e_mid], [e_mid, d_lo]] <- R A R^T,
 // e_{lo-1} <- c e_{lo-1}, the bulge s e_{lo-1} moves to T(hi, lo-1), and Z <- Z R^T on (hi, lo).
-// Pad: the chunks of a lockstep domain share one trip count, and a chunk with `active` false
-// or a shorter chase idles through identity rotations. Idle state is only discarded by
-// selects, never multiplied by a mask, so a failed chunk's NaNs reach neither T nor Z.
+// Pad: lockstep chunks share one trip count; an inactive or shorter chunk idles through identity
+// rotations, discarded by selects (never a mask multiply), so its NaNs reach neither T nor Z.
 template <bool Pad, typename T, size_t P, typename Part, typename QCache>
 __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t, QCache& q, Range window,
                                                      SteqrShiftStrategy strategy, bool active) {
@@ -224,16 +223,13 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
     const T sigma = wilkinson_shift(strategy, d_l, e_l, d_l1);
 
     const int32_t nrot = Pad ? lockstep_max(t.part, active ? m - l : 0) : m - l;
-    // The rows the next plane rotates: d_hi and e_mid (= e_{hi-1}) come out of the previous
-    // rotation, so they are carried in registers; shuffles run unconditionally, clamped.
+    // d_hi, e_mid (= e_{hi-1}) are carried from the previous rotation; shuffles run clamped.
     T d_hi = t.d_at(ms);
     T e_mid = t.e_at(std::max(ms - 1, 0));
     e_mid = (ms >= 1) ? e_mid : T(0);
-    T e_l_new = T(0);
 
-    // The chase writes row hi but reads only rows lo, lo-1 (lower index, not yet reached), so it may read T as it was before
-    // the sweep; an immutable snapshot lets the compiler hoist those shuffles off the
-    // rotation chain. evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
+    // The chase reads rows lo, lo-1 (not yet written), so a pre-sweep snapshot lets the compiler hoist
+    // those shuffles. evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
     const TridiagLanes<T, P, Part> before = t;
 
     ChaseState<T> pair{d_hi - sigma, e_mid};
@@ -271,13 +267,12 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
 
         d_hi = act ? r.d_lo : d_hi;
         e_mid = act ? r.e_below : e_mid;
-        e_l_new = act ? r.e_mid : e_l_new;
     }
 
-    // The last plane was (l, l+1): flush d_l, e_l and e_{l-1}.
+    // Flush d_l, e_l (pair.pivot: an active chunk ran plane (l, l+1)) and e_{l-1}.
     if (active && t.lane == l) {
         t.d = d_hi;
-        t.e = e_l_new;
+        t.e = pair.pivot;
     }
     if (active && l >= 1 && t.lane == (l - 1)) {
         t.e = e_mid;
