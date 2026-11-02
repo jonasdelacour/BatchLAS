@@ -8,3 +8,4 @@
 #include <batchlas/blas/device/v2/level1.hh>
 #include <batchlas/blas/device/v2/level2.hh>
 #include <batchlas/blas/device/v2/interop.hh>
+#include <batchlas/blas/device/v2/grid.hh>

@@ -80,6 +80,19 @@ BATCHLAS_DLA_INLINE Published<V> WorkGroup<WG, SG>::publish(V v) const {
     return {v};
 }
 
+template <int P, bool Masked, class Impl>
+template <class V>
+BATCHLAS_DLA_INLINE Published<V> Partition<P, Masked, Impl>::publish(V v) const {
+    barrier();
+    return {v};
+}
+template <Scope S, int SG>
+template <class V>
+BATCHLAS_DLA_INLINE Published<V> RtGroup<S, SG>::publish(V v) const {
+    barrier(V::mem == Mem::Local ? Mem::Local : Mem::Global);
+    return {v};
+}
+
 template <class V> inline constexpr bool is_published_v = false;
 template <class V> inline constexpr bool is_published_v<Published<V>> = true;
 
@@ -88,7 +101,7 @@ template <class V> BATCHLAS_DLA_INLINE const V& unpub(const V& v) { return v; }
 template <class V> BATCHLAS_DLA_INLINE const V& unpub(const Published<V>& v) { return v.v; }
 // An operand read at indices other items own must be Published unless one item is the executor.
 template <class Ex, class V> constexpr void require_published() {
-    static_assert(is_published_v<V> || Ex::size == 1,
+    static_assert(is_published_v<V> || is_thread_v<Ex>,
                   "v2: this operand is read across owners; pass ex.publish(v) or assume_published(v)");
 }
 }  // namespace detail

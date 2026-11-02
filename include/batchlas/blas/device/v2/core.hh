@@ -11,11 +11,44 @@
 
 #include <batchlas/blas/enums.hh>
 
+// Inline policy (synthesis 2.9): an op takes the attribute of the code it replaces.
+//   BATCHLAS_DLA_INLINE  always_inline: leaf arithmetic, accessors, ops replacing expression text
+//   BATCHLAS_DLA_HELPER  plain inline: ops replacing a plain-inline hand helper (phases,
+//                        reductions, bcast, epilogues); LLVM unrolls the caller's loop while
+//                        the call is still there, as it did for the hand helper
+//   BATCHLAS_DLA_BODY    on a lambda passed to a loop op, `[&](int i) BATCHLAS_DLA_BODY {...}`:
+//                        a lambda body is otherwise optimised alone (LFTR, IV canonicalisation)
+// Each is overridable (-D) for a backend whose inliner needs another spelling.
 #ifndef BATCHLAS_DLA_INLINE
 #define BATCHLAS_DLA_INLINE __attribute__((always_inline)) inline
 #endif
+#ifndef BATCHLAS_DLA_HELPER
+#define BATCHLAS_DLA_HELPER inline
+#endif
+#ifndef BATCHLAS_DLA_BODY
+#define BATCHLAS_DLA_BODY __attribute__((always_inline))
+#endif
 
 namespace batchlas::device::v2 {
+
+// ---- loop policy --------------------------------------------------------------------------
+// The unroll policy of a v2-owned loop, emitted as loop metadata: Default adds none (LLVM and
+// ptxas decide, the hand loop's behaviour); None is llvm.loop.unroll.disable (PTX .pragma
+// "nounroll"); Count<N> is unroll_count(N); Full is unroll(full) (a compile-time trip count).
+namespace unroll {
+struct Default {};
+struct None {};
+template <int N> struct Count {
+    static constexpr int count = N;
+};
+struct Full {};
+}  // namespace unroll
+
+// Elements [lo, hi) in the parent's coordinates (an op on a Range owns i - lo mod size).
+struct Range {
+    int lo;
+    int hi;
+};
 
 // ---- extents ---------------------------------------------------------------------------
 template <int N> struct Ext {
@@ -225,7 +258,19 @@ struct RowOwnerSplitStoredDiag {};  // hemv RowOwnerSplit reading A(r,r) as stor
 struct Cyclic {};               // ger: column loop outside, owned rows inside; no % or /
 struct Scaled {};               // nrm2: two-pass lassq, overflow-safe
 struct Unscaled {};             // nrm2: sqrt(dotc(x, x)); overflows past sqrt(max)
+// for_each_owned_2d: how an item walks the column-major m x n grid e = lid + s * size.
+struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: v1 index math)
+struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
+struct Stepped {};              // one division per item, then r += size with a carry loop
+struct Walk {};                 // one division per item, (dr, dc) = (size % m, size / m) per step
 }  // namespace alg
+
+// Butterfly order of a team reduction: xor masks P/2 .. 1 (Down) or 1 .. P/2 (Asc). The two
+// sum in different orders, so a strict port names the hand kernel's.
+namespace bfly {
+struct Down {};
+struct Asc {};
+}  // namespace bfly
 
 // Op tags for scratch_elements.
 namespace op {

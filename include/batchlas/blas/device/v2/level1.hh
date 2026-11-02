@@ -17,14 +17,113 @@ namespace batchlas::device::v2 {
 
 template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
 
-// The primitive: f(i) for every i < n this item owns.
-template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
-    for (int i = ex.lid(); i < n; i += Ex::size) f(i);
+// The primitive: f(i) for every i this item owns, of [0, n) or of a Range [lo, hi) in parent
+// coordinates (i owned by lid == (i - lo) mod size, as an op on x.tail(lo): the two compose with
+// no barrier). A Range keeps the hand loop's bounds: a 0-based loop over a tail view unrolls
+// differently (latrd P3, gebrd, stein). U is the unroll policy of this loop (core.hh unroll::),
+// emitted as loop metadata; whether ptxas honours a PTX nounroll needs a gate check per use.
+namespace detail {
+template <class U, class F> BATCHLAS_DLA_INLINE void strided_loop(int lo, int hi, int step, F& f) {
+    if constexpr (std::is_same_v<U, unroll::Default>) {
+        for (int i = lo; i < hi; i += step) f(i);
+    } else if constexpr (std::is_same_v<U, unroll::None>) {
+#pragma clang loop unroll(disable)
+        for (int i = lo; i < hi; i += step) f(i);
+    } else if constexpr (std::is_same_v<U, unroll::Full>) {
+#pragma clang loop unroll(full)
+        for (int i = lo; i < hi; i += step) f(i);
+    } else {
+        constexpr int N = U::count;
+        static_assert(N >= 1, "v2::for_each_owned: unroll::Count<N> needs N >= 1");
+#pragma clang loop unroll_count(N)
+        for (int i = lo; i < hi; i += step) f(i);
+    }
 }
-// f(i) for every i in [first, end) this item owns, in the parent's coordinates: the same items
-// own the same elements as an op on x.tail(first), so the two compose with no barrier.
-template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f) {
-    for (int i = first + ex.lid(); i < end; i += Ex::size) f(i);
+}  // namespace detail
+
+template <class U = unroll::Default, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
+    if constexpr (std::is_same_v<U, unroll::Default> && !is_runtime_v<Ex>) {
+        for (int i = ex.lid(); i < n; i += Ex::size) f(i);  // the v2.0 spelling, SASS-pinned by the lab
+    } else {
+        detail::strided_loop<U>(ex.lid(), n, detail::size_of(ex), f);
+    }
+}
+template <class U = unroll::Default, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, Range r, F&& f) {
+    if constexpr (std::is_same_v<U, unroll::Default> && !is_runtime_v<Ex>) {
+        for (int i = r.lo + ex.lid(); i < r.hi; i += Ex::size) f(i);
+    } else {
+        detail::strided_loop<U>(r.lo + ex.lid(), r.hi, detail::size_of(ex), f);
+    }
+}
+// for_each_owned(ex, Range{first, end}, f), the P3 spelling.
+template <class U = unroll::Default, class Ex, class F>
+BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f) {
+    for_each_owned<U>(ex, Range{first, end}, f);
+}
+// n == the executor's size: each item owns exactly i = lid, no loop and no guard (the caller
+// guarantees n == size; krylov's ItemGroup).
+template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned_exact(const Ex& ex, [[maybe_unused]] int n, F&& f) {
+    f(ex.lid());
+}
+
+// f(r, c) for every element of an m x n column-major grid this item owns: flat e = lid + s *
+// size, so consecutive items take consecutive rows (loads coalesce) and per-item partial sums
+// keep the legacy grid-stride order. Alg (core.hh alg::) is the hand kernel's index form:
+//   Flat     q = e / m, (e - q m, q) per step, e in Idx (ptrdiff_t: v1's 64-bit index math)
+//   DivMod   (e % m, e / m) per step
+//   Stepped  one division per item; r += size, then subtract m while r >= m
+//   Walk     one division per item; (r, c) += (size % m, size / m) with one carry per step
+// On Thread every Alg is the column-major double loop; on a Grid2D, the item's one element.
+template <class Alg = alg::Walk, class Idx = int, class Ex, class F>
+BATCHLAS_DLA_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
+    if constexpr (requires { ex.row(); ex.col(); }) {  // Grid2D (grid.hh)
+        const int i = ex.row(), j = ex.col();
+        if (i < m && j < n) f(i, j);
+    } else if constexpr (is_thread_v<Ex>) {
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i) f(i, j);
+    } else if constexpr (std::is_same_v<Alg, alg::Flat>) {
+        const Idx total = static_cast<Idx>(m) * static_cast<Idx>(n);
+        const Idx w = static_cast<Idx>(detail::size_of(ex));
+        for (Idx e = static_cast<Idx>(ex.lid()); e < total; e += w) {
+            const Idx q = e / static_cast<Idx>(m);
+            f(static_cast<int>(e - q * static_cast<Idx>(m)), static_cast<int>(q));
+        }
+    } else if constexpr (std::is_same_v<Alg, alg::DivMod>) {
+        const Idx total = static_cast<Idx>(m) * static_cast<Idx>(n);
+        const Idx w = static_cast<Idx>(detail::size_of(ex));
+        for (Idx e = static_cast<Idx>(ex.lid()); e < total; e += w)
+            f(static_cast<int>(e % static_cast<Idx>(m)), static_cast<int>(e / static_cast<Idx>(m)));
+    } else if constexpr (std::is_same_v<Alg, alg::Stepped>) {
+        if (m <= 0) return;
+        const int w = detail::size_of(ex);
+        int c = ex.lid() / m;
+        int r = ex.lid() - c * m;
+        while (c < n) {
+            f(r, c);
+            r += w;
+            while (r >= m) {
+                r -= m;
+                ++c;
+            }
+        }
+    } else {
+        static_assert(std::is_same_v<Alg, alg::Walk>, "v2::for_each_owned_2d: alg::Flat, DivMod, Stepped or Walk");
+        if (m <= 0) return;
+        const int w = detail::size_of(ex);
+        const int dc = w / m, dr = w - dc * m;
+        int c = ex.lid() / m;
+        int r = ex.lid() - c * m;
+        while (c < n) {
+            f(r, c);
+            r += dr;
+            c += dc;
+            if (r >= m) {
+                r -= m;
+                ++c;
+            }
+        }
+    }
 }
 
 // out(i) = f(ins(i)...)
@@ -107,7 +206,11 @@ BATCHLAS_DLA_INLINE T scope_reduce(const Ex& ex, T v, Op op = {}) {
 // scratch may be reused.
 template <int K, class Ex, class T, int Slots>
 BATCHLAS_DLA_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
-    if constexpr (!is_work_group_v<Ex> || Ex::nteams == 1) {
+    if constexpr (is_runtime_v<Ex>) {
+#pragma unroll
+        for (int k = 0; k < K; ++k) v[k] = ex.group_reduce(v[k]);
+        return v;
+    } else if constexpr (!is_work_group_v<Ex> || Ex::nteams == 1) {
 #pragma unroll
         for (int k = 0; k < K; ++k) v[k] = ex.team_reduce(v[k]);
         return v;

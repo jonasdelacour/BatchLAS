@@ -284,6 +284,11 @@ TYPED_TEST(DeviceBlasV2Test, ReductionsMatchHostOnEveryExecutor) {
     check_reductions(n, inc, hx, hy, out, "SgpPartition<8, Masked>");
     run_reductions<T, 32>(this->dev, n, inc, hx, hy, out, [](sycl::nd_item<1>) { return v2::Thread{}; }, 32, 1);
     check_reductions(n, inc, hx, hy, out, "Thread");
+    // Runtime-width executors: a 96-item work-group (not a power of two), and one per sub-group.
+    run_reductions<T, 96>(this->dev, n, inc, hx, hy, out, [](sycl::nd_item<1> it) { return v2::RtGroup<>(it); });
+    check_reductions(n, inc, hx, hy, out, "RtGroup<Group> @96");
+    run_reductions<T, 64>(this->dev, n, inc, hx, hy, out, [](sycl::nd_item<1> it) { return v2::RtGroup<v2::Scope::Sub>(it); }, 2, 32);
+    check_reductions(n, inc, hx, hy, out, "RtGroup<Sub>");
 }
 
 // iamax: lowest index on ties (the tie straddles two owners), NaN wins at its lowest index.
@@ -410,6 +415,11 @@ TYPED_TEST(DeviceBlasV2Test, GemvEveryTransposeExecutorAndAlgorithm) {
     gemv_case<C, void, 32, true, T>(this->dev, pt, 2, 16, "C Partition<16> beta=Zero");
     gemv_case<N, void, 32, false, T>(this->dev, th, 32, 1, "N Thread Serial");
     gemv_case<C, void, 32, false, T>(this->dev, th, 32, 1, "C Thread Serial");
+    auto rt = [](sycl::nd_item<1> it) { return v2::RtGroup<>(it); };
+    auto tm16 = [](sycl::nd_item<1> it) { return v2::Teams<128, 16>{it}; };
+    gemv_case<N, void, 96, false, T>(this->dev, rt, 1, 96, "N RtGroup @96 RowOwner");
+    gemv_case<C, void, 96, false, T>(this->dev, rt, 1, 96, "C RtGroup @96 SgPerCol");
+    gemv_case<Tt, void, 128, true, T>(this->dev, tm16, 1, 128, "T Teams<128, 16> SgPerCol beta=Zero");
 }
 
 // symv/hemv Lower with x staged in local memory and published; the strict upper triangle is
@@ -787,6 +797,195 @@ TYPED_TEST(DeviceBlasV2Test, TeamsAreIndependentExecutors) {
         worst = std::max(worst, rel(got[b], d, s));
     }
     EXPECT_VERIFY(T, Check::blas, n, worst);
+}
+
+// ---- v2.1 executors and loops ---------------------------------------------------------------
+
+// Ownership record: every element of the Range [lo, hi) and of the m x n grid is visited once,
+// by the item the Cyclic rule names, for every unroll policy and 2-D index form. One region
+// per executor instance (a team, a partition, an item for Thread); o holds owner + 1.
+template <int WG, class MakeEx> void ownership_case(Dev& dev, MakeEx make_ex, int regions, const char* where) {
+    constexpr int n = 77, lo = 5, hi = 74, m2 = 7, n2 = 13, kU = 4, kA = 4;
+    constexpr int per = n * kU + m2 * n2 * kA;
+    constexpr int groups = 64;
+    std::vector<int> ho(std::size_t(groups) * regions * per, 0);
+    int* o = dev.up(ho);
+    dev.template run<WG>(groups, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const auto ex = make_ex(it);
+        const int region = int(it.get_group_linear_id()) * regions + ex.region;
+        int* ob = o + std::ptrdiff_t(region) * per;
+        const int me = ex.ex.lid() + 1;
+        auto mark = [&](int* p) { sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>(*p).fetch_add(me); };
+        v2::for_each_owned(ex.ex, v2::Range{lo, hi}, [&](int i) { mark(ob + i); });
+        v2::for_each_owned<v2::unroll::None>(ex.ex, v2::Range{lo, hi}, [&](int i) { mark(ob + n + i); });
+        v2::for_each_owned<v2::unroll::Count<3>>(ex.ex, v2::Range{lo, hi}, [&](int i) { mark(ob + 2 * n + i); });
+        v2::for_each_owned<v2::unroll::Count<2>>(ex.ex, hi, [&](int i) { mark(ob + 3 * n + i); });  // 0-based
+        int* o2 = ob + n * kU;
+        v2::for_each_owned_2d<v2::alg::Flat, std::ptrdiff_t>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + r + c * m2); });
+        v2::for_each_owned_2d<v2::alg::DivMod>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + m2 * n2 + r + c * m2); });
+        v2::for_each_owned_2d<v2::alg::Stepped>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + 2 * m2 * n2 + r + c * m2); });
+        v2::for_each_owned_2d<v2::alg::Walk>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + 3 * m2 * n2 + r + c * m2); });
+    });
+    const auto got = dev.down(o, ho.size());
+    int bad = 0;
+    for (int g = 0; g < groups * regions; ++g) {
+        const int* ob = got.data() + std::size_t(g) * per;
+        const int w = make_ex.width;
+        for (int u = 0; u < kU; ++u)
+            for (int i = 0; i < n; ++i) {
+                const int first = u == 3 ? 0 : lo;
+                const int want = (i >= first && i < hi) ? (i - first) % w + 1 : 0;
+                bad += ob[u * n + i] != want;
+            }
+        for (int a = 0; a < kA; ++a)
+            for (int e = 0; e < m2 * n2; ++e) bad += ob[n * kU + a * m2 * n2 + e] != e % w + 1;
+    }
+    EXPECT_EQ(bad, 0) << where;
+}
+
+template <class Ex> struct Region {
+    Ex ex;
+    int region;
+};
+
+TEST(DeviceBlasV21, ForEachOwnedRangesUnrollPoliciesAnd2dFormsVisitOnceByTheOwner) {
+    Dev dev;
+    if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP();
+    struct WgM { int width = 64; auto operator()(sycl::nd_item<1> it) const { return Region<v2::WorkGroup<64>>{{it}, 0}; } };
+    struct RtM { int width = 96; auto operator()(sycl::nd_item<1> it) const { return Region<v2::RtGroup<>>{v2::RtGroup<>(it), 0}; } };
+    struct RtSubM {
+        int width = 32;
+        auto operator()(sycl::nd_item<1> it) const {
+            const v2::RtGroup<v2::Scope::Sub> ex(it);
+            return Region<v2::RtGroup<v2::Scope::Sub>>{ex, int(it.get_local_linear_id()) / 32};
+        }
+    };
+    struct TeamsM {
+        int width = 8;
+        auto operator()(sycl::nd_item<1> it) const {
+            const v2::Teams<128, 8> ex{it};
+            return Region<v2::Teams<128, 8>>{ex, ex.team()};
+        }
+    };
+    struct ThreadM { int width = 1; auto operator()(sycl::nd_item<1> it) const { return Region<v2::Thread>{{}, int(it.get_local_linear_id())}; } };
+    ownership_case<64>(dev, WgM{}, 1, "WorkGroup<64>");
+    ownership_case<96>(dev, RtM{}, 1, "RtGroup<Group> @96");
+    ownership_case<64>(dev, RtSubM{}, 2, "RtGroup<Sub>");
+    ownership_case<128>(dev, TeamsM{}, 16, "Teams<128, 8>");
+    ownership_case<32>(dev, ThreadM{}, 32, "Thread");
+}
+
+// Teams<WG, P, O>: P-lane teams reduce with the named butterfly order, bit for bit against a
+// host emulation of that order (Down and Asc sum in different orders on random data).
+template <class T, int P, class O> void teams_order_case(Dev& dev) {
+    constexpr int WG = 128, teams = WG / P;
+    const auto hx = batched<T>(WG, 81, [](T*) {}, 64);
+    T* x = dev.up(hx);
+    std::vector<T> ho(std::size_t(64) * teams, T(0));
+    T* o = dev.up(ho);
+    dev.template run<WG>(64, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::Teams<WG, P, O> tm{it};
+        const int g = int(it.get_group_linear_id());
+        const T r = tm.team_reduce(x[std::ptrdiff_t(g) * WG + tm.team() * P + tm.lane()]);
+        if (tm.leader()) o[g * teams + tm.team()] = r;
+    });
+    const auto got = dev.down(o, ho.size());
+    int bad = 0;
+    for (int g = 0; g < 64; ++g)
+        for (int t = 0; t < teams; ++t) {
+            std::vector<real_of<T>> re(P), im(P);
+            for (int l = 0; l < P; ++l) {
+                const T v = hx[std::size_t(g) * WG + t * P + l];
+                re[l] = std::real(v), im[l] = std::imag(v);
+            }
+            auto step = [&](int msk) {
+                auto r2 = re, i2 = im;
+                for (int l = 0; l < P; ++l) r2[l] = re[l] + re[l ^ msk], i2[l] = im[l] + im[l ^ msk];
+                re = r2, im = i2;
+            };
+            if constexpr (std::is_same_v<O, v2::bfly::Down>)
+                for (int msk = P / 2; msk >= 1; msk >>= 1) step(msk);
+            else
+                for (int msk = 1; msk < P; msk <<= 1) step(msk);
+            T want;
+            if constexpr (is_cplx<T>) want = T(re[0], im[0]);
+            else want = re[0];
+            bad += !same_bits(got[std::size_t(g) * teams + t], want);
+        }
+    EXPECT_EQ(bad, 0) << "P = " << P << (std::is_same_v<O, v2::bfly::Down> ? " Down" : " Asc");
+}
+
+TYPED_TEST(DeviceBlasV2Test, TeamsOfPLanesReduceInTheNamedButterflyOrder) {
+    using T = TypeParam;
+    teams_order_case<T, 8, v2::bfly::Down>(this->dev);
+    teams_order_case<T, 8, v2::bfly::Asc>(this->dev);
+    teams_order_case<T, 16, v2::bfly::Asc>(this->dev);
+    teams_order_case<T, 32, v2::bfly::Asc>(this->dev);
+}
+
+// RtGroup: bcast from a runtime source over the work-group and over the sub-group; sync orders
+// local memory (each item reads its neighbour's slot after the barrier). WG 96, not a power of 2.
+TYPED_TEST(DeviceBlasV2Test, RtGroupBcastAndSyncAtARuntimeWidth) {
+    using T = TypeParam;
+    constexpr int WG = 96;
+    const auto hx = batched<T>(WG, 91);
+    T* x = this->dev.up(hx);
+    std::vector<T> ho(std::size_t(kBatch) * WG * 3, T(0));
+    T* o = this->dev.up(ho);
+    this->dev.template run<WG>(kBatch, sizeof(T) * WG, [=](sycl::nd_item<1> it, unsigned char* lm) {
+        const v2::RtGroup<> ex(it);
+        const int b = int(it.get_group_linear_id()), l = ex.lid();
+        const T mine = x[std::ptrdiff_t(b) * WG + l];
+        T* slm = reinterpret_cast<T*>(lm);
+        const T g = ex.bcast(mine, (b * 7 + 37) % ex.width());
+        const T s = ex.team_exec().bcast(mine, (b + 5) % 32);
+        slm[l] = mine;
+        v2::sync(ex);
+        const T nb = slm[(l + 1) % ex.width()];
+        T* ob = o + std::ptrdiff_t(b) * WG * 3;
+        ob[l] = g, ob[WG + l] = s, ob[2 * WG + l] = nb;
+    });
+    const auto got = this->dev.down(o, ho.size());
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b)
+        for (int l = 0; l < WG; ++l) {
+            const T* xb = hx.data() + std::size_t(b) * WG;
+            const T* ob = got.data() + std::size_t(b) * WG * 3;
+            bad += !same_bits(ob[l], xb[(b * 7 + 37) % WG]);
+            bad += !same_bits(ob[WG + l], xb[(l / 32) * 32 + (b + 5) % 32]);
+            bad += !same_bits(ob[2 * WG + l], xb[(l + 1) % WG]);
+        }
+    EXPECT_EQ(bad, 0);
+}
+
+// Grid2D through the batched2d launcher: B := A + b on a 5 x 9 grid, ld 7, batch 1031 over at
+// most 7 groups in dimension 0, so every item walks several batch items (for_each_batch).
+TYPED_TEST(DeviceBlasV2Test, Batched2dLauncherCoversEveryItemPastTheGroupLimit) {
+    using T = TypeParam;
+    constexpr int m = 5, n = 9, ld = 7, batch = 1031;
+    const auto ha = batched<T>(ld * n, 101, [](T*) {}, batch);
+    T* a = this->dev.up(ha);
+    std::vector<T> hb(ha.size(), T(-7));
+    T* bb = this->dev.up(hb);
+    const auto shape = v2::batched2d_shape(m, n, 64);
+    v2::batched2d(this->dev.q(), batch, m, n,
+                  [=](const v2::Grid2D<>& g, int b) {
+                      v2::for_each_owned_2d(g, m, n, [&](int r, int c) {
+                          const std::ptrdiff_t k = std::ptrdiff_t(b) * ld * n + c * ld + r;
+                          bb[k] = v2::Arith<T>::add(a[k], T(real_of<T>(b)));
+                      });
+                  },
+                  shape, 7)
+        .wait_and_throw();
+    const auto got = this->dev.down(bb, hb.size());
+    int bad = 0;
+    for (int b = 0; b < batch; ++b)
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < ld; ++r) {
+                const std::size_t k = std::size_t(b) * ld * n + c * ld + r;
+                bad += !same_bits(got[k], r < m ? T(ha[k] + T(real_of<T>(b))) : T(-7));
+            }
+    EXPECT_EQ(bad, 0);
 }
 
 // ---- register fragments on a Partition ----------------------------------------------------

@@ -41,7 +41,8 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
     const int m = a.rows(), n = a.cols();
     if constexpr (std::is_same_v<Al, alg::RowOwner>) {
         static_assert(TR == Transpose::NoTrans, "v2::gemv: alg::RowOwner is the NoTrans algorithm");
-        for (int r = ex.lid(); r < m; r += Ex::size) {
+        const int step = detail::size_of(ex);
+        for (int r = ex.lid(); r < m; r += step) {
             T acc = Ar::zero();
 #pragma unroll 4
             for (int c = 0; c < n; ++c) Ar::mac(acc, a(r, c), x(c));
@@ -50,9 +51,10 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
     } else if constexpr (std::is_same_v<Al, alg::SgPerCol>) {
         static_assert(TR != Transpose::NoTrans, "v2::gemv: alg::SgPerCol is the (Conj)Trans algorithm");
         const int lane = ex.lane();
-        for (int c = ex.team(); c < n; c += Ex::nteams) {
+        const int nteams = detail::nteams_of(ex), tsize = detail::team_size_of(ex);
+        for (int c = ex.team(); c < n; c += nteams) {
             T acc = Ar::zero();
-            for (int r = lane; r < m; r += Ex::team_size) {
+            for (int r = lane; r < m; r += tsize) {
                 if constexpr (conj) Ar::mac_conj(acc, a(r, c), x(r));
                 else Ar::mac(acc, a(r, c), x(r));
             }
@@ -60,7 +62,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             if (lane == 0) store(alpha, acc, beta, y(c));
         }
     } else if constexpr (std::is_same_v<Al, alg::Serial>) {
-        static_assert(Ex::size == 1, "v2::gemv: alg::Serial needs a one-item executor (Thread)");
+        static_assert(is_thread_v<Ex>, "v2::gemv: alg::Serial needs a one-item executor (Thread)");
         if constexpr (TR == Transpose::NoTrans) {
             for (int r = 0; r < m; ++r) {
                 T acc = Ar::zero();
@@ -81,7 +83,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
         static_assert(TR != Transpose::NoTrans, "v2::gemv: alg::GroupReducePerOutput is a (Conj)Trans algorithm");
         for (int c = 0; c < n; ++c) {
             T acc = Ar::zero();
-            for (int r = ex.lid(); r < m; r += Ex::size) {
+            for (int r = ex.lid(); r < m; r += detail::size_of(ex)) {
                 if constexpr (conj) Ar::mac_conj(acc, a(r, c), x(r));
                 else Ar::mac(acc, a(r, c), x(r));
             }
@@ -112,7 +114,7 @@ BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X
         static_assert(is_trailing_v<std::remove_cvref_t<decltype(x)>> && is_trailing_v<Y>,
                       "v2::symv/hemv: a Trailing A takes Trailing x and y");
         const int k = a.first(), n = a.end();
-        for (int r = k + ex.lid(); r < n; r += Ex::size) {
+        for (int r = k + ex.lid(); r < n; r += size_of(ex)) {
             const int c_split = sycl::min(r, n - 1);
             T acc = Ar::zero();
             if constexpr (masked_diag) {
@@ -134,7 +136,7 @@ BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X
     const int n = a.rows();
     // Row r of the lower triangle (c <= r) then column r below the diagonal (c > r): ascending
     // c crosses c == r once, so the split keeps the accumulation order and removes the branch.
-    for (int r = ex.lid(); r < n; r += Ex::size) {
+    for (int r = ex.lid(); r < n; r += size_of(ex)) {
         T acc = Ar::zero();
         if constexpr (masked_diag) {
 #pragma unroll 4
@@ -168,7 +170,7 @@ BATCHLAS_DLA_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& 
     const int m = a.rows(), n = a.cols();
     for (int c = 0; c < n; ++c) {
         const T yc = tag_mul(alpha, Conj ? Ar::conj(static_cast<T>(y(c))) : static_cast<T>(y(c)));
-        for (int r = ex.lid(); r < m; r += Ex::size) Ar::mac(a(r, c), x(r), yc);
+        for (int r = ex.lid(); r < m; r += size_of(ex)) Ar::mac(a(r, c), x(r), yc);
     }
 }
 }  // namespace detail

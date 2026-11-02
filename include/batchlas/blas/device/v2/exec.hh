@@ -40,21 +40,37 @@ template <class Impl, class R> BATCHLAS_DLA_INLINE R xor_shuffle(const Impl& par
     else return permute_group_by_xor(part, v, m);  // ADL: SubGroupPartition (src/kernels/common)
 }
 
-// xor butterfly over P lanes; every lane ends with the same value.
-template <int P, class Impl, class T, class Op> BATCHLAS_DLA_INLINE T butterfly(const Impl& part, T v, Op op) {
+// xor butterfly over P lanes; every lane ends with the same value. O = bfly::Down: masks
+// P/2 .. 1; bfly::Asc: 1 .. P/2 (another summation order, geqrf's tiny reductions).
+template <int P, class O = bfly::Down, class Impl, class T, class Op> BATCHLAS_DLA_INLINE T butterfly(const Impl& part, T v, Op op) {
     using A = Arith<T>;
+    static_assert(std::is_same_v<O, bfly::Down> || std::is_same_v<O, bfly::Asc>, "v2: butterfly order is bfly::Down or bfly::Asc");
+    constexpr bool down = std::is_same_v<O, bfly::Down>;
     if constexpr (A::is_complex) {
         using R = typename A::real_t;
         R re = A::re(v), im = A::im(v);
+        if constexpr (down) {
 #pragma unroll
-        for (int m = P / 2; m >= 1; m >>= 1) {
-            re += xor_shuffle(part, re, static_cast<std::uint32_t>(m));
-            im += xor_shuffle(part, im, static_cast<std::uint32_t>(m));
+            for (int m = P / 2; m >= 1; m >>= 1) {
+                re += xor_shuffle(part, re, static_cast<std::uint32_t>(m));
+                im += xor_shuffle(part, im, static_cast<std::uint32_t>(m));
+            }
+        } else {
+#pragma unroll
+            for (int m = 1; m < P; m <<= 1) {
+                re += xor_shuffle(part, re, static_cast<std::uint32_t>(m));
+                im += xor_shuffle(part, im, static_cast<std::uint32_t>(m));
+            }
         }
         return A::make(re, im);
     } else {
+        if constexpr (down) {
 #pragma unroll
-        for (int m = P / 2; m >= 1; m >>= 1) v = op(v, xor_shuffle(part, v, static_cast<std::uint32_t>(m)));
+            for (int m = P / 2; m >= 1; m >>= 1) v = op(v, xor_shuffle(part, v, static_cast<std::uint32_t>(m)));
+        } else {
+#pragma unroll
+            for (int m = 1; m < P; m <<= 1) v = op(v, xor_shuffle(part, v, static_cast<std::uint32_t>(m)));
+        }
         return v;
     }
 }
@@ -93,21 +109,29 @@ template <int WG, int SG = 32> struct WorkGroup {
     template <class V> BATCHLAS_DLA_INLINE Published<V> publish(V v) const;
 };
 
-// Teams of SG items (sub-groups) working independently inside a WG launch. A team is the
-// executor: Cyclic ops stride by SG. No work-group barrier exists here by construction.
-template <int WG, int SG = 32> struct Teams {
-    static_assert(WG % SG == 0, "v2::Teams: SG must divide WG");
-    static constexpr int size = SG, team_size = SG, nteams = WG / SG, sg_size = SG;
+// Teams of P lanes working independently inside a WG launch (P == SG: whole sub-groups; P < SG:
+// aligned P-lane chunks of one sub-group, xor butterflies with masks < P). A team is the
+// executor: Cyclic ops stride by P. O names the butterfly order (bfly::Down on whole
+// sub-groups is portable::reduce_over_group, the legacy tree). No work-group barrier exists
+// here by construction; sync(ex) is a sub-group barrier that every lane must reach.
+template <int WG, int P = 32, class O = bfly::Down, int SG = 32> struct Teams {
+    static_assert(detail::is_pow2(P) && SG % P == 0 && WG % SG == 0, "v2::Teams: P a power of two dividing SG, SG dividing WG");
+    static constexpr int size = P, team_size = P, nteams = WG / P, sg_size = SG;
     static constexpr bool sub_whole = true;
     static constexpr Scope natural_scope = Scope::Sub;
     sycl::nd_item<1> it;
 
     BATCHLAS_DLA_INLINE int lid() const { return lane(); }
-    BATCHLAS_DLA_INLINE int lane() const { return static_cast<int>(it.get_sub_group().get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int team() const { return static_cast<int>(it.get_local_linear_id()) / SG; }
+    BATCHLAS_DLA_INLINE int lane() const {
+        if constexpr (P == SG) return static_cast<int>(it.get_sub_group().get_local_linear_id());
+        else return static_cast<int>(it.get_sub_group().get_local_linear_id()) & (P - 1);
+    }
+    BATCHLAS_DLA_INLINE int team() const { return static_cast<int>(it.get_local_linear_id()) / P; }
     BATCHLAS_DLA_INLINE bool leader() const { return lane() == 0; }
+    BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
-        return detail::sycl_reduce(it.get_sub_group(), v, op);
+        if constexpr (P == SG && std::is_same_v<O, bfly::Down>) return detail::sycl_reduce(it.get_sub_group(), v, op);
+        else return detail::butterfly<P, O>(it.get_sub_group(), v, op);
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
@@ -120,6 +144,7 @@ template <int SG = 32> struct SubGroup {
     static constexpr Scope natural_scope = Scope::Sub;
     sycl::sub_group sg;
 
+    BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return sg; }
     BATCHLAS_DLA_INLINE int lid() const { return static_cast<int>(sg.get_local_linear_id()); }
     BATCHLAS_DLA_INLINE int lane() const { return lid(); }
     BATCHLAS_DLA_INLINE int team() const { return 0; }
@@ -166,6 +191,9 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
         if constexpr (std::is_same_v<Impl, sycl::sub_group>) return part;
         else return part.sg;
     }
+    // A sub-group barrier (warp sync): every lane of the sub-group must reach it.
+    BATCHLAS_DLA_INLINE void barrier(Mem = Mem::Local) const { sycl::group_barrier(sub()); }
+    template <class V> BATCHLAS_DLA_INLINE Published<V> publish(V v) const;
     // COLLECTIVE: lane `src`'s v to every lane of the partition; `src` must be
     // partition-uniform and every lane must reach the call. Complex moves as two reals.
     // Plain `inline`, not BATCHLAS_DLA_INLINE: inlined early, the source's real view lands
@@ -201,9 +229,92 @@ struct Thread {
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op = {}) const { return v; }
 };
 
+// A work-group whose size is a launch value (one binary for every WG), or one sub-group of it
+// (S = Scope::Sub). Ids and ranges are read once, at construction, as hand kernels read them
+// at the top (read per use, the sub-group range is rematerialised per op: +3..4 REG, geqrf).
+// Loops stride by the runtime width(); SG is the sub-group size the kernel is launched with.
+template <Scope S = Scope::Group, int SG = 32> struct RtGroup {
+    static_assert(S == Scope::Sub || S == Scope::Group, "v2::RtGroup: Scope::Sub or Scope::Group");
+    static constexpr bool runtime = true;
+    static constexpr bool sub_whole = (S == Scope::Sub);
+    static constexpr Scope natural_scope = S;
+    static constexpr int sg_size = SG;
+    sycl::nd_item<1> it;
+    int lane_, lid_, width_, team_, nteams_;
+
+    BATCHLAS_DLA_INLINE explicit RtGroup(sycl::nd_item<1> i)
+        : it(i), lane_(static_cast<int>(i.get_sub_group().get_local_linear_id())),
+          lid_(S == Scope::Sub ? lane_ : static_cast<int>(i.get_local_linear_id())),
+          width_(S == Scope::Sub ? static_cast<int>(i.get_sub_group().get_local_linear_range())
+                                 : static_cast<int>(i.get_local_range(0))),
+          team_(S == Scope::Sub ? 0 : static_cast<int>(i.get_sub_group().get_group_linear_id())),
+          nteams_(S == Scope::Sub ? 1 : static_cast<int>(i.get_sub_group().get_group_linear_range())) {}
+
+    BATCHLAS_DLA_INLINE int lid() const { return lid_; }
+    BATCHLAS_DLA_INLINE int width() const { return width_; }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
+    BATCHLAS_DLA_INLINE int team() const { return team_; }
+    BATCHLAS_DLA_INLINE int nteams() const { return nteams_; }
+    BATCHLAS_DLA_INLINE int team_size() const { return static_cast<int>(it.get_sub_group().get_local_linear_range()); }
+    BATCHLAS_DLA_INLINE bool leader() const { return lid_ == 0; }
+    BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
+    // The sub-group this item belongs to, as its own executor.
+    BATCHLAS_DLA_INLINE RtGroup<Scope::Sub, SG> team_exec() const { return RtGroup<Scope::Sub, SG>(it); }
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
+        return detail::sycl_reduce(it.get_sub_group(), v, op);
+    }
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
+        if constexpr (S == Scope::Sub) return team_reduce(v, op);
+        else return detail::sycl_reduce(it.get_group(), v, op);
+    }
+    BATCHLAS_DLA_INLINE void barrier(Mem m = Mem::Local) const {
+        if constexpr (S == Scope::Sub) sycl::group_barrier(it.get_sub_group());
+        else if (m == Mem::Local) it.barrier(sycl::access::fence_space::local_space);
+        else it.barrier(sycl::access::fence_space::global_and_local);
+    }
+    template <class V> BATCHLAS_DLA_INLINE Published<V> publish(V v) const;
+    // COLLECTIVE: item `src`'s v to every item of the executor (`src` uniform).
+    template <class T> BATCHLAS_DLA_HELPER T bcast(T v, int src) const {
+        using A = Arith<T>;
+        auto one = [&](auto x) {
+            if constexpr (S == Scope::Sub) return sycl::select_from_group(it.get_sub_group(), x, src);
+            else return sycl::group_broadcast(it.get_group(), x, src);
+        };
+        if constexpr (A::is_complex) return A::make(one(A::re(v)), one(A::im(v)));
+        else return one(v);
+    }
+};
+
+template <class Ex> inline constexpr bool is_runtime_v = requires { Ex::runtime; };
+
+namespace detail {
+// The executor's Cyclic stride, team width and team count: type constants, or launch values
+// for RtGroup. Ops read sizes only through these.
+template <class Ex> BATCHLAS_DLA_INLINE int size_of(const Ex& ex) {
+    if constexpr (is_runtime_v<Ex>) return ex.width();
+    else return Ex::size;
+}
+template <class Ex> BATCHLAS_DLA_INLINE int team_size_of(const Ex& ex) {
+    if constexpr (is_runtime_v<Ex>) return ex.team_size();
+    else return Ex::team_size;
+}
+template <class Ex> BATCHLAS_DLA_INLINE int nteams_of(const Ex& ex) {
+    if constexpr (is_runtime_v<Ex>) return ex.nteams();
+    else return Ex::nteams;
+}
+}  // namespace detail
+
 template <class Ex> inline constexpr bool is_work_group_v = false;
 template <int WG, int SG> inline constexpr bool is_work_group_v<WorkGroup<WG, SG>> = true;
 template <class Ex> inline constexpr bool is_thread_v = std::is_same_v<Ex, Thread>;
+
+// A barrier over the executor's scope: work-group barrier on WorkGroup / RtGroup<Group>, a
+// sub-group barrier on Teams, SubGroup, Partition and RtGroup<Sub>, nothing on Thread.
+template <class Ex> BATCHLAS_DLA_INLINE void sync(const Ex& ex, Mem m = Mem::Local) {
+    if constexpr (is_thread_v<Ex>) return;
+    else if constexpr (requires { ex.barrier(m); }) ex.barrier(m);
+    else sycl::group_barrier(ex.sub());
+}
 
 // Scratch for a Group-scope packed exchange. The caller allocates the local memory; its size
 // is the constexpr scratch_elements<Op, Ex, T>().
