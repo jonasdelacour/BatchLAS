@@ -106,6 +106,12 @@
 #define BATCHLAS_BENCH_NETLIB_COMPLEX_TYPES(name, sizes)
 #endif
 
+// GFLOP count of `batch` gemms of m x n x k (2mnk flops each), for the gemm benchmarks' GFLOPS
+// rate. Keep the operation order: the gemm benchmarks' numbers were recorded with it.
+inline double gemm_gflop(std::size_t m, std::size_t n, std::size_t k, std::size_t batch) {
+    return static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k);
+}
+
 #define BATCHLAS_REGISTER_BENCHMARK(name, sizes) \
     BATCHLAS_BENCH_CUDA(name, sizes) \
     BATCHLAS_BENCH_ROCM(name, sizes) \
