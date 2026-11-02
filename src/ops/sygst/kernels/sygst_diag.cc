@@ -7,8 +7,10 @@
 
 #include <src/ops/sygst/sygst_native.hh>
 
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/sygst-sygvd-syfn.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
 #include <src/queue.hh>
 
 #include <sycl/sycl.hpp>
@@ -16,99 +18,48 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::sycl_sygst {
 
 namespace {
 
-using sycl_device::Cx;
+namespace v2 = batchlas::device::v2;
 
 template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;
 
-// acc - a b, acc + conj(a) b and a + b, written out (no std::complex in device code).
-inline float sub_mul(float acc, float a, float b) { return sycl::fma(-a, b, acc); }
-inline double sub_mul(double acc, double a, double b) { return sycl::fma(-a, b, acc); }
-template <typename R>
-inline Cx<R> sub_mul(Cx<R> acc, Cx<R> a, Cx<R> b) {
-    acc.re = sycl::fma(-a.re, b.re, acc.re);
-    acc.re = sycl::fma(a.im, b.im, acc.re);
-    acc.im = sycl::fma(-a.re, b.im, acc.im);
-    acc.im = sycl::fma(-a.im, b.re, acc.im);
-    return acc;
-}
-inline float add_conj_mul(float acc, float a, float b) { return sycl::fma(a, b, acc); }
-inline double add_conj_mul(double acc, double a, double b) { return sycl::fma(a, b, acc); }
-template <typename R>
-inline Cx<R> add_conj_mul(Cx<R> acc, Cx<R> a, Cx<R> b) {
-    acc.re = sycl::fma(a.re, b.re, acc.re);
-    acc.re = sycl::fma(a.im, b.im, acc.re);
-    acc.im = sycl::fma(a.re, b.im, acc.im);
-    acc.im = sycl::fma(-a.im, b.re, acc.im);
-    return acc;
-}
-inline float add(float a, float b) { return a + b; }
-inline double add(double a, double b) { return a + b; }
-template <typename R>
-inline Cx<R> add(Cx<R> a, Cx<R> b) { return Cx<R>{a.re + b.re, a.im + b.im}; }
 template <typename D>
-inline D real_only(D x) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) return D{x.re, decltype(x.re)(0)};
-    else return x;
-}
-
+using Col = v2::Frag<D, kDiagMaxOrder>;  // one column of the block, in registers
 template <typename D>
-struct Col {
-    D v[kDiagMaxOrder];
-};
-
+using Pack = v2::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
 template <typename D>
-struct alignas(16) Pack {
-    D e[16 / sizeof(D) > 0 ? 16 / sizeof(D) : 1];
-};
-template <typename D>
-constexpr int kVec = static_cast<int>(sizeof(Pack<D>::e) / sizeof(D));
+constexpr int kVec = v2::pack16_elems<D>;
 
-// F(r, q) in shared memory: row-major for the solve (it reads rows), column-major for the product.
-template <bool Inverse>
-inline int fidx(int r, int q, int ldf) { return Inverse ? r * ldf + q : r + q * ldf; }
+// F(r, q) as stored: F^T column-major for the solve (column i of the store is row i of F),
+// F column-major for the product.
+template <bool Inverse, class M>
+inline auto& fat(const M& fs, int r, int q) { return Inverse ? fs(q, r) : fs(r, q); }
 
-// F^-1 c (forward substitution) or F^H c (top-down, in place). By value: an array out-parameter spills.
-// Four partial sums per row shorten the dependent FMA chain.
+// F^-1 c (itype 1, ?TRSV with the stored F^T) or F^H c (2, 3, ?TRMV). A plain inline function as
+// before the port, so the compiler's inlining choice for the two calls is unchanged.
 template <bool Inverse, int KB, typename D>
 inline Col<D> apply(Col<D> c, const D* f, int ldf, int kb) {
-    constexpr int V = kVec<D>;
-    BATCHLAS_UNROLL_FULL
-    for (int i = 0; i < (KB ? KB : kDiagMaxOrder); ++i) {
-        if (i < (KB ? KB : kb)) {
-            D acc[4] = {};
-            const D* const line = f + i * ldf;  // row i of F (solve) or column i (product)
-            if constexpr (Inverse) {
-                BATCHLAS_UNROLL_FULL
-                for (int p0 = 0; p0 < i; p0 += V) {
-                    const Pack<D> pk = *reinterpret_cast<const Pack<D>*>(line + p0);
-                    BATCHLAS_UNROLL_FULL
-                    for (int u = 0; u < V; ++u)
-                        if (p0 + u < i) acc[(p0 + u) % 4] = sub_mul(acc[(p0 + u) % 4], pk.e[u], c.v[p0 + u]);
-                }
-            } else {
-                BATCHLAS_UNROLL_FULL
-                for (int p0 = (i + 1) / V * V; p0 < (KB ? KB : kDiagMaxOrder); p0 += V) {
-                    if (p0 >= (KB ? KB : kb)) continue;
-                    const Pack<D> pk = *reinterpret_cast<const Pack<D>*>(line + p0);
-                    BATCHLAS_UNROLL_FULL
-                    for (int u = 0; u < V; ++u)
-                        if (p0 + u > i && p0 + u < (KB ? KB : kb))
-                            acc[(p0 + u) % 4] = add_conj_mul(acc[(p0 + u) % 4], pk.e[u], c.v[p0 + u]);
-                }
-            }
-            const D sum = add(add(acc[0], acc[1]), add(acc[2], acc[3]));
-            const auto fii = sycl_device::dev_real(line[i]);
-            c.v[i] = Inverse ? sycl_device::dev_div_real(add(c.v[i], sum), fii)
-                             : add(sycl_device::dev_mul_real(c.v[i], fii), sum);
-        }
-    }
+    using KN = std::conditional_t<(KB > 0), v2::Ext<KB>, v2::Dyn>;
+    const KN kn = [&] { if constexpr (KB > 0) return KN{}; else return KN{kb}; }();
+    const v2::Mat<const D, KN, KN, v2::Dyn, v2::Mem::Local> fs{f, kn, kn, v2::Dyn{ldf}};
+    if constexpr (Inverse) v2::trsv_frag<Uplo::Upper, Transpose::Trans>(v2::Thread{}, fs, c);
+    else v2::trmv_frag<Uplo::Lower, Transpose::ConjTrans>(v2::Thread{}, fs, c);
     return c;
+}
+
+// An element of the 16-byte-aligned SLM packs: aligned to min(16, sizeof(D)). Said explicitly
+// because a v2 operand holds its pointer as a member, which drops the alignment clang derives from
+// pointer arithmetic on &slm[0]; without it a complex S column goes out as two 8-byte shared
+// stores per element instead of one 16-byte store.
+template <typename D>
+inline D* slm_elem(D* p) {
+    return static_cast<D*>(__builtin_assume_aligned(p, sizeof(D) < 16 ? sizeof(D) : 16));
 }
 
 template <bool Inverse, int KB, typename T, typename D>
@@ -123,61 +74,54 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
         sycl::local_accessor<Pack<D>, 1> slm(sycl::range<1>(packs), h);
         h.parallel_for<SygstDiagKernel<D, Inverse, KB>>(
             sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
+                using KN = std::conditional_t<(KB > 0), v2::Ext<KB>, v2::Dyn>;
+                const KN kn = [&] { if constexpr (KB > 0) return KN{}; else return KN{kb}; }();
+                const v2::Thread th{};
+                const Uplo ul = lower ? Uplo::Lower : Uplo::Upper;
                 const int t = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t first = static_cast<std::ptrdiff_t>(it.get_group(0)) * ipw;
                 D* const fbase = reinterpret_cast<D*>(&slm[0]);
                 D* const sbase = fbase + ipw * fper;
-                auto named = [=](int i, int c) { return lower ? i >= c : i <= c; };
-                // Column-wise and coalesced: thread t owns row t % kb of columns t / kb, + wg / kb, ...
-                // I2: a masked item is a dead partition, never loaded, computed or stored.
-                const int row = t % kb, cstep = wg / kb;
-                for (int idx = t / kb; idx < ipw * kb; idx += cstep) {
-                    const int gi = idx / kb, c = idx - gi * kb;
+                auto a_of = [=](std::ptrdiff_t itm) { return v2::mat(ap + itm * stride_a, kb, kb, lda); };
+                auto s_of = [=](int gi) { return v2::mat<v2::Mem::Local>(slm_elem(sbase + gi * sper), kb, kb, lds); };
+                // ?LACPY of A's uplo triangle into S and of B's into F (conjugate-transposed from U),
+                // column-wise and coalesced. I2: a masked item is a dead partition, never loaded,
+                // computed or stored.
+                v2::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) {
                     const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch || (mask && !mask[itm]) || !named(row, c)) continue;
-                    sbase[gi * sper + row + c * lds] = ap[itm * stride_a + static_cast<std::ptrdiff_t>(c) * lda + row];
-                    const D bv = bp[itm * stride_b + static_cast<std::ptrdiff_t>(c) * ldb + row];
-                    D* const fg = fbase + gi * fper;  // F(row, c) = B(row, c) or F(c, row) = conj(B(row, c))
-                    if (lower) fg[fidx<Inverse>(row, c, ldf)] = bv;
-                    else fg[fidx<Inverse>(c, row, ldf)] = sycl_device::dev_conj(bv);
-                }
+                    if (row >= kb || itm >= batch || (mask && !mask[itm]) || !v2::in_triangle(ul, row, c)) return;
+                    s_of(gi)(row, c) = a_of(itm)(row, c);
+                    const D bv = v2::mat(bp + itm * stride_b, kb, kb, ldb)(row, c);
+                    const auto fs = v2::mat<v2::Mem::Local>(slm_elem(fbase + gi * fper), kb, kb, ldf);
+                    if (lower) fat<Inverse>(fs, row, c) = bv;
+                    else fat<Inverse>(fs, c, row) = v2::Arith<D>::conj(bv);
+                });
                 const int g = t / kb, j = t - g * kb;
                 const bool active = g < ipw && first + g < batch && (!mask || mask[first + g]);
                 const D* const f = fbase + (active ? g * fper : 0);
-                D* const s = sbase + (active ? g * sper : 0);
+                const v2::Mat<D, KN, KN, v2::Dyn, v2::Mem::Local> s{slm_elem(sbase + (active ? g * sper : 0)), kn, kn, v2::Dyn{lds}};
                 it.barrier(sycl::access::fence_space::local_space);
+                // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
                 Col<D> col{};
-                BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < (KB ? KB : kDiagMaxOrder); ++i)
-                    if (active && i < kb)
-                        col.v[i] = i == j ? real_only(s[i + j * lds])
-                                   : named(i, j) ? s[i + j * lds] : sycl_device::dev_conj(s[j + i * lds]);
+                if (active) v2::frag_load(th, kn, v2::herm(s, ul).col(j), col);
                 it.barrier(sycl::access::fence_space::local_space);
                 if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
-                BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < (KB ? KB : kDiagMaxOrder); ++i)
-                    if (active && i < kb) s[i + j * lds] = col.v[i];
+                if (active) v2::frag_store(th, kn, col, s.col(j));
                 it.barrier(sycl::access::fence_space::local_space);
-                // C = F^-1 X^H (or F^H X^H): X's conjugate transpose, row j of X as column j.
-                BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < (KB ? KB : kDiagMaxOrder); ++i)
-                    if (active && i < kb) col.v[i] = sycl_device::dev_conj(s[j + i * lds]);
+                // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
+                if (active) v2::frag_load(th, kn, v2::conj_vec(s.row(j)), col);
                 it.barrier(sycl::access::fence_space::local_space);
                 if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
-                BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < (KB ? KB : kDiagMaxOrder); ++i)
-                    if (active && i < kb) s[i + j * lds] = col.v[i];
+                if (active) v2::frag_store(th, kn, col, s.col(j));
                 it.barrier(sycl::access::fence_space::local_space);
-                for (int idx = t / kb; idx < ipw * kb; idx += cstep) {
-                    const int gi = idx / kb, c = idx - gi * kb;
+                // The Hermitian C (real diagonal) to `full` and its uplo triangle back to A.
+                v2::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) {
                     const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch || (mask && !mask[itm])) continue;
-                    const D* const sg = sbase + gi * sper;
-                    const D v = row == c ? real_only(sg[row + c * lds])
-                                : named(row, c) ? sg[row + c * lds] : sycl_device::dev_conj(sg[c + row * lds]);
-                    if (hp) hp[itm * stride_h + static_cast<std::ptrdiff_t>(c) * ldh + row] = v;
-                    if (named(row, c)) ap[itm * stride_a + static_cast<std::ptrdiff_t>(c) * lda + row] = v;
-                }
+                    if (row >= kb || itm >= batch || (mask && !mask[itm])) return;
+                    const D v = v2::herm(s_of(gi), ul)(row, c);
+                    if (hp) v2::mat(hp + itm * stride_h, kb, kb, ldh)(row, c) = v;
+                    if (v2::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
+                });
             });
     });
 }
@@ -224,11 +168,8 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             const auto itm = static_cast<std::ptrdiff_t>(e / per);
             if (mask && !mask[itm]) return;  // I3
             const int r = static_cast<int>(e % per), i = r % kb, c = r / kb;
-            const bool own = lower ? i >= c : i <= c;
-            const D* const src = ap + itm * stride_a;
-            const D v = own ? src[static_cast<std::ptrdiff_t>(c) * lda + i]
-                            : sycl_device::dev_conj(src[static_cast<std::ptrdiff_t>(i) * lda + c]);
-            hp[itm * stride_f + static_cast<std::ptrdiff_t>(c) * ldf + i] = i == c ? real_only(v) : v;
+            const auto src = v2::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), lower ? Uplo::Lower : Uplo::Upper);
+            v2::mat(hp + itm * stride_f, kb, kb, ldf)(i, c) = src(i, c);  // H = the Hermitian A, real diagonal
         });
     });
     return ctx.get_event();

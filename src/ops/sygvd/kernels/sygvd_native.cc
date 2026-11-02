@@ -2,6 +2,8 @@
 
 #include <src/ops/sygvd/sygvd_native.hh>
 
+#include <batchlas/blas/device/v2/ext/sygst-sygvd-syfn.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
 
@@ -15,6 +17,8 @@ namespace batchlas::sycl_sygvd {
 
 namespace {
 
+namespace v2 = batchlas::device::v2;
+
 template <typename T> class SygvdIdentityFailedKernel;
 class SygvdMergeInfoKernel;
 
@@ -24,7 +28,6 @@ template <typename T>
 Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
                             Span<const int32_t> potrf_info, const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
-    using R = typename base_type<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     D* const bp = reinterpret_cast<D*>(B.data_ptr());
     const int n = B.rows();
@@ -42,9 +45,10 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
             const std::size_t e = it.get_id(1);
             const int r = static_cast<int>(e % static_cast<std::size_t>(n));
             const int c = static_cast<int>(e / static_cast<std::size_t>(n));
-            if (lower ? r < c : r > c) return;
-            bp[static_cast<std::ptrdiff_t>(b) * stride + static_cast<std::ptrdiff_t>(c) * ldb + r] =
-                sycl_device::dev_from_real<D>(R(r == c ? 1 : 0));
+            // ?LASET(uplo, 0, 1): the failed item's B becomes the identity on its uplo triangle.
+            v2::laset_at(lower ? Uplo::Lower : Uplo::Upper,
+                         bp[static_cast<std::ptrdiff_t>(b) * stride + static_cast<std::ptrdiff_t>(c) * ldb + r], r, c,
+                         v2::Zero{}, v2::One{});
         });
     });
     return ctx.get_event();
