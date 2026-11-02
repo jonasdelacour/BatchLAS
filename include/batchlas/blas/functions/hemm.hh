@@ -40,8 +40,8 @@ using hemm_vendor = Event(Queue&,
 ///     C := \alpha B A + \beta C \quad (\texttt{Side::Right}) \f]
 /// with `A` Hermitian. Only the triangle of `A` named by `uplo` is read; the
 /// other is taken to be its conjugate transpose, and the imaginary part of the
-/// diagonal is taken to be zero whatever is stored there. `B` and `C` are m x n;
-/// `A` is m x m (Left) or n x n (Right).
+/// diagonal is taken to be zero whatever is stored there. `B` and `C` are \f$m \times n\f$;
+/// `A` is \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right).
 ///
 /// Constrained to complex `T`: for a real matrix Hermitian and symmetric are the
 /// same statement, and the real spelling is symm. Also callable as
@@ -54,14 +54,16 @@ using hemm_vendor = Event(Queue&,
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
-/// @param ctx    queue the work is enqueued on
-/// @param A      batch of Hermitian matrices; only the `uplo` triangle is read
-/// @param B      batch of m x n matrices; not modified
-/// @param C      batch of m x n matrices; input scaled by `beta`, overwritten with the result
-/// @param alpha  scale of the product
-/// @param beta   scale of the input `C`
-/// @param side   whether `A` multiplies from the left or the right
-/// @param uplo   which triangle of `A` holds the data
+/// @param[in]     ctx    queue the work is enqueued on
+/// @param[in]     A      batch of Hermitian \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right)
+///                       matrices; only the `uplo` triangle is read
+/// @param[in]     B      batch of \f$m \times n\f$ matrices; not modified
+/// @param[in,out] C      batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+///                       with the result
+/// @param[in]     alpha  scale \f$\alpha\f$ of the product
+/// @param[in]     beta   scale \f$\beta\f$ of the input `C`
+/// @param[in]     side   whether `A` multiplies from the left or the right
+/// @param[in]     uplo   which triangle of `A` holds the data
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
@@ -94,6 +96,19 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of hemm (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::hemm calls it. Same arguments and semantics.
+/// @tparam Back  backend whose vendor library runs the call
+/// @tparam T     `std::complex<float>` or `std::complex<double>`
+/// @param[in]     ctx    queue the work is enqueued on
+/// @param[in]     A      batch of Hermitian \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right)
+///                       matrices; only the `uplo` triangle is read
+/// @param[in]     B      batch of \f$m \times n\f$ matrices; not modified
+/// @param[in,out] C      batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+///                       with the result
+/// @param[in]     alpha  scale \f$\alpha\f$ of the product
+/// @param[in]     beta   scale \f$\beta\f$ of the input `C`
+/// @param[in]     side   whether `A` multiplies from the left or the right
+/// @param[in]     uplo   which triangle of `A` holds the data
+/// @return event of the last enqueued vendor call; `C` is valid once it completes
 /// @ingroup api_dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event hemm_vendor(Queue& ctx,

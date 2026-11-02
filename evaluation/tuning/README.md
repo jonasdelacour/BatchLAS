@@ -104,7 +104,7 @@ Coupling between benches:
   grid must cover sytrd_blocked's. syev tunes `nb`, the LATRD wg hint and the fused panel update as
   one tuple against end-to-end time.
 - stedc's constants feed syev's and gesvd's tridiagonal solves: tune stedc first.
-- STEDC cases start at n = 64; the default space pre-tunes `recursion_threshold` at n = 64 only.
+- STEDC cases start at \f$n = 64\f$; the default space pre-tunes `recursion_threshold` at \f$n = 64\f$ only.
 
 ## Promoting a parameter out of `unwired.json`
 

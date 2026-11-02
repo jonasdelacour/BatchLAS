@@ -52,7 +52,7 @@ inline real_of<D> dev_imag(D a) {
     }
 }
 
-// max(|Re|, |Im|) -- NOT |a|, whose square-and-add is the overflow this avoids.
+// \f$\max(\lvert\mathrm{Re}\rvert, \lvert\mathrm{Im}\rvert)\f$ -- NOT \f$\lvert a\rvert\f$, whose square-and-add is the overflow this avoids.
 template <typename D>
 inline real_of<D> dev_absmax(D a) {
     if constexpr (batchlas::sycl_device::dev_is_complex_v<D>) {
@@ -62,7 +62,7 @@ inline real_of<D> dev_absmax(D a) {
     }
 }
 
-// |a/s|^2, formed by dividing FIRST. s is guaranteed positive by the caller.
+// \f$\lvert a/s\rvert^2\f$, formed by dividing FIRST. s is guaranteed positive by the caller.
 template <typename D>
 inline real_of<D> dev_abs2_scaled(D a, real_of<D> s) {
     using R = real_of<D>;
@@ -77,9 +77,9 @@ inline real_of<D> dev_abs2_scaled(D a, real_of<D> s) {
 }
 
 // The Householder scalars, LAPACK ?LARFG exactly. `s` scales the WHOLE column
-// (alpha included); `ssq` is the TAIL's sum of |x/s|^2. identity == true means
-// tau = 0, H = I, A(j,j) unchanged and v unwritten; otherwise A(j,j) := beta
-// (REAL even for complex) and A(j+1:m, j) := x / (alpha - beta).
+// (alpha included); `ssq` is the TAIL's sum of \f$\lvert x/s\rvert^2\f$. identity == true means
+// \f$\tau = 0\f$, \f$H = I\f$, A(j,j) unchanged and v unwritten; otherwise A(j,j) := \f$\beta\f$
+// (REAL even for complex) and A(j+1:m, j) := \f$x / (\alpha - \beta)\f$.
 template <typename D>
 struct LarfgScalars {
     D tau;
@@ -113,7 +113,7 @@ inline LarfgScalars<D> geqrf_larfg_scalars(D alpha, real_of<D> s, real_of<D> ssq
 
     const R nrm = sycl::sqrt(sycl::fma(ar, ar, sycl::fma(ai, ai, ssq)));
 
-    // beta = -SIGN(nrm, alphr). Fortran's SIGN returns +|x| for a +0 second
+    // \f$\beta = -\operatorname{sign}(\mathrm{nrm}, \mathrm{alphr})\f$. Fortran's SIGN returns +|x| for a +0 second
     // argument and alphr == 0 is reachable, so the test is `>= 0`, not `> 0`.
     const R beta_s = (alphr >= R(0)) ? -nrm : nrm;
 
@@ -190,7 +190,7 @@ inline R geqrf_sg_max(const sycl::sub_group& sg, R v) {
     return v;
 }
 
-// LAPACK ?GEQR2 on an m x n tile, in place. The apply's conj(tau) is zgeqr2's,
+// LAPACK ?GEQR2 on an \f$m \times n\f$ tile, in place. The apply's conj(tau) is zgeqr2's,
 // not a transcription slip: dropping it still passes every real-typed test.
 // `tau_ptr` is a GLOBAL pointer already offset to this matrix; reflector j lands
 // at tau_ptr[j]. kmax lets a caller factor fewer reflectors than min(m, n).
@@ -289,7 +289,7 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         // TEAM -> column, LANE -> row. The trip count is sub-group- but NOT
         // work-group-uniform: no work-group barrier may appear in this region.
         for (int c = j + 1 + team; c < n; c += nteams) {
-            // w = v^H A(j:m, c); v(j) = 1 implicitly but A(j,j) holds beta.
+            // \f$w = v^{H} A(j{:}m, c)\f$; v(j) = 1 implicitly but A(j,j) holds beta.
             D acc = (lane == 0) ? A.at(j, c) : dev_zero<D>();
             for (int r = j + 1 + lane; r < m; r += nlanes) {
                 acc = dev_add(acc, batchlas::sycl_device::dev_mul(

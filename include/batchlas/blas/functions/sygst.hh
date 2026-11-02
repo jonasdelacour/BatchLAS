@@ -35,7 +35,12 @@ using sygst_vendor = sygst<T>;
 
 /// @brief Validates the arguments of sygst() and sygst_buffer_size().
 ///
-/// Checks square A and B of the same order and batch size, `itype` in {1, 2, 3} and a valid @p uplo.
+/// Checks square A and B of the same order and batch size, `itype` in \f$\{1, 2, 3\}\f$ and a valid @p uplo.
+/// @param[in] who    op name that opens the error message (e.g. `"sygst"`)
+/// @param[in] A      batch of \f$n \times n\f$ Hermitian matrices
+/// @param[in] B      batch of \f$n \times n\f$ Cholesky factors
+/// @param[in] itype  problem type, 1, 2 or 3
+/// @param[in] uplo   triangle of A and B that holds the data
 /// @throws batchlas::invalid_argument naming the first violated requirement
 /// @ingroup api_eigen_lowlevel
 template <typename T>
@@ -71,12 +76,13 @@ inline void sygst_validate_params(const char* who, const MatrixView<T, MatrixFor
 /// Asynchronous: A is readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T     float, double, std::complex<float> or std::complex<double>
-/// @param ctx         queue the work is enqueued on
-/// @param A           batch of n x n Hermitian matrices, overwritten with the reduced matrix
-/// @param B           batch of n x n Cholesky factors (any `ld >= n`, any batch stride)
-/// @param itype       1: \f$ A x = \lambda B x \f$; 2: \f$ A B x = \lambda x \f$; 3: \f$ B A x = \lambda x \f$
-/// @param uplo        triangle of A and B that holds the data
-/// @param work_space  device-accessible scratch of at least sygst_buffer_size() bytes
+/// @param[in] ctx          queue the work is enqueued on
+/// @param[in,out] A        batch of \f$n \times n\f$ Hermitian matrices, overwritten with the reduced matrix
+/// @param[in] B            batch of \f$n \times n\f$ Cholesky factors from potrf() (any `ld >= n`, any batch stride); not modified
+/// @param[in] itype        1: \f$ A x = \lambda B x \f$; 2: \f$ A B x = \lambda x \f$; 3: \f$ B A x = \lambda x \f$
+/// @param[in] uplo         triangle of A and B that holds the data
+/// @param[out] work_space  device-accessible scratch of at least sygst_buffer_size() bytes;
+///                         contents undefined on return
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if sygst_validate_params() rejects the call
 /// @throws batchlas::workspace_error if @p work_space is shorter than sygst_buffer_size()
@@ -89,7 +95,15 @@ BATCHLAS_API Event sygst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
                          Span<std::byte> work_space);
 
 /// @brief Workspace, in bytes, that sygst() needs for these operands (0 for itype 1 on the
-///        native family; one n x n product per item for itypes 2 and 3).
+///        native family; one \f$n \times n\f$ product per item for itypes 2 and 3).
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T     float, double, std::complex<float> or std::complex<double>
+/// @param[in] ctx    queue the call will run on
+/// @param[in] A      batch of \f$n \times n\f$ Hermitian matrices, as passed to sygst()
+/// @param[in] B      batch of \f$n \times n\f$ Cholesky factors, as passed to sygst()
+/// @param[in] itype  problem type, 1, 2 or 3
+/// @param[in] uplo   triangle of A and B that holds the data
+/// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
 template <Backend Back, typename T>
 BATCHLAS_API size_t sygst_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
@@ -97,6 +111,16 @@ BATCHLAS_API size_t sygst_buffer_size(Queue& ctx, const MatrixView<T, MatrixForm
 
 /// @brief The complex-Hermitian spelling of sygst() (LAPACK `?hegst`); identical semantics, and the same
 ///        backend-deducing overload `hegst(ctx, ...)`.
+/// @tparam Back  backend
+/// @tparam T     float, double, std::complex<float> or std::complex<double>
+/// @param[in] ctx          queue the work is enqueued on
+/// @param[in,out] A        batch of \f$n \times n\f$ Hermitian matrices, overwritten with the reduced matrix
+/// @param[in] B            batch of \f$n \times n\f$ Cholesky factors from potrf(); not modified
+/// @param[in] itype        1: \f$ A x = \lambda B x \f$; 2: \f$ A B x = \lambda x \f$; 3: \f$ B A x = \lambda x \f$
+/// @param[in] uplo         triangle of A and B that holds the data
+/// @param[out] work_space  device-accessible scratch of at least sygst_buffer_size() bytes;
+///                         contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_eigen
 template <Backend Back, typename T>
 inline Event hegst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
@@ -113,6 +137,15 @@ BATCHLAS_DISPATCH_ON_QUEUE(hegst)
 namespace batchlas::backend {
 
 /// @brief LAPACKE `?sygst` / `?hegst` per item, sygst()'s `vendor` family on the host backend.
+/// @tparam B  backend
+/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @param[in] ctx          queue the work is enqueued on
+/// @param[in,out] A        batch of \f$n \times n\f$ Hermitian matrices, overwritten with the reduced matrix
+/// @param[in] Bm           batch of \f$n \times n\f$ Cholesky factors from potrf(); not modified
+/// @param[in] itype        problem type, 1, 2 or 3, as for sygst()
+/// @param[in] uplo         triangle of A and Bm that holds the data
+/// @param[out] work_space  scratch of at least sygst_buffer_size() bytes; contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event sygst_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,

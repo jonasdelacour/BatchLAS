@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// A single-tile batched SYRK/HERK for n <= kGramMaxTile (ortho's tall, skinny
+// A single-tile batched SYRK/HERK for \f$n \le\f$ kGramMaxTile (ortho's tall, skinny
 // A). The tile is sized to n, one shared tile serves both operands, and only the
 // thread tiles meeting the requested triangle are carried. The shared stride is
 // exactly n (unpadded) so fragments stay LDS.128; the swizzle below keeps that
@@ -246,7 +246,7 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-// Problem-side support, independent of scalar type and queue. Only n <=
+// Problem-side support, independent of scalar type and queue. Only \f$n \le\f$
 // kGramMaxTile; above it non-float has no native route (the triangular kernel is float-only).
 template <typename T>
 bool syrk_gram_supported(const MatrixView<T, MatrixFormat::Dense>& A,
@@ -262,7 +262,7 @@ bool syrk_gram_supported(const MatrixView<T, MatrixFormat::Dense>& A,
     if (A.is_heterogeneous() || C.is_heterogeneous()) {
         return false;
     }
-    // SYRK spells A*A^T and must not be handed a ConjTrans; HERK spells A*A^H
+    // SYRK spells \f$A A^{T}\f$ and must not be handed a ConjTrans; HERK spells \f$A A^{H}\f$
     // and must not be handed a plain Trans, which would be complex-symmetric.
     if (conjugated ? (transA != Transpose::NoTrans && transA != Transpose::ConjTrans)
                    : (transA == Transpose::ConjTrans)) {

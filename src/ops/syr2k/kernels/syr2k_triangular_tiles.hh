@@ -3,7 +3,7 @@
 
 // A 128x128x8 register-tiled SYR2K over the triangular tile set, fusing both
 // rank-k products into the same accumulators:
-//     accum += A[bi] * B[bj]^T   and   accum += B[bi] * A[bj]^T
+//     \f$\mathrm{accum} \mathrel{+}= A_{bi} B_{bj}^{T}\f$   and   \f$\mathrm{accum} \mathrel{+}= B_{bi} A_{bj}^{T}\f$
 // Products are issued sequentially, not interleaved, to keep one fragment pair
 // live (occupancy). Diagonal tiles alias the bj-side tiles to the bi-side ones
 // (block-uniform, no divergence) and mask their epilogue.
@@ -141,9 +141,9 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 // Staging coordinates. NoTrans walks the output row index,
-                // which is the contiguous direction of a column-major n x k
+                // which is the contiguous direction of a column-major \f$n \times k\f$
                 // operand; Trans walks k, which is the contiguous direction of
-                // a k x n one and has to be transposed on the way into shared.
+                // a \f$k \times n\f$ one and has to be transposed on the way into shared.
                 const int s_row = TransOperand ? tid / 2 : (tid % 32) * 4;
                 const int s_l = TransOperand ? (tid % 2) * 4 : tid / 32;
 
@@ -218,7 +218,7 @@ BATCHLAS_UNROLL_FULL
                             const TileVec4<T> r1 = tile_load4(&srow[kk * Stride + 64 + ty * Band]);
                             const TileVec4<T> c0 = tile_load4(&scol[kk * Stride + tx * Band]);
                             const TileVec4<T> c1 = tile_load4(&scol[kk * Stride + 64 + tx * Band]);
-                            // her2k: op(X) op(Y)^H conjugates the column factor (NoTrans) or the row one.
+                            // her2k: \f$\mathrm{op}(X)\mathrm{op}(Y)^{H}\f$ conjugates the column factor (NoTrans) or the row one.
                             constexpr bool kConjR = Conjugate && TransOperand;
                             constexpr bool kConjC = Conjugate && !TransOperand;
                             const T rf[ThreadTile] = {conj_if<kConjR>(r0.v[0]), conj_if<kConjR>(r0.v[1]),
@@ -299,8 +299,8 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-// Conjugate: her2k's alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H, with a real diagonal and
-// beta real. A is staged times alpha (NoTrans) or conj(alpha) (ConjTrans) and the epilogue scale
+// Conjugate: her2k's \f$\alpha\,\mathrm{op}(A)\mathrm{op}(B)^{H} + \bar\alpha\,\mathrm{op}(B)\mathrm{op}(A)^{H}\f$, with a real diagonal and
+// \f$\beta\f$ real. A is staged times \f$\alpha\f$ (NoTrans) or \f$\bar\alpha\f$ (ConjTrans) and the epilogue scale
 // is 1, which is what gives the second product the conjugate scalar.
 template <typename T, bool Conjugate = false>
 Event syr2k_triangular_tiles(Queue& ctx,

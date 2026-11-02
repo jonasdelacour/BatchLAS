@@ -20,7 +20,7 @@ inline std::array<T, 2> givens_rotation(const T& a, const T& b) {
 }
 
 // Similarity transform of rows/cols i, j of the tridiagonal (d, e); returns the new bulge.
-// QR == true indexes top-down (virtual k == physical k), false bottom-up (k -> n-1-k), so one
+// QR == true indexes top-down (virtual k == physical k), false bottom-up (\f$k \mapsto n-1-k\f$), so one
 // bulge chase implements both the QR and the QL iteration.
 template <typename T>
 inline T apply_givens_rotation(const VectorView<T>& d,

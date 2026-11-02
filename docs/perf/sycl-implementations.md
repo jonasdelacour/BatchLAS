@@ -52,17 +52,17 @@ Source `acpp-dual-build` at `ddf07744`; acpp runs at `ACPP_ADAPTIVITY_LEVEL=1`,
   `factor_bench` (families interleaved, 9 reps), the `steqr`, `syev_cta`, `syev_cta_fused`, `stedc`
   and `syev` (`BATCHLAS_SYEV_ROUTE=auto`) benchmarks; one process per (cell, implementation), under
   a GPU guard, by a campaign driver not kept in the repository.
-- **Grid.** float and double; n = 64..1024 gemm, 8..1024 potrf/getrf/geqrf/syev, 5..32 CTA kernels,
-  64..1024 stedc. Batch 16384 (n <= 32), 4096 (64), 1024 (128), 512 (256), 256 (512), 128 (1024).
+- **Grid.** float and double; \f$n = 64, \dots, 1024\f$ gemm, \f$8, \dots, 1024\f$ potrf/getrf/geqrf/syev, \f$5, \dots, 32\f$ CTA kernels,
+  \f$64, \dots, 1024\f$ stedc. Batch 16384 (\f$n \le 32\f$), 4096 (64), 1024 (128), 512 (256), 256 (512), 128 (1024).
 - **Order and statistics.** A throwaway pass, then reps 0-5 with the implementation order rotated
-  per cell and rep; reps 6-9 for the 113 cells with 3% <= |ratio - 1| < 15%. Ratio =
-  median(acpp) / median(DPC++); most paired bootstrap 95% CIs are within +-1%. Routes from coverage
+  per cell and rep; reps 6-9 for the 113 cells with \f$3\% \le \lvert \text{ratio} - 1 \rvert < 15\%\f$. Ratio =
+  median(acpp) / median(DPC++); most paired bootstrap 95% CIs are within \f$\pm 1\%\f$. Routes from coverage
   `reached` rows; `factor_bench` pins throw rather than fall back.
 
 ## sycl-impl A/B: gemm {#sycl-impl-ab-gemm}
 
 - Float Auto is cuBLAS in every cell (1.00-1.09, the [vendor path](#sycl-impl-ab-vendor-calls-through-run-native));
-  double Auto is `tiled` (1.02-1.04), `wide:m=64:n=64:k=16` at packed n >= 256 (1.00).
+  double Auto is `tiled` (1.02-1.04), `wide:m=64:n=64:k=16` at packed \f$n \ge 256\f$ (1.00).
 - `tiled` is the one consistent native loss: 1.17-1.19 in float in every form, 1.02-1.04 in
   double. Nsight Systems, `GemmTiled` float n = 1024: 67.4 ms DPC++, 80.9 ms acpp.
 - `reg 128x128x8` loses 1.26-1.33 at n = 64, 1.03-1.08 above. `wide 64x64x16` and `reg 64x64x16`
@@ -75,18 +75,18 @@ Auto's route is identical in DPC++, acpp and the opt-in tree in every cell. Larg
 | op, dtype | Auto acpp / DPC++ | Where it loses |
 | --- | --- | --- |
 | geqrf float | 0.98-1.70 | `blocked` n = 128-1024: 1.35-1.70, same with the opt-in; native panel kernels (gemm sub-routes are cuBLAS in both) |
-| getrf float | 1.00-1.49 | `tiny` n = 8-32: 1.16-1.49 ([A10](#sycl-impl-ab-launch-bounds-r10)); `blocked` n >= 256: 1.03-1.09 |
+| getrf float | 1.00-1.49 | `tiny` n = 8-32: 1.16-1.49 ([A10](#sycl-impl-ab-launch-bounds-r10)); `blocked` \f$n \ge 256\f$: 1.03-1.09 |
 | potrf float | 0.92-1.36 | `tiny` n = 8: 1.20; `lpanel:panel=8` n = 256: 1.36; `blocked` n = 1024: 1.23 (opt-in 1.06) |
-| geqrf double | 1.00-1.12 | `blocked` n >= 128: 1.04-1.12 |
+| geqrf double | 1.00-1.12 | `blocked` \f$n \ge 128\f$: 1.04-1.12 |
 | potrf, getrf double | 1.00-1.11 | n = 8: potrf `tiny` 1.04, getrf `vendor` 1.11 |
 
-getrf `blocked` at n = 8-16 runs 0.36-0.67 on acpp in both precisions; no table routes it there.
-geqrf `vendor` is not run at n >= 256 (cuSOLVER loops over the batch: 0.42 s per call at float n = 512).
+getrf `blocked` at \f$n = 8, \dots, 16\f$ runs 0.36-0.67 on acpp in both precisions; no table routes it there.
+geqrf `vendor` is not run at \f$n \ge 256\f$ (cuSOLVER loops over the batch: 0.42 s per call at float \f$n = 512\f$).
 
 ## sycl-impl A/B: the sub-group CTA eigensolvers {#sycl-impl-ab-sub-group-cta-kernels}
 
 The real-kernel A/B for the `SscpBackend` of `sg_partition` ([design: JIT-time target dispatch](../design/sycl-implementations.md#sycl-impl-device-target-dispatch)):
-n = 5..32, batch 16384, eigenvectors, each kernel called directly. Paired 95% CIs within +-0.02.
+\f$n = 5, \dots, 32\f$, batch 16384, eigenvectors, each kernel called directly. Paired 95% CIs within \f$\pm 0.02\f$.
 
 | kernel | dtype | n = 5 | 8 | 12 | 16 | 24 | 32 | DPC++ ms at n = 16 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -179,23 +179,23 @@ inversions.
 ## sycl-impl A/B: accuracy {#sycl-impl-ab-accuracy}
 
 `scripts/impl_diff.py run` (2026-10-09, `build-dpcpp` against `build-acpp-tests`) runs one accuracy
-harness in both trees on the same graded inputs (`--seed=1234`, log10 cond 0..10 in 0.1 bins, 128
+harness in both trees on the same graded inputs (`--seed=1234`, \f$\log_{10}\mathrm{cond} \in [0, 10]\f$ in 0.1 bins, 128
 matrices per bin) and pairs rows per sample; the DPC++ run writes the inputs (`--inputs DIR`) and acpp
-reads them back (the device generator differs for double n >= 64). About 3.6 M paired samples, n = 8..256.
+reads them back (the device generator differs for double \f$n \ge 64\f$). About 3.6 M paired samples, \f$n = 8, \dots, 256\f$.
 
 | Family (shared inputs) | dtype | Bit-identical | Paired geo-mean B/A | Max paired rel. diff |
 | --- | --- | --- | --- | --- |
 | eigenvalues: steqr, steqr_cta, stedc, syev_cta, syev_blocked, syevx, syev Auto, cuSOLVER, NETLIB | float, double | 100% | 1 | 0 |
 | eigensolver residual R, orthogonality O (eigenvectors of steqr, steqr_cta, stedc, syev); ortho Chol2, Cholesky, ShiftChol3, Householder | double | 100% | 1 | 6.4e-12 |
-| same | float | 81-83% | 1 | 2.2e-7 (<= 2 ulp) |
-| ortho SVQB, SVQB2 | float, double | 39-50% | 0.89-1.05 | 6.7e3 (past cond ~1/sqrt(eps), chaotic in both) |
+| same | float | 81-83% | 1 | 2.2e-7 (\f$\le 2\f$ ulp) |
+| ortho SVQB, SVQB2 | float, double | 39-50% | 0.89-1.05 | 6.7e3 (past \f$\mathrm{cond} \sim 1/\sqrt{\varepsilon}\f$, chaotic in both) |
 | ortho CGS2 | float, double | < 1% | 0.98-1.04 | 2.1 |
 
 - **No accuracy regression on acpp.** No median or paired geo-mean ratio leaves [0.87, 1.09].
 - Float R and O differ because the work-group sum is DPC++'s native reduction against acpp's
   `portable::detail::wg_reduce_floating` ([design: the group-algorithm wrappers](../design/sycl-implementations.md#sycl-impl-group-algorithms));
   per-element PTX is the same. Why double R and O are bit-identical is not explained.
-- `max_relerr` at cond >= 1e3 measures the dsterf reference, not the solver (a harness property).
+- `max_relerr` at \f$\mathrm{cond} \ge 10^3\f$ measures the dsterf reference, not the solver (a harness property).
 
 ## sycl-impl A/B: route parity {#sycl-impl-ab-route-parity}
 

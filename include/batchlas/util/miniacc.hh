@@ -79,6 +79,13 @@ struct Result {
     std::vector<SampleRow> sample_rows;
 };
 
+/// @brief Parses a scalar, a comma list `v1,v2,...` or a range `start:end[:num]` into values.
+///
+/// A range gives \f$\mathrm{num}\f$ evenly spaced values from start to end inclusive
+/// (default 5, at least 2).
+/// @param[in] str  the specification; empty, or a range with fewer than two fields, gives no values
+/// @return the parsed values, in order
+/// @throws std::invalid_argument or std::out_of_range if a field is not a representable number (from `std::stod` / `std::stoul`)
 inline std::vector<double> parse_range_or_list_double(const std::string& str) {
     std::vector<double> vals;
     if (str.empty()) return vals;
@@ -114,6 +121,9 @@ inline std::vector<double> parse_range_or_list_double(const std::string& str) {
     return vals;
 }
 
+/// @brief Splits a comma-separated list, dropping empty items.
+/// @param[in] str  the list, e.g. `float,double`
+/// @return the non-empty items, in order
 inline std::vector<std::string> parse_list(const std::string& str) {
     std::vector<std::string> vals;
     std::stringstream ss(str);
@@ -124,6 +134,10 @@ inline std::vector<std::string> parse_list(const std::string& str) {
     return vals;
 }
 
+/// @brief Drops every value within @p eps of an earlier kept value.
+/// @param[in] input  values to deduplicate
+/// @param[in] eps    absolute tolerance: \f$v\f$ is dropped if \f$\lvert u - v \rvert \le \mathrm{eps}\f$ for a kept \f$u\f$
+/// @return the kept values, in their original order
 inline std::vector<double> dedup_nearly_equal(const std::vector<double>& input,
                                               double eps = 1e-12) {
     std::vector<double> out;
@@ -145,6 +159,11 @@ inline std::vector<double> dedup_nearly_equal(const std::vector<double>& input,
 /// @ingroup api_internal_helpers
 class State {
 public:
+    /// @brief Creates the context for one (case, argument list, condition target) run.
+    /// @param[in] args               the case's argument list, read by arg() / arg_int()
+    /// @param[in] cfg                run-wide settings
+    /// @param[in] target_log10_cond  requested \f$\log_{10} \kappa\f$; NaN when none was asked for
+    /// @param[in] benchmark_name     the registered case name
     State(std::vector<double> args,
           Config cfg,
           double target_log10_cond,
@@ -154,23 +173,46 @@ public:
           target_log10_cond_(target_log10_cond),
           benchmark_name_(std::move(benchmark_name)) {}
 
+    /// @brief Argument @p idx of the case's argument list.
+    /// @param[in] idx  0-based position in the argument list
+    /// @return the argument, or 0.0 when @p idx is past the end
     double arg(size_t idx) const {
         return idx < args_.size() ? args_[idx] : 0.0;
     }
 
+    /// @brief Argument @p idx rounded to the nearest integer.
+    /// @param[in] idx  0-based position in the argument list
+    /// @return the rounded argument, or 0 when @p idx is past the end
     int arg_int(size_t idx) const {
         return static_cast<int>(std::lround(arg(idx)));
     }
 
+    /// @brief Number of samples the case should record (`--samples`).
+    /// @return Config::samples
     size_t samples() const { return cfg_.samples; }
+    /// @brief Base RNG seed (`--seed`).
+    /// @return Config::seed
     unsigned int seed() const { return cfg_.seed; }
+    /// @brief Requested \f$\log_{10} \kappa\f$ of this run.
+    /// @return the target, or NaN when `--log10-cond` was not given
     double target_log10_cond() const { return target_log10_cond_; }
+    /// @brief Registered name of the running case.
+    /// @return the name
     const std::string& benchmark_name() const { return benchmark_name_; }
 
+    /// @brief Sets a case-level tag copied into every sample recorded after this call.
+    /// @param[in] key    tag name (a `tag_<key>` CSV column)
+    /// @param[in] value  tag value; replaces an earlier value for @p key
     void SetTag(const std::string& key, const std::string& value) {
         case_tags_[key] = value;
     }
 
+    /// @brief Appends one sample row.
+    /// @param[in] metrics         named metric values; non-finite values count as missing in the summary
+    /// @param[in] ok              false marks the sample as a failure
+    /// @param[in] failure_reason  free-text reason for a failure
+    /// @param[in] info_code       status code of the call under test (e.g. LAPACK `info`)
+    /// @param[in] tags            per-sample tags; they override case tags of the same name
     void RecordSample(const std::unordered_map<std::string, double>& metrics,
                       bool ok = true,
                       const std::string& failure_reason = "",
@@ -189,6 +231,8 @@ public:
         rows_.push_back(std::move(row));
     }
 
+    /// @brief Samples recorded so far.
+    /// @return the rows, in recording order
     const std::vector<SampleRow>& rows() const { return rows_; }
 
 private:
@@ -209,13 +253,27 @@ struct Benchmark {
     BenchFunc func;
     std::vector<std::vector<double>> args_list;
 
+    /// @brief Creates a case with no argument lists.
+    /// @param[in] n  case name
+    /// @param[in] f  function run once per argument list and condition target
     Benchmark(const std::string& n, BenchFunc f) : name(n), func(std::move(f)) {}
 
+    /// @brief Appends one argument list.
+    /// @param[in] a  the argument list
+    /// @return this, for chaining
     Benchmark* Args(const std::vector<double>& a) {
         args_list.push_back(a);
         return this;
     }
 
+    /// @brief Appends @p num single-argument lists evenly spaced over \f$[\mathrm{start}, \mathrm{end}]\f$.
+    ///
+    /// List \f$i\f$ holds \f$\mathrm{start} + (\mathrm{end} - \mathrm{start}) \, \frac{i}{\mathrm{num} - 1}\f$
+    /// for \f$i = 0, \dots, \mathrm{num} - 1\f$.
+    /// @param[in] start  first value
+    /// @param[in] end    last value
+    /// @param[in] num    number of values; below 2 is raised to 2
+    /// @return this, for chaining
     Benchmark* ArgRange(double start, double end, size_t num = 5) {
         if (num < 2) num = 2;
         for (size_t i = 0; i < num; ++i) {
@@ -225,6 +283,9 @@ struct Benchmark {
         return this;
     }
 
+    /// @brief Appends the Cartesian product of @p ranges, one argument list per combination.
+    /// @param[in] ranges  candidate values per argument position; the last position varies fastest
+    /// @return this, for chaining
     Benchmark* ArgsProduct(const std::vector<std::vector<double>>& ranges) {
         std::vector<std::vector<double>> combos{{}};
         for (const auto& r : ranges) {
@@ -243,16 +304,29 @@ struct Benchmark {
     }
 };
 
+/// @brief The process-wide list of registered cases.
+/// @return the registry, in registration order
 inline std::vector<Benchmark>& registry() {
     static std::vector<Benchmark> bench_list;
     return bench_list;
 }
 
+/// @brief Registers a case.
+/// @param[in] name  case name, matched by `--benchmark_filter`, `--backend` and `--type`
+/// @param[in] func  function run once per argument list and condition target
+/// @return the new case, for adding argument lists; valid until the next registration
 inline Benchmark* RegisterBenchmark(const std::string& name, BenchFunc func) {
     registry().emplace_back(name, std::move(func));
     return &registry().back();
 }
 
+/// @brief Mean, 95th percentile and maximum of one metric over the finite samples.
+///
+/// The percentile is the value at 0-based index \f$\lceil 0.95 \, (n - 1) \rceil\f$ of the
+/// \f$n\f$ finite values sorted ascending.
+/// @param[in] rows         recorded samples
+/// @param[in] metric_name  metric to summarise; a row without it counts as NaN
+/// @return the summary; mean, p95 and max are NaN when no sample is finite
 inline MetricSummary summarize_metric(const std::vector<SampleRow>& rows,
                                       const std::string& metric_name) {
     MetricSummary out;
@@ -286,6 +360,13 @@ inline MetricSummary summarize_metric(const std::vector<SampleRow>& rows,
     return out;
 }
 
+/// @brief Runs one case on one argument list and condition target and summarises every metric.
+/// @param[in] b                  the case
+/// @param[in] args               its argument list
+/// @param[in] cfg                run-wide settings
+/// @param[in] target_log10_cond  requested \f$\log_{10} \kappa\f$, or NaN
+/// @param[in] keep_samples       keep the per-sample rows in Result::sample_rows (for the CSV)
+/// @return the result
 inline Result run_benchmark(const Benchmark& b,
                             const std::vector<double>& args,
                             const Config& cfg,
@@ -328,6 +409,12 @@ inline Result run_benchmark(const Benchmark& b,
     return res;
 }
 
+/// @brief Whether a case passes the command-line filters; an empty filter passes everything.
+/// @param[in] b                 the case
+/// @param[in] benchmark_filter  glob on the case name, with `*` and `?` wildcards
+/// @param[in] backends          backend names; the name must contain `Backend::<name>` for one of them
+/// @param[in] types             `float`, `double`, `cfloat` / `complex<float>`, `cdouble` / `complex<double>`
+/// @return true if all three filters pass
 inline bool match_filter(const Benchmark& b,
                          const std::string& benchmark_filter,
                          const std::vector<std::string>& backends,
@@ -395,6 +482,9 @@ inline bool match_filter(const Benchmark& b,
     return true;
 }
 
+/// @brief Formats a summary cell with 6 significant digits.
+/// @param[in] v  the value
+/// @return the text, or an empty string for a non-finite @p v
 inline std::string format_value(double v) {
     if (!std::isfinite(v)) return "";
     std::ostringstream oss;
@@ -402,6 +492,10 @@ inline std::string format_value(double v) {
     return oss.str();
 }
 
+/// @brief Mean of the first of @p keys with a finite mean in @p r.
+/// @param[in] r     a result
+/// @param[in] keys  metric names in order of preference (aliases of one quantity)
+/// @return the mean, or NaN when none is finite
 inline double metric_mean_or_nan(const Result& r,
                                  const std::initializer_list<const char*>& keys) {
     for (const char* k : keys) {
@@ -427,11 +521,18 @@ struct SummaryMetricColumns {
     bool show_residual_ratio = false;
 };
 
+/// @brief Whether @p r has a finite mean for one of @p keys.
+/// @param[in] r     a result
+/// @param[in] keys  metric names (aliases of one quantity)
+/// @return true if metric_mean_or_nan() is finite
 inline bool has_any_metric(const Result& r,
                            const std::initializer_list<const char*>& keys) {
     return std::isfinite(metric_mean_or_nan(r, keys));
 }
 
+/// @brief Chooses the optional summary columns: those with a finite mean in at least one result.
+/// @param[in] results  all results of the run
+/// @return the column flags
 inline SummaryMetricColumns detect_summary_columns(const std::vector<Result>& results) {
     SummaryMetricColumns cols;
     for (const auto& r : results) {
@@ -450,6 +551,10 @@ inline SummaryMetricColumns detect_summary_columns(const std::vector<Result>& re
     return cols;
 }
 
+/// @brief Prints the summary table's header line to `std::cout`.
+/// @param[in] name_width  width of the name column
+/// @param[in] max_args    number of argument columns
+/// @param[in] cols        optional columns to print
 inline void print_summary_header(size_t name_width,
                                  size_t max_args,
                                  const SummaryMetricColumns& cols) {
@@ -477,6 +582,11 @@ inline void print_summary_header(size_t name_width,
     std::cout << kColorReset << '\n';
 }
 
+/// @brief Prints one result as a summary table row to `std::cout`.
+/// @param[in] r           the result
+/// @param[in] name_width  width of the name column
+/// @param[in] max_args    number of argument columns; missing arguments print empty
+/// @param[in] cols        optional columns to print, as for print_summary_header()
 inline void print_summary_row(const Result& r,
                               size_t name_width,
                               size_t max_args,
@@ -521,6 +631,11 @@ inline void print_summary_row(const Result& r,
     std::cout << '\n';
 }
 
+/// @brief Writes one CSV row per kept sample: name, arguments, target, status, tags, metrics.
+///
+/// On an open failure prints a message to `std::cerr` and writes nothing.
+/// @param[in] path     output file; overwritten
+/// @param[in] results  results run with `keep_samples`; only their Result::sample_rows are written
 inline void write_samples_csv(const std::string& path,
                               const std::vector<Result>& results) {
     std::ofstream f(path);
@@ -589,6 +704,14 @@ inline void write_samples_csv(const std::string& path,
     }
 }
 
+/// @brief Runs every matching case on each argument list and condition target, prints the summary, writes the CSV.
+/// @param[in] cfg               run-wide settings; an empty Config::log10_cond_values runs one NaN target
+/// @param[in] csv_path          per-sample CSV file; empty writes none and drops the samples
+/// @param[in] benchmark_filter  glob on case names, see match_filter()
+/// @param[in] backends          backend filter, see match_filter()
+/// @param[in] types             scalar-type filter, see match_filter()
+/// @param[in] args_override     argument lists to run instead of each case's own; empty keeps them
+/// @return 0
 inline int RunRegisteredBenchmarks(const Config& cfg,
                                    const std::string& csv_path,
                                    const std::string& benchmark_filter,
@@ -656,6 +779,13 @@ struct CliOptions {
     bool help_requested = false;
 };
 
+/// @brief Parses the miniacc command line; positional arguments combine as a Cartesian product.
+///
+/// On `--help` / `-h` prints usage to `std::cout` and returns with CliOptions::help_requested set.
+/// @param[in] argc  argument count, as passed to `main`
+/// @param[in] argv  argument vector, as passed to `main`; `argv[0]` is skipped
+/// @return the parsed options
+/// @throws std::invalid_argument or std::out_of_range on a value that is not a representable number (from `std::stod` / `std::stoul`)
 inline CliOptions ParseCommandLine(int argc, char** argv) {
     CliOptions opt;
     std::vector<std::vector<double>> arg_values;
@@ -715,6 +845,8 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
 }
 
 /// @brief Parses the command line and runs every registered case that matches; the body of MINI_ACC_MAIN().
+/// @param[in] argc  argument count, as passed to `main`
+/// @param[in] argv  argument vector, as passed to `main`
 /// @return 0, including after `--help`
 /// @ingroup api_internal_helpers
 inline int MiniAccMain(int argc, char** argv) {

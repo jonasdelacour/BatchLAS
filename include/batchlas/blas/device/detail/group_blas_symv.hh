@@ -7,6 +7,9 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Value of the mirrored entry \f$a_{ji}\f$ given the stored \f$a_{ij}\f$: conjugated when `Tag::hermitian`.
+/// @param[in] value  stored entry \f$a_{ij}\f$
+/// @return \f$\bar{a}_{ij}\f$ for a Hermitian `Tag`, else \f$a_{ij}\f$
 template <typename Tag, typename T>
 inline constexpr T symmetric_mirror(const T& value) {
     if constexpr (Tag::hermitian) {
@@ -23,11 +26,19 @@ struct SymvTransposeWorkspace {
     T x_row[kTile];
 };
 
+/// @brief Linear index of entry (`row`, `col`) in the padded local-memory tile of SymvTransposeWorkspace.
+/// @param[in] row  row within the tile, \f$0 \le \mathrm{row} < 16\f$
+/// @param[in] col  column within the tile, \f$0 \le \mathrm{col} < 16\f$
+/// @return offset into `SymvTransposeWorkspace<T>::matrix`; rows are padded by one element to avoid bank conflicts
 template <typename T>
 inline constexpr int symv_transpose_tile_index(int row, int col) {
     return row * (SymvTransposeWorkspace<T>::kTile + 1) + col;
 }
 
+/// @brief Whether `policy` and the group size admit the local-memory tiled symv path.
+/// @param[in] group   executor or DeviceBlasLaunchInfo whose local linear range is checked
+/// @param[in] policy  requested device-BLAS policy; `Generic` always rejects the tiled path
+/// @return true when the group has at least 16 work-items (32 under `Subgroup32`) and the policy is not `Generic`
 template <typename Group>
 inline constexpr bool symv_tiled_policy_matches(const Group& group, DeviceBlasPolicy policy) {
     const int local_size = detail::group_local_linear_range(group);
@@ -43,6 +54,11 @@ inline constexpr bool symv_tiled_policy_matches(const Group& group, DeviceBlasPo
     return local_size >= 16;
 }
 
+/// @brief Whether the local-memory tiled symv path can run for matrix `a`.
+/// @param[in] group   executor whose local linear range is checked
+/// @param[in] a       the symmetric matrix \f$A\f$; only its extents are read
+/// @param[in] policy  requested device-BLAS policy
+/// @return true when symv_tiled_policy_matches() holds and \f$A\f$ is at least \f$16 \times 16\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr bool can_use_tiled_symv(const Group& group,
                                          const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -52,6 +68,11 @@ inline constexpr bool can_use_tiled_symv(const Group& group,
         a.cols() >= SymvTransposeWorkspace<T>::kTile;
 }
 
+/// @brief Whether the local-memory tiled symv path can run for a matrix of order `extent`.
+/// @param[in] group   executor or DeviceBlasLaunchInfo whose local linear range is checked
+/// @param[in] extent  order \f$n\f$ of the matrix
+/// @param[in] policy  requested device-BLAS policy
+/// @return true when symv_tiled_policy_matches() holds and \f$n \ge 16\f$
 template <typename T, typename Group>
 inline constexpr bool can_use_tiled_symv(const Group& group,
                                          int extent,
@@ -60,6 +81,14 @@ inline constexpr bool can_use_tiled_symv(const Group& group,
         extent >= SymvTransposeWorkspace<T>::kTile;
 }
 
+/// @brief Tiled symmetric matrix-vector product staging \f$16 \times 16\f$ blocks of \f$A\f$ through local memory.
+///
+/// Each off-diagonal block is read once and used for both its own and its mirrored contribution.
+/// @param[in]     group          executor whose work-items share the product; every work-item must call
+/// @param[in]     a              single \f$n \times n\f$ symmetric matrix; only the `Tag::uplo` triangle is read
+/// @param[in,out] operand        `x` (read), `y` (scaled by \f$\beta\f$, then accumulated into),
+///                               \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace_ptr  local memory holding a SymvTransposeWorkspace; contents undefined on return
 template <typename Tag, typename Group, typename T>
 inline void symv_tiled(const Group& group,
                        const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -179,6 +208,10 @@ inline void symv_tiled(const Group& group,
     }
 }
 
+/// @brief Generic symmetric matrix-vector product, one column of the stored triangle at a time; no operand checks.
+/// @param[in]     group    executor whose work-items share the product; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ symmetric matrix; only the `Tag::uplo` triangle is read
+/// @param[in,out] operand  `x` (read), `y` (scaled by \f$\beta\f$, then accumulated into), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -222,6 +255,10 @@ inline constexpr void symv(const Group& group,
 
 namespace detail {
 
+/// @brief Local memory, in elements of `T`, that dispatch_symv() can use for `Tag` and `Policy`.
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] extent  order \f$n \ge 0\f$ of the matrix
+/// @return element count of a SymvTransposeWorkspace, or 0 when the tiled path cannot run
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
@@ -232,6 +269,12 @@ inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo&
     return 0;
 }
 
+/// @brief Validates the operands of a symmetric or Hermitian matrix-vector product, then picks the tiled or generic path.
+/// @param[in]     group      executor whose work-items share the product; every work-item must call
+/// @param[in]     a          single \f$n \times n\f$ symmetric matrix; only the `Tag::uplo` triangle is read
+/// @param[in,out] operand    `x` (read), `y` (overwritten with \f$\alpha A x + \beta y\f$), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local memory of symv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <typename Tag, DeviceBlasPolicy Policy, typename Group, typename T>
 inline void dispatch_symv(const Group& group,
                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -254,15 +297,18 @@ inline void dispatch_symv(const Group& group,
 
 /// @brief Symmetric matrix-vector product \f$ y := \alpha\,A\,x + \beta\,y \f$, reading only the `UploV` triangle of `A`.
 ///
-/// With a workspace, a non-`Generic` policy, at least 16 work-items and
-/// n >= 16, 16 x 16 blocks of `A` are staged through local memory and each
+/// With a workspace, a non-`Generic` policy, at least 16 work-items (32 under
+/// DeviceBlasPolicy::Subgroup32) and \f$n \ge 16\f$, \f$16 \times 16\f$ blocks of `A` are staged through local memory and each
 /// off-diagonal block is used for both its own and its mirrored contribution.
 /// @tparam UploV  stored triangle of `A`
 /// @tparam Group  `sycl::group` or `sycl::sub_group` (the tiled path barriers on it); every work-item must call
-/// @param group      executor
-/// @param a          single n x n matrix
-/// @param operand    `x`, `y` (each of length at least n), `alpha`, `beta`
-/// @param workspace  local memory of symv_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor whose work-items share the product
+/// @param[in]     a          single \f$n \times n\f$ symmetric matrix; only the `UploV` triangle is read
+/// @param[in,out] operand    `x`, `y` (each of length at least \f$n\f$), \f$\alpha\f$, \f$\beta\f$;
+///                           `x`, `alpha` and `beta` are read, `y` is overwritten with
+///                           \f$\alpha A x + \beta y\f$
+/// @param[out]    workspace  local memory of symv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 /// @pre `y` holds finite values even when `beta == 0`; `y` does not alias `x`.
 /// @see hemv(), @ref design_device_group_blas
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
@@ -274,6 +320,12 @@ inline constexpr void symv(const Group& group,
 }
 
 /// @brief As symv(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor whose work-items share the product
+/// @param[in]     a          single \f$n \times n\f$ symmetric matrix; only the `UploV` triangle is read
+/// @param[in,out] operand    `x`, `y` (each of length at least \f$n\f$), \f$\alpha\f$, \f$\beta\f$;
+///                           `y` is overwritten with \f$\alpha A x + \beta y\f$
+/// @param[out]    workspace  local memory of symv_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -283,8 +335,8 @@ inline constexpr void symv(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that symv() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] extent  order \f$n \ge 0\f$ of the matrix
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper>
@@ -294,8 +346,8 @@ inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that symv() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] extent  order \f$n \ge 0\f$ of the matrix
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
@@ -305,6 +357,15 @@ inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As symv(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor whose work-items share the product
+/// @param[in]     a          single \f$n \times n\f$ symmetric matrix; only the `UploV` triangle is read
+/// @param[in]     x          single vector of length at least \f$n\f$; must not alias `y`
+/// @param[in,out] y          single vector of length at least \f$n\f$, overwritten with
+///                           \f$\alpha A x + \beta y\f$; must hold finite values even when \f$\beta = 0\f$
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A x\f$
+/// @param[in]     beta       scale \f$\beta\f$ of the incoming `y`
+/// @param[out]    workspace  local memory of symv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -317,6 +378,15 @@ inline constexpr void symv(const Group& group,
 }
 
 /// @brief As symv(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor whose work-items share the product
+/// @param[in]     a          single \f$n \times n\f$ symmetric matrix; only the `UploV` triangle is read
+/// @param[in]     x          single vector of length at least \f$n\f$; must not alias `y`
+/// @param[in,out] y          single vector of length at least \f$n\f$, overwritten with
+///                           \f$\alpha A x + \beta y\f$; must hold finite values even when \f$\beta = 0\f$
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A x\f$
+/// @param[in]     beta       scale \f$\beta\f$ of the incoming `y`
+/// @param[out]    workspace  local memory of symv_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -332,10 +402,12 @@ inline constexpr void symv(const Group& group,
 ///
 /// For real `T` this is exactly symv(). The diagonal is read as stored; its
 /// imaginary part is not forced to zero.
-/// @param group      executor (`sycl::group` or `sycl::sub_group`)
-/// @param a          single n x n matrix, `UploV` triangle read
-/// @param operand    `x`, `y`, `alpha`, `beta`
-/// @param workspace  local memory of hemv_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor (`sycl::group` or `sycl::sub_group`); every work-item must call
+/// @param[in]     a          single \f$n \times n\f$ Hermitian matrix; only the `UploV` triangle is read
+/// @param[in,out] operand    `x`, `y` (each of length at least \f$n\f$), \f$\alpha\f$, \f$\beta\f$;
+///                           `y` is overwritten with \f$\alpha A x + \beta y\f$
+/// @param[out]    workspace  local memory of hemv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -345,6 +417,12 @@ inline constexpr void hemv(const Group& group,
 }
 
 /// @brief As hemv(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor (`sycl::group` or `sycl::sub_group`); every work-item must call
+/// @param[in]     a          single \f$n \times n\f$ Hermitian matrix; only the `UploV` triangle is read
+/// @param[in,out] operand    `x`, `y` (each of length at least \f$n\f$), \f$\alpha\f$, \f$\beta\f$;
+///                           `y` is overwritten with \f$\alpha A x + \beta y\f$
+/// @param[out]    workspace  local memory of hemv_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -354,8 +432,8 @@ inline constexpr void hemv(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that hemv() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] extent  order \f$n \ge 0\f$ of the matrix
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper>
@@ -365,8 +443,8 @@ inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that hemv() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
+/// @param[in] launch  description of the launch the call runs in
+/// @param[in] extent  order \f$n \ge 0\f$ of the matrix
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
@@ -376,6 +454,15 @@ inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As hemv(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor (`sycl::group` or `sycl::sub_group`); every work-item must call
+/// @param[in]     a          single \f$n \times n\f$ Hermitian matrix; only the `UploV` triangle is read
+/// @param[in]     x          single vector of length at least \f$n\f$; must not alias `y`
+/// @param[in,out] y          single vector of length at least \f$n\f$, overwritten with
+///                           \f$\alpha A x + \beta y\f$; must hold finite values even when \f$\beta = 0\f$
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A x\f$
+/// @param[in]     beta       scale \f$\beta\f$ of the incoming `y`
+/// @param[out]    workspace  local memory of hemv_workspace_elements() elements, or `nullptr`;
+///                           contents undefined on return
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -388,6 +475,15 @@ inline constexpr void hemv(const Group& group,
 }
 
 /// @brief As hemv(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor (`sycl::group` or `sycl::sub_group`); every work-item must call
+/// @param[in]     a          single \f$n \times n\f$ Hermitian matrix; only the `UploV` triangle is read
+/// @param[in]     x          single vector of length at least \f$n\f$; must not alias `y`
+/// @param[in,out] y          single vector of length at least \f$n\f$, overwritten with
+///                           \f$\alpha A x + \beta y\f$; must hold finite values even when \f$\beta = 0\f$
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A x\f$
+/// @param[in]     beta       scale \f$\beta\f$ of the incoming `y`
+/// @param[out]    workspace  local memory of hemv_workspace_elements() elements for `Policy`,
+///                           or `nullptr`; contents undefined on return
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,

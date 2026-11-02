@@ -7,6 +7,11 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic element-wise n-ary map \f$ z_i := \mathrm{op}(u_i, v_i, \ldots) \f$; no operand checks.
+/// @param[in]  group   executor whose work-items share the elements
+/// @param[out] z       output vector, overwritten with \f$\mathrm{op}\f$ applied element-wise
+/// @param[in]  op      the element-wise function, taking one `T` per input
+/// @param[in]  inputs  input vectors, each of at least `z.size()` elements
 template <typename Group, typename T, typename Op, typename... Inputs>
 inline constexpr void hadamard(const Group& group,
                                const VectorView<T>& z,
@@ -27,9 +32,9 @@ inline constexpr void hadamard(const Group& group,
 
 /// @brief \f$ y := x \f$, cooperatively across `group`.
 /// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group  executor whose work-items share the elements
-/// @param x      input vector
-/// @param y      output vector
+/// @param[in] group  executor whose work-items share the elements
+/// @param[in] x      source vector of length \f$n\f$
+/// @param[out] y     destination vector of length \f$n\f$; overwritten with \f$x\f$
 /// @pre `x.size() == y.size()`; both single vectors (`batch_size() == 1`). Checked by `assert` only.
 template <typename Group, typename T>
 inline constexpr void copy(const Group& group,
@@ -45,9 +50,9 @@ inline constexpr void copy(const Group& group,
 }
 
 /// @brief \f$ y := \bar{x} \f$ (a plain copy for real `T`).
-/// @param group  executor whose work-items share the elements
-/// @param x      input vector
-/// @param y      output vector
+/// @param[in] group  executor whose work-items share the elements
+/// @param[in] x      source vector of length \f$n\f$
+/// @param[out] y     destination vector of length \f$n\f$; overwritten with \f$\bar{x}\f$
 /// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr void copyc(const Group& group,
@@ -63,9 +68,9 @@ inline constexpr void copyc(const Group& group,
 }
 
 /// @brief \f$ x := \alpha\,x \f$.
-/// @param group  executor whose work-items share the elements
-/// @param x      vector scaled in place
-/// @param alpha  scale
+/// @param[in] group   executor whose work-items share the elements
+/// @param[in,out] x   vector scaled in place
+/// @param[in] alpha   scale factor \f$\alpha\f$
 template <typename Group, typename T>
 inline constexpr void scal(const Group& group,
                            const VectorView<T>& x,
@@ -80,10 +85,10 @@ inline constexpr void scal(const Group& group,
 }
 
 /// @brief \f$ y := \alpha\,x + y \f$.
-/// @param group  executor whose work-items share the elements
-/// @param x      input vector
-/// @param y      vector updated in place
-/// @param alpha  scale of `x`
+/// @param[in] group   executor whose work-items share the elements
+/// @param[in] x       input vector of length \f$n\f$
+/// @param[in,out] y   vector of length \f$n\f$; overwritten with \f$\alpha\,x + y\f$
+/// @param[in] alpha   scale \f$\alpha\f$ of `x` (default 1)
 /// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr void axpy(const Group& group,
@@ -100,10 +105,10 @@ inline constexpr void axpy(const Group& group,
 }
 
 /// @brief Element-wise product \f$ z_i := x_i\,y_i \f$.
-/// @param group  executor whose work-items share the elements
-/// @param x      first factor
-/// @param y      second factor
-/// @param z      output; may alias `x` or `y`
+/// @param[in] group  executor whose work-items share the elements
+/// @param[in] x      first factor, length \f$n\f$
+/// @param[in] y      second factor, length \f$n\f$
+/// @param[out] z     output of length \f$n\f$, overwritten with the product; may alias `x` or `y`
 /// @pre all three vectors have the same size.
 template <typename Group, typename T>
 inline constexpr void hadamard(const Group& group,
@@ -116,10 +121,10 @@ inline constexpr void hadamard(const Group& group,
 /// @brief Element-wise n-ary map \f$ z_i := \mathrm{op}(u_i, v_i, \ldots) \f$.
 /// @tparam Op      callable taking one `T` per input and returning `T`; must be device-callable
 /// @tparam Inputs  one or more `VectorView<T>`
-/// @param group   executor whose work-items share the elements
-/// @param z       output vector
-/// @param op      the element-wise function
-/// @param inputs  input vectors, each of `z.size()`
+/// @param[in] group   executor whose work-items share the elements
+/// @param[out] z      output vector, overwritten with \f$\mathrm{op}\f$ applied element-wise
+/// @param[in] op      the element-wise function
+/// @param[in] inputs  input vectors, each of `z.size()`
 template <typename Group, typename T, typename Op, typename... Inputs>
     requires(sizeof...(Inputs) > 0 && (detail::VectorOperandFor<T, Inputs> && ...))
 inline constexpr void hadamard(const Group& group,
@@ -131,9 +136,9 @@ inline constexpr void hadamard(const Group& group,
 }
 
 /// @brief Unconjugated dot product \f$ \sum_i x_i\,y_i \f$.
-/// @param group  executor whose work-items share the elements
-/// @param x      first vector
-/// @param y      second vector
+/// @param[in] group  executor whose work-items share the elements
+/// @param[in] x      first vector, length \f$n\f$
+/// @param[in] y      second vector, length \f$n\f$
 /// @return the group-wide sum, on every work-item of `group`
 /// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
@@ -153,9 +158,9 @@ inline constexpr T dotu(const Group& group,
 }
 
 /// @brief Conjugated dot product \f$ \sum_i \bar{x}_i\,y_i \f$ (dotu for real `T`).
-/// @param group  executor whose work-items share the elements
-/// @param x      conjugated vector
-/// @param y      second vector
+/// @param[in] group  executor whose work-items share the elements
+/// @param[in] x      conjugated vector, length \f$n\f$
+/// @param[in] y      second vector, length \f$n\f$
 /// @return the group-wide sum, on every work-item of `group`
 /// @pre `x.size() == y.size()`.
 template <typename Group, typename T>

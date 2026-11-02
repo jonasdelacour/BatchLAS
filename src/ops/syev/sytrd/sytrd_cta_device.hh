@@ -38,8 +38,8 @@ namespace batchlas {
         }
     }
 
-    // DLARFG over a partition: alpha lives in lane alpha_lane, x in the others (inactive lanes
-    // pass 0). Overwrites alpha with beta and x with the scaled v (implicit 1); returns tau.
+    // DLARFG over a partition: \f$\alpha\f$ lives in lane alpha_lane, x in the others (inactive lanes
+    // pass 0). Overwrites \f$\alpha\f$ with \f$\beta\f$ and x with the scaled v (implicit 1); returns \f$\tau\f$.
     template <typename T, typename Partition>
     inline T larfg_small(const Partition& part,
                          int32_t len,
@@ -80,11 +80,11 @@ namespace batchlas {
         return tau;
     }
 
-    // SYTD2 on the UPPER triangle of a partition-resident P x P tile (column-major, LDA), which
+    // SYTD2 on the UPPER triangle of a partition-resident \f$P \times P\f$ tile (column-major, LDA), which
     // must hold the full Hermitian matrix zero-padded past n; V_local/W_local are length-P
     // scratch. Leaves {s,d}sytd2 / {c,z}hetd2 packing: d(i) = A[i,i], e(i) = A[i,i+1], reflector
-    // i in rows 0..i-1 of column i+1. Returns this lane's tau(lane) (zero for lane >= n-1).
-    // Step k touches only the leading k x k block, so column k is final once step k has run.
+    // i in rows 0..i-1 of column i+1. Returns this lane's \f$\tau(\mathrm{lane})\f$ (zero for \f$\mathrm{lane} \ge n-1\f$).
+    // Step k touches only the leading \f$k \times k\f$ block, so column k is final once step k has run.
     template <typename T, int32_t LDA, typename LocalPtr, typename Partition>
     inline T sytd2_cta_upper_partition(const Partition& part,
                                        LocalPtr A_local,
@@ -94,7 +94,7 @@ namespace batchlas {
                                        int32_t lane) {
         T tau_lane = T(0);
 
-        // Step k annihilates A(0:k-2, k); [x; alpha] is column k, rows 0..k-1.
+        // Step k annihilates A(0:k-2, k); \f$[x; \alpha]\f$ is column k, rows 0..k-1.
         for (int32_t k = n - 1; k >= 1; --k) {
             const int32_t m = k;
             const int32_t alpha_row = k - 1;
@@ -142,7 +142,7 @@ namespace batchlas {
                 }
                 group_barrier(part);
 
-                // DSYTD2: x = tau*A*v, w = x - (tau/2)(v^H x) v, A -= v w^H + w v^H.
+                // DSYTD2: \f$x = \tau A v\f$, \f$w = x - (\tau/2)(v^H x) v\f$, \f$A \mathrel{-}= v w^H + w v^H\f$.
                 T y = T(0);
                 if (lane < m) {
                     for (int32_t c = 0; c < m; ++c) {

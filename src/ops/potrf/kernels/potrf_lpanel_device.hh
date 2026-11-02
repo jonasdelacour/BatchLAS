@@ -2,7 +2,7 @@
 #pragma once
 
 // The native batched POTRF LPANEL kernel: LEFT-LOOKING, thread-per-row. Local memory holds
-// one `n x NB` panel, not the matrix; the columns to its left are re-read from global memory.
+// one \f$n \times NB\f$ panel, not the matrix; the columns to its left are re-read from global memory.
 // Four invariants a maintainer can silently break. (1) EVERY barrier is a WORK-GROUP barrier
 // at the top level, outside the `if` guarding its phase, and failure is a predicated skip,
 // never a `break` -- the schedule is then a function of (n, NB) alone, which is what makes
@@ -71,7 +71,7 @@ BATCHLAS_UNROLL_FULL
             const int kb = ((j - k) < NB) ? (j - k) : NB;
 
             // Out-of-range entries are ZEROED, not skipped: the FMA loop below is then a
-            // fully unrolled NB x NB with no inner bound test.
+            // fully unrolled \f$NB \times NB\f$ with no inner bound test.
             for (int e = tid; e < NB * NB; e += L) {
                 const int i = e % NB;
                 const int kk = e / NB;

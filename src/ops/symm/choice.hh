@@ -30,7 +30,7 @@ inline constexpr select::OpSpec spec{Op::symm, select::Lib::level3, {last_resort
 /// Keys: form exact (the transcribed squareish test as an axis); m, n: C's extents; batch. Side is no key (never read).
 inline constexpr std::array<std::string_view, 4> key_names{"form:exact", "m:log", "n:log", "batch:log"};
 
-/// sq if 2 min >= max, else tall (a > 2b) or wide: the transcribed squareish ratio as an exact key.
+/// sq if \f$2 \min \ge \max\f$, else tall (\f$a > 2b\f$) or wide: the transcribed squareish ratio as an exact key.
 inline std::string_view form_of(std::int64_t a, std::int64_t b) {
     return 2 * std::min(a, b) >= std::max(a, b) ? "sq" : (a > 2 * b ? "tall" : "wide");
 }

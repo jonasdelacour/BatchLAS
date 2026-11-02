@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Batched GEMM for orders <= 64: several matrices per work-group, op(B) staged in local
+// Batched GEMM for orders \f$\le 64\f$: several matrices per work-group, op(B) staged in local
 // memory, each lane holding one row of op(A) in registers and a column strip of C.
 // Lanes run DOWN the rows, so the A loads and the C stores are coalesced; Direct runs
 // them across columns, ld apart. evidence: docs/perf/gemm.md#the-small-batched-kernel
@@ -32,10 +32,10 @@ class GemmSmallBatchedKernel;
 
 inline constexpr int kSmallWg = 128;
 
-// The largest order the kernel serves; max(m, n, k) picks the bucket.
+// The largest order the kernel serves; \f$\max(m, n, k)\f$ picks the bucket.
 inline constexpr int kSmallMaxDim = 64;
 
-// A 16-byte scalar stops at 32: its 64 bucket stages 64 x 65 x 16 B = 66.5 KB and holds a
+// A 16-byte scalar stops at 32: its 64 bucket stages \f$64 \times 65 \times 16\f$ B = 66.5 KB and holds a
 // 64-entry row plus 32 accumulators, 384 registers. choice.hh's small_max_dim mirrors it.
 template <typename T>
 inline constexpr int kSmallMaxDimFor = sizeof(T) >= 16 ? 32 : kSmallMaxDim;
@@ -111,7 +111,7 @@ Event launch_small_batched(Queue& ctx,
                 const D* const Bb = b_ptr + bi * sb;
 
                 // Row r of op(A), unrolled so the array stays in registers. A transposed A is
-                // stored k x m, so a lane's row is a stored column, lda from its neighbours':
+                // stored \f$k \times m\f$, so a lane's row is a stored column, lda from its neighbours':
                 // it goes through sB in storage order (coalesced) as sB[r + l * kLdb], and the
                 // second barrier keeps it there until every lane of the slot has read its row.
                 D a[NB];
@@ -136,7 +136,7 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 // op(B) into sB[l + c * kLdb], walked in STORAGE order so the global
-                // read is coalesced either way; zero outside k x n.
+                // read is coalesced either way; zero outside \f$k \times n\f$.
                 for (int e = tt; e < NB * NB; e += kTpm) {
                     const int s0 = e % NB, s1 = e / NB;
                     const int l = tb ? s1 : s0;
@@ -193,11 +193,11 @@ BATCHLAS_UNROLL_FULL
 template <typename T, int NB, bool PrefetchC>
 class GemmSmallTiledKernel;
 
-// NN, 32 < max(m, n, k) <= kSmallTiledMaxDim: one matrix per work-group, A
+// NN, \f$32 < \max(m, n, k) \le\f$ kSmallTiledMaxDim: one matrix per work-group, A
 // ([k][m]) and B (as stored) both staged in local memory, and a 4x4 register
 // tile of C per lane, so an FMA costs 1/8 of a shared load instead of one.
-// With beta != 0 the lane reads its C tile BEFORE the barrier so that latency
-// overlaps the staging; at beta == 0 that prefetch is compiled out, because
+// With \f$\beta \ne 0\f$ the lane reads its C tile BEFORE the barrier so that latency
+// overlaps the staging; at \f$\beta = 0\f$ that prefetch is compiled out, because
 // its registers cost more than it saves. evidence: docs/perf/gemm.md#the-small-tiled-kernel
 inline constexpr int kSmallTiledMaxDim = 56;
 template <int NB>

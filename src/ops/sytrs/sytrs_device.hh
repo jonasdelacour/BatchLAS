@@ -1,7 +1,7 @@
 #pragma once
 
 // LAPACK ?sytrs2 on device: the factor is first converted (?syconv: each step's interchange applied
-// to the earlier columns of L, the 2 x 2 off-diagonals moved out), after which A = P L D L^T P^T with
+// to the earlier columns of L, the \f$2 \times 2\f$ off-diagonals moved out), after which \f$A = P L D L^{T} P^{T}\f$ with
 // L unit lower and P one permutation. Logical lower form throughout (sytrf_device.hh's reversal).
 // The fused tiers solve one right-hand side per sub-group with lane i owning logical rows i, i + 32,
 // ... in registers: the gather, both sweeps (broadcast form, no reduction) and the scatter take no
@@ -15,11 +15,11 @@
 
 namespace batchlas::sytrf_device {
 
-// The staged factor in local memory, logical indices. `ps` is the logical ipiv: +(p + 1) a 1 x 1
-// step with partner p, -(p + 1) both rows of a 2 x 2 step whose second row is swapped with p, 0
-// for an entry sytrf cannot have written. `perm[t]`: the row of B that P^T brings to row t.
-// `kind[t]`: 0 a 1 x 1 block, 1 / 2 the first / second row of a 2 x 2 block. `e[k]`: the
-// off-diagonal of the 2 x 2 block starting at k.
+// The staged factor in local memory, logical indices. `ps` is the logical ipiv: +(p + 1) a \f$1 \times 1\f$
+// step with partner p, -(p + 1) both rows of a \f$2 \times 2\f$ step whose second row is swapped with p, 0
+// for an entry sytrf cannot have written. `perm[t]`: the row of B that \f$P^{T}\f$ brings to row t.
+// `kind[t]`: 0 a \f$1 \times 1\f$ block, 1 / 2 the first / second row of a \f$2 \times 2\f$ block. `e[k]`: the
+// off-diagonal of the \f$2 \times 2\f$ block starting at k.
 template <typename D>
 struct Staged {
     D* L;
@@ -39,7 +39,7 @@ inline int logical_piv(int raw, int n, bool rev) {
     return raw > 0 ? lp + 1 : -(lp + 1);
 }
 
-// ldl_solve's check: an entry out of [1, n] or an unpaired 2 x 2 entry is a list sytrf cannot write.
+// ldl_solve's check: an entry out of [1, n] or an unpaired \f$2 \times 2\f$ entry is a list sytrf cannot write.
 inline bool piv_list_valid(const int* ps, int n) {
     for (int k = 0; k < n;) {
         const int v = ps[k];
@@ -49,8 +49,8 @@ inline bool piv_list_valid(const int* ps, int n) {
     return true;
 }
 
-// ?syconv on column j: the interchanges of the steps after j, in step order (a 2 x 2 step at k
-// swaps row k + 1). The 2 x 2 off-diagonal of a block starting at j moves to e[j] (when e is set).
+// ?syconv on column j: the interchanges of the steps after j, in step order (a \f$2 \times 2\f$ step at k
+// swaps row k + 1). The \f$2 \times 2\f$ off-diagonal of a block starting at j moves to e[j] (when e is set).
 template <typename D, typename Acc>
 inline void convert_column(const Acc& L, const int* ps, int n, int j, D* e) {
     for (int k = 0; k < n;) {
@@ -86,7 +86,7 @@ inline void build_perm(const int* ps, int n, int* perm, int* kind) {
 }
 
 // Validation, conversion and the permutation for one item, `nl` lanes; `bar` is the group barrier.
-// An invalid list leaves L as staged, perm the identity and every kind 1 x 1; the caller writes NaN.
+// An invalid list leaves L as staged, perm the identity and every kind \f$1 \times 1\f$; the caller writes NaN.
 template <typename D, typename Acc, typename Bar>
 inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind, D* e, int lid, int nl, int* flag,
                         Bar&& bar) {
@@ -107,8 +107,8 @@ inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind
 }
 
 // ?syconv as a gather, for a factor in global memory: column j of W is column j of G with its rows
-// permuted by sigma_j, the interchanges after step j composed (W(t, j) = G(sigma_j(t), j), t > j).
-// Walking j down, sigma gains one interchange per block start, applied by lane 0 in O(1) through
+// permuted by \f$\sigma_j\f$, the interchanges after step j composed (\f$W(t, j) = G(\sigma_j(t), j)\f$, \f$t > j\f$).
+// Walking j down, \f$\sigma\f$ gains one interchange per block start, applied by lane 0 in \f$O(1)\f$ through
 // its inverse; every read and write of a column is then one pass instead of one swap per step.
 // kind must be build_perm's for a valid list.
 template <typename D, typename Dst, typename Src, typename Bar>
@@ -137,7 +137,7 @@ inline void convert_gather(const Dst& W, const Src& G, int n, const int* ps, con
     }
 }
 
-// Row t of D^-1 x for a block of kind kd: x is row t's value, xp its 2 x 2 partner's, dtt and dpp
+// Row t of \f$D^{-1} x\f$ for a block of kind kd: x is row t's value, xp its \f$2 \times 2\f$ partner's, dtt and dpp
 // their diagonals, off the block's off-diagonal. ?sytrs's arithmetic, so both rows of a block agree.
 template <typename D>
 inline D d_solve_row(int kd, D x, D xp, D dtt, D dpp, D off) {
@@ -161,7 +161,7 @@ inline D row_bcast(const SG& sg, const D (&x)[R], int k) {
     return batchlas::portable::group_broadcast(sg, v, k & 31);
 }
 
-// L w = y, w := D^-1 w, L^T z = w on one sub-group; x[r] holds logical row lane + 32 r. Collective.
+// \f$L w = y\f$, \f$w := D^{-1} w\f$, \f$L^{T} z = w\f$ on one sub-group; x[r] holds logical row lane + 32 r. Collective.
 template <int R, typename D, typename SG>
 inline void ldl_solve_regs(const SG& sg, int lane, const Staged<D>& S, D (&x)[R]) {
     using namespace sycl_device;

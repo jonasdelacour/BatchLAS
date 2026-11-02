@@ -99,11 +99,11 @@ using triangular_mask_into = Event(Queue&,
 /// @brief Elementwise \f$C := A \circ B\f$ for \f$\circ\f$ = Op, per batch item.
 /// @tparam T   scalar type
 /// @tparam Op  Add, Subtract, Multiply (Hadamard) or Divide
-/// @param ctx  queue the kernel is enqueued on
-/// @param A    first operand
-/// @param B    second operand, same shape and batch size as `A`
-/// @param C    output of the same shape; may alias `A` or `B`
-/// @return     event of the enqueued kernel
+/// @param[in]  ctx  queue the kernel is enqueued on
+/// @param[in]  A    first operand, a batch of \f$m \times n\f$ matrices
+/// @param[in]  B    second operand, same shape and batch size as `A`
+/// @param[out] C    result, same shape and batch size; may alias `A` or `B`
+/// @return          event of the enqueued kernel
 template <typename T, BinaryOp Op>
 BATCHLAS_API Event elementwise_into(Queue& ctx,
                                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -111,13 +111,13 @@ BATCHLAS_API Event elementwise_into(Queue& ctx,
                                     const MatrixView<T, MatrixFormat::Dense>& C);
 
 /// @brief \f$C := \alpha A + \beta B\f$, elementwise, per batch item.
-/// @param ctx    queue the kernel is enqueued on
-/// @param alpha  scale of `A`
-/// @param A      first operand
-/// @param beta   scale of `B`
-/// @param B      second operand, same shape and batch size as `A`
-/// @param C      output of the same shape; may alias `A` or `B`
-/// @return       event of the enqueued kernel
+/// @param[in]  ctx    queue the kernel is enqueued on
+/// @param[in]  alpha  scale \f$\alpha\f$ of `A`
+/// @param[in]  A      first operand, a batch of \f$m \times n\f$ matrices
+/// @param[in]  beta   scale \f$\beta\f$ of `B`
+/// @param[in]  B      second operand, same shape and batch size as `A`
+/// @param[out] C      result, same shape and batch size; may alias `A` or `B`
+/// @return            event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event axpby_into(Queue& ctx,
                               T alpha,
@@ -127,18 +127,21 @@ BATCHLAS_API Event axpby_into(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& C);
 
 /// @brief In-place scaling \f$A := \alpha A\f$.
-/// @return event of the enqueued kernel
+/// @param[in]     ctx    queue the kernel is enqueued on
+/// @param[in,out] A      batch of \f$m \times n\f$ matrices, overwritten with \f$\alpha A\f$
+/// @param[in]     alpha  scale factor \f$\alpha\f$
+/// @return               event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
 
-/// @brief \f$C :=\f$ A with everything outside the requested triangle zeroed.
-/// @param ctx   queue the kernel is enqueued on
-/// @param A     input, m x n per item
-/// @param C     output of the same shape; may alias `A`
-/// @param uplo  Upper keeps the part on and above diagonal `k`, Lower on and below
-/// @param k     diagonal offset, as NumPy `triu`/`tril`: 0 is the main diagonal,
-///              > 0 toward the upper right, < 0 toward the lower left
-/// @return      event of the enqueued kernel
+/// @brief \f$C := A\f$ with everything outside the requested triangle zeroed.
+/// @param[in]  ctx   queue the kernel is enqueued on
+/// @param[in]  A     input, a batch of \f$m \times n\f$ matrices
+/// @param[out] C     result, same shape and batch size; may alias `A`
+/// @param[in]  uplo  Upper keeps the part on and above diagonal `k`, Lower on and below
+/// @param[in]  k     diagonal offset, as NumPy `triu`/`tril`: \f$k = 0\f$ is the main diagonal,
+///                   \f$k > 0\f$ toward the upper right, \f$k < 0\f$ toward the lower left
+/// @return           event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event triangular_mask_into(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -147,6 +150,11 @@ BATCHLAS_API Event triangular_mask_into(Queue& ctx,
                                         int64_t k = 0);
 
 /// @brief \f$C := A + B\f$ elementwise; see elementwise_into().
+/// @param[in]  ctx  queue the kernel is enqueued on
+/// @param[in]  A    first operand, a batch of \f$m \times n\f$ matrices
+/// @param[in]  B    second operand, same shape and batch size as `A`
+/// @param[out] C    result, same shape and batch size; may alias `A` or `B`
+/// @return          event of the enqueued kernel
 template <typename T>
 inline Event add_into(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -156,6 +164,11 @@ inline Event add_into(Queue& ctx,
 }
 
 /// @brief \f$C := A - B\f$ elementwise; see elementwise_into().
+/// @param[in]  ctx  queue the kernel is enqueued on
+/// @param[in]  A    minuend, a batch of \f$m \times n\f$ matrices
+/// @param[in]  B    subtrahend, same shape and batch size as `A`
+/// @param[out] C    result, same shape and batch size; may alias `A` or `B`
+/// @return          event of the enqueued kernel
 template <typename T>
 inline Event subtract_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -165,6 +178,11 @@ inline Event subtract_into(Queue& ctx,
 }
 
 /// @brief \f$C := A \odot B\f$ elementwise (Hadamard), not the matrix product; see matmul().
+/// @param[in]  ctx  queue the kernel is enqueued on
+/// @param[in]  A    first factor, a batch of \f$m \times n\f$ matrices
+/// @param[in]  B    second factor, same shape and batch size as `A`
+/// @param[out] C    result, same shape and batch size; may alias `A` or `B`
+/// @return          event of the enqueued kernel
 template <typename T>
 inline Event multiply_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -174,6 +192,11 @@ inline Event multiply_into(Queue& ctx,
 }
 
 /// @brief \f$C := A \oslash B\f$ elementwise; see elementwise_into().
+/// @param[in]  ctx  queue the kernel is enqueued on
+/// @param[in]  A    dividend, a batch of \f$m \times n\f$ matrices
+/// @param[in]  B    divisor, same shape and batch size as `A`
+/// @param[out] C    result, same shape and batch size; may alias `A` or `B`
+/// @return          event of the enqueued kernel
 template <typename T>
 inline Event divide_into(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -187,12 +210,19 @@ inline Event divide_into(Queue& ctx,
 namespace detail {
 // First in every value-returning wrapper: its work copies and results carry no batch mask, so a
 // masked operand would run every item.
+/// @brief Throws when any operand carries a batch mask.
+/// @param[in] who  wrapper name, appended to `linalg::` in the error message
+/// @param[in] v    the operand views to check
+/// @throws batchlas::unsupported if any of @p v has a batch mask
 template <typename... V>
 inline void refuse_batch_mask(const char* who, const V&... v) {
     if ((v.has_batch_mask() || ...))
         throw ::batchlas::unsupported(std::string("linalg::") + who + ": batch mask not supported yet");
 }
 
+/// @brief Allocates a matrix with the shape and batch size of a view.
+/// @param[in] A  the view whose rows, columns and batch size are copied; its data is not read
+/// @return a new uninitialized batch of `A.rows()` \f$\times\f$ `A.cols()` matrices
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Dense>& A) {
     return Matrix<T, MatrixFormat::Dense>(A.rows(), A.cols(), A.batch_size());
@@ -203,6 +233,10 @@ inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Den
 /// @{
 
 /// @brief Returns a new matrix \f$A + B\f$ (elementwise).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    first operand, a batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] B    second operand, same shape and batch size as `A`; no batch mask
+/// @return         new batch of \f$m \times n\f$ matrices, readable after `ctx.wait()`
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -215,6 +249,10 @@ inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
 }
 
 /// @brief Returns a new matrix \f$A - B\f$ (elementwise).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    minuend, a batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] B    subtrahend, same shape and batch size as `A`; no batch mask
+/// @return         new batch of \f$m \times n\f$ matrices, readable after `ctx.wait()`
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -226,6 +264,10 @@ inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
 }
 
 /// @brief Returns a new matrix \f$A \odot B\f$ (Hadamard, not matmul()).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    first factor, a batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] B    second factor, same shape and batch size as `A`; no batch mask
+/// @return         new batch of \f$m \times n\f$ matrices, readable after `ctx.wait()`
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -237,6 +279,10 @@ inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
 }
 
 /// @brief Returns a new matrix \f$A \oslash B\f$ (elementwise).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    dividend, a batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] B    divisor, same shape and batch size as `A`; no batch mask
+/// @return         new batch of \f$m \times n\f$ matrices, readable after `ctx.wait()`
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -248,6 +294,10 @@ inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
 }
 
 /// @brief Returns a new matrix \f$\alpha A\f$; `A` is not modified (scale() works in place).
+/// @param[in] ctx    queue the kernel is enqueued on
+/// @param[in] A      batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] alpha  scale factor \f$\alpha\f$
+/// @return           new batch of \f$m \times n\f$ matrices, readable after `ctx.wait()`
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -272,17 +322,17 @@ inline constexpr Uplo kDefaultUplo = Uplo::Lower;
 template <typename T>
 struct MatmulOptions {
     T alpha = T(1);                                          ///< scale of the product
-    Transpose transA = Transpose::NoTrans;                   ///< op(A)
-    Transpose transB = Transpose::NoTrans;                   ///< op(B)
+    Transpose transA = Transpose::NoTrans;                   ///< \f$\mathrm{op}(A)\f$
+    Transpose transB = Transpose::NoTrans;                   ///< \f$\mathrm{op}(B)\f$
     ComputePrecision precision = ComputePrecision::Default;  ///< internal compute type
 };
 
 /// @brief Returns a new matrix \f$C = \alpha\,\mathrm{op}(A)\,\mathrm{op}(B)\f$.
-/// @param ctx   queue; supplies the backend
-/// @param A     `op(A)` is m x k per item
-/// @param B     `op(B)` is k x n per item, same batch size
-/// @param opts  alpha, transA, transB, precision
-/// @return      m x n x batch matrix, fully written once the queue is waited on
+/// @param[in] ctx   queue; supplies the backend
+/// @param[in] A     batch of matrices with \f$\mathrm{op}(A)\f$ of size \f$m \times k\f$; no batch mask
+/// @param[in] B     batch with \f$\mathrm{op}(B)\f$ of size \f$k \times n\f$, same batch size; no batch mask
+/// @param[in] opts  alpha, transA, transB, precision
+/// @return          new batch of \f$m \times n\f$ matrices, fully written once the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -304,11 +354,11 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
 }
 
 /// @brief Returns a new vector \f$y = \mathrm{op}(A)\,x\f$ per item (NumPy `matvec`).
-/// @param ctx    queue; supplies the backend
-/// @param A      `op(A)` is m x n per item
-/// @param x      length n per item, same batch size
-/// @param trans  op(A)
-/// @return       length-m vector per item (stride m), valid after the queue is waited on
+/// @param[in] ctx    queue; supplies the backend
+/// @param[in] A      batch of matrices with \f$\mathrm{op}(A)\f$ of size \f$m \times n\f$; no batch mask
+/// @param[in] x      vector of length \f$n\f$ per item, same batch size; no batch mask
+/// @param[in] trans  selects \f$\mathrm{op}(A)\f$: NoTrans (\f$A\f$), Trans (\f$A^T\f$) or ConjTrans (\f$A^H\f$)
+/// @return           vector of length \f$m\f$ per item (stride \f$m\f$), valid after the queue is waited on
 template <typename T>
 inline Vector<T> matvec(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -324,10 +374,12 @@ inline Vector<T> matvec(Queue& ctx,
 ///
 /// Real `T` runs syrk(); complex `T` runs herk(), which has no native kernel, so a
 /// complex call in a build without the vendor BLAS throws batchlas::NoRouteError.
-/// @param ctx    queue; supplies the backend
-/// @param A      m x n per item
-/// @param trans  NoTrans gives \f$AA^H\f$ (m x m); Trans or ConjTrans gives \f$A^HA\f$ (n x n)
-/// @return       new matrix, valid after the queue is waited on
+/// @param[in] ctx    queue; supplies the backend
+/// @param[in] A      batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] trans  NoTrans gives \f$AA^H\f$ (\f$m \times m\f$); Trans or ConjTrans gives
+///                   \f$A^HA\f$ (\f$n \times n\f$)
+/// @return           new batch of \f$n \times n\f$ matrices (Trans, ConjTrans; default) or
+///                   \f$m \times m\f$ (NoTrans), valid after the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> gram(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -356,11 +408,12 @@ inline Matrix<T, MatrixFormat::Dense> gram(Queue& ctx,
 ///        (Right), A triangular (SciPy `solve_triangular`); neither A nor B is modified.
 ///
 /// No status is reported: a zero diagonal entry gives infinities in that item.
-/// @param ctx   queue; supplies the backend
-/// @param A     triangular, m x m (Left) or n x n (Right) per item; only the `uplo` triangle is read
-/// @param B     m x n per item
-/// @param opts  alpha, side, uplo (default Lower), trans, diag (Unit: SciPy `unit_diagonal`)
-/// @return      new m x n x batch matrix, valid after the queue is waited on
+/// @param[in] ctx   queue; supplies the backend
+/// @param[in] A     triangular, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right) per item;
+///                  only the `uplo` triangle is read; no batch mask
+/// @param[in] B     right-hand sides, \f$m \times n\f$ per item, same batch size; no batch mask
+/// @param[in] opts  alpha, side, uplo (default Lower), trans, diag (Unit: SciPy `unit_diagonal`)
+/// @return          new batch of \f$m \times n\f$ matrices, valid after the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve_triangular(Queue& ctx,
                                                        const MatrixView<T, MatrixFormat::Dense>& A,
@@ -379,16 +432,16 @@ inline Matrix<T, MatrixFormat::Dense> solve_triangular(Queue& ctx,
 template <typename T>
 struct Cholesky {
     Matrix<T, MatrixFormat::Dense> factor;  ///< the factor in the `uplo` triangle, zeros in the other
-    /// Per-item status, as potrf(): 0 factorised, i > 0 the leading minor of order i is not
-    /// positive definite (that item's factor is incomplete). Always filled; check it.
+    /// Per-item status, as potrf(): 0 factorised, \f$i > 0\f$ the leading minor of order \f$i\f$
+    /// is not positive definite (that item's factor is incomplete). Always filled; check it.
     UnifiedVector<int32_t> info;
 };
 
 /// @brief Cholesky factor of a Hermitian positive-definite A; A is not modified.
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     n x n per item; the `uplo` triangle is read
-/// @param uplo  Lower gives \f$L\f$ with \f$A = LL^H\f$, Upper gives \f$U\f$ with \f$A = U^HU\f$
-/// @return      factor and per-item info, valid after the queue is waited on
+/// @param[in] ctx   queue; supplies the backend and the arena
+/// @param[in] A     batch of \f$n \times n\f$ matrices; the `uplo` triangle is read; no batch mask
+/// @param[in] uplo  Lower gives \f$L\f$ with \f$A = LL^H\f$, Upper gives \f$U\f$ with \f$A = U^HU\f$
+/// @return          factor and per-item info, valid after the queue is waited on
 /// @throws batchlas::invalid_argument if `A` is not square
 template <typename T>
 inline Cholesky<T> cholesky(Queue& ctx,
@@ -410,10 +463,10 @@ inline Cholesky<T> cholesky(Queue& ctx,
 /// @brief Returns the eigenvalues of a symmetric/Hermitian A, ascending per item; A is not modified.
 ///
 /// **Blocks** before returning (its internal copy of A must outlive the kernels).
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     n x n per item; the `uplo` triangle is read
-/// @param uplo  triangle of A that is read
-/// @return      real vector of `n * batch_size` values, item b at offset `b * n`
+/// @param[in] ctx   queue; supplies the backend and the arena
+/// @param[in] A     batch of \f$n \times n\f$ matrices; the `uplo` triangle is read; no batch mask
+/// @param[in] uplo  triangle of A that is read
+/// @return          real vector of `n * batch_size` values, item \f$b\f$ at offset `b * n`
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
                                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -436,17 +489,17 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
 template <typename T>
 struct Eigh {
     UnifiedVector<typename base_type<T>::type> values;  ///< ascending, `n` per batch item
-    Matrix<T, MatrixFormat::Dense> vectors;             ///< eigenvectors as columns, n x n per item
-    /// Per-item convergence status: 0 converged, > 0 LAPACK-like. Always filled;
+    Matrix<T, MatrixFormat::Dense> vectors;             ///< eigenvectors as columns, \f$n \times n\f$ per item
+    /// Per-item convergence status: 0 converged, \f$> 0\f$ LAPACK-like. Always filled;
     /// check it, since a non-converged item otherwise looks like a converged one.
     UnifiedVector<int32_t> info;
 };
 
 /// @brief Eigenvalues and eigenvectors of a symmetric/Hermitian A; A is not modified.
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     n x n per item; the `uplo` triangle is read
-/// @param uplo  triangle of A that is read
-/// @return      values, vectors and per-item info, valid after the queue is waited on
+/// @param[in] ctx   queue; supplies the backend and the arena
+/// @param[in] A     batch of \f$n \times n\f$ matrices; the `uplo` triangle is read; no batch mask
+/// @param[in] uplo  triangle of A that is read
+/// @return          values, vectors and per-item info, valid after the queue is waited on
 /// @throws batchlas::invalid_argument if `A` is not square
 template <typename T>
 inline Eigh<T> eigh(Queue& ctx,
@@ -475,18 +528,27 @@ inline Eigh<T> eigh(Queue& ctx,
 /// @brief Result of the subset forms of eigh() and eigvalsh().
 template <typename T>
 struct EighSubset {
-    /// `k` slots per batch item (item b at offset `b * k`; `k` = `iu - il + 1` for an index
-    /// range, `n` for a value range); the first `count[b]` are written, ascending unless
-    /// SyevxParams::order says otherwise. Slots past `count[b]` are not written.
+    /// \f$k\f$ slots per batch item (item \f$b\f$ at offset `b * k`; \f$k = i_u - i_l + 1\f$ for
+    /// an index range, \f$k = n\f$ for a value range); the first `count[b]` are written, ascending
+    /// unless SyevxParams::order says otherwise. Slots past `count[b]` are not written.
     UnifiedVector<typename base_type<T>::type> values;
-    /// n x k per item, the eigenvectors as columns; columns past `count[b]` are zero.
-    /// Empty (0 x 0) from eigvalsh().
+    /// \f$n \times k\f$ per item, the eigenvectors as columns; columns past `count[b]` are zero.
+    /// Empty (\f$0 \times 0\f$) from eigvalsh().
     Matrix<T, MatrixFormat::Dense> vectors;
     UnifiedVector<int32_t> count;  ///< eigenpairs found per item: `k` for an index range
     UnifiedVector<int32_t> info;   ///< per-item convergence status, as Eigh::info
 };
 
 namespace detail {
+/// @brief Shared body of the subset forms of eigh() and eigvalsh(): allocates the result and runs syevx().
+/// @param[in] ctx     queue; supplies the backend and the arena
+/// @param[in] A       batch of \f$n \times n\f$ matrices; not modified; no batch mask
+/// @param[in] subset  `SyevxSelect::Index` or `SyevxSelect::Value` range and syevx() options
+/// @param[in] jobz    JobType::EigenVectors to also fill `vectors`, JobType::NoEigenVectors for values only
+/// @return            values, vectors (empty for values only), per-item counts and info, valid after the
+///                    queue is waited on
+/// @throws batchlas::invalid_argument for `SyevxSelect::Extremal` or a non-square `A`
+/// @throws batchlas::unsupported if `A` has a batch mask
 template <typename T>
 inline EighSubset<T> eigh_subset(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
@@ -524,14 +586,14 @@ inline EighSubset<T> eigh_subset(Queue& ctx,
 
 /// @brief Eigenpairs of a symmetric/Hermitian A by index or value range (SciPy `eigh` with
 ///        `subset_by_index` / `subset_by_value`); runs syevx(). A is not modified.
-/// @param ctx     queue; supplies the backend and the arena
-/// @param A       n x n per item; the lower triangle is read
-/// @param subset  `select = SyevxSelect::Index` with `il`, `iu` (0-based, inclusive, ascending
-///                spectrum; `iu < 0` means n - 1), or `SyevxSelect::Value` with the interval
-///                (`vl`, `vu`]; `order`, `abstol` and `method` are honoured
-/// @return        values, vectors, per-item counts and info, valid after the queue is waited on
+/// @param[in] ctx     queue; supplies the backend and the arena
+/// @param[in] A       batch of \f$n \times n\f$ matrices; the lower triangle is read; no batch mask
+/// @param[in] subset  `select = SyevxSelect::Index` with `il`, `iu` (0-based, inclusive, ascending
+///                    spectrum; `iu < 0` means \f$n - 1\f$), or `SyevxSelect::Value` with the
+///                    interval \f$(v_l, v_u]\f$; `order`, `abstol` and `method` are honoured
+/// @return            values, vectors, per-item counts and info, valid after the queue is waited on
 /// @throws batchlas::invalid_argument for `SyevxSelect::Extremal`, a non-square `A`, or a range
-///         syevx() rejects (an index block outside [0, n), `vl >= vu`)
+///         syevx() rejects (an index block outside \f$[0, n)\f$, `vl >= vu`)
 template <typename T>
 inline EighSubset<T> eigh(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -540,6 +602,11 @@ inline EighSubset<T> eigh(Queue& ctx,
 }
 
 /// @brief eigh() with a subset, eigenvalues only; `vectors` is empty. Does not wait.
+/// @param[in] ctx     queue; supplies the backend and the arena
+/// @param[in] A       batch of \f$n \times n\f$ matrices; the lower triangle is read; no batch mask
+/// @param[in] subset  index or value range, as for the subset form of eigh()
+/// @return            values, per-item counts and info (empty `vectors`), valid after the queue
+///                    is waited on
 template <typename T>
 inline EighSubset<T> eigvalsh(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& A,
@@ -550,9 +617,9 @@ inline EighSubset<T> eigvalsh(Queue& ctx,
 /// @brief Result of solve() and solve_spd().
 template <typename T>
 struct Solve {
-    Matrix<T, MatrixFormat::Dense> x;  ///< the solution, n x nrhs per item
-    /// Per-item status of the factorisation: getrf's for solve() (i > 0: U(i,i) is exactly
-    /// zero), potrf's for solve_spd() (i > 0: not positive definite). That item's `x` is not
+    Matrix<T, MatrixFormat::Dense> x;  ///< the solution, \f$n \times n_{rhs}\f$ per item
+    /// Per-item status of the factorisation: getrf's for solve() (\f$i > 0\f$: \f$U_{ii}\f$ is
+    /// exactly zero), potrf's for solve_spd() (\f$i > 0\f$: not positive definite). That item's `x` is not
     /// meaningful. Always filled; a near-singular item still reports 0.
     UnifiedVector<int32_t> info;
 };
@@ -561,12 +628,12 @@ struct Solve {
 ///
 /// Neither A nor B is modified; pivots and workspace come from the arena.
 /// **Blocks** before returning (its internal copy of A must outlive the kernels).
-/// @param ctx    queue; supplies the backend and the arena
-/// @param A      n x n per item
-/// @param B      n x nrhs per item, same batch size
-/// @param trans  op(A)
-/// @return       the solution and per-item info
-/// @throws batchlas::internal_error for NoTrans when an extent (n, nrhs or batch)
+/// @param[in] ctx    queue; supplies the backend and the arena
+/// @param[in] A      batch of \f$n \times n\f$ matrices; no batch mask
+/// @param[in] B      right-hand sides, \f$n \times n_{rhs}\f$ per item, same batch size; no batch mask
+/// @param[in] trans  selects \f$\mathrm{op}(A)\f$: NoTrans (\f$A\f$), Trans (\f$A^T\f$) or ConjTrans (\f$A^H\f$)
+/// @return           the solution and per-item info
+/// @throws batchlas::internal_error for NoTrans when an extent (\f$n\f$, \f$n_{rhs}\f$ or batch)
 ///         is below 1: `gesv` has no kernel for an empty problem
 template <typename T>
 inline Solve<T> solve(Queue& ctx,
@@ -606,12 +673,12 @@ inline Solve<T> solve(Queue& ctx,
 /// claim is the caller's, and `info` reports the items where it is false.
 /// Neither A nor B is modified; the workspace comes from the arena.
 /// **Blocks** before returning (its internal copy of A must outlive the kernels).
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     n x n per item; the `uplo` triangle is read
-/// @param B     n x nrhs per item
-/// @param uplo  triangle of A that is read
-/// @return      the solution and per-item info
-/// @throws batchlas::internal_error when an extent (n, nrhs or batch) is below 1:
+/// @param[in] ctx   queue; supplies the backend and the arena
+/// @param[in] A     batch of \f$n \times n\f$ matrices; the `uplo` triangle is read; no batch mask
+/// @param[in] B     right-hand sides, \f$n \times n_{rhs}\f$ per item, same batch size; no batch mask
+/// @param[in] uplo  triangle of A that is read
+/// @return          the solution and per-item info
+/// @throws batchlas::internal_error when an extent (\f$n\f$, \f$n_{rhs}\f$ or batch) is below 1:
 ///         `posv` has no kernel for an empty problem
 template <typename T>
 inline Solve<T> solve_spd(Queue& ctx,
@@ -634,6 +701,11 @@ inline Solve<T> solve_spd(Queue& ctx,
 }
 
 /// @brief Returns a copy of A with everything below diagonal `k` zeroed (NumPy `triu`).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] k    diagonal offset: \f$k = 0\f$ is the main diagonal, \f$k > 0\f$ toward the
+///                 upper right, \f$k < 0\f$ toward the lower left
+/// @return         new batch of \f$m \times n\f$ matrices, valid after the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -645,6 +717,11 @@ inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
 }
 
 /// @brief Returns a copy of A with everything above diagonal `k` zeroed (NumPy `tril`).
+/// @param[in] ctx  queue the kernel is enqueued on
+/// @param[in] A    batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] k    diagonal offset: \f$k = 0\f$ is the main diagonal, \f$k > 0\f$ toward the
+///                 upper right, \f$k < 0\f$ toward the lower left
+/// @return         new batch of \f$m \times n\f$ matrices, valid after the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -658,14 +735,16 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
 /// @brief Result of inv().
 template <typename T>
 struct Inv {
-    Matrix<T, MatrixFormat::Dense> inverse;  ///< \f$A^{-1}\f$, n x n per item
+    Matrix<T, MatrixFormat::Dense> inverse;  ///< \f$A^{-1}\f$, \f$n \times n\f$ per item
     UnifiedVector<int32_t> info;             ///< per-item status as Solve::info (getrf's)
 };
 
 /// @brief Inverse of A by LU with partial pivoting (getrf + getri); A is not modified.
 ///
 /// **Blocks** before returning (its internal copy of A must outlive the kernels).
-/// @return the inverse and per-item info
+/// @param[in] ctx  queue; supplies the backend and the arena
+/// @param[in] A    batch of \f$n \times n\f$ matrices; no batch mask
+/// @return         the inverse and per-item info
 /// @throws batchlas::invalid_argument if `A` is not square
 template <typename T>
 inline Inv<T> inv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -694,6 +773,9 @@ inline Inv<T> inv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @brief Returns \f$A^T\f$ as a new matrix. Real `T` only.
 ///
 /// Plain transpose; a complex call is a compile error because nothing conjugates.
+/// @param[in] ctx  queue the copy is enqueued on
+/// @param[in] A    batch of \f$m \times n\f$ matrices
+/// @return         new batch of \f$n \times m\f$ matrices
 template <typename T>
     requires RealScalar<T>
 inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
@@ -703,6 +785,10 @@ inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
 
 /// @brief Returns one norm per batch item. **Blocks** until the result is ready.
 /// @see batchlas::norm for the asynchronous out-parameter form
+/// @param[in] ctx        queue the reduction runs on
+/// @param[in] A          batch of \f$m \times n\f$ matrices
+/// @param[in] norm_type  which norm to compute (default Frobenius)
+/// @return               one real norm \f$\lVert A_i\rVert\f$ per batch item, ready on return
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> norm(
         Queue& ctx,
@@ -711,9 +797,15 @@ inline UnifiedVector<typename base_type<T>::type> norm(
     return ::batchlas::norm<T, MatrixFormat::Dense>(ctx, A, norm_type);
 }
 
-/// @brief Returns \f$\|A_i\|\,\|A_i^{-1}\|\f$ per item (eigenvalue-magnitude ratio for Spectral).
+/// @brief Returns \f$\lVert A_i\rVert\,\lVert A_i^{-1}\rVert\f$ per item (eigenvalue-magnitude
+///        ratio for Spectral).
 ///
 /// **Blocks** until the result is ready. Real `T` only.
+/// @param[in] ctx        queue the computation runs on
+/// @param[in] A          batch of \f$n \times n\f$ nonsingular matrices; for Spectral, symmetric
+///                       with only the lower triangle read
+/// @param[in] norm_type  norm used for \f$\lVert\cdot\rVert\f$ (default Frobenius)
+/// @return               one condition number per batch item, ready on return
 template <typename T>
     requires RealScalar<T>
 inline UnifiedVector<T> cond(Queue& ctx,
@@ -727,9 +819,9 @@ inline UnifiedVector<T> cond(Queue& ctx,
 /// @brief Result of svd().
 template <typename T>
 struct Svd {
-    Matrix<T, MatrixFormat::Dense> U;                   ///< m x m (All), m x k (Thin) or m x 0 (None)
-    UnifiedVector<typename base_type<T>::type> values;  ///< k = min(m, n) per batch item, descending
-    Matrix<T, MatrixFormat::Dense> Vh;                  ///< n x n (All), k x n (Thin) or 0 x n (None)
+    Matrix<T, MatrixFormat::Dense> U;                   ///< \f$m \times m\f$ (All), \f$m \times k\f$ (Thin) or \f$m \times 0\f$ (None)
+    UnifiedVector<typename base_type<T>::type> values;  ///< \f$k = \min(m, n)\f$ per batch item, descending
+    Matrix<T, MatrixFormat::Dense> Vh;                  ///< \f$n \times n\f$ (All), \f$k \times n\f$ (Thin) or \f$0 \times n\f$ (None)
     /// Per-item convergence status, as Eigh::info. Always filled.
     UnifiedVector<int32_t> info;
 };
@@ -737,11 +829,12 @@ struct Svd {
 /// @brief Singular value decomposition \f$A_i = U_i\Sigma_iV_i^H\f$; A is not modified.
 ///
 /// **Blocks** before returning (its internal copy of A must outlive the kernels).
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     m x n per item (square when `hermitian_uplo` is engaged)
-/// @param opts  jobu and jobvh (All, Thin or None; they may differ: Thin is NumPy
-///              `full_matrices=False`), and `hermitian_uplo` for Hermitian input
-/// @return      U, singular values, Vh and per-item info
+/// @param[in] ctx   queue; supplies the backend and the arena
+/// @param[in] A     batch of \f$m \times n\f$ matrices (square when `hermitian_uplo` is engaged);
+///                  no batch mask
+/// @param[in] opts  jobu and jobvh (All, Thin or None; they may differ: Thin is NumPy
+///                  `full_matrices=False`), and `hermitian_uplo` for Hermitian input
+/// @return          U, singular values, Vh and per-item info
 /// @throws batchlas::invalid_argument if both jobs are None (call batchlas::gesvd for
 ///         values only), or `A` is not square with `hermitian_uplo` engaged
 /// @note Complex input the one-sided Jacobi kernel cannot take (beyond its size
@@ -799,6 +892,10 @@ inline Svd<T> svd(Queue& ctx,
 }
 
 /// @brief svd() with one job for both U and Vh (All or Thin).
+/// @param[in] ctx      queue; supplies the backend and the arena
+/// @param[in] A        batch of \f$m \times n\f$ matrices; no batch mask
+/// @param[in] vectors  job for both U and Vh: All or Thin (None throws)
+/// @return             U, singular values, Vh and per-item info
 template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -810,12 +907,14 @@ inline Svd<T> svd(Queue& ctx,
 template <typename T>
 struct Lu {
     Matrix<T, MatrixFormat::Dense> factors;  ///< L and U packed; L's unit diagonal is implicit
-    UnifiedVector<int64_t> pivots;           ///< rows * batch_size, in getrf()'s pivot format
-    UnifiedVector<int32_t> info;             ///< per-item status as getrf(): i > 0 if U(i,i) is exactly zero
+    UnifiedVector<int64_t> pivots;           ///< `rows * batch_size` entries, in getrf()'s pivot format
+    UnifiedVector<int32_t> info;             ///< per-item status as getrf(): \f$i > 0\f$ if \f$U_{ii}\f$ is exactly zero
 };
 
 /// @brief LU factorisation with partial pivoting, \f$A_i = P_iL_iU_i\f$; A is not modified.
-/// @return packed factors, pivots and per-item info, valid after the queue is waited on
+/// @param[in] ctx  queue; supplies the backend
+/// @param[in] A    batch of \f$n \times n\f$ matrices; no batch mask
+/// @return         packed factors, pivots and per-item info, valid after the queue is waited on
 /// @throws batchlas::invalid_argument if `A` is not square
 // Pivots are a UnifiedVector, not an arena lease as in solve(): they outlive the call.
 template <typename T>
@@ -836,16 +935,16 @@ inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @brief Result of qr().
 template <typename T>
 struct Qr {
-    Matrix<T, MatrixFormat::Dense> q;  ///< m x n per item, orthonormal columns
-    Matrix<T, MatrixFormat::Dense> r;  ///< n x n per item, upper triangular, zeros below
+    Matrix<T, MatrixFormat::Dense> q;  ///< \f$m \times n\f$ per item, orthonormal columns
+    Matrix<T, MatrixFormat::Dense> r;  ///< \f$n \times n\f$ per item, upper triangular, zeros below
 };
 
 /// @brief Reduced QR factorisation \f$A = QR\f$ of a tall or square A; A is not modified.
 ///
 /// **Blocks** before returning (its Householder scalars must outlive the kernels).
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     m x n per item, m >= n
-/// @return      Q and R, valid after the queue is waited on
+/// @param[in] ctx  queue; supplies the backend and the arena
+/// @param[in] A    batch of \f$m \times n\f$ matrices with \f$m \ge n\f$; no batch mask
+/// @return         Q and R, valid after the queue is waited on
 /// @throws batchlas::invalid_argument if `A` has more columns than rows
 template <typename T>
 inline Qr<T> qr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {

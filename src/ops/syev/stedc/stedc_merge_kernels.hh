@@ -97,8 +97,8 @@ inline void maybe_rescale_vectors(bool do_rescale,
         }
 
         // Each lane's |mant| is in [0.5, 1), so one product over a wide group bottoms out at
-        // 0.5^width (2^-256 at width 256 is zero in float). Reduce 32 lanes per round and
-        // renormalize between rounds: every partial stays >= 2^-33.
+        // \f$0.5^{width}\f$ (\f$2^{-256}\f$ at width 256 is zero in float). Reduce 32 lanes per round and
+        // renormalize between rounds: every partial stays \f$\ge 2^{-33}\f$.
         T mant_all = T(1);
         int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
         for (int32_t r0 = 0; r0 < width; r0 += 32) {
@@ -112,7 +112,7 @@ inline void maybe_rescale_vectors(bool do_rescale,
         }
 
         if (active && lane == 0) {
-            // mag = sqrt(|mant_all| * 2^expo_all), split so neither the square
+            // mag = \f$\sqrt{\lvert mant\_all\rvert \cdot 2^{expo\_all}}\f$, split so neither the square
             // root's argument nor its result can leave range.
             const int32_t half = expo_all >> 1;              // floor(expo_all / 2)
             const int32_t rem = expo_all - 2 * half;         // 0 or 1
@@ -155,7 +155,7 @@ void stedc_merge_fused_cta(Queue& ctx,
 //   v            – secular vector z (already permuted, squared weights for Legacy path)
 //   rho          – signed rank-1 update coefficient per batch item
 //   n_reduced    – number of non-deflated poles per batch item
-// Outputs: Qprime (n×n, identity for deflated columns), temp_lambdas (unsorted),
+// Outputs: Qprime (\f$n \times n\f$, identity for deflated columns), temp_lambdas (unsorted),
 // info (per-item status or nullptr; divide the node index by info_nodes_per_item).
 template <Backend B, typename T>
 void stedc_merge_dispatch(Queue& ctx,

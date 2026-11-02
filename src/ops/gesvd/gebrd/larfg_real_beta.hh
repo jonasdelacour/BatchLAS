@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// ZLARFG: H^H [alpha; x] = [beta; 0] with beta REAL, H = I - tau v v^H, v(0) = 1. gebrd needs the
-// real beta so that complex input reduces to a REAL bidiagonal the real bdsdc/bdsqr can solve;
-// detail::larfg's complex branch keeps beta's phase (beta = -sgn(alpha) |.|) and would leave d, e
+// ZLARFG: \f$H^H [\alpha; x] = [\beta; 0]\f$ with \f$\beta\f$ REAL, \f$H = I - \tau v v^H\f$, \f$v(0) = 1\f$. gebrd needs the
+// real \f$\beta\f$ so that complex input reduces to a REAL bidiagonal the real bdsdc/bdsqr can solve;
+// detail::larfg's complex branch keeps \f$\beta\f$'s phase (\f$\beta = -\mathrm{sgn}(\alpha)\,\lvert\cdot\rvert\f$) and would leave d, e
 // complex. Real T is detail::larfg unchanged.
 
 #include <src/math-helpers.hh>

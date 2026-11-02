@@ -40,7 +40,7 @@ public:
     EnvValue() = default;
 
     /// @brief Construct from what `std::getenv` returned.
-    /// @param raw the variable's value, or `nullptr` for an unset variable
+    /// @param[in] raw  the variable's value, or `nullptr` for an unset variable; copied
     explicit EnvValue(const char* raw) {
         if (raw) {
             set_ = true;
@@ -49,9 +49,12 @@ public:
     }
 
     /// @brief An unset value.
+    /// @return an EnvValue for which is_set() is false
     static EnvValue unset() { return EnvValue(); }
 
     /// @brief A value that is set to `v` (which may be empty).
+    /// @param[in] v  the value; moved into the result
+    /// @return an EnvValue for which is_set() is true and value() is `v`
     static EnvValue of(std::string v) {
         EnvValue e;
         e.set_ = true;
@@ -60,12 +63,16 @@ public:
     }
 
     /// @brief True when the variable was set, including set to the empty string.
+    /// @return whether the variable was set
     bool is_set() const noexcept { return set_; }
 
     /// @brief The value, or `nullptr` when unset: the drop-in for `std::getenv("...")`.
+    /// @return a pointer valid until this EnvValue is next assigned or destroyed (for one held in
+    ///         settings(), until configure() or detail::reload_settings()), or `nullptr`
     const char* get() const noexcept { return set_ ? value_.c_str() : nullptr; }
 
     /// @brief The value as text; empty when unset.
+    /// @return the captured text
     const std::string& value() const noexcept { return value_; }
 
 private:
@@ -92,6 +99,8 @@ struct RoutingSettings {
     std::array<EnvValue, ops.size()> values{};
 
     /// @brief Position of `op` in `ops`, or `ops.size()` when `op` reads no route variable.
+    /// @param[in] op  the op's `<op>` spelling, e.g. `"potrf"`
+    /// @return the index into `ops` and `values`, or `ops.size()`
     static constexpr std::size_t index_of(std::string_view op) {
         for (std::size_t i = 0; i < ops.size(); ++i)
             if (ops[i] == op) return i;
@@ -99,15 +108,26 @@ struct RoutingSettings {
     }
 
     /// @brief The route variable's name for `op`: `"BATCHLAS_" + upper-cased op + "_ROUTE"`.
+    /// @param[in] op  the op's `<op>` spelling
+    /// @return the environment variable name
     BATCHLAS_API static std::string env_name(std::string_view op);
 
     /// @brief The captured `BATCHLAS_<OP>_ROUTE` for `op`.
+    /// @param[in] op  the op's `<op>` spelling; must be one of `ops`
+    /// @return the captured value
     /// @throws batchlas::invalid_argument for an op not in `ops`
     const EnvValue& route(std::string_view op) const { return values[checked(op)]; }
     /// @brief Mutable access to the captured `BATCHLAS_<OP>_ROUTE` for `op`, as configure() needs.
+    /// @param[in] op  the op's `<op>` spelling; must be one of `ops`
+    /// @return the captured value, assignable
+    /// @throws batchlas::invalid_argument for an op not in `ops`
     EnvValue& route(std::string_view op) { return values[checked(op)]; }
 
 private:
+    /// @brief index_of() that refuses an op with no route variable.
+    /// @param[in] op  the op's `<op>` spelling
+    /// @return the index into `ops` and `values`
+    /// @throws batchlas::invalid_argument for an op not in `ops`
     static std::size_t checked(std::string_view op) {
         const std::size_t i = index_of(op);
         if (i == ops.size())
@@ -155,7 +175,7 @@ struct SelectionSettings {
     EnvValue getrs_laswp{};
 
     /// `BATCHLAS_ILUK_DEVICE`: only a first character of `0` or `1` is inspected; `true`, `on`
-    /// and `yes` fall through to the shape default (batch_size >= 32).
+    /// and `yes` fall through to the shape default (`batch_size` \f$\ge 32\f$).
     EnvValue iluk_device{};
 
     /// `BATCHLAS_LATRD_IMPL` = `legacy` | `device` | `grid`. Re-read per call.
@@ -177,7 +197,7 @@ struct SelectionSettings {
     // route it through env_falsy. evidence: docs/design/environment.md#environment-sb2st-back-wave-fails-open
     EnvValue sb2st_back_wave{};
 
-    /// `BATCHLAS_SB2ST_SUBGROUP` = `auto` | `on` | `off` (case-folded). `on` throws when kd > 32
+    /// `BATCHLAS_SB2ST_SUBGROUP` = `auto` | `on` | `off` (case-folded). `on` throws when \f$\mathit{kd} > 32\f$
     /// or the device lacks sub-group size 32.
     EnvValue sb2st_subgroup{};
 
@@ -237,7 +257,7 @@ struct SelectionSettings {
 
 /// @brief Launch geometry, block widths, iteration counts and tuning thresholds.
 ///
-/// Where the call site's default is a function of n, the scalar type, an argument or a device
+/// Where the call site's default is a function of \f$n\f$, the scalar type, an argument or a device
 /// property, the field is a sentinel (0, `std::nullopt` or an unset EnvValue) and the default
 /// stays at the call site. Fields with a constant default carry it.
 /// @ingroup api_config
@@ -245,11 +265,11 @@ struct SelectionSettings {
 // evidence: docs/design/environment.md#environment-geometry-defaults-stay-at-the-call-site
 struct GeometrySettings {
     /// `BATCHLAS_LATRD_GRID_GROUPS` (env_positive_int_or). 0 = auto,
-    /// `min(residency cap, ceil((n-1)/32))`. A forced value is still clamped by the residency cap
+    /// \f$\min(\text{residency cap}, \lceil (n-1)/32 \rceil)\f$. A forced value is still clamped by the residency cap
     /// unless UnsafeSettings::latrd_grid_force_unsafe lifts it.
     int latrd_grid_groups = 0;
 
-    /// `BATCHLAS_LATRD_GRID_MIN_N` (env_positive_int_or): the n at which the grid latrd path
+    /// `BATCHLAS_LATRD_GRID_MIN_N` (env_positive_int_or): the \f$n\f$ at which the grid latrd path
     /// becomes eligible.
     // evidence: docs/perf/syev.md#syev-latrd-grid-gate-confirmed-in-eigenvector-mode
     int latrd_grid_min_n = 768;
@@ -264,8 +284,8 @@ struct GeometrySettings {
     int latrd_lower_panel_wg_hint = 0;
 
     /// `BATCHLAS_SB2ST_BACK_SUBS` (env_positive_int_or). 0 = the call site's default chain.
-    /// @note Force together with sb2st_back_tile_w; only tile {1,2,4,8} x subs {4,8,16} are
-    ///       instantiated.
+    /// @note Force together with sb2st_back_tile_w; only the (tile, subs) pairs in
+    ///       \f$\{1,2,4,8\} \times \{4,8,16\}\f$ are instantiated.
     int sb2st_back_subs = 0;
 
     /// `BATCHLAS_SB2ST_BACK_TILE_W` (env_positive_int_or): column tile of the wave kernel.
@@ -283,7 +303,7 @@ struct GeometrySettings {
     /// `BATCHLAS_POTRF_W`. 0 = unset; the default is type-dependent (128/32/32/16).
     int potrf_w = 0;
 
-    /// `BATCHLAS_SYEV_TWO_STAGE_KD` (env_positive_int_or): the band width, clamped to `[1, n-1]`
+    /// `BATCHLAS_SYEV_TWO_STAGE_KD` (env_positive_int_or): the band width, clamped to \f$[1, n-1]\f$
     /// at the call site.
     int syev_two_stage_kd = 32;
 
@@ -292,22 +312,22 @@ struct GeometrySettings {
     int syev_two_stage_sb2st_block = 32;
 
     /// `BATCHLAS_SY2SB_ORMQR_NB`: unset, `off` or `0` (never hint), or a positive forced value
-    /// (clamped to kd at the call site). A value that does not parse, is negative or is above 1024
+    /// (clamped to \f$\mathit{kd}\f$ at the call site). A value that does not parse, is negative or is above 1024
     /// reads as unset. Wins over `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
     EnvValue sy2sb_ormqr_nb{};
 
-    /// `BATCHLAS_SYTRD_BLOCK_SIZE`. 0 = unset; the default is n-bucketed and type-dependent.
+    /// `BATCHLAS_SYTRD_BLOCK_SIZE`. 0 = unset; the default is \f$n\f$-bucketed and type-dependent.
     /// Wins over `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
     int sytrd_block_size = 0;
 
-    /// `BATCHLAS_TRMM_TILE_M`. 0 = unset (a function of m); bucketed to 16, 32, 64 or 128.
+    /// `BATCHLAS_TRMM_TILE_M`. 0 = unset (a function of \f$m\f$); bucketed to 16, 32, 64 or 128.
     int trmm_tile_m = 0;
 
     /// `BATCHLAS_GEMM_WIDE_STAGES`: the complex<float> cp.async legs of `wide:m=128:n=128:k=8` and
     /// of the transposed wide tiles (and their split-k bodies). 0 = unset (cp.async stages on
     /// sm_120+); 2 forces the register prefetch; 3 allows the cp.async stages from sm_80. Other
     /// values read as unset. The cp.async stages also need 8-byte bases, and on the transposed
-    /// tiles both ld <= INT_MAX / 128.
+    /// tiles both \f$\mathrm{ld} \le \mathtt{INT\_MAX} / 128\f$.
     int gemm_wide_stages = 0;
 
     /// `BATCHLAS_TRSM_OUTER_NB`. 0 = unset: 128 for Side::Left, the CTA nb for Side::Right.
@@ -327,10 +347,10 @@ struct GeometrySettings {
     int syevx_check_every = 4;
 
     /// `BATCHLAS_SYEVX_EXTRA_DIRECTIONS`: 0 means "no guard block"; nullopt means the default
-    /// `max(2, k/4)`. A negative value reads as unset.
+    /// \f$\max(2, \lfloor k/4 \rfloor)\f$. A negative value reads as unset.
     std::optional<int> syevx_extra_directions{};
 
-    /// `BATCHLAS_SYEVX_FILTER_DEGREE`. 0 = unset (only > 0 is accepted). Top of a four-level
+    /// `BATCHLAS_SYEVX_FILTER_DEGREE`. 0 = unset (only values \f$> 0\f$ are accepted). Top of a four-level
     /// precedence chain; setting it also disables the automatic degree.
     int syevx_filter_degree = 0;
 
@@ -338,7 +358,7 @@ struct GeometrySettings {
     /// SyevxParams supplied a value.
     std::optional<int> syevx_init_power{};
 
-    /// `BATCHLAS_SYEVX_LOCK_FACTOR` (`atof`, > 0 only): a column is masked once its residual is
+    /// `BATCHLAS_SYEVX_LOCK_FACTOR` (`atof`, \f$> 0\f$ only): a column is masked once its residual is
     /// this multiple of the tolerance. An unparseable value yields the default.
     // Locking exactly at tol oscillates: a masked column is not frozen and drifts back above tol.
     double syevx_lock_factor = 0.1;
@@ -346,7 +366,7 @@ struct GeometrySettings {
     /// @brief The runtime overrides of include/batchlas/tuning_params.hh (`BATCHLAS_TUNE_*`).
     ///
     /// Parsed by `tuning::detail::tuning_env_override`, which rejects trailing garbage and
-    /// values <= 0 or above INT32_MAX; each default is the n-bucketed compiled constant.
+    /// values \f$\le 0\f$ or above \f$\mathtt{INT32\_MAX}\f$; each default is the \f$n\f$-bucketed compiled constant.
     /// @see @ref perf_tuning
     // A settings() read added to tuning_params.hh must be mirrored in the generator's template.
     // evidence: docs/perf/tuning.md#tuning-regenerating-the-header
@@ -515,7 +535,7 @@ BATCHLAS_API const Settings& settings();
 /// ScopedEnvVar triggers one) re-reads the environment on top of it, so a knob set here and not
 /// exported holds for the life of the process, and a knob something explicitly exports still
 /// wins. The unsafe group is not gated here.
-/// @param s the complete settings to install
+/// @param[in] s  the complete settings to install; copied
 /// @pre No batchlas::Queue has been constructed yet in this process.
 /// @throws batchlas::api_misuse (a `std::runtime_error`) if a Queue already exists; nothing is
 ///         changed.
@@ -542,6 +562,7 @@ BATCHLAS_API void reload_settings();
 BATCHLAS_API void note_queue_constructed() noexcept;
 
 /// @brief True once note_queue_constructed() has been called.
+/// @return whether a Queue has been constructed in this process
 /// @ingroup api_config_lowlevel
 BATCHLAS_API bool queue_constructed() noexcept;
 

@@ -11,7 +11,7 @@ DRAM roof), in-order SYCL queue.
 
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
-| `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch >= 1 |
+| `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch \f$\ge 1\f$ |
 | `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, no heterogeneous B or C, not netlib with any transpose, not CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)) |
 
 Both refuse a masked batch. Selection takes the first runnable entry of the nearest row of
@@ -62,11 +62,11 @@ clock. Named cells `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) lanczo
 * **No event timing.** It costs about 0.36 ms per call; cell L's ideal-traffic roof is 22.9 µs.
 * **The vendor's per-call host chain is timed** (`setStream`, the host walk of row offsets, the buffer-size
   re-query, the `BumpAllocator` carve). Descriptors are created on the first, untimed call. `nsys` shows both arms
-  spend > 93 % of wall time in GPU kernels, so the win is a kernel result.
+  spend \f$> 93\%\f$ of wall time in GPU kernels, so the win is a kernel result.
 * **Warm-up is wall-clock.** The SM clock idles at 210 MHz; a call count cannot price the ramp. Default
   `BATCHLAS_SPMM_WARM_MS` = 400 ms per row.
 * **Check the route** from `BATCHLAS_COVERAGE_OUT` in every run. `BATCHLAS_SPMM_ROUTE=vendor` is a pin, not a control.
-* **Admission rule.** A row is admitted when either arm's rel_sd is <= 0.02 in both passes, **or** the two passes'
+* **Admission rule.** A row is admitted when either arm's rel_sd is \f$\le 0.02\f$ in both passes, **or** the two passes'
   ratios agree within 5 %. An rel_sd-only filter deleted a reproducible loss (1.934 / 1.872) and manufactured a
   passing clause.
 * Every sweep ran twice in independent processes, one route per process. Cross-pass median spread is 0.3-0.8 %.
@@ -77,7 +77,7 @@ clock. Named cells `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) lanczo
 ## The gather window
 
 **Acceptance gate:** a clause may move a cell only if worst-of-two-passes `t_native/t_vendor <= 1.10` on every cell
-it moves, at batch >= 128, with every boundary bracketed by measured rows. Over 644 saturated rows (`verdict.txt`):
+it moves, at batch \f$\ge 128\f$, with every boundary bracketed by measured rows. Over 644 saturated rows (`verdict.txt`):
 
 | clause | rows moved | verdict | worst | median |
 |---|---|---|---|---|
@@ -94,8 +94,8 @@ quote them. In the LOBPCG regime neither arm exceeds 0.52 of the roof and the ga
 
 ### The cfloat transB exclusion
 
-`complex<float>`, `transB = Trans`, banded, m=2048, 16 nnz/row, batch 512: the ratio is 0.63-0.71 at `nrhs` 8-12
-and 1.09-1.73 at `nrhs` 16-50 (worst 1.731 at 25); the scattered pattern stays at 0.79-1.02. By batch (nrhs=25) the
+`complex<float>`, `transB = Trans`, banded, \f$m = 2048\f$, 16 nnz/row, batch 512: the ratio is 0.63-0.71 at `nrhs` 8-12
+and 1.09-1.73 at `nrhs` 16-50 (worst 1.731 at 25); the scattered pattern stays at 0.79-1.02. By batch (\f$\mathit{nrhs} = 25\f$) the
 loss switches on between batch 4 (0.581) and 8 (1.447), peaking at 2.18. Hence the exclusion is by type and
 `transB`, not `nrhs`, and it declines a 1.7-1.9x native win at batch 1-4. The mechanism is a hypothesis:
 `kNCmax<Cx<float>>` is 8, so `nrhs=25` runs 4 passes with 7 idle lanes.
@@ -103,7 +103,7 @@ loss switches on between batch 4 (0.581) and 8 (1.447), peaking at 2.18. Hence t
 ### The batch axis has no floor
 
 A small-batch sweep (batch 1-128, 210 admitted rows) has no row over 1.10 at any rung; the worst is 1.078 at batch 4
-(+13.5 µs/call, non-monotonic on its cell). Below batch ~64 the timed region is launch latency plus the vendor's host
+(+13.5 µs/call, non-monotonic on its cell). Below batch \f$\approx 64\f$ the timed region is launch latency plus the vendor's host
 chain, so these ratios show only absence of harm.
 
 ### The transposed refusal
