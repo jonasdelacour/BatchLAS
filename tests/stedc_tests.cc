@@ -12,6 +12,7 @@
 
 // Named rather than inherited transitively: the `info` cases below use M_PI,
 // std::cos and std::is_same_v, and nothing else in this file did.
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -451,56 +452,62 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
 // ---------------------------------------------------------------------------
 // Spectra that stress deflation, the secular solver and the Loewner vectors.
 //
-// One item per kind: Wilkinson W+ (pairs equal to working precision), W21+ blocks glued by
-// sqrt(eps) (near-equal pairs across every merge), graded down to 1e-6, a cluster of width
-// ~sqrt(eps), and random T scaled by 1e+6 and 1e-6 (stedc does not prescale; its deflation
-// tolerance is absolute). n = 320 pads to 32 * 2^4. Eigenvalues against host LAPACKE per item,
+// Kinds: Wilkinson W+ (pairs equal to working precision), W21+ blocks glued by sqrt(eps)
+// (near-equal pairs across every merge), graded down to 1e-6, a cluster of width ~sqrt(eps), and
+// random T scaled by 1e+6 and 1e-6. n = 320 pads to 32 * 2^4. One item per picked kind; the data
+// of a kind does not depend on which kinds are picked. Eigenvalues against host LAPACKE per item,
 // then residual and orthogonality through batchlas::verify. On a GPU the Levels driver runs under
 // both fused merge variants; the host tier's stedc reads neither knob, so it runs once.
 // ---------------------------------------------------------------------------
-TYPED_TEST(StedcTest, HardSpectraResidualAndOrthogonality) {
-    using T = typename TestFixture::ScalarType;
-    using Real = typename base_type<T>::type;
-    constexpr Backend B = TestFixture::BackendType;
-    constexpr int kinds = 6;
-    const char* kind_names[kinds] = {"wilkinson", "glued_w21", "graded", "cluster", "scaled_1e+6", "scaled_1e-6"};
+namespace {
+constexpr int kHardKinds = 6;
+constexpr const char* kHardKindNames[kHardKinds] = {"wilkinson", "glued_w21", "graded", "cluster", "scaled_1e+6", "scaled_1e-6"};
+
+template <Backend B, typename Real>
+void expect_hard_spectra_solved(Queue& ctx, const std::vector<int>& kinds) {
     const double sqrt_eps = std::sqrt(static_cast<double>(std::numeric_limits<Real>::epsilon()));
+    const int batch = static_cast<int>(kinds.size());
 
     for (const int n : {64, 128, 320}) {
         // d and e padded per item (strides n + 2 and n), so a kernel that assumes packing reads a neighbour.
         const int sd = n + 2, se = n;
-        std::vector<Real> hd(static_cast<size_t>(sd) * kinds, Real(0)), he(static_cast<size_t>(se) * kinds, Real(0));
+        std::vector<Real> all_d(static_cast<size_t>(sd) * kHardKinds, Real(0)), all_e(static_cast<size_t>(se) * kHardKinds, Real(0));
         uint32_t state = 2026u + static_cast<uint32_t>(n);
         auto next_unit = [&]() {
             state = state * 1664525u + 1013904223u;
             return 0.5 + static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
         };
         const double g = std::pow(1e-6, 1.0 / (n - 1));
-        for (int b = 0; b < kinds; ++b) {
-            Real* d = hd.data() + static_cast<size_t>(b) * sd;
-            Real* e = he.data() + static_cast<size_t>(b) * se;
+        for (int b = 0; b < kHardKinds; ++b) {
+            Real* d = all_d.data() + static_cast<size_t>(b) * sd;
+            Real* e = all_e.data() + static_cast<size_t>(b) * se;
             for (int i = 0; i < n; ++i) {
                 const double r = 2.0 * next_unit() - 2.0;
-                const double v[kinds] = {std::fabs(i - 0.5 * (n - 1)), std::fabs((i % 21) - 10.0),
-                                         (i % 2 ? -1.0 : 1.0) * std::pow(g, i), 1.0, 1e6 * r, 1e-6 * r};
+                const double v[kHardKinds] = {std::fabs(i - 0.5 * (n - 1)), std::fabs((i % 21) - 10.0),
+                                              (i % 2 ? -1.0 : 1.0) * std::pow(g, i), 1.0, 1e6 * r, 1e-6 * r};
                 d[i] = static_cast<Real>(v[b]);
             }
             for (int i = 0; i < n - 1; ++i) {
                 const double u = next_unit();
-                const double v[kinds] = {1.0, i % 21 == 20 ? sqrt_eps : 1.0, u * std::pow(g, i + 0.5), sqrt_eps * u,
-                                         1e6 * u, 1e-6 * u};
+                const double v[kHardKinds] = {1.0, i % 21 == 20 ? sqrt_eps : 1.0, u * std::pow(g, i + 0.5), sqrt_eps * u,
+                                              1e6 * u, 1e-6 * u};
                 e[i] = static_cast<Real>(v[b]);
             }
         }
-        auto upload = [](const std::vector<Real>& h, int size, int stride) {
-            Vector<Real> v(size, Real(0), kinds, Stride(stride), Inc(1));
-            std::memcpy(v.data_ptr(), h.data(), sizeof(Real) * Vector<Real>::required_span_length(size, 1, stride, kinds));
+        std::vector<Real> hd(static_cast<size_t>(sd) * batch), he(static_cast<size_t>(se) * batch);
+        for (int b = 0; b < batch; ++b) {
+            std::copy_n(all_d.begin() + static_cast<std::ptrdiff_t>(kinds[b]) * sd, sd, hd.begin() + static_cast<std::ptrdiff_t>(b) * sd);
+            std::copy_n(all_e.begin() + static_cast<std::ptrdiff_t>(kinds[b]) * se, se, he.begin() + static_cast<std::ptrdiff_t>(b) * se);
+        }
+        auto upload = [batch](const std::vector<Real>& h, int size, int stride) {
+            Vector<Real> v(size, Real(0), batch, Stride(stride), Inc(1));
+            std::memcpy(v.data_ptr(), h.data(), sizeof(Real) * Vector<Real>::required_span_length(size, 1, stride, batch));
             return v;
         };
         const auto d0 = upload(hd, n, sd);
         const auto e0 = upload(he, n - 1, se);
-        auto dense = Matrix<Real>::Zeros(n, n, kinds);
-        dense.fill_tridiag(*this->ctx, e0, d0, e0).wait();
+        auto dense = Matrix<Real>::Zeros(n, n, batch);
+        dense.fill_tridiag(ctx, e0, d0, e0).wait();
 
         std::vector<StedcMergeVariant> variants{StedcMergeVariant::Fused, StedcMergeVariant::FusedCta};
         if constexpr (B == Backend::NETLIB) variants.resize(1);
@@ -508,20 +515,34 @@ TYPED_TEST(StedcTest, HardSpectraResidualAndOrthogonality) {
             SCOPED_TRACE("n=" + std::to_string(n) + " merge_variant=" + std::to_string(static_cast<int>(variant)));
             auto d = upload(hd, n, sd);
             auto e = upload(he, n - 1, se);
-            UnifiedVector<Real> W(static_cast<size_t>(n) * kinds);
-            auto Z = Matrix<Real>::Identity(n, kinds);
+            UnifiedVector<Real> W(static_cast<size_t>(n) * batch);
+            auto Z = Matrix<Real>::Identity(n, batch);
             const StedcParams<Real> params{.algorithm = StedcAlgorithm::Levels, .merge_variant = variant};
-            UnifiedVector<std::byte> ws(stedc_buffer_size<B, Real>(*this->ctx, n, kinds, JobType::EigenVectors, params));
-            (void)stedc<B, Real>(*this->ctx, d, e, VectorView<Real>(W, n, kinds), ws, JobType::EigenVectors, params, Z);
-            this->ctx->wait();
+            UnifiedVector<std::byte> ws(stedc_buffer_size<B, Real>(ctx, n, batch, JobType::EigenVectors, params));
+            (void)stedc<B, Real>(ctx, d, e, VectorView<Real>(W, n, batch), ws, JobType::EigenVectors, params, Z);
+            ctx.wait();
 
-            for (int b = 0; b < kinds; ++b) {
-                SCOPED_TRACE(kind_names[b]);
+            for (int b = 0; b < batch; ++b) {
+                SCOPED_TRACE(kHardKindNames[kinds[b]]);
                 test_utils::expect_eigenvalues_match_lapacke<Real>(dense, W, n, false, std::span<const int>(&b, 1));
+                test_utils::expect_eigenpairs<Real>(ctx, dense, Z, W, n, b);
             }
-            test_utils::expect_eigenpairs<Real>(*this->ctx, dense, Z, W, n, dense.all_items());
         }
     }
+}
+} // namespace
+
+TYPED_TEST(StedcTest, HardSpectraResidualAndOrthogonality) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    expect_hard_spectra_solved<TestFixture::BackendType, Real>(*this->ctx, {0, 1, 2, 3, 4});
+}
+
+// T x 1e-6 on its own: stedc does not prescale T (LAPACK dstedc scales to unit norm), and the
+// small-z deflation tolerance 8 eps max(|D|, |z|) is absolute because z is a unit vector, so the
+// GPU merge deflates live components (tridiag-modernize DESIGN WP6e). The host tier runs no merge.
+TYPED_TEST(StedcTest, ScaledDownSpectrumResidualAndOrthogonality) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    expect_hard_spectra_solved<TestFixture::BackendType, Real>(*this->ctx, {5});
 }
 
 TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
