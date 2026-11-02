@@ -4,8 +4,8 @@
 // Float 256x128 and 128x256 tiles, k = 8 slabs, 4 copy_async stages, one 256-lane group per SM: the
 // shape of cuBLAS's cutlass_80_simt_sgemm_{256x128,128x256}_8x4 on sm_120. A thread holds TM x TN
 // accumulators (16x8 or 8x16) as 4-row/4-column bands, read by LDS.128 from padded [k][m] / [k][n]
-// slabs. Every copy is one zero-filled 4-byte element (any ld, any base): a packet operand (A, B^T)
-// takes consecutive m (n) per lane, a k-contiguous one (B, A^T) k fastest, 8 lanes per 32-byte row
+// slabs. Every copy is one zero-filled 4-byte element (any ld, any base): a packet operand (A, \f$B^{T}\f$)
+// takes consecutive m (n) per lane, a k-contiguous one (B, \f$A^{T}\f$) k fastest, 8 lanes per 32-byte row
 // segment; the stride pad of 4 keeps those transposed writes conflict-free.
 // evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
 
@@ -91,7 +91,7 @@ struct GemmK8S4LargeBody {
         if (bid >= batch || item_off(mask, bid)) return;
         const int tid = static_cast<int>(item.get_local_id(2));
         const int lane = tid & 31, warp = tid >> 5;
-        // The 128x128 kernel's lane swizzle and 2 x 4 warp grid, bands 32 rows / 16 columns apart.
+        // The 128x128 kernel's lane swizzle and \f$2 \times 4\f$ warp grid, bands 32 rows / 16 columns apart.
         const int ml = (lane & 1) | (((lane >> 2) & 3) << 1);
         const int nl = ((lane >> 1) & 1) | (((lane >> 4) & 1) << 1);
         const int mb = (warp & 1) * (TileM / 2) + ml * 4;
@@ -191,7 +191,7 @@ BATCHLAS_UNROLL_FULL
         // Staged epilogue: pass p stages each thread's column p of every n band (slot = column / 4),
         // then each warp stores Slots / 8 whole columns, rows lane + 32 i (one 128-byte piece per
         // warp store at any ldc). Pass p + 1's priors load while pass p stores, so one prior latency
-        // is exposed, not four; none at beta = 0, where the store is alpha * acc alone (keeps -0.0).
+        // is exposed, not four; none at \f$\beta = 0\f$, where the store is \f$\alpha \cdot \mathrm{acc}\f$ alone (keeps -0.0).
         // evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
         constexpr int CW = Slots / 8, RW = TileM / 32;
         float* sc = sa;

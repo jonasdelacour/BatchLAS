@@ -98,11 +98,6 @@ public:
         return with_real_dtype("syrk", dtype, []<typename T>() { return spellings(K::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
-        auto ints = [](const auto& xs) {
-            std::vector<std::string> out;
-            for (int v : xs) out.push_back(std::to_string(v));
-            return out;
-        };
         return {{"form", {"sq", "tall", "wide"}}, {"trans", {K::grid_trans.begin(), K::grid_trans.end()}},
                 {"n", ints(K::grid_n)}, {"k", ints(K::grid_k)}, {"batch", ints(batches())}};
     }

@@ -106,7 +106,7 @@ void stedc_merge_fused_cta(Queue& ctx,
 //   rho          – signed cut off-diagonal beta per batch item (tridiag::Tear); the update
 //                  coefficient is Tear<T>{beta}.rho() = 2|beta|
 //   n_reduced    – number of non-deflated poles per batch item
-// Outputs: Qprime (n×n, identity for deflated columns), temp_lambdas (unsorted),
+// Outputs: Qprime (\f$n \times n\f$, identity for deflated columns), temp_lambdas (unsorted),
 // info (per-item status or nullptr; divide the node index by info_nodes_per_item).
 template <Backend B, typename T>
 void stedc_merge_dispatch(Queue& ctx,

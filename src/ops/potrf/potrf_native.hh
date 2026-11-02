@@ -52,7 +52,7 @@ BATCHLAS_INTERNAL_API int potrf_cta_max_n_for_slm(
 template <typename T>
 int potrf_cta_max_n();
 
-// LPANEL tier (potrf_lpanel.cc): ONE n x NB panel in local memory instead of the whole
+// LPANEL tier (potrf_lpanel.cc): ONE \f$n \times NB\f$ panel in local memory instead of the whole
 // matrix. TWO caps, hence the second argument -- the local-memory slice AND
 // MAX_WORK_GROUP_SIZE, because the body needs one work-item per row. nb_hint 0 means the
 // type's default NB; a value this build does not instantiate answers 0 here and throws at

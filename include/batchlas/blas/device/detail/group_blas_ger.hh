@@ -7,6 +7,11 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic rank-1 update: each work-item owns a strided set of elements of \f$A\f$.
+/// @param[in]     group      executor; every work-item must call
+/// @param[in]     x          left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`
+/// @param[in,out] operand    \f$y\f$ (read), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
+/// @param[in]     transform  whether \f$x\f$ and \f$y\f$ are conjugated
 template <typename Group, typename T>
 inline constexpr void ger(const Group& group,
                           const VectorView<T>& x,
@@ -30,6 +35,10 @@ inline constexpr void ger(const Group& group,
 
 namespace detail {
 
+/// @brief Validates the operands and runs the generic ger with the conjugation flags of `Tag`.
+/// @param[in]     group    executor; every work-item must call
+/// @param[in]     x        left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`
+/// @param[in,out] operand  \f$y\f$ (read), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <typename Tag, typename Group, typename T>
 inline constexpr void dispatch_ger(const Group& group,
                                    const VectorView<T>& x,
@@ -54,9 +63,9 @@ inline constexpr void dispatch_ger(const Group& group,
 /// @tparam ConjugateXV  use \f$\bar{x}\f$
 /// @tparam ConjugateYV  use \f$\bar{y}\f$
 /// @tparam Group        `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group    executor whose work-items share the elements of `A`
-/// @param x        left vector, length `a.rows()`
-/// @param operand  `y` (length `a.cols()`), `A` (updated in place) and `alpha`
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 /// @pre single-problem views; sizes as above. Checked by `assert` only.
 template <bool ConjugateXV = false, bool ConjugateYV = false, typename Group, typename T>
 inline constexpr void ger(const Group& group,
@@ -66,6 +75,12 @@ inline constexpr void ger(const Group& group,
 }
 
 /// @brief As ger(), with an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @tparam ConjugateXV  use \f$\bar{x}\f$
+/// @tparam ConjugateYV  use \f$\bar{y}\f$
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <DeviceBlasPolicy Policy,
           bool ConjugateXV = false,
           bool ConjugateYV = false,
@@ -79,6 +94,11 @@ inline constexpr void ger(const Group& group,
 }
 
 /// @brief As ger(), with the operands passed separately instead of in an operand struct.
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <bool ConjugateXV = false, bool ConjugateYV = false, typename Group, typename T>
 inline constexpr void ger(const Group& group,
                           const VectorView<T>& x,
@@ -88,7 +108,15 @@ inline constexpr void ger(const Group& group,
     ger<ConjugateXV, ConjugateYV>(group, x, make_rank1_update_operand(y, a, alpha));
 }
 
-/// @brief As ger(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
+/// @brief As ger(), with the operands passed separately and an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @tparam ConjugateXV  use \f$\bar{x}\f$
+/// @tparam ConjugateYV  use \f$\bar{y}\f$
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <DeviceBlasPolicy Policy,
           bool ConjugateXV = false,
           bool ConjugateYV = false,
@@ -104,9 +132,9 @@ inline constexpr void ger(const Group& group,
 }
 
 /// @brief Unconjugated rank-1 update \f$ A := A + \alpha\,x\,y^{T} \f$; ger() without conjugation.
-/// @param group    executor whose work-items share the elements of `A`
-/// @param x        left vector, length `a.rows()`
-/// @param operand  `y`, `A` and `alpha`
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -115,6 +143,10 @@ inline constexpr void geru(const Group& group,
 }
 
 /// @brief As geru(), with an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -124,6 +156,11 @@ inline constexpr void geru(const Group& group,
 }
 
 /// @brief As geru(), with the operands passed separately instead of in an operand struct.
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -133,7 +170,13 @@ inline constexpr void geru(const Group& group,
     ger<false, false>(group, x, y, a, alpha);
 }
 
-/// @brief As geru(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
+/// @brief As geru(), with the operands passed separately and an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -145,9 +188,9 @@ inline constexpr void geru(const Group& group,
 }
 
 /// @brief Conjugated rank-1 update \f$ A := A + \alpha\,x\,y^{H} \f$; ger() with conjugated `y`.
-/// @param group    executor whose work-items share the elements of `A`
-/// @param x        left vector, length `a.rows()`
-/// @param operand  `y`, `A` and `alpha`
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -156,6 +199,10 @@ inline constexpr void gerc(const Group& group,
 }
 
 /// @brief As gerc(), with an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `operand.a.rows()`; one problem, not a batch
+/// @param[in,out] operand  \f$y\f$ (read, length \f$n\f$ = `operand.a.cols()`), the \f$m \times n\f$ matrix \f$A\f$ (updated in place) and \f$\alpha\f$ (read)
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -165,6 +212,11 @@ inline constexpr void gerc(const Group& group,
 }
 
 /// @brief As gerc(), with the operands passed separately instead of in an operand struct.
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -174,7 +226,13 @@ inline constexpr void gerc(const Group& group,
     ger<false, true>(group, x, y, a, alpha);
 }
 
-/// @brief As gerc(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
+/// @brief As gerc(), with the operands passed separately and an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @tparam Policy       DeviceBlasPolicy; accepted for API symmetry and ignored (one implementation)
+/// @param[in] group       executor whose work-items share the elements of \f$A\f$; every work-item must call
+/// @param[in] x           left vector \f$x\f$ of length \f$m\f$ = `a.rows()`; one problem, not a batch
+/// @param[in] y           right vector \f$y\f$ of length \f$n\f$ = `a.cols()`; one problem, not a batch
+/// @param[in,out] a       dense \f$m \times n\f$ matrix \f$A\f$; overwritten with the updated matrix
+/// @param[in] alpha       scalar \f$\alpha\f$ scaling the outer product (default 1)
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,

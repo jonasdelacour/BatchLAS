@@ -23,7 +23,7 @@ namespace util {
  *
  * @tparam T The element type of the local accessor
  * @tparam Dims The dimensionality of the accessor
- * @param accessor The local accessor to get a pointer from
+ * @param[in] accessor The local accessor to get a pointer from
  * @return T* Raw pointer to the local accessor's storage
  * @ingroup api_internal_helpers
  */

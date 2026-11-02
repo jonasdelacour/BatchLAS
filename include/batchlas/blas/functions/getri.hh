@@ -47,6 +47,8 @@ using getri_vendor_buffer_size = size_t(Queue&,
 
 
 /// @brief Validates A for getri_buffer_size(): non-negative extents only.
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] A  batch of LU factors getri_buffer_size() will get; only the extents are read
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_factorizations_lowlevel
 // Runs before choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
@@ -64,6 +66,9 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 /// @brief Validates A and C for the positional getri(): non-negative extents, C not aliasing A.
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] A  batch of LU factors getri() will get; only the extents and data pointer are read
+/// @param[in] C  batch of outputs getri() will get; only the extents and data pointer are read
 /// @throws batchlas::invalid_argument on negative extents of A or C, or if a non-empty C
 ///         starts at A's storage (getri is out of place on every backend)
 /// @ingroup api_factorizations_lowlevel
@@ -91,14 +96,15 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// Asynchronous: C and @p info are readable after the returned event is waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n LU factors from getrf()
-/// @param C           batch of n x n outputs, receives \f$ A^{-1} \f$
-/// @param pivots      pivots from getrf(), `n * batch` entries
-/// @param workspace  device-accessible scratch of at least getri_buffer_size() bytes
-/// @param info        per-item LAPACK status, one int32 per batch item: 0 on
-///                    success, i > 0 if U(i,i) is exactly zero, so the item has
-///                    no inverse (its C is not meaningful). Empty span = not requested.
+/// @param[in]  ctx        queue the kernels are enqueued on
+/// @param[in]  A          batch of \f$n \times n\f$ LU factors from getrf(); not modified
+/// @param[out] C          batch of \f$n \times n\f$ outputs, receives \f$ A^{-1} \f$; must not alias A
+/// @param[in]  pivots     pivots from getrf() on the same backend, `n * batch` entries
+/// @param[out] workspace  device-accessible scratch of at least getri_buffer_size() bytes;
+///                        contents undefined on return
+/// @param[out] info       per-item LAPACK status, one int32 per batch item: 0 on
+///                        success, \f$i > 0\f$ if \f$U_{ii}\f$ is exactly zero, so the item has
+///                        no inverse (its C is not meaningful). Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @pre A and C square of the same order and batch, and
 ///      `pivots.size() >= n * batch` (checked by the option overloads only)
@@ -117,6 +123,12 @@ BATCHLAS_API Event getri(Queue& ctx,
                          Span<int32_t> info);
 
 /// @brief getri() without per-item status (`info` not requested).
+/// @param[in]  ctx        queue the kernels are enqueued on
+/// @param[in]  A          batch of \f$n \times n\f$ LU factors from getrf(); not modified
+/// @param[out] C          batch of \f$n \times n\f$ outputs, receives \f$ A^{-1} \f$; must not alias A
+/// @param[in]  pivots     pivots from getrf() on the same backend, `n * batch` entries
+/// @param[out] workspace  scratch of at least getri_buffer_size() bytes; contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend B, typename T>
@@ -131,6 +143,9 @@ inline Event getri(Queue& ctx,
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.
 ///
 /// Takes A alone: the kernel choice, and therefore the size, depends only on A.
+/// @param[in] ctx  queue the inversion will run on (kernel selection reads its device)
+/// @param[in] A    batch of \f$n \times n\f$ LU factors getri() will get; only the shape is read
+/// @return bytes to pass as the `workspace` span of getri()
 /// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
@@ -143,6 +158,14 @@ namespace batchlas::backend {
 
 /// @brief Vendor arm of getri(); called by getri() when it selects the `vendor`
 ///        kernel family, not by users.
+/// @param[in]  ctx        queue the kernels are enqueued on
+/// @param[in]  A          batch of \f$n \times n\f$ LU factors from getrf(); not modified
+/// @param[out] C          batch of \f$n \times n\f$ outputs, receives \f$ A^{-1} \f$
+/// @param[in]  pivots     pivots from getrf() on the same backend
+/// @param[out] workspace  scratch of at least getri_vendor_buffer_size() bytes; contents undefined
+///                        on return
+/// @param[out] info_out   per-item LAPACK status as getri()'s `info`; empty means not requested
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 // DECLARATION ONLY: the public getri is defined in src/ops/getri/getri.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
@@ -156,6 +179,9 @@ BATCHLAS_API Event getri_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of getri().
+/// @param[in] ctx  queue the call will run on
+/// @param[in] A    batch of \f$n \times n\f$ LU factors the call will get; only the shape is read
+/// @return bytes to pass as the `workspace` span of backend::getri_vendor()
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_vendor_buffer_size(Queue& ctx,

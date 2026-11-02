@@ -26,45 +26,70 @@ struct BATCHLAS_API UnifiedVector
     using pointer = T*;          ///< Pointer to an element.
     using size_t = std::size_t;  ///< Size and index type.
     /// @brief Allocates @p size uninitialised elements.
+    /// @param[in] size  number of elements; size and capacity of the new vector
     /// @throws std::bad_alloc if the allocation fails
     UnifiedVector(size_t size);
     /// @brief Allocates @p size elements set to @p value (filled on the host).
+    /// @param[in] size   number of elements
+    /// @param[in] value  value every element is set to
+    /// @throws std::bad_alloc if the allocation fails
     UnifiedVector(size_t size, T value);
     /// @brief Deep copy of @p other's first `size()` elements into a new allocation.
+    /// @param[in] other  vector to copy
+    /// @throws std::bad_alloc if the allocation fails
     UnifiedVector(const UnifiedVector<T> &other);
     /// @brief Deep copy of @p other's elements; reallocates only when this capacity is smaller.
     ///
     /// Trivially copyable `T` is copied with a device memcpy that is waited on.
+    /// @param[in] other  vector to copy
+    /// @return `*this`
+    /// @throws std::bad_alloc if the allocation fails; this vector is then unchanged
     UnifiedVector<T> &operator=(const UnifiedVector<T> &other);
     /// @brief Frees the allocation; never throws, even if the runtime reports an earlier async error.
     ~UnifiedVector();
 
     /// @brief Sets the size; reallocates (keeping the contents) only when @p new_size exceeds the capacity.
+    /// @param[in] new_size  new number of elements; elements past the old size hold unspecified values
+    ///                      (stale contents when within the capacity)
+    /// @throws std::bad_alloc if growing the allocation fails
     void resize(size_t new_size);
     /// @brief Grows to @p new_size, setting the new elements to @p value.
     /// @note A no-op unless @p new_size exceeds the capacity: it neither shrinks nor
     ///       grows within the existing capacity (unlike the one-argument resize()).
+    /// @param[in] new_size  new number of elements
+    /// @param[in] value     value the elements past the old size are set to
+    /// @throws std::bad_alloc if growing the allocation fails
     void resize(size_t new_size, T value);
     /// @brief Grows a ring buffer to @p new_size, unrolling its live segment to the front.
     ///
     /// The live data starts at @p front and ends with the @p seg_size elements at
-    /// @p back, wrapping when back < front. After the call it is contiguous from
+    /// @p back, wrapping when `back < front`. After the call it is contiguous from
     /// index 0 and the rest is value-initialised. No-op unless @p new_size exceeds
     /// the capacity.
+    /// @param[in] new_size  new number of elements, and the new capacity
+    /// @param[in] front     index of the first live element
+    /// @param[in] back      index of the start of the last live segment
+    /// @param[in] seg_size  elements in the segment starting at @p back
+    /// @throws std::bad_alloc if growing the allocation fails
     void resize(size_t new_size, size_t front, size_t back, size_t seg_size);
 
     /// @brief Ensures a capacity of at least @p new_capacity, keeping the contents and the size.
+    /// @param[in] new_capacity  minimum capacity in elements
+    /// @throws std::bad_alloc if growing the allocation fails
     void reserve(size_t new_capacity);
 
     /// @brief An empty vector with no allocation.
     UnifiedVector() : size_(0), capacity_(0), data_(nullptr) {}
     /// @brief Takes @p other's allocation and leaves @p other empty.
+    /// @param[in,out] other  vector whose allocation is taken; empty on return
     UnifiedVector(UnifiedVector<T> &&other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
         other.size_ = 0;
         other.capacity_ = 0;
         other.data_ = nullptr;
     }
     /// @brief Frees this vector's allocation, takes @p other's and leaves @p other empty.
+    /// @param[in,out] other  vector whose allocation is taken; empty on return
+    /// @return `*this`
     UnifiedVector<T> &operator=(UnifiedVector<T> &&other) {
         if (this == &other) return *this;
         UnifiedVector<T> previous(std::move(*this));  // its destructor frees the old allocation
@@ -81,11 +106,17 @@ struct BATCHLAS_API UnifiedVector
     inline constexpr operator Span<T>() const { return Span<T>(data_, size_); }
     /// @brief A Span over the first `size()` elements.
     inline constexpr Span<T> to_span() const { return Span<T>(data_, size_); }
-    /// @brief A Span over elements [@p offset, @p offset + @p count); not bounds-checked.
+    /// @brief A Span over elements \f$[\mathrm{offset}, \mathrm{offset} + \mathrm{count})\f$; not bounds-checked.
+    /// @param[in] offset  index of the first element
+    /// @param[in] count   number of elements
+    /// @return the sub-span; it aliases this vector's storage
     inline constexpr Span<T> subspan(size_t offset, size_t count) const { return Span<T>(data_ + offset, count); }
-    /// @brief A Span over elements [@p offset, size()).
+    /// @brief A Span over elements \f$[\mathrm{offset}, \mathrm{size}())\f$.
+    /// @param[in] offset  index of the first element; at most size()
+    /// @return the sub-span; it aliases this vector's storage
     inline constexpr Span<T> subspan(size_t offset) const { return Span<T>(data_ + offset, size_ - offset); }
     /// @brief Sets every element to @p data, on the host.
+    /// @param[in] data  value every element is set to
     inline constexpr void fill(T data) { std::fill(begin(), end(), data); }
     inline constexpr T *data() const { return data_; }               ///< Pointer to the first element (null when never allocated).
     inline constexpr size_t size() const { return size_; }           ///< Number of elements.
@@ -96,21 +127,33 @@ struct BATCHLAS_API UnifiedVector
     inline constexpr void clear() { size_ = 0; }
 
     /// @brief Element @p index; prints and asserts (debug build) when out of range.
+    /// @param[in] index  element index
+    /// @return reference to the element
     inline constexpr T &operator[](size_t index) { if(index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
     /// @brief Element @p index (const); same checks as the non-const overload.
+    /// @param[in] index  element index
+    /// @return const reference to the element
     inline constexpr const T &operator[](size_t index) const { if (index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
 
-    /// @brief Element @p index. @pre index < size() (asserted in debug builds, not thrown)
+    /// @brief Element @p index. @pre `index < size()` (asserted in debug builds, not thrown)
+    /// @param[in] index  element index
+    /// @return reference to the element
     inline constexpr T &at(size_t index) { assert(index < size_); return data_[index]; }
-    /// @brief Element @p index (const). @pre index < size()
+    /// @brief Element @p index (const). @pre `index < size()`
+    /// @param[in] index  element index
+    /// @return const reference to the element
     inline constexpr const T &at(size_t index) const { assert(index < size_); return data_[index]; }
 
     /// @brief Element-wise comparison with Span::operator== semantics.
+    /// @param[in] other  vector to compare with
+    /// @return true when the two compare equal as Spans
     inline bool operator==(const UnifiedVector<T> &other) const {
         return Span<T>(*this) == Span<T>(other);
     }
 
     /// @brief Appends @p value, doubling the capacity when full (which invalidates earlier Spans).
+    /// @param[in] value  element to append
+    /// @throws std::bad_alloc if growing the allocation fails
     inline void push_back(const T &value) {
         if(size_ == capacity_){
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
@@ -120,6 +163,8 @@ struct BATCHLAS_API UnifiedVector
     }
 
     /// @brief Appends @p value by move; growth as for the copying overload.
+    /// @param[in,out] value  element to append; moved from
+    /// @throws std::bad_alloc if growing the allocation fails
     inline void push_back(T &&value) {
         if(size_ == capacity_){
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
@@ -129,20 +174,25 @@ struct BATCHLAS_API UnifiedVector
     }
 
 
-    /// @brief Removes and returns the last element; keeps the capacity. @pre size() > 0
+    /// @brief Removes and returns the last element; keeps the capacity. @pre `size() > 0`
+    /// @return the removed element
     inline constexpr T pop_back() { assert(size_ > 0); return data_[--size_]; }
 
     /// @brief Prints the elements on the host as `[a, b, c]`, like Span's operator<<.
+    /// @param[in,out] os   stream written to
+    /// @param[in]     vec  vector to print
+    /// @return @p os
     template <typename U>
     friend std::ostream &operator<<(std::ostream &os, const UnifiedVector<U> &vec);
 
     inline constexpr T *begin() const { return data_; }            ///< Iterator to the first element.
     inline constexpr T *end() const { return data_ + size_; }      ///< Iterator one past the last element.
 
-    inline constexpr T &back() const { return data_[size_ - 1]; }  ///< Last element. @pre size() > 0
-    inline constexpr T &front() const { return data_[0]; }         ///< First element. @pre size() > 0
+    inline constexpr T &back() const { return data_[size_ - 1]; }  ///< Last element. @pre `size() > 0`
+    inline constexpr T &front() const { return data_[0]; }         ///< First element. @pre `size() > 0`
 
     /// @brief Exchanges storage, size and capacity with @p other; no element is copied.
+    /// @param[in,out] other  vector to exchange with; holds this vector's old storage on return
     inline constexpr void swap(UnifiedVector<T> &other) {
         std::swap(data_, other.data_);
         std::swap(size_, other.size_);
@@ -151,6 +201,10 @@ struct BATCHLAS_API UnifiedVector
 private:
     // USM shared allocation of @p n elements on the default device; throws std::bad_alloc on a
     // null return (n > 0), so a caller updates capacity_ only after it succeeded.
+    /// @brief USM shared allocation of @p n elements on the default device.
+    /// @param[in] n  number of elements to allocate
+    /// @return       the uninitialised allocation; may be null when @p n is 0
+    /// @throws std::bad_alloc if the allocation of n > 0 elements fails
     static T* alloc_shared(size_t n);
 
     size_t size_;
@@ -159,6 +213,8 @@ private:
 };
 
 /// @brief Swaps the storage of two vectors without copying; found by ADL.
+/// @param[in,out] lhs  first vector; holds @p rhs's old storage on return
+/// @param[in,out] rhs  second vector; holds @p lhs's old storage on return
 /// @ingroup api_matrix_lowlevel
 template <typename T>
 inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {

@@ -15,9 +15,9 @@
 
 namespace batchlas::ops::herk {
 
-struct Gram : select::NoFields<"gram"> {};      ///< syrk_gram_tiles<T, Conjugate=true>: one tile covers C; n <= 128
+struct Gram : select::NoFields<"gram"> {};      ///< syrk_gram_tiles<T, Conjugate=true>: one tile covers C; \f$n \le 128\f$
 struct Triangular : select::NoFields<"triangular"> {};  ///< syrk_triangular_tiles<T, Conjugate=true>; cfloat only
-struct Fold : select::NoFields<"fold"> {};      ///< public gemm of the whole n x n product into scratch + fold, chunked
+struct Fold : select::NoFields<"fold"> {};      ///< public gemm of the whole \f$n \times n\f$ product into scratch + fold, chunked
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::herk_vendor (per-item ?herk loop)
 
 using HerkChoice = std::variant<Gram, Triangular, Fold, Vendor>;  ///< fieldless: tile, chunk, gemm kernel derived
@@ -33,7 +33,7 @@ constexpr auto candidates() {
 inline constexpr std::array<std::string_view, 4> last_resort{"fold", "triangular", "gram", "vendor"};  ///< nothing in the row runs
 inline constexpr select::OpSpec spec{Op::herk, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: trans N|C exact; n = C's order, weight 2 (work ~ n^2 k batch); k = op(A)'s inner extent.
+/// Keys: trans N|C exact; n = C's order, weight 2 (work \f$\sim n^2 k \cdot \mathit{batch}\f$); k = op(A)'s inner extent.
 inline constexpr std::array<std::string_view, 4> key_names{"trans:exact", "n:log:2", "k:log", "batch:log"};
 
 // The transcription grid: 768|769 and 3|4 straddle the old rule (fold iff batch >= 4 and n <= 768).
@@ -54,9 +54,9 @@ constexpr std::int64_t gram_slm_bytes(std::int64_t n) {  ///< the staged [KC][ti
 }
 
 inline constexpr int kFoldWg = 256;  ///< fold_hermitian's work-group (expand_group_shape)
-inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
+inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' \f$16 \times 16\f$ work-group
 template <typename T>
-constexpr std::int64_t triangular_slm_bytes() {  ///< two staged 8 x 128 operand tiles
+constexpr std::int64_t triangular_slm_bytes() {  ///< two staged \f$8 \times 128\f$ operand tiles
     return std::int64_t(2) * 8 * 128 * std::int64_t(sizeof(T));
 }
 

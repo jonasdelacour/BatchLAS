@@ -12,8 +12,8 @@
 
 namespace batchlas::ops::gesvd {
 
-struct Jacobi : select::NoFields<"jacobi"> {};    ///< gesvdj_cta: one-sided Jacobi, max(m, n) <= 64, not Hermitian
-struct Cta : select::NoFields<"cta"> {};          ///< gesvd_cta: normal equations + syev_cta, max(m, n) <= 32, not thin
+struct Jacobi : select::NoFields<"jacobi"> {};    ///< gesvdj_cta: one-sided Jacobi, \f$\max(m, n) \le 64\f$, not Hermitian
+struct Cta : select::NoFields<"cta"> {};          ///< gesvd_cta: normal equations + syev_cta, \f$\max(m, n) \le 32\f$, not thin
 struct Blocked : select::NoFields<"blocked"> {};  ///< gesvd_blocked: bidiagonalisation + bdsdc, or syev_blocked (Lower)
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::gesvd_vendor; needs the solver library
 

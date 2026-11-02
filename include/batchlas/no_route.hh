@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// What a call throws when nothing in this build can serve it: no native kernel for
-// the shape and no vendor library compiled in. SYCL-free, so the op enum can key
-// installed headers too.
+/// @file
+/// @brief batchlas::NoRouteError, what a call throws when nothing in this build can serve it: no
+///        native kernel for the shape and no vendor library compiled in. SYCL-free, so the op enum
+///        can key installed headers too.
 
 #include <complex>
 #include <cstdint>
@@ -17,8 +18,9 @@
 
 namespace batchlas {
 
-// The public ops that can lack an implementation in a build (one per
-// include/batchlas/blas/functions/*.hh).
+/// @brief The public ops that can lack an implementation in a build (one per
+///        include/batchlas/blas/functions/*.hh); NoRouteError::op() names one.
+/// @ingroup api_errors
 enum class Op : uint8_t {
     gemm, gemv, trsm, trmm, symm, hemm, syrk, herk, syr2k, her2k,
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm,
@@ -26,8 +28,14 @@ enum class Op : uint8_t {
     COUNT
 };
 
+/// @brief Scalar type of a call that had no route: float, double, complex<float>, complex<double>.
+/// @ingroup api_errors
 enum class ScalarKind : uint8_t { F32, F64, C32, C64 };
 
+/// @brief The ScalarKind of scalar type @p T (any type that is not float, double or
+///        complex<float> maps to C64).
+/// @tparam T  scalar type
+/// @ingroup api_errors
 template <typename T>
 inline constexpr ScalarKind scalar_kind_of =
     std::is_same_v<T, float>                ? ScalarKind::F32 :
@@ -35,6 +43,10 @@ inline constexpr ScalarKind scalar_kind_of =
     std::is_same_v<T, std::complex<float>>  ? ScalarKind::C32 :
                                               ScalarKind::C64;
 
+/// @brief The C++ spelling of a ScalarKind, e.g. `"complex<float>"`.
+/// @param[in] s  scalar kind
+/// @return the type's name, or `"?"` for a value outside the enum
+/// @ingroup api_errors
 inline constexpr std::string_view to_string(ScalarKind s) {
     switch (s) {
         case ScalarKind::F32: return "float";
@@ -45,6 +57,10 @@ inline constexpr std::string_view to_string(ScalarKind s) {
     return "?";
 }
 
+/// @brief The lowercase name of an Op, e.g. `"getrf"`.
+/// @param[in] o  op
+/// @return the op's name, or `"?"` for `Op::COUNT` or a value outside the enum
+/// @ingroup api_errors
 inline constexpr std::string_view op_name(Op o) {
     switch (o) {
         case Op::gemm:  return "gemm";   case Op::gemv:  return "gemv";
@@ -66,20 +82,41 @@ inline constexpr std::string_view op_name(Op o) {
     return "?";
 }
 
-// The usual cause is a deliberate -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF, so the message
-// says which build switch brings an implementation back. A batchlas::unsupported (so also a
-// std::runtime_error); exported, or catch-by-type breaks under -fvisibility=hidden.
+/// @brief Thrown when no native kernel can run the call and no vendor library for the op is
+///        compiled in.
+///
+/// The usual cause is a deliberate `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, so the message
+/// says which build switch brings an implementation back. A batchlas::unsupported (so also a
+/// std::runtime_error).
+/// @ingroup api_errors
+// Exported, or catch-by-type breaks under -fvisibility=hidden.
 class BATCHLAS_API NoRouteError : public batchlas::unsupported {
 public:
+    /// @brief Builds the error and its message.
+    /// @param[in] op       the op that had no route
+    /// @param[in] backend  the backend the call was made for
+    /// @param[in] scalar   the call's scalar type
+    /// @param[in] detail   extra context appended to the message in parentheses; may be empty
     NoRouteError(Op op, Backend backend, ScalarKind scalar, std::string detail)
         : batchlas::unsupported(build_message(op, scalar, detail)),
           op_(op), backend_(backend), scalar_(scalar) {}
 
+    /// @brief The op that had no route.
+    /// @return the op passed at construction
     Op op() const { return op_; }
+    /// @brief The backend the call was made for.
+    /// @return the backend passed at construction
     Backend backend() const { return backend_; }
+    /// @brief The call's scalar type.
+    /// @return the scalar kind passed at construction
     ScalarKind scalar() const { return scalar_; }
 
 private:
+    /// @brief Builds the what() text: the op and scalar, @p detail, and the build switch to flip.
+    /// @param[in] op      the op that had no route
+    /// @param[in] scalar  the call's scalar type
+    /// @param[in] detail  extra context appended in parentheses; omitted when empty
+    /// @return the full error message
     static std::string build_message(Op op, ScalarKind scalar, const std::string& detail) {
         std::string m = "BatchLAS: no route for ";
         m += op_name(op);

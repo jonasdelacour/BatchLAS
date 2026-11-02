@@ -41,6 +41,8 @@ using gesv_buffer_size = size_t(Queue&,
 ///
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()` and equal
 /// batch sizes.
+/// @param[in] A  batch of \f$n \times n\f$ matrices
+/// @param[in] B  batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
 // Stricter than getrs_validate_params on purpose: getrs routes a non-conforming
@@ -85,14 +87,15 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n matrices; overwritten with L and U
-/// @param B           batch of n x nrhs right-hand sides; overwritten with X
-/// @param pivots      pivot output, `n * batch` entries in getrf()'s format
-/// @param workspace  device-accessible scratch of at least gesv_buffer_size() bytes
-/// @param info        per-item status as for getrf(): 0 on success, i > 0 if
-///                    U(i,i) is exactly zero (that item's X is meaningless).
-///                    Empty span = not requested.
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ matrices; overwritten with L and U
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[out] pivots     pivot output, `n * batch` entries in getrf()'s format
+/// @param[out] workspace  device-accessible scratch of at least gesv_buffer_size() bytes;
+///                        contents undefined on return
+/// @param[out] info       per-item status as for getrf(), one `int32_t` per item: 0 on success,
+///                        \f$i > 0\f$ if \f$U_{ii}\f$ is exactly zero (that item's X is
+///                        meaningless). Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
 /// @throws batchlas::workspace_error if the composed getrf + getrs route is
@@ -109,6 +112,12 @@ BATCHLAS_API Event gesv(Queue& ctx,
 /// @brief Workspace, in bytes, that gesv() needs for these operands on this queue.
 ///
 /// Takes the same operands as the call, so both resolve the same route.
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx  queue the call will run on
+/// @param[in] A    batch of \f$n \times n\f$ matrices, as passed to gesv()
+/// @param[in] B    batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides, as passed to gesv()
+/// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
 template <Backend Back, typename T>
@@ -117,6 +126,15 @@ BATCHLAS_API size_t gesv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& B);
 
 /// @brief gesv() without per-item status (`info` not requested).
+/// @tparam Back  backend
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ matrices; overwritten with L and U
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[out] pivots     pivot output, `n * batch` entries in getrf()'s format
+/// @param[out] workspace  device-accessible scratch of at least gesv_buffer_size() bytes;
+///                        contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend Back, typename T>

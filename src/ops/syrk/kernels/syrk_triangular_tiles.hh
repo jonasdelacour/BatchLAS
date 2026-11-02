@@ -131,8 +131,8 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 // Staging coordinates. NoTrans walks the output row index,
-                // which is the contiguous direction of a column-major n x k A;
-                // Trans walks k, which is the contiguous direction of a k x n A
+                // which is the contiguous direction of a column-major \f$n \times k\f$ A;
+                // Trans walks k, which is the contiguous direction of a \f$k \times n\f$ A
                 // and has to be transposed on the way into shared.
                 const int s_row = TransOperand ? tid / 2 : (tid % 32) * 4;
                 const int s_l = TransOperand ? (tid % 2) * 4 : tid / 32;
@@ -203,7 +203,7 @@ BATCHLAS_UNROLL_FULL
                         const TileVec4<T> a1 = tile_load4(&sa[kk * AStride + 64 + ty * Band]);
                         const TileVec4<T> b0 = tile_load4(&sb[kk * BStride + tx * Band]);
                         const TileVec4<T> b1 = tile_load4(&sb[kk * BStride + 64 + tx * Band]);
-                        // herk: A A^H conjugates the column factor, A^H A the row factor.
+                        // herk: \f$A A^{H}\f$ conjugates the column factor, \f$A^{H} A\f$ the row factor.
                         constexpr bool kConjA = Conjugate && TransOperand;
                         constexpr bool kConjB = Conjugate && !TransOperand;
                         const T af[ThreadTile] = {conj_if<kConjA>(a0.v[0]), conj_if<kConjA>(a0.v[1]),
@@ -283,7 +283,7 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-// Conjugate: herk's A A^H (NoTrans) or A^H A (ConjTrans), with a real diagonal; alpha and beta
+// Conjugate: herk's \f$A A^{H}\f$ (NoTrans) or \f$A^{H} A\f$ (ConjTrans), with a real diagonal; \f$\alpha\f$ and \f$\beta\f$
 // then carry herk's real scalars.
 template <typename T, bool Conjugate = false>
 Event syrk_triangular_tiles(Queue& ctx,

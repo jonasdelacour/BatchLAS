@@ -14,7 +14,7 @@
 namespace batchlas::ops::potri {
 
 struct Cta : select::NoFields<"cta"> {};  ///< sycl_potri::potri_cta: trtri + lauum in local memory, one launch
-/// LAPACK's blocked trtri then lauum: the CTA kernel on the nb x nb diagonal blocks, public trmm, gemm and herk/syrk.
+/// LAPACK's blocked trtri then lauum: the CTA kernel on the \f$nb \times nb\f$ diagonal blocks, public trmm, gemm and herk/syrk.
 struct Blocked {
     int nb = 64;  ///< diagonal block order; the CTA kernel must hold one block
     static constexpr std::string_view name = "blocked";
@@ -38,7 +38,7 @@ constexpr auto candidates() {
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "cta"};  ///< generality order (§5.5)
 inline constexpr select::OpSpec spec{Op::potri, select::Lib::none, {last_resort}};  ///< no library
 
-inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work ~ n^3 batch
+inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work \f$\sim n^3 \cdot \mathit{batch}\f$
 
 inline constexpr std::array<int, 18> grid_n{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512};
 inline constexpr std::array<int, 5> grid_batch{128, 512, 2048, 8192, 32768};

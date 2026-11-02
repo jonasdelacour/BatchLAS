@@ -37,10 +37,6 @@ inline void SyevCtaBenchSizesNetlib(Benchmark* b) {
     SyevCtaBenchSizes(b);
 }
 
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
 inline Uplo parse_uplo(int v) {
     return (v == 0) ? Uplo::Lower : Uplo::Upper;
 }

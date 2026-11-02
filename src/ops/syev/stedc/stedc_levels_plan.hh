@@ -15,7 +15,7 @@ struct StedcLevelPlan {
     int64_t padded_n = 0;  // leaf << levels
 };
 
-// Merge tree for an n x n tridiagonal and the tuned leaf threshold; `levels == 0` means
+// Merge tree for an \f$n \times n\f$ tridiagonal and the tuned leaf threshold; `levels == 0` means
 // no level plan applies (the caller falls back to the recursive driver).
 inline StedcLevelPlan plan_stedc_levels(int64_t n, int64_t threshold) {
     StedcLevelPlan plan{n, 0, n};

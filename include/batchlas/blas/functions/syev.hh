@@ -48,26 +48,29 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  * Computes \f$ A = Q \Lambda Q^H \f$ for every batch item from its `uplo` triangle.
  * The kernel family is the first entry of the nearest row of the device's tuned table
  * (`tuned/syev.<device>.txt`) that can run the call: on a GPU queue a native
- * tier (the n <= 32 sub-group solvers `cta`, `cta_fused` and `jacobi`, which need
- * sub-group size 32; `blocked` or `two_stage` at any n), otherwise `vendor`, the
+ * tier (the \f$n \le 32\f$ sub-group solvers `cta`, `cta_fused` and `jacobi`, which need
+ * sub-group size 32; `blocked` or `two_stage` at any \f$n\f$), otherwise `vendor`, the
  * solver library. Pin a family with `BATCHLAS_SYEV_ROUTE` (e.g. `two_stage`, `vendor`).
  * Asynchronous: returns once the work is enqueued.
  *
  * @tparam B  backend (NETLIB always runs the vendor LAPACKE path)
  * @tparam T  float, double, std::complex<float> or std::complex<double>
- * @param ctx         queue the work is enqueued on
- * @param descrA      batch of n x n matrices; with `JobType::EigenVectors` overwritten by
- *                    the orthonormal eigenvectors (column j pairs with eigenvalue j),
- *                    otherwise its contents are destroyed
- * @param eigenvalues n real eigenvalues per batch item, packed, ascending
- * @param jobtype     `EigenVectors` or `NoEigenVectors`
- * @param uplo        which triangle of `descrA` holds the matrix; only it is read (the
- *                    diagonal's imaginary part is taken as zero), the other may be overwritten
- * @param workspace   at least syev_buffer_size() bytes for the same arguments
- * @param info        per-item convergence status: 0 converged, > 0 LAPACK-like (the
- *                    number of off-diagonals that failed to converge, or 1 where the tier
- *                    only tracks failure). An EMPTY span means "not requested" and costs
- *                    nothing; syev_buffer_size() is the same either way.
+ * @param[in]     ctx          queue the work is enqueued on
+ * @param[in,out] descrA       batch of \f$n \times n\f$ symmetric/Hermitian matrices; with
+ *                             `JobType::EigenVectors` overwritten by the orthonormal eigenvectors
+ *                             (column \f$j\f$ pairs with eigenvalue \f$j\f$), otherwise its contents
+ *                             are destroyed
+ * @param[out]    eigenvalues  \f$n\f$ real eigenvalues per batch item, packed
+ *                             (\f$n \cdot \mathit{batch}\f$ elements), ascending
+ * @param[in]     jobtype      `EigenVectors` or `NoEigenVectors`
+ * @param[in]     uplo         which triangle of `descrA` holds the matrix; only it is read (the
+ *                             diagonal's imaginary part is taken as zero), the other may be overwritten
+ * @param[out]    workspace    scratch of at least syev_buffer_size() bytes for the same arguments;
+ *                             contents undefined on return
+ * @param[out]    info         per-item convergence status: 0 converged, \f$> 0\f$ LAPACK-like (the
+ *                             number of off-diagonals that failed to converge, or 1 where the tier
+ *                             only tracks failure). An EMPTY span means "not requested" and costs
+ *                             nothing; syev_buffer_size() is the same either way.
  * @return event of the last enqueued kernel
  * @throws batchlas::invalid_argument if `descrA` is not square
  * @throws batchlas::workspace_error if the workspace span is smaller than the chosen kernel needs
@@ -94,6 +97,14 @@ BATCHLAS_API Event syev(Queue& ctx,
 // evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
 /**
  * @brief syev() without the convergence status (`info` empty).
+ * @param[in]     ctx          queue the work is enqueued on
+ * @param[in,out] descrA       batch of \f$n \times n\f$ symmetric/Hermitian matrices; overwritten by
+ *                             the eigenvectors or destroyed, as in syev()
+ * @param[out]    eigenvalues  \f$n\f$ real eigenvalues per batch item, packed, ascending
+ * @param[in]     jobtype      `EigenVectors` or `NoEigenVectors`
+ * @param[in]     uplo         which triangle of `descrA` holds the matrix
+ * @param[out]    workspace    scratch of at least syev_buffer_size() bytes; contents undefined on return
+ * @return event of the last enqueued kernel
  * @ingroup api_eigen
  */
 template <Backend B, typename T>
@@ -111,6 +122,12 @@ inline Event syev(Queue& ctx,
  *
  * Makes the same kernel choice as the call, so the size is for the tier that will
  * run. `info` does not affect it.
+ * @param[in] ctx          queue the syev() call will run on (selection reads its device)
+ * @param[in] A            batch of \f$n \times n\f$ matrices the call will get; only the shape is read
+ * @param[in] eigenvalues  the call's eigenvalue span; its contents are not read
+ * @param[in] jobtype      the call's `JobType`
+ * @param[in] uplo         the call's triangle
+ * @return bytes to pass as the `workspace` span of syev()
  * @ingroup api_eigen_lowlevel
  */
 template <Backend B, typename T>
@@ -131,6 +148,17 @@ namespace batchlas::backend {
 /**
  * @brief The vendor solver's syev (cuSOLVER, rocSOLVER or a LAPACKE loop), as syev()'s
  *        `vendor` family calls it; same contract as syev(), with `info_out` as `info`.
+ * @param[in]     ctx          queue the work is enqueued on
+ * @param[in,out] descrA       batch of \f$n \times n\f$ symmetric/Hermitian matrices; overwritten by
+ *                             the eigenvectors or destroyed, as in syev()
+ * @param[out]    eigenvalues  \f$n\f$ real eigenvalues per batch item, packed, ascending
+ * @param[in]     jobtype      `EigenVectors` or `NoEigenVectors`
+ * @param[in]     uplo         which triangle of `descrA` holds the matrix
+ * @param[out]    workspace    scratch of at least syev_vendor_buffer_size() bytes; contents undefined
+ *                             on return
+ * @param[out]    info_out     per-item convergence status as syev()'s `info`; empty (the default)
+ *                             means "not requested"
+ * @return event of the last enqueued kernel
  * @ingroup api_dispatch
  */
 template <Backend B, typename T>
@@ -142,7 +170,16 @@ BATCHLAS_API Event syev_vendor(Queue& ctx,
                                Span<std::byte> workspace,
                                Span<int32_t> info_out = Span<int32_t>());
 
-/** @brief Workspace, in bytes, for backend::syev_vendor(). @ingroup api_dispatch */
+/**
+ * @brief Workspace, in bytes, for backend::syev_vendor().
+ * @param[in] ctx          queue the call will run on
+ * @param[in] descrA       batch of \f$n \times n\f$ matrices the call will get; only the shape is read
+ * @param[in] eigenvalues  the call's eigenvalue span; its contents are not read
+ * @param[in] jobtype      the call's `JobType`
+ * @param[in] uplo         the call's triangle
+ * @return bytes to pass as the `workspace` span of backend::syev_vendor()
+ * @ingroup api_dispatch
+ */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -154,14 +191,29 @@ BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas::ops::syev::detail {
 
-// Capability introspection for the Python binding: whether the cta / blocked / two_stage
-// kernel can run A on this queue's device. They ask syev's own can_run (src/ops/syev/syev.cc),
-// so they cannot drift from what selection does. `uplo` is accepted and ignored: both
-// large-n kernels mirror Upper into Lower.
+/// @brief Capability introspection for the Python binding: whether the `cta` kernel can run
+///        @p A on this queue's device. Asks syev's own can_run (src/ops/syev/syev.cc), so it
+///        cannot drift from what selection does.
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx  queue whose device is asked
+/// @param[in] A    batch of \f$n \times n\f$ matrices; only the shape is read
+/// @return true when the `cta` kernel can run @p A
 template <typename T>
 BATCHLAS_API bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
+/// @brief As syev_supports_cta(), for the `blocked` kernel.
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx   queue whose device is asked
+/// @param[in] A     batch of \f$n \times n\f$ matrices; only the shape is read
+/// @param[in] uplo  accepted and ignored: the kernel mirrors Upper into Lower
+/// @return true when the `blocked` kernel can run @p A
 template <typename T>
 BATCHLAS_API bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
+/// @brief As syev_supports_cta(), for the `two_stage` kernel.
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx   queue whose device is asked
+/// @param[in] A     batch of \f$n \times n\f$ matrices; only the shape is read
+/// @param[in] uplo  accepted and ignored: the kernel mirrors Upper into Lower
+/// @return true when the `two_stage` kernel can run @p A
 template <typename T>
 BATCHLAS_API bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
 

@@ -19,22 +19,24 @@ namespace batchlas {
 /// The symbolic phase keeps every entry whose level of fill is at most
 /// `levels_of_fill`. The numeric phase then prunes each row: entries at or below
 /// `drop_tolerance` times the row's scale (floored at 1) are dropped, and at most
-/// ceil(`fill_factor` x the row's original non-zero count) - 1 off-diagonal
-/// entries survive, largest magnitude first (ties by column). A pivot smaller
-/// than max(|`diagonal_shift`|, `diag_pivot_threshold` x max(row scale, 1)) is
-/// shifted by `diagonal_shift`, replaced by it, or raised to that threshold.
+/// \f$\lceil f \cdot r \rceil - 1\f$ off-diagonal entries survive, largest magnitude
+/// first (ties by column), where \f$f\f$ is `fill_factor` and \f$r\f$ the row's original
+/// non-zero count. A pivot smaller than
+/// \f$\max(\lvert \delta \rvert, \tau \cdot \max(s, 1))\f$, with \f$\delta\f$ = `diagonal_shift`,
+/// \f$\tau\f$ = `diag_pivot_threshold` and \f$s\f$ the row scale, is shifted by
+/// `diagonal_shift`, replaced by it, or raised to that threshold.
 /// @tparam T  scalar type; real-valued fields use its real counterpart
 /// @ingroup api_sparse
 template <typename T>
 struct ILUKParams {
-    int levels_of_fill = 0;  ///< k; 0 keeps exactly A's pattern. Must be >= 0.
+    int levels_of_fill = 0;  ///< \f$k\f$; 0 keeps exactly A's pattern. Must be \f$\ge 0\f$.
     T diagonal_shift = T(1e-8);  ///< added to (or substituted for) a pivot that is too small
-    typename base_type<T>::type drop_tolerance = typename base_type<T>::type(1e-4);  ///< relative drop threshold; >= 0
-    typename base_type<T>::type fill_factor = typename base_type<T>::type(10);  ///< per-row cap on kept entries relative to A's row; >= 1
-    typename base_type<T>::type diag_pivot_threshold = typename base_type<T>::type(0.1);  ///< relative pivot threshold; >= 0
+    typename base_type<T>::type drop_tolerance = typename base_type<T>::type(1e-4);  ///< relative drop threshold; \f$\ge 0\f$
+    typename base_type<T>::type fill_factor = typename base_type<T>::type(10);  ///< per-row cap on kept entries relative to A's row; \f$\ge 1\f$
+    typename base_type<T>::type diag_pivot_threshold = typename base_type<T>::type(0.1);  ///< relative pivot threshold; \f$\ge 0\f$
     bool modified_ilu = true;  ///< add dropped entries to the diagonal (MILU) instead of discarding them
     /// Check that every batch item shares one CSR pattern. Must stay true for
-    /// batch > 1: disabling the check is rejected.
+    /// \f$\mathrm{batch\_size} > 1\f$: disabling the check is rejected.
     bool validate_batch_sparsity = true;
 };
 
@@ -48,12 +50,12 @@ struct ILUKParams {
 template <typename T>
 struct ILUKView {
     MatrixView<T, MatrixFormat::CSR> lu;  ///< L (strict lower, unit diagonal implied) and U (upper, with diagonal)
-    Span<int> diag_positions;  ///< size n * batch_size, absolute indices into lu's values
+    Span<int> diag_positions;  ///< size \f$n \cdot \mathrm{batch\_size}\f$, absolute indices into lu's values
 
     Span<int> l_rows;       ///< row indices ordered by forward-solve level
-    Span<int> l_level_ptr;  ///< size l_levels + 1
+    Span<int> l_level_ptr;  ///< size \f$\mathrm{l\_levels} + 1\f$
     Span<int> u_rows;       ///< row indices ordered by backward-solve level
-    Span<int> u_level_ptr;  ///< size u_levels + 1
+    Span<int> u_level_ptr;  ///< size \f$\mathrm{u\_levels} + 1\f$
     int l_levels = 0;       ///< number of forward-solve levels
     int u_levels = 0;       ///< number of backward-solve levels
 
@@ -69,23 +71,23 @@ struct ILUKView {
 /// Holds L (unit diagonal, strict lower triangle) and U (upper triangle with its
 /// diagonal) in one CSR matrix, plus a level schedule for the two triangular
 /// solves: rows inside one level depend only on earlier levels, so iluk_apply
-/// walks `l_levels` / `u_levels` steps instead of n. One schedule serves the
+/// walks `l_levels` / `u_levels` steps instead of \f$n\f$. One schedule serves the
 /// whole batch. Build it with iluk_factorize; `view()` gives the ILUKView that
 /// iluk_apply takes.
 /// @tparam T  scalar type
 /// @ingroup api_sparse
 template <typename T>
 struct ILUKPreconditioner {
-    /// 1x1 placeholder with a single stored non-zero; iluk_factorize replaces it.
+    /// \f$1 \times 1\f$ placeholder with a single stored non-zero; iluk_factorize replaces it.
     ILUKPreconditioner() : lu(1, 1, NonZeros{1}, 1) {}
 
     Matrix<T, MatrixFormat::CSR> lu;  ///< L (strict lower, unit diagonal implied) and U (upper, with diagonal)
-    UnifiedVector<int> diag_positions;  ///< size n * batch_size
+    UnifiedVector<int> diag_positions;  ///< size \f$n \cdot \mathrm{batch\_size}\f$
 
     UnifiedVector<int> l_rows;       ///< row indices ordered by forward-solve level
-    UnifiedVector<int> l_level_ptr;  ///< size l_levels + 1
+    UnifiedVector<int> l_level_ptr;  ///< size \f$\mathrm{l\_levels} + 1\f$
     UnifiedVector<int> u_rows;       ///< row indices ordered by backward-solve level
-    UnifiedVector<int> u_level_ptr;  ///< size u_levels + 1
+    UnifiedVector<int> u_level_ptr;  ///< size \f$\mathrm{u\_levels} + 1\f$
     int l_levels = 0;  ///< number of forward-solve levels
     int u_levels = 0;  ///< number of backward-solve levels
 
@@ -104,6 +106,7 @@ struct ILUKPreconditioner {
     bool modified_ilu = true;  ///< the ILUKParams value it was built with
 
     /// @brief Non-owning view of this factor; valid while `*this` is alive and unmodified.
+    /// @return an ILUKView aliasing this factor's storage
     ILUKView<T> view() const {
         ILUKView<T> v;
         v.lu = lu.view();
@@ -126,8 +129,11 @@ struct ILUKPreconditioner {
 ///
 /// iluk_factorize already does this; call it only for an ILUKPreconditioner
 /// assembled by hand, because iluk_apply requires a valid schedule. Runs on the
-/// host and reads `M.lu`'s row offsets and column indices.
-/// @param M  factor whose `lu`, `n` are set; its schedule fields are overwritten
+/// host and reads `M.lu`'s row offsets, column indices and diagonal values (at `diag_positions`).
+/// @param[in,out] M  factor whose `lu`, `n`, `batch_size`, `diag_positions` and
+///                   `diagonal_shift` are set; its schedule fields (`l_rows`, `l_level_ptr`,
+///                   `l_levels`, `u_rows`, `u_level_ptr`, `u_levels`) and
+///                   `u_diagonals_usable` are overwritten
 /// @throws batchlas::invalid_argument if `M.n <= 0`
 /// @ingroup api_sparse_lowlevel
 template <typename T>
@@ -141,9 +147,9 @@ BATCHLAS_API void iluk_build_level_schedule(ILUKPreconditioner<T>& M);
 /// large batches and on the host otherwise (`BATCHLAS_ILUK_DEVICE` forces either).
 /// @tparam B  backend the call is compiled for
 /// @tparam T  scalar type
-/// @param ctx     queue used for the device phase and allocations
-/// @param A       batch of square CSR matrices; not modified
-/// @param params  fill, drop and pivot controls
+/// @param[in] ctx     queue used for the device phase and allocations
+/// @param[in] A       batch of \f$n \times n\f$ CSR matrices sharing one sparsity pattern; not modified
+/// @param[in] params  fill, drop and pivot controls
 /// @return the owning factor, ready for iluk_apply
 /// @throws batchlas::invalid_argument if `A` is not square, a parameter is out of
 ///         range, or the batch items do not share one pattern
@@ -159,9 +165,11 @@ BATCHLAS_API ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
 ///
 /// An upper bound: it sizes against the symbolic ILU(k) pattern, and the numeric
 /// phase only prunes. Costs one host-side symbolic factorization of item 0.
-/// @param ctx     queue the factorization will run on
-/// @param A       the matrix batch that will be factored
-/// @param params  the parameters that will be used
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx     queue the factorization will run on
+/// @param[in] A       the batch of \f$n \times n\f$ CSR matrices that will be factored
+/// @param[in] params  the parameters that will be used
 /// @return required workspace size in bytes
 /// @throws batchlas::invalid_argument for a non-square `A`, out-of-range params,
 ///         or `validate_batch_sparsity == false` with a batch of more than one
@@ -177,12 +185,15 @@ BATCHLAS_API size_t iluk_buffer_size(Queue& ctx,
 /// preconditioner out of a workspace it already holds. The exact footprint is
 /// only known after the numeric phase, so it is reported through `bytes_used`
 /// rather than predicted.
-/// @param ctx         queue used for the device phase
-/// @param A           batch of square CSR matrices sharing one pattern; not modified
-/// @param workspace   at least iluk_buffer_size bytes of USM the host can write
-///                    (the level schedule is copied in from the host)
-/// @param params      fill, drop and pivot controls
-/// @param bytes_used  if non-null, receives the bytes of `workspace` the factor occupies
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx          queue used for the device phase
+/// @param[in] A            batch of \f$n \times n\f$ CSR matrices sharing one pattern; not modified
+/// @param[out] workspace   at least iluk_buffer_size bytes of USM the host can write
+///                         (the level schedule is copied in from the host); receives the
+///                         factor and must outlive the returned view
+/// @param[in] params       fill, drop and pivot controls
+/// @param[out] bytes_used  if non-null, receives the bytes of `workspace` the factor occupies
 /// @return a view that aliases `workspace` and is valid only while it is
 /// @throws batchlas::invalid_argument, batchlas::convergence_error as the owning overload
 /// @ingroup api_sparse
@@ -199,11 +210,13 @@ BATCHLAS_API ILUKView<T> iluk_factorize(Queue& ctx,
 /// diagonal) and then \f$U x = y\f$ by level-scheduled sparse triangular solves,
 /// and writes \f$x\f$ to `out`. Asynchronous: nothing is waited on, so repeated
 /// applications inside an iterative solver stay pipelined.
-/// @param ctx        queue the kernel is enqueued on
-/// @param M          factor from iluk_factorize
-/// @param rhs        batch of n x nrhs right-hand sides; not modified
-/// @param out        batch of n x nrhs results
-/// @param workspace  unused; iluk_apply_buffer_size is 0
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx        queue the kernel is enqueued on
+/// @param[in] M          factor from iluk_factorize, with a level schedule
+/// @param[in] rhs        batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; not modified
+/// @param[out] out       batch of \f$n \times \mathrm{nrhs}\f$ results \f$x = (LU)^{-1} r\f$
+/// @param[in] workspace  unused (iluk_apply_buffer_size is 0); may be empty
 /// @return event of the solve kernel
 /// @throws batchlas::invalid_argument if `rhs` / `out` rows differ from `M.n`,
 ///         their column counts differ, their batch size differs from
@@ -218,6 +231,14 @@ BATCHLAS_API Event iluk_apply(Queue& ctx,
                               Span<std::byte> workspace = Span<std::byte>());
 
 /// @brief iluk_apply on an owning factor; forwards `M.view()`.
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx       queue the kernel is enqueued on
+/// @param[in] M          owning factor from iluk_factorize
+/// @param[in] rhs        batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; not modified
+/// @param[out] out       batch of \f$n \times \mathrm{nrhs}\f$ results \f$x = (LU)^{-1} r\f$
+/// @param[in] workspace  unused (iluk_apply_buffer_size is 0); may be empty
+/// @return event of the solve kernel
 /// @ingroup api_sparse
 template <Backend B, typename T>
 Event iluk_apply(Queue& ctx,
@@ -229,6 +250,13 @@ Event iluk_apply(Queue& ctx,
 }
 
 /// @brief Bytes of workspace iluk_apply needs; currently always 0.
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx queue the apply will run on
+/// @param[in] M    factor that will be applied
+/// @param[in] rhs  batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides that will be passed
+/// @param[in] out  batch of \f$n \times \mathrm{nrhs}\f$ results that will be passed
+/// @return required workspace size in bytes (0)
 /// @ingroup api_sparse_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t iluk_apply_buffer_size(Queue& ctx,
@@ -237,6 +265,13 @@ BATCHLAS_API size_t iluk_apply_buffer_size(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& out);
 
 /// @brief iluk_apply_buffer_size on an owning factor; forwards `M.view()`.
+/// @tparam B  backend the call is compiled for
+/// @tparam T  scalar type
+/// @param[in] ctx queue the apply will run on
+/// @param[in] M    owning factor that will be applied
+/// @param[in] rhs  batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides that will be passed
+/// @param[in] out  batch of \f$n \times \mathrm{nrhs}\f$ results that will be passed
+/// @return required workspace size in bytes (0)
 /// @ingroup api_sparse_lowlevel
 template <Backend B, typename T>
 size_t iluk_apply_buffer_size(Queue& ctx,

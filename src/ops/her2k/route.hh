@@ -33,7 +33,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 
 // Correctness only (R3). Every family runs each item at the top-level (n, k), so none takes a
 // heterogeneous operand. Fold is chunked over the batch (grid z, scratch budget), so it refuses
-// only an item whose own n x n product does not fit; it runs over the public gemm, so ROCm too.
+// only an item whose own \f$n \times n\f$ product does not fit; it runs over the public gemm, so ROCm too.
 template <Backend B, typename T>
 bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {

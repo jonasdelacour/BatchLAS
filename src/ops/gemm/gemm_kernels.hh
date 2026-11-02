@@ -103,7 +103,7 @@ BATCHLAS_INTERNAL_API Event gemm_tiled(Queue& ctx, const MatrixView<T, MatrixFor
                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                        Transpose transA, Transpose transB);
 
-// Every scalar; max(m, n, k) <= 64, or 32 for complex<double> (ops::gemm::small_max_dim).
+// Every scalar; \f$\max(m, n, k) \le 64\f$, or 32 for complex<double> (ops::gemm::small_max_dim).
 template <typename T>
 BATCHLAS_INTERNAL_API Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                                        const MatrixView<T, MatrixFormat::Dense>& B,

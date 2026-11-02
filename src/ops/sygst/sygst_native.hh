@@ -42,8 +42,8 @@ constexpr std::size_t diag_slm_bytes(int kb) {
     return (bytes + 15) / 16 * 16;
 }
 
-// The kb x kb diagonal block of every item, in place, reading and writing only the uplo triangles:
-// itype 1 C = F^-1 A F^-H, itypes 2, 3 C = F^H A F, with F = L (Lower) or U^H (Upper).
+// The \f$kb \times kb\f$ diagonal block of every item, in place, reading and writing only the uplo triangles:
+// itype 1 \f$C = F^{-1} A F^{-H}\f$, itypes 2, 3 \f$C = F^H A F\f$, with \f$F = L\f$ (Lower) or \f$U^H\f$ (Upper).
 // With `full`, the whole Hermitian result (real diagonal) is also stored there. A null `mask` is every
 // item; otherwise item b is skipped where mask[b] == 0 (both kernels).
 template <typename T>
@@ -51,7 +51,7 @@ BATCHLAS_INTERNAL_API Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t
                                        std::ptrdiff_t stride_b, int kb, int batch, int itype, Uplo uplo, T* full,
                                        int ldf, std::ptrdiff_t stride_f, const std::uint8_t* mask);
 
-// full := the whole Hermitian kb x kb block whose uplo triangle a holds (the other is not read).
+// full := the whole Hermitian \f$kb \times kb\f$ block whose uplo triangle a holds (the other is not read).
 template <typename T>
 BATCHLAS_INTERNAL_API Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int kb, int batch,
                                          Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f,
