@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Device LA v2, syevx-family extension (general ops): RtGroup, a run-time-width executor;
-// group_sync, allreduce; lazy / flipped / cols_flipped operands; abs2, scale_re; sumsq,
+// group_sync, allreduce; lazy / flipped / cols_flipped operands; abs2, scale_re, sub_scaled; sumsq,
 // sumsq_mat; 2-D lacpy, laset, swap_mat; count_le. A 2-D op hands l = r + c*m to owner
 // l mod width, so ops on one executor and shape compose with no barrier.
 
@@ -102,11 +102,37 @@ template <class T> BATCHLAS_DLA_INLINE T scale_re(real_t<T> s, T x) {
     if constexpr (A::is_complex) return A::make(s * A::re(x), s * A::im(x));
     else return s * x;
 }
+// a - s x for a real s, one expression per component so it contracts to FMA (as `a - T(s) * x`
+// does for real T); complex: no cross terms.
+template <class T> BATCHLAS_DLA_INLINE T sub_scaled(T a, real_t<T> s, T x) {
+    using A = Arith<T>;
+    if constexpr (A::is_complex) return A::make(A::re(a) - s * A::re(x), A::im(a) - s * A::im(x));
+    else return a - s * x;
+}
+
+namespace detail {
+// acc += |x|^2 as ONE expression: fp-contract=on fuses only within an expression, so a
+// separate abs2() return would cost the FMA a legacy `acc += d * d` gets.
+template <class R, class T> BATCHLAS_DLA_INLINE void acc_abs2(R& acc, T x) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) acc += A::re(x) * A::re(x) + A::im(x) * A::im(x);
+    else acc += x * x;
+}
+}  // namespace detail
 
 // sum |x_i|^2 over the executor's scope (unscaled lassq: overflows past sqrt(max)).
 template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto sumsq(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
-    return reduce<S>(ex, x.size(), [&](int i) -> R { return abs2(x(i)); });
+    R acc = R(0);
+    if constexpr (is_thread_v<Ex>) {
+        // Serial and rolled in PTX. ptxas still unrolls it x4 (FilterResidual f32 LDG 8 -> 18,
+        // total +8%); without the pragma LLVM unrolls too (LDG 82, +98%), as does an int64 counter.
+#pragma nounroll
+        for (int i = 0; i < x.size(); ++i) detail::acc_abs2(acc, x(i));
+    } else {
+        for_each_owned(ex, x.size(), [&](int i) { detail::acc_abs2(acc, x(i)); });
+    }
+    return detail::scope_reduce<S>(ex, acc);
 }
 
 // The m x n index space, column-major, flat over the executor: f(r, c) for every owned element.
@@ -121,7 +147,7 @@ template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned_2d(const Ex
 template <Scope S = Scope::Auto, class Ex, class MA> BATCHLAS_DLA_INLINE auto sumsq_mat(const Ex& ex, const MA& a) {
     using R = real_t<typename MA::value_type>;
     R acc = R(0);
-    for_each_owned_2d(ex, a.rows(), a.cols(), [&](int r, int c) { acc += abs2(a(r, c)); });
+    for_each_owned_2d(ex, a.rows(), a.cols(), [&](int r, int c) { detail::acc_abs2(acc, a(r, c)); });
     return detail::scope_reduce<S>(ex, acc);
 }
 

@@ -48,10 +48,10 @@ namespace batchlas {
 
 namespace {
 
-// The residual kernel's R/norm sweep. true: one sub-group per column, its three squared norms
-// reduced by shuffles (deterministic, no SLM atomics, no zero-init barrier). false: the flat
-// sweep with per-column SLM atomics it replaced, kept compilable for the SASS and runtime A/B.
-constexpr bool kResidualTeamPerColumn = true;
+// Residual R/norm sweep. true: a sub-group per column, norms by shuffles (deterministic, no SLM
+// atomics, one barrier fewer). false: the flat sweep with per-column SLM atomics; the default until
+// a runtime A/B, as on sm_89 true costs f64 +24% SASS (40 CALLs: double sub-group reductions).
+constexpr bool kResidualTeamPerColumn = false;
 
 // BATCHLAS_SYEVX_PROJECTED_VENDOR: the tiny projected solves (XtAX, StAS) go to the vendor syev.
 // The run path and the buffer size must both read it, or vendor-free sizing throws.
@@ -462,7 +462,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
                         namespace v2 = batchlas::device::v2;
-                        const v2::WorkGroup<static_cast<int>(wg)> ex{item};
+                        const v2::RtGroup<> ex{item};
                         const int bid = int(item.get_group_linear_id());
                         if (masked && !mk[bid]) return;  // I1, before the group reductions
                         const auto Ab = Akv.batch_item(bid);
@@ -628,7 +628,6 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const bool find_largest = params.find_largest;
                 batchlas::impl::parallel_for<SyevxResidualsKernel<B,T,MFormat>>(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     namespace v2 = batchlas::device::v2;
-                    using Ar = v2::Arith<T>;
                     const v2::RtGroup<> ex{item};
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
@@ -669,7 +668,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const auto x = Xb.col(c), ax = AXb.col(c), r = Rb.col(c);
                             float_type pr = 0, px = 0, pax = 0;
                             v2::for_each_owned(tm, nn, [&](int i) {
-                                const T rv = Ar::sub(ax(i), v2::scale_re(lam, x(i)));
+                                const T rv = v2::sub_scaled(ax(i), lam, x(i));
                                 r(i) = rv;
                                 pr += v2::abs2(rv);
                                 px += v2::abs2(x(i));
@@ -783,8 +782,14 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     if (want_eigenvectors && update_best[0] != 0) {
                         // Where the largest-first presentation happens: slot i of the snapshot
                         // takes column block_vectors-1-i of X, folded into this copy.
-                        v2::lacpy(ex, v2::cols_flipped(Xb.sub(0, find_largest ? nb - ne : 0, nn, ne), find_largest),
-                                  v2::mat(Xbest_data + bid * (n * neigs), nn, ne, nn));
+                        // A flat loop, not lacpy(cols_flipped(...)): that costs f64 REG 48 -> 52,
+                        // at WG 256 one resident group fewer per SM (5 -> 4).
+                        auto* blockXbest = Xbest_data + bid * (n * neigs);
+                        for (int i = int(ex.lid()); i < int(n * neigs); i += ex.width()) {
+                            const int64_t slot = i / int(n);
+                            const int64_t row = i - slot * int(n);
+                            blockXbest[i] = Xb.p[(find_largest ? (block_vectors - 1 - slot) : slot) * int64_t(n) + row];
+                        }
                     }
 
                     v2::group_sync(ex);
@@ -910,7 +915,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             namespace v2 = batchlas::device::v2;
-                            const v2::WorkGroup<128> ex{item};
+                            const v2::RtGroup<> ex{item};
                             const auto bid = item.get_group_linear_id();
                             if (masked && !mk[bid]) return;  // I1
                             const int nn = int(n), nb = int(nblk);
@@ -927,15 +932,16 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             // filler matches the live block's scale: a unit-norm filler
                             // beside 1e-6 residual columns hands Chol2 a Gram matrix
                             // with condition ~1e12.
-                            for (int j = 0; j < nb; ++j) {
-                                if (locked(j)) continue;
-                                const float_type s = v2::sumsq<v2::Scope::Group>(ex, Rb.col(j));
+                            for (int64_t j = 0; j < nblk; ++j) {
+                                if (locked(int(j))) continue;
+                                const float_type s = v2::sumsq<v2::Scope::Group>(ex, Rb.col(int(j)));
                                 if (ex.leader()) colnorm[j] = sycl::sqrt(s);
                             }
                             v2::group_sync(ex);
                             if (ex.leader()) {
                                 float_type mx = 0;
-                                for (int j = 0; j < nb; ++j) mx = sycl::fmax(mx, colnorm[j]);
+                                // int64, as legacy: an int loop unrolls (LDS 17 -> 25), nounroll undershoots (13).
+                                for (int64_t j = 0; j < nblk; ++j) mx = sycl::fmax(mx, colnorm[j]);
                                 // Every column locked (possible when the caller asks for
                                 // no guard block): fall back to a unit scale so the
                                 // filler still produces a full-rank block.
@@ -1038,7 +1044,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             namespace v2 = batchlas::device::v2;
-                            const v2::WorkGroup<128> ex{item};
+                            const v2::RtGroup<> ex{item};
                             const auto bid = item.get_group_linear_id();
                             if (masked && !mk[bid]) return;  // I1
                             const auto Rb = v2::mat(Rdata + int64_t(bid) * R_stride, int(n), int(nlock), int(R_ld));
@@ -1058,7 +1064,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     auto Sdata = S.data_ptr();
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*128)}, sycl::range{size_t(128)}), [=](sycl::nd_item<1> item){
                         namespace v2 = batchlas::device::v2;
-                        const v2::WorkGroup<128> ex{item};
+                        const v2::RtGroup<> ex{item};
                         auto bid = item.get_group_linear_id();
                         if (masked && !mk[bid]) return;  // I1
                         const int len = int(n * block_vectors);
@@ -1111,7 +1117,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             namespace v2 = batchlas::device::v2;
-                            const v2::WorkGroup<128> ex{item};
+                            const v2::RtGroup<> ex{item};
                             const auto bid = item.get_group_linear_id();
                             if (masked && !mk[bid]) return;  // I1, before the group reductions
                             const auto H = v2::mat(StAS_ptr + int64_t(bid) * StAS_stride, int(nv), int(nv), int(StAS_ld));

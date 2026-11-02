@@ -292,7 +292,7 @@ Event syevx_filtered(Queue& ctx,
                                   sycl::range{static_cast<size_t>(rwg)}),
                 [=](sycl::nd_item<1> item) {
                     namespace v2 = batchlas::device::v2;
-                    const v2::WorkGroup<rwg> ex{item};
+                    const v2::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
                     // Partials are interleaved (lo, hi) pairs, one per row group.
@@ -381,8 +381,7 @@ Event syevx_filtered(Queue& ctx,
                                       sycl::range{static_cast<size_t>(wg)}),
                     [=](sycl::nd_item<1> item) {
                         namespace v2 = batchlas::device::v2;
-                        using Ar = v2::Arith<T>;
-                        const v2::WorkGroup<wg> ex{item};
+                        const v2::RtGroup<> ex{item};
                         const int b = static_cast<int>(item.get_group_linear_id());
                         // I1, before the reduction. "Converged" is the neutral flag: the host
                         // loop then stops on the active items alone.
@@ -396,7 +395,7 @@ Event syevx_filtered(Queue& ctx,
                             const int col = large ? static_cast<int>(mm) - 1 - j : j;
                             const Real lam = th[b * mm + col];
                             const auto r = v2::lazy(static_cast<int>(nn), [&](int i) {
-                                return Ar::sub(AXk(i, col, b), v2::scale_re(lam, Xk(i, col, b)));
+                                return v2::sub_scaled(AXk(i, col, b), lam, Xk(i, col, b));
                             });
                             const Real nrm = sycl::sqrt(v2::sumsq(v2::Thread{}, r));
                             rn[b * kk + j] = nrm;
@@ -552,12 +551,12 @@ Event syevx_filtered(Queue& ctx,
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
-                        using Ar = batchlas::device::v2::Arith<T>;
                         using batchlas::device::v2::scale_re;
+                        using batchlas::device::v2::sub_scaled;
                         // D := ca (A S - c S) - cb P, every scalar real.
-                        const T av = Ar::sub(Tk(r, c, b), scale_re(cvals[b], Sk(r, c, b)));
+                        const T av = sub_scaled(Tk(r, c, b), cvals[b], Sk(r, c, b));
                         T out = scale_re(ca[b], av);
-                        if (!is_first) out = Ar::sub(out, scale_re(cb[b], Pk(r, c, b)));
+                        if (!is_first) out = sub_scaled(out, cb[b], Pk(r, c, b));
                         Dk(r, c, b) = out;
                     });
             });
@@ -655,7 +654,7 @@ Event syevx_filtered(Queue& ctx,
                                   sycl::range{static_cast<size_t>(wg)}),
                 [=](sycl::nd_item<1> item) {
                     namespace v2 = batchlas::device::v2;
-                    const v2::WorkGroup<wg> ex{item};
+                    const v2::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
                     const int n_ = static_cast<int>(nn), m_ = static_cast<int>(mm), k_ = static_cast<int>(kk);

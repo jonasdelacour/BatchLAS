@@ -299,7 +299,7 @@ TYPED_TEST(DeviceBlasV2SyevxTest, CountLeAndScalarHelpers) {
     const R* x = this->dev.up(hx);
     const R* qv = this->dev.up(hq);
     int* cnt = this->dev.up(std::vector<int>(hq.size() + 1, -7));
-    T* sc = this->dev.up(std::vector<T>(2, T(0)));
+    T* sc = this->dev.up(std::vector<T>(4, T(0)));
     R* ab = this->dev.up(std::vector<R>(1, R(0)));
     const int nq = static_cast<int>(hq.size()), nx = static_cast<int>(hx.size());
     T z, hinf;
@@ -312,22 +312,29 @@ TYPED_TEST(DeviceBlasV2SyevxTest, CountLeAndScalarHelpers) {
         cnt[nq] = v2::count_le(v2::vec(x, 0), R(0));  // empty
         sc[0] = v2::scale_re(R(2), hinf);
         sc[1] = v2::scale_re(R(-0.5), z);
+        sc[2] = v2::sub_scaled(z, R(2), hinf);
+        sc[3] = v2::sub_scaled(z, R(-0.5), z);
         ab[0] = v2::abs2(z);
     });
     const auto gc = this->dev.down(cnt, hq.size() + 1);
     for (int q = 0; q < nq; ++q) EXPECT_EQ(gc[q], want[q]) << "query " << q;
     EXPECT_EQ(gc[nq], 0) << "empty array";
-    const auto gs = this->dev.down(sc, 2);
+    const auto gs = this->dev.down(sc, 4);
     const auto ga = this->dev.down(ab, 1);
     if constexpr (is_cplx<T>) {
         // No cross terms: (2 + 0i)(1 + inf i) by the full product has 0 * inf = NaN in Re.
         EXPECT_EQ(gs[0].real(), R(2));
         EXPECT_EQ(gs[0].imag(), inf);
         EXPECT_TRUE(same_bits(gs[1], T(R(-1.5), R(-2))));
+        EXPECT_EQ(gs[2].real(), R(1));
+        EXPECT_EQ(gs[2].imag(), -inf);
+        EXPECT_TRUE(same_bits(gs[3], T(R(4.5), R(6))));
         EXPECT_EQ(ga[0], R(25));
     } else {
         EXPECT_EQ(gs[0], inf);
         EXPECT_TRUE(same_bits(gs[1], T(R(-1.5))));
+        EXPECT_EQ(gs[2], -inf);
+        EXPECT_TRUE(same_bits(gs[3], T(R(4.5))));
         EXPECT_EQ(ga[0], R(9));
     }
 }
