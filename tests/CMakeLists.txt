@@ -734,6 +734,32 @@ if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
                 ${_device_calls_args})
     set_tests_properties(device_calls_tests PROPERTIES
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+
+    # sass_parity_tests: the gate's rule self-test, then each committed SASS snapshot of the
+    # device-LA v2 kernels against this build with the algo thresholds. Exit 2 ("A/B": an
+    # occupancy step) fails here too. Skips (77) without an NVPTX image of the snapshot's arch.
+    file(GLOB _sass_snapshots CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sass_snapshots/*.json")
+    set(_sass_parity "\"${Python3_EXECUTABLE}\" \"${PROJECT_SOURCE_DIR}/scripts/sass_parity.py\"")
+    set(_sass_check "--cand \"${PROJECT_BINARY_DIR}\"")
+    foreach(_snap ${_sass_snapshots})
+        string(APPEND _sass_check " --snapshot-check \"${_snap}\"")
+    endforeach()
+    if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
+        string(APPEND _sass_check " --cuobjdump \"${CUDAToolkit_BIN_DIR}/cuobjdump\"")
+    endif()
+    add_test(NAME sass_parity_tests
+        COMMAND sh -c "${_sass_parity} --self-test && ${_sass_parity} ${_sass_check}")
+    set_tests_properties(sass_parity_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 900)
+endif()
+
+# kernel_entry_calls_tests: v2-using kernel bodies never call a local lambda or a view's
+# operator() directly (the DPC++ SemaSYCL kernel-body quirk); see the script's docstring.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME kernel_entry_calls_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_kernel_entry_calls.py"
+                --root "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(kernel_entry_calls_tests PROPERTIES LABELS "util")
 endif()
 
 # no_raw_subgroup_queries: every sub-group capability check goes through
