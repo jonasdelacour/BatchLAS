@@ -132,15 +132,17 @@ namespace batchlas {
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
                     constexpr int kP = static_cast<int>(P);
-                    using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<kP>, v2::Mem::Local>;
-                    const Tile tile{&A_local[base_a], {}, {}, {}};
-                    // An inactive item reduces a zero tile: its source block is 0 x 0.
-                    const int32_t n_src = live ? n : 0;
-                    const auto A = v2::mat(A_prob.data(), n_src, n_src, A_prob.ld());
+                    // Offset views over the accessor base: the uniform base keeps [R.X4+UR] addressing.
+                    using Local = sycl::local_accessor<T, 1>;
+                    using Tile = v2::OffMat<Local, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<kP>>;
+                    const Tile tile{A_local, base_a, {}, {}, {}};
+                    // Extents from the kernel's n, so every guard below tests the same value.
+                    const auto A = v2::mat(A_prob.data(), n, n, A_prob.ld());
 
                     // The Hermitian tile from the named triangle only (defect 14), each lane loading its
-                    // row coalesced; Im(diag) dropped as {c,z}hetrd does; zero past n.
-                    v2::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower>(v2::fit(ex), A, tile);
+                    // row coalesced; Im(diag) dropped as {c,z}hetrd does; zero past n. An inactive item
+                    // reduces a zero tile.
+                    v2::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower>(v2::fit(ex), A, tile, live);
                     v2::team_barrier(ex);
 
                     if constexpr (Upper) {
@@ -157,8 +159,8 @@ namespace batchlas {
                         }
                     } else {
                         // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then).
-                        v2::sytd2<Uplo::Lower>(ex, tile, v2::vec<v2::Mem::Local>(&V_local[base_v], n),
-                                               v2::vec<v2::Mem::Local>(&W_local[base_w], n), n,
+                        v2::sytd2<Uplo::Lower>(ex, tile, v2::OffVec<Local>{V_local, base_v, v2::Dyn{n}},
+                                               v2::OffVec<Local>{W_local, base_w, v2::Dyn{n}}, n,
                                                [&](int32_t i, const T& beta, const T& taui) {
                                                    if (live) {
                                                        E_prob(i) = beta;

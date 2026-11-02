@@ -147,9 +147,10 @@ Event update_vw_lower_small_legacy(Queue& q,
                 if (r < c || (mask != nullptr && mask[b] == 0)) return;  // I3
 
                 namespace dla = batchlas::device::v2;
-                const auto A = dla::mat(a_ptr + b * stride_a, n2, n2, lda);
-                const auto V = dla::mat(v_ptr + b * stride_v, n2, ib, ldv);
-                const auto W = dla::mat(w_ptr + b * stride_w, n2, ib, ldw);
+                // Offset views: element (i, j) is p[i + j * ld], the legacy kernel's index form.
+                const auto A = dla::off_mat(a_ptr + b * stride_a, n2, n2, lda);
+                const auto V = dla::off_mat(v_ptr + b * stride_v, n2, ib, ldv);
+                const auto W = dla::off_mat(w_ptr + b * stride_w, n2, ib, ldw);
 
                 // One lower her2k entry: A(r, c) -= V(r, :) W(c, :)^H + W(r, :) V(c, :)^H.
                 const T acc = dla::dot2c(dla::Thread{}, V.row(r), W.row(c), W.row(r), V.row(c));
@@ -255,9 +256,10 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                 T* Eb = e_ptr + b * stride_e;
                 T* Taub = tau_ptr + b * stride_tau;
-                const auto Ag = dla::mat(a_ptr + b * stride_a, n, n, lda);
-                const auto Al = dla::mat<dla::Mem::Local>(batchlas::util::get_raw_ptr(A_local), n, n, n);
-                const auto Wl = dla::vec<dla::Mem::Local>(batchlas::util::get_raw_ptr(W_local), n);
+                // Offset views over the accessors: the legacy kernel's A_local[r + c * n] indexing.
+                const auto Ag = dla::off_mat(a_ptr + b * stride_a, n, n, lda);
+                const auto Al = dla::off_mat<dla::Mem::Local>(A_local, n, n, n);
+                const auto Wl = dla::OffVec<sycl::local_accessor<T, 1>>{W_local, 0, dla::Dyn{n}};
 
                 dla::lacpy(ex, Ag, Al);
                 dla::team_barrier(ex);

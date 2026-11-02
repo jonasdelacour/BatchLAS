@@ -127,6 +127,54 @@ template <class Ex, class T> BATCHLAS_DLA_INLINE T broadcast(const Ex& ex, T v, 
     }
 }
 
+// ---- operands ----------------------------------------------------------------------------
+// Views at a base B (a pointer, or a sycl::local_accessor) plus an int32 element offset, for
+// tiles carved per team out of one local accessor. With the accessor as B every access is the
+// hand kernels' A_local[off + i + j * ld]: a uniform base sm_89 folds into [R.X4+UR] addressing,
+// and the same IR size, so LLVM makes the same unrolling decisions. A Vec/Mat at &A_local[off]
+// costs an IMAD per access and unrolls differently.
+template <class B> using base_elem_t = std::remove_cvref_t<decltype(std::declval<const B&>()[0])>;
+
+template <class B, class N = Dyn, class Inc = Unit, Mem M = Mem::Local> struct OffVec {
+    using value_type = base_elem_t<B>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    B p;
+    int off;
+    N n;
+    Inc inc{};
+
+    BATCHLAS_DLA_INLINE auto& operator()(int i) const { return p[off + i * int(inc)]; }
+    BATCHLAS_DLA_INLINE int size() const { return int(n); }
+    BATCHLAS_DLA_INLINE OffVec<B, Dyn, Inc, M> tail(int k) const { return {p, off + k * int(inc), Dyn{int(n) - k}, inc}; }
+    BATCHLAS_DLA_INLINE OffVec<B, Dyn, Inc, M> head(int k) const { return {p, off, Dyn{k}, inc}; }
+};
+
+template <class B, class R = Dyn, class C = Dyn, class Ld = Dyn, Mem M = Mem::Local> struct OffMat {
+    using value_type = base_elem_t<B>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    B p;
+    int off;
+    R m;
+    C n;
+    Ld ld;
+
+    BATCHLAS_DLA_INLINE auto& operator()(int i, int j) const { return p[off + i + j * int(ld)]; }
+    BATCHLAS_DLA_INLINE int rows() const { return int(m); }
+    BATCHLAS_DLA_INLINE int cols() const { return int(n); }
+    BATCHLAS_DLA_INLINE OffVec<B, R, Unit, M> col(int j) const { return {p, off + j * int(ld), m}; }
+    BATCHLAS_DLA_INLINE OffVec<B, C, Ld, M> row(int i) const { return {p, off + i, n, ld}; }
+    BATCHLAS_DLA_INLINE OffMat<B, Dyn, Dyn, Ld, M> sub(int i, int j, int r, int c) const {
+        return {p, off + i + j * int(ld), Dyn{r}, Dyn{c}, ld};
+    }
+};
+
+// m x n at base p (a pointer or local accessor), leading dimension ld: A(i, j) is p[i + j * ld].
+template <Mem M = Mem::Global, class B> BATCHLAS_DLA_INLINE OffMat<B, Dyn, Dyn, Dyn, M> off_mat(B p, int m, int n, int ld) {
+    return {p, 0, Dyn{m}, Dyn{n}, Dyn{ld}};
+}
+
 // ---- scalars and element kernels -----------------------------------------------------------
 // |a|^2 as one expression (re*re + im*im).
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T a) {
@@ -209,6 +257,7 @@ template <class V> struct ImpliedUnit {
         return i == k ? Arith<value_type>::one() : static_cast<value_type>(v(i));
     }
     BATCHLAS_DLA_INLINE int size() const { return v.size(); }
+    BATCHLAS_DLA_INLINE ImpliedUnit<decltype(std::declval<V>().tail(0))> tail(int t) const { return {v.tail(t), k - t}; }
 };
 template <class V> BATCHLAS_DLA_INLINE ImpliedUnit<V> implied_unit(V v, int k) { return {v, k}; }
 
@@ -306,12 +355,15 @@ template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void lacpy(const Ex&
 
 // tile := the Hermitian matrix whose UL triangle is a (n x n, n = a.rows()), Im(diag) dropped,
 // zero past n up to the tile's extent. Item r reads row r of the triangle (coalesced) and writes
-// it and its conjugate mirror, so a barrier must precede reads of other rows.
-template <Uplo UL, class Ex, class MA, class MT> BATCHLAS_DLA_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& tile) {
+// it and its conjugate mirror, so a barrier must precede reads of other rows. active == false
+// (a masked-off batch item) zero-fills the whole tile and reads nothing.
+template <Uplo UL, class Ex, class MA, class MT>
+BATCHLAS_DLA_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& tile, bool active = true) {
     using T = typename MT::value_type;
     using Ar = Arith<T>;
     const int n = a.rows(), r = ex.owned();
-    if (r >= 0 && r < n) {
+    if (r < 0 || r >= tile.rows()) return;
+    if (active && r < n) {
         for (int c = 0; c < n; ++c) {
             if (UL == Uplo::Upper ? r > c : r < c) continue;
             T v = a(r, c);
@@ -323,7 +375,7 @@ template <Uplo UL, class Ex, class MA, class MT> BATCHLAS_DLA_INLINE void lacpy_
             tile(r, c) = v;
         }
         for (int c = n; c < tile.cols(); ++c) tile(r, c) = Ar::zero();
-    } else if (r >= 0 && r < tile.rows()) {
+    } else {
         for (int c = 0; c < tile.cols(); ++c) tile(r, c) = Ar::zero();
     }
 }
