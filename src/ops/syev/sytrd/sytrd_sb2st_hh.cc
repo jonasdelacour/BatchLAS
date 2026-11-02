@@ -162,7 +162,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 const v2::HermBandLower<T> A{AB, ldw, kdw};
 
                 // --- Load the input band into the expanded working band (rows past kd read 0).
-                v2::for_each_owned(ex, ldw * n, [&](int32_t idx) {
+                v2::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t col = idx / ldw;
                     const int32_t row = idx - col * ldw;
                     AB[idx] = (row <= kd_i) ? ABs(row, col) : T(0);
@@ -171,7 +171,9 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                 // Hermitian input: force a real diagonal before we start.
                 if constexpr (detail::is_complex<T>::value) {
-                    v2::for_each_owned(ex, n, [&](int32_t j) { AB[j * ldw] = real_part_as_T(AB[j * ldw]); });
+                    v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
+                        AB[j * ldw] = real_part_as_T(AB[j * ldw]);
+                    });
                     v2::group_barrier(ex);
                 }
 
@@ -189,7 +191,9 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                     const T kappa = v2::dotc<v2::arith::Native>(ex, v, w);
                     const T coef = tau * batchlas::device::detail::conj(tau) * kappa * T(Real(0.5));
-                    v2::map(ex, w, [=](T wi, T vi) { return batchlas::device::detail::conj(tau) * wi - coef * vi; }, w, v);
+                    // The loop is written out: through for_each_owned ptxas unrolls it 4x (latch layout).
+                    for (int i = ex.lid(); i < m; i += decltype(ex)::size)
+                        w(i) = batchlas::device::detail::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
                     v2::group_barrier(ex);
 
                     v2::her2<Uplo::Lower>(rows, v2::NegOne{}, v2::assume_published(w), v2::assume_published(v), W);
@@ -222,12 +226,14 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                     // v = (1; scale x), read before the column is overwritten below.
                     if (ex.leader()) v(0) = T(1);
-                    v2::map(ex, v.tail(1), [=](T xi) { return (h.tau == T(0)) ? T(0) : xi * h.scale; }, y.tail(1));
+                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY {
+                        v(k + 1) = (h.tau == T(0)) ? T(0) : static_cast<T>(y(k + 1)) * h.scale;
+                    });
                     v2::group_barrier(ex);
 
                     if (ex.leader()) y(0) = h.beta;
-                    v2::map(ex, y.tail(1), [] { return T(0); });
-                    v2::copy_pad(ex, v, v2::mat(Vb).col(slot).head(kd_i));
+                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY { y(k + 1) = T(0); });
+                    v2::copy_pad(ex, v, v2::col_of(Vb, slot, 0, kd_i));
                     if (ex.leader()) TAUv(slot, b) = h.tau;
                     v2::group_barrier(ex);
                     return h.tau;
@@ -265,7 +271,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 (void)ldv;
 
                 // --- Extract the tridiagonal.
-                v2::for_each_owned(ex, n, [&](int32_t j) {
+                v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
                     const T diag = A.get(j, j);
                     ABt(0, j) = real_part_as_T(diag);
                     if constexpr (detail::is_complex<T>::value) {
@@ -274,7 +280,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                         Dv(j, b) = static_cast<Real>(diag);
                     }
                 });
-                v2::for_each_owned(ex, n - 1, [&](int32_t j) {
+                v2::for_each_owned(ex, n - 1, [&](int32_t j) BATCHLAS_DLA_BODY {
                     const T sub = A.get(j + 1, j);
                     ABt(1, j) = sub;  // signed: the phase pass consumes this
                     Ev(j, b) = detail::abs(sub);
@@ -359,11 +365,11 @@ Event unmqr_hb2st_wave(Queue& ctx,
                 const v2::StridedTeams<C, kWg> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
-                const auto V = v2::mat(Vv.batch_item(b));
+                const auto V = Vv.batch_item(b);
 
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
@@ -384,12 +390,13 @@ Event unmqr_hb2st_wave(Queue& ctx,
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
                         v2::larf<Side::Left, v2::larf_form::ScaleV>(
-                            cols, v2::assume_published(V.col(k).head(L)), tau, v2::row_major_tile<C>(Zl + s * C, L));
+                            cols, v2::assume_published(v2::col_of(V, k, 0, L)), tau,
+                            v2::win_of(v2::row_major_tile<C>(Zl, n), s, 0, L, C));
                     }
                     v2::group_barrier(ex);
                 }
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
@@ -452,12 +459,12 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                 const v2::StridedTeams<C> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
-                const auto V = v2::mat(Vv.batch_item(b));
+                const auto V = Vv.batch_item(b);
 
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 // Load the column tile once.
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
@@ -471,11 +478,12 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
                     v2::larf<Side::Left, v2::larf_form::ScaleV>(
-                        cols, v2::assume_published(V.col(k).head(L)), tau, v2::row_major_tile<C>(Zl + s * C, L));
+                        cols, v2::assume_published(v2::col_of(V, k, 0, L)), tau,
+                        v2::win_of(v2::row_major_tile<C>(Zl, n), s, 0, L, C));
                     v2::group_barrier(cols);
                 }
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
@@ -677,8 +685,8 @@ streaming:
                 const int32_t c0 = chunk * kBackCols;
                 const int32_t c1 = sycl::min(c0 + kBackCols, ncols);
 
-                const auto Z = v2::mat(Zv.batch_item(b));
-                const auto V = v2::mat(Vv.batch_item(b));
+                const auto Z = Zv.batch_item(b);
+                const auto V = Vv.batch_item(b);
 
                 for (int32_t k = nrefl - 1; k >= 0; --k) {
                     const T tau = TAUv(k, b);
@@ -688,7 +696,7 @@ streaming:
 
                     // L may exceed the 32 lanes (kd > 32): the lanes stride the reflector.
                     v2::larf<Side::Left, v2::larf_form::ScaleV>(
-                        ex, v2::assume_published(V.col(k).head(L)), tau, Z.sub(s, c0, L, c1 - c0));
+                        ex, v2::assume_published(v2::col_of(V, k, 0, L)), tau, v2::win_of(Z, s, c0, L, c1 - c0));
                 }
             });
     });

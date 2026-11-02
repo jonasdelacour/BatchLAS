@@ -18,6 +18,12 @@
 #include <batchlas/blas/device/v2/dla.hh>
 #include <batchlas/util/group-collectives.hh>
 
+// A lambda handed to a v2 loop primitive (for_each_owned, the team loops) is inlined together
+// with the primitive, so the loop body is complete before the loop passes see it.
+#ifndef BATCHLAS_DLA_BODY
+#define BATCHLAS_DLA_BODY __attribute__((always_inline))
+#endif
+
 namespace batchlas::device::v2 {
 
 namespace arith {
@@ -61,7 +67,7 @@ template <class G, class T> BATCHLAS_DLA_INLINE T shfl_xor(const G& g, const T& 
 template <int Lo, int Hi, Bfly O, class G, class T, class Op> BATCHLAS_DLA_INLINE T bfly(const G& g, T v, Op op) {
     constexpr bool plus = std::is_same_v<Op, sycl::plus<T>>;
     static_assert(plus || !Arith<T>::is_complex, "v2: a complex team reduction is a sum");
-    auto step = [&](std::uint32_t m) {
+    auto step = [&](std::uint32_t m) BATCHLAS_DLA_BODY {
         if constexpr (plus) v += shfl_xor(g, v, m);
         else v = op(v, shfl_xor(g, v, m));
     };
@@ -107,14 +113,14 @@ template <int C, int WG = 32, int SG = 32> struct StridedTeams {
     static constexpr bool sub_whole = true;
     static constexpr Scope natural_scope = Scope::Sub;
     sycl::nd_item<1> it;
+    int lane_ = (WG == SG) ? static_cast<int>(it.get_local_linear_id())
+                           : static_cast<int>(it.get_local_linear_id()) % SG;
+    int grp_ = lane_ / C;  // member index (the hand kernels' grp)
+    int col_ = lane_ % C;  // team index (the hand kernels' col)
 
-    BATCHLAS_DLA_INLINE int lane() const {
-        const int l = static_cast<int>(it.get_local_linear_id());
-        if constexpr (WG == SG) return l;
-        else return l % SG;
-    }
-    BATCHLAS_DLA_INLINE int lid() const { return lane() / C; }
-    BATCHLAS_DLA_INLINE int team() const { return lane() % C; }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
+    BATCHLAS_DLA_INLINE int lid() const { return grp_; }
+    BATCHLAS_DLA_INLINE int team() const { return col_; }
     BATCHLAS_DLA_INLINE bool leader() const { return lid() == 0; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
         return detail::bfly<C, SG, Bfly::Up>(it.get_sub_group(), v, op);
@@ -166,6 +172,44 @@ template <class T, class RS = Dyn, class CS = Dyn> struct StridedMat {
 template <int C, class T> BATCHLAS_DLA_INLINE StridedMat<T, Ext<C>, Unit> row_major_tile(T* p, int m) {
     return {p, m, C};
 }
+
+// Index-form sub-views of any 2-D operand (a v2 Mat, a StridedMat, a v1 KernelMatrixView):
+// element (i, j) is a(i0 + i, j0 + j), so the base pointer never moves. A moved 64-bit
+// pointer is one more live register pair per view and reorders the index arithmetic.
+template <class M> struct WinOf {
+    using value_type = std::remove_cvref_t<decltype(std::declval<const M&>()(0, 0))>;
+    M a;
+    int i0, j0, m, n;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return a(i0 + i, j0 + j); }
+    BATCHLAS_DLA_INLINE int rows() const { return m; }
+    BATCHLAS_DLA_INLINE int cols() const { return n; }
+};
+// a(i0 : i0 + n, j): a column segment of any 2-D operand, in index form.
+template <class M> struct ColOf {
+    using value_type = std::remove_cvref_t<decltype(std::declval<const M&>()(0, 0))>;
+    M a;
+    int i0, j, n;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return a(i0 + i, j); }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DLA_INLINE ColOf tail(int k) const { return {a, i0 + k, j, n - k}; }
+    BATCHLAS_DLA_INLINE ColOf head(int k) const { return {a, i0, j, k}; }
+};
+template <class M> BATCHLAS_DLA_INLINE WinOf<M> win_of(const M& a, int i0, int j0, int m, int n) {
+    return {a, i0, j0, m, n};
+}
+template <class M> BATCHLAS_DLA_INLINE ColOf<M> col_of(const M& a, int j, int i0, int n) { return {a, i0, j, n}; }
+
+// x(t) = f(t), t < n: a vector over an index map, f returning the element (a reference to write
+// through). Each element keeps the caller's own address expression, e.g. a band chase's rotation
+// sequence AB(r, j1 + t kd1 + dc), so a port keeps the hand kernel's index arithmetic.
+template <class F> struct FnVec {
+    using value_type = std::remove_cvref_t<decltype(std::declval<const F&>()(0))>;
+    F f;
+    int n;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return f(i); }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+};
+template <class F> BATCHLAS_DLA_INLINE FnVec<F> fn_vec(int n, F f) { return {f, n}; }
 
 // A Hermitian (real: symmetric) matrix in LAPACK lower band storage, half-bandwidth kd:
 // A(i, j), i >= j, lives at p[(i - j) + j * ld]. A(i, j) above the diagonal reads conj(A(j, i));
@@ -252,7 +296,11 @@ template <class AP, Scope S = Scope::Auto, class Ex, class X, class Y>
 BATCHLAS_DLA_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
     using T = detail::vt<X>;
     T acc = T(0);
-    for_each_owned(ex, x.size(), [&](int i) { acc += detail::nconj(static_cast<T>(x(i))) * static_cast<T>(y(i)); });
+    // Kept rolled (.pragma "nounroll"): on a WorkGroup the trip count is ceil(n / WG), one for
+    // the sb2st window (n <= kd < WG), and ptxas unrolls this loop 4x on a flipped latch.
+#pragma unroll 1
+    for (int i = ex.lid(); i < x.size(); i += Ex::size)
+        acc += detail::nconj(static_cast<T>(x(i))) * static_cast<T>(y(i));
     return detail::scope_reduce<S>(ex, acc);
 }
 
@@ -261,7 +309,7 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto nrm
     using T = detail::vt<X>;
     using R = real_t<T>;
     R acc = R(0);
-    for_each_owned(ex, x.size(), [&](int i) { acc += detail::abs2n(static_cast<T>(x(i))); });
+    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DLA_BODY { acc += detail::abs2n(static_cast<T>(x(i))); });
     return detail::scope_reduce<S>(ex, acc);
 }
 
@@ -269,14 +317,23 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto nrm
 template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void copy_pad(const Ex& ex, const X& x, const Y& y) {
     using T = detail::vt<Y>;
     const int m = x.size();
-    for_each_owned(ex, y.size(), [&](int i) { y(i) = (i < m) ? static_cast<T>(x(i)) : T(0); });
+    for_each_owned(ex, y.size(), [&](int i) BATCHLAS_DLA_BODY { y(i) = (i < m) ? static_cast<T>(x(i)) : T(0); });
+}
+
+// B(0:m, 0:n) := A(0:m, 0:n) (LAPACK xLACPY, full), column by column; rows over the Cyclic
+// layout. Elements are addressed as A(i, j), so a strided base never moves its pointer.
+// The loops are written out: through for_each_owned ptxas unrolls the row loop 8x more.
+template <class Ex, class MA, class MB>
+BATCHLAS_DLA_INLINE void lacpy(const Ex& ex, int m, int n, const MA& a, const MB& b) {
+    for (int j = 0; j < n; ++j)
+        for (int i = ex.lid(); i < m; i += Ex::size) b(i, j) = a(i, j);
 }
 
 // x := conj(x) (LAPACK xLACGV); a no-op for real T.
 template <class Ex, class X> BATCHLAS_DLA_INLINE void conj_inplace(const Ex& ex, const X& x) {
     using T = detail::vt<X>;
     if constexpr (Arith<T>::is_complex)
-        for_each_owned(ex, x.size(), [&](int i) { x(i) = detail::nconj(static_cast<T>(x(i))); });
+        for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DLA_BODY { x(i) = detail::nconj(static_cast<T>(x(i))); });
 }
 
 // ---- Householder ------------------------------------------------------------------------------
@@ -334,7 +391,7 @@ BATCHLAS_DLA_INLINE void larf(const Ex& ex, const VP& vp, Tau tau, const MC& c) 
     const auto& v = detail::unpub(vp);
     const int nout = left ? c.cols() : c.rows();
     const int len = left ? c.rows() : c.cols();
-    detail::for_each_team_out(ex, nout, [&](int o, bool live) {
+    detail::for_each_team_out(ex, nout, [&](int o, bool live) BATCHLAS_DLA_BODY {
         T w = T(0);
         if (live) {
             for (int k = ex.lid(); k < len; k += Ex::size) {
@@ -366,7 +423,7 @@ BATCHLAS_DLA_INLINE void hemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
     const auto alpha = as_tag(alpha_);
     const auto beta = as_tag(beta_);
     const int m = a.rows(), n = a.cols();
-    detail::for_each_team_out(ex, m, [&](int r, bool live) {
+    detail::for_each_team_out(ex, m, [&](int r, bool live) BATCHLAS_DLA_BODY {
         T acc = T(0);
         if (live) {
             for (int j = ex.lid(); j < n; j += Ex::size) acc += static_cast<T>(a(r, j)) * static_cast<T>(x(j));
@@ -421,7 +478,7 @@ template <class Rot, class Ex, class X, class Y, class C>
 BATCHLAS_DLA_INLINE void largv(const Ex& ex, const X& x, const Y& y, const C& c) {
     using T = detail::vt<X>;
     using R = real_t<T>;
-    for_each_owned(ex, x.size(), [&](int t) {
+    for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY {
         const T f = x(t);
         const T g = y(t);
         R ct = R(0);
@@ -437,19 +494,19 @@ BATCHLAS_DLA_INLINE void largv(const Ex& ex, const X& x, const Y& y, const C& c)
 // (x(t), y(t)) := rotation t applied to the pair  (xLARTV)
 template <class Rot, class Ex, class X, class Y, class C, class S>
 BATCHLAS_DLA_INLINE void lartv(const Ex& ex, const X& x, const Y& y, const C& c, const S& s) {
-    for_each_owned(ex, x.size(), [&](int t) { Rot::rot_pair(x(t), y(t), c(t), s(t)); });
+    for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY { Rot::rot_pair(x(t), y(t), c(t), s(t)); });
 }
 
 // two-sided rotation t of the 2x2 Hermitian block [x z; conj(z) y]  (xLAR2V)
 template <class Rot, class Ex, class X, class Y, class Z, class C, class S>
 BATCHLAS_DLA_INLINE void lar2v(const Ex& ex, const X& x, const Y& y, const Z& z, const C& c, const S& s) {
-    for_each_owned(ex, x.size(), [&](int t) { Rot::lar2v_pair(x(t), y(t), z(t), c(t), s(t)); });
+    for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY { Rot::lar2v_pair(x(t), y(t), z(t), c(t), s(t)); });
 }
 
 // one rotation (c, s) applied to the vector pair (x, y)  (xROT)
 template <class Rot, class Ex, class X, class Y, class Rc, class Sc>
 BATCHLAS_DLA_INLINE void rot(const Ex& ex, const X& x, const Y& y, Rc c, const Sc& s) {
-    for_each_owned(ex, x.size(), [&](int i) { Rot::rot_pair(x(i), y(i), c, s); });
+    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DLA_BODY { Rot::rot_pair(x(i), y(i), c, s); });
 }
 
 }  // namespace batchlas::device::v2

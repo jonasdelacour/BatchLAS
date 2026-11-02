@@ -211,7 +211,7 @@ Event btrd_lower_inplace(Queue& q,
             Real* const Cp = C.data_ptr();  // C / WORK are built with inc = 1
             T* const Wp = WORK.data_ptr();
 
-            v2::for_each_owned(ex, n + kd + 2, [&](int i) {
+            v2::for_each_owned(ex, n + kd + 2, [&](int i) BATCHLAS_DLA_BODY {
                 C[i] = Real(0);
                 WORK[i] = T(0);
             });
@@ -220,7 +220,6 @@ Event btrd_lower_inplace(Queue& q,
             const int kd1 = kd + 1;
             const int kdm1 = kd - 1;
             const int incx = ldab - 1;
-            const int inca = kd1 * ldab;
             const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
             auto idx = [&](int r, int c) -> int { return r + c * ldab; };
@@ -229,10 +228,23 @@ Event btrd_lower_inplace(Queue& q,
             int j1 = kdn + 1;
             int j2 = 0;
 
-            // The rotation sequence j = j1 + t kd1, t < cnt: its C / WORK entries, and the band
-            // entries AB(r, col + t kd1) one rotation apart (stride inca).
-            auto seq = [&](auto* p, int cnt) { return v2::vec(p + j1, cnt, kd1); };
-            auto band_seq = [&](int r, int col, int cnt) { return v2::vec(AB + idx(r, col), cnt, inca); };
+            // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
+            // band entries AB(r, j + dc), addressed as the scalar loops address them.
+            auto rseq = [&](int cnt, auto at) {
+                return v2::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+                    return at(j1 + t * kd1);
+                });
+            };
+            auto Cj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return C[j]; };
+            auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
+            auto Cpj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return Cp[j]; };
+            auto Wpj = [&](int j) BATCHLAS_DLA_BODY -> T& { return Wp[j]; };
+            auto band = [&](int r, int dc) {
+                return [&ABv, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return ABv(r, j + dc); };
+            };
+            auto band_p = [&](int r, int dc) {
+                return [&idx, AB, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB[idx(r, j + dc)]; };
+            };
 
             if (ex.leader()) {
                 shared_ints[0] = nr;
@@ -245,7 +257,7 @@ Event btrd_lower_inplace(Queue& q,
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (detail::is_complex<T>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
-                v2::for_each_owned(ex, n, [&](int j) { diag[j] = detail::real_as_T(diag[j]); });
+                v2::for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { diag[j] = detail::real_as_T(diag[j]); });
                 v2::group_barrier(ex);
             }
 
@@ -268,7 +280,7 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLARGV: the rotations annihilating the fill WORK(j) against AB(kd, j - kd1).
-                        v2::largv<Ops>(ex, band_seq(kd, j1 - kd1, nr), seq(Wp, nr), seq(Cp, nr));
+                        v2::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                         v2::group_barrier(ex);
 
                         if (nr > 2 * kd - 1) {
@@ -277,8 +289,8 @@ Event btrd_lower_inplace(Queue& q,
                             // columns and rotations are kd1 columns apart: one barrier for the nest
                             // (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
-                                v2::lartv<Ops>(ex, band_seq(kd - 1 - l, j1 - kd1 + l + 1, nr),
-                                               band_seq(kd - l, j1 - kd1 + l + 1, nr), seq(Cp, nr), seq(Wp, nr));
+                                v2::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                               rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj), rseq(nr, Wj));
                             }
                             v2::group_barrier(ex);
                         } else {
@@ -330,13 +342,13 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                        v2::lar2v<Ops>(ex, band_seq(0, j1 - 1, nr), band_seq(0, j1, nr), band_seq(1, j1 - 1, nr),
-                                       seq(Cp, nr), seq(Wp, nr));
+                        v2::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
+                                       rseq(nr, Cpj), rseq(nr, Wpj));
                         v2::group_barrier(ex);
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                         if constexpr (detail::is_complex<T>::value) {
-                            v2::conj_inplace(ex, seq(Wp, nr));
+                            v2::conj_inplace(ex, rseq(nr, Wj));
                             v2::group_barrier(ex);
                         }
 
@@ -347,8 +359,8 @@ Event btrd_lower_inplace(Queue& q,
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
-                                    v2::lartv<Ops>(ex, band_seq(l + 2, j1 - 1, nrt), band_seq(l + 1, j1, nrt),
-                                                   seq(Cp, nrt), seq(Wp, nrt));
+                                    v2::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                                   rseq(nrt, Cj), rseq(nrt, Wj));
                                 }
                             }
                             v2::group_barrier(ex);
@@ -391,7 +403,7 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
-                        v2::for_each_owned(ex, nr, [&](int t) {
+                        v2::for_each_owned(ex, nr, [&](int t) BATCHLAS_DLA_BODY {
                             const int j = j1 + t * kd1;
                             WORK[j + kd] = WORK[j] * ABv(kd, j);
                             ABv(kd, j) = T(C[j]) * ABv(kd, j);
@@ -509,10 +521,7 @@ Event sytrd_sb2st(Queue& ctx,
             h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
-                const auto AB = v2::mat(ABsrc.batch_item(b));
-                const auto W = v2::mat(ABdst.batch_item(b));
-                // lacpy, one column at a time
-                for (int j = 0; j < n; ++j) v2::copy(v2::Thread{}, AB.col(j).head(ldab), W.col(j).head(ldab));
+                v2::lacpy(v2::Thread{}, ldab, n, ABsrc.batch_item(b), ABdst.batch_item(b));
             });
         });
     }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/sb2st-sy2sb.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -174,7 +174,7 @@ Event copy_band_lower(Queue& q,
 
                 // AB(0 : lk, j) = A(j : j + lk, j): the band part of column j.
                 const int lk = std::min(kd, n - 1 - j) + 1;
-                v2::copy(v2::Thread{}, v2::vec(A + j + j * lda, lk), v2::vec(AB + j * ldab, lk));
+                v2::copy(v2::Thread{}, v2::vec_of(A, lk, j + j * lda), v2::vec_of(AB, lk, j * ldab));
             });
     });
 

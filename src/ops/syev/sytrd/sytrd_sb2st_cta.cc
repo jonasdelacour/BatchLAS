@@ -154,7 +154,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 };
 
                 auto zero_cw = [&](Real* C, T* WORK) __attribute__((always_inline)) {
-                    v2::for_each_owned(pex, cw_len, [&](int i) {
+                    v2::for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
                         C[i] = Real(0);
                         WORK[i] = T(0);
                     });
@@ -164,7 +164,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 auto stage_ab = [&](T* ABl, bool to_local) __attribute__((always_inline)) {
                     if (!to_local) group_barrier(partition);
                     const int ab_elems_l = ldab_l * n;
-                    v2::for_each_owned(pex, ab_elems_l, [&](int t) {
+                    v2::for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
                         const int ccol = t / ldab_l;
                         const int rrow = t - ccol * ldab_l;
                         if (to_local) ABl[t] = ABg[rrow + ccol * ABv.ld()];
@@ -178,7 +178,6 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     const int kd1 = kd + 1;
                     const int kdm1 = kd - 1;
                     const int incx = ldab - 1;
-                    const int inca = kd1 * ldab;
                     const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
                     auto idx = [&](int r, int c) -> int { return r + c * ldab; };
@@ -190,14 +189,24 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     int j1 = kdn + 1;
                     int j2 = 0;
 
-                    // The rotation sequence j = j1 + t kd1, t < cnt: its C / WORK entries, and the band
-                    // entries AB(r, col + t kd1) one rotation apart (stride inca).
-                    auto seq = [&](auto* p, int cnt) { return v2::vec(p + j1, cnt, kd1); };
-                    auto band_seq = [&](int r, int col, int cnt) { return v2::vec(AB + idx(r, col), cnt, inca); };
+                    // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and
+                    // the band entries AB(r, j + dc), addressed as the scalar loops address them.
+                    auto rseq = [&](int cnt, auto at) {
+                        return v2::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+                            return at(j1 + t * kd1);
+                        });
+                    };
+                    auto Cj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return C[j]; };
+                    auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
+                    auto band = [&](int r, int dc) {
+                        return [&AB_at, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB_at(r, j + dc); };
+                    };
 
                     // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
                     if constexpr (detail::is_complex<T>::value) {
-                        v2::for_each_owned(pex, n, [&](int j) { AB_at(0, j) = real_as_T(AB_at(0, j)); });
+                        v2::for_each_owned(pex, n, [&](int j) BATCHLAS_DLA_BODY {
+                            AB_at(0, j) = real_as_T(AB_at(0, j));
+                        });
                         group_barrier(partition);
                     }
 
@@ -209,21 +218,22 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
                             if (nr > 0) {
                                 // xLARGV over the rotations.
-                                v2::largv<Ops>(pex, band_seq(kd, j1 - kd1, nr), seq(WORK, nr), seq(C, nr));
+                                v2::largv<Ops>(pex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                                 group_barrier(partition);
 
                                 if (nr > 2 * kd - 1) {
                                     // xLARTV per band diagonal l (l sequential, rotations parallel);
                                     // the rotations are independent, so one barrier after all l.
                                     for (int l = 0; l < kd - 1; ++l) {
-                                        v2::lartv<Ops>(pex, band_seq(kd - 1 - l, j1 - kd1 + l + 1, nr),
-                                                       band_seq(kd - l, j1 - kd1 + l + 1, nr), seq(C, nr), seq(WORK, nr));
+                                        v2::lartv<Ops>(pex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                                       rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj),
+                                                       rseq(nr, Wj));
                                     }
                                     group_barrier(partition);
                                 } else {
                                     // Each lane applies its own rotations along the band diagonal (xROT).
                                     if (kdm1 > 0) {
-                                        v2::for_each_owned(pex, nr, [&](int t) {
+                                        v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
                                             const int j = j1 + t * kd1;
                                             v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, j - kd), kdm1, incx),
                                                          v2::vec(AB + idx(kd, j - kd), kdm1, incx), C[j], WORK[j]);
@@ -266,13 +276,13 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
                             if (nr > 0) {
                                 // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                                v2::lar2v<Ops>(pex, band_seq(0, j1 - 1, nr), band_seq(0, j1, nr), band_seq(1, j1 - 1, nr),
-                                               seq(C, nr), seq(WORK, nr));
+                                v2::lar2v<Ops>(pex, rseq(nr, band(0, -1)), rseq(nr, band(0, 0)), rseq(nr, band(1, -1)),
+                                               rseq(nr, Cj), rseq(nr, Wj));
                                 group_barrier(partition);
 
                                 // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                                 if constexpr (detail::is_complex<T>::value) {
-                                    v2::conj_inplace(pex, seq(WORK, nr));
+                                    v2::conj_inplace(pex, rseq(nr, Wj));
                                     group_barrier(partition);
                                 }
 
@@ -280,8 +290,8 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                     for (int l = 0; l < kd - 1; ++l) {
                                         const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                         if (nrt > 0) {
-                                            v2::lartv<Ops>(pex, band_seq(l + 2, j1 - 1, nrt), band_seq(l + 1, j1, nrt),
-                                                           seq(C, nrt), seq(WORK, nrt));
+                                            v2::lartv<Ops>(pex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                                           rseq(nrt, Cj), rseq(nrt, Wj));
                                         }
                                     }
                                     group_barrier(partition);
@@ -289,7 +299,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                     // Each lane applies its own rotations (0..nr-2) from the right (xROT).
                                     const int main_nrot = nr - 1;
                                     if (kdm1 > 0 && main_nrot > 0) {
-                                        v2::for_each_owned(pex, main_nrot, [&](int t) {
+                                        v2::for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DLA_BODY {
                                             const int j = j1 + t * kd1;
                                             v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j - 1), kdm1),
                                                          v2::vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
@@ -325,7 +335,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
                             if (nr > 0) {
                                 // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
-                                v2::for_each_owned(pex, nr, [&](int t) {
+                                v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
                                     const int j = j1 + t * kd1;
                                     WORK[j + kd] = WORK[j] * AB_at(kd, j);
                                     AB_at(kd, j) = T(C[j]) * AB_at(kd, j);
