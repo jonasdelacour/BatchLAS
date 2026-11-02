@@ -320,10 +320,11 @@ namespace batchlas {
                 // D = diag(A^H A)^(-1/2)
                 // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
                 // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
+                const auto c_diag = dla::diag(dla::mat(ATA_ptr + bid * k * k, k, k, k));
                 dla::map(ex, dla::vec(diags.data() + bid * k, k), [](T c) {
                     const float_t diag = sycl::fmax(float_t(0), dla::Arith<T>::re(c));
                     return (diag <= std::numeric_limits<float_t>::min()) ? float_t(0) : sycl::rsqrt(diag);
-                }, dla::diag(dla::mat(ATA_ptr + bid * k * k, k, k, k)));
+                }, c_diag);
                 });
             });
             //Compute StS = D * StS * D
@@ -376,8 +377,9 @@ namespace batchlas {
                 const dla::DynGroup ex{item};
                 const auto Q = dla::mat(output_basis.data() + batch_idx * m * k, m, k, m);
                 T* const a = Adata + batch_idx * A_stride;
-                if (is_A_trans) dla::lacpy<Transpose::ConjTrans>(ex, Q, dla::mat(a, k, m, A_ld));  // rows of A := Q^H
-                else dla::lacpy<Transpose::NoTrans>(ex, Q, dla::mat(a, m, k, A_ld));
+                // A := Q, or rows of A := Q^H
+                dla::lacpy(ex, is_A_trans ? Transpose::ConjTrans : Transpose::NoTrans, Q,
+                           dla::mat(a, is_A_trans ? k : m, is_A_trans ? m : k, A_ld));
             });
         };
 

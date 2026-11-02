@@ -52,7 +52,7 @@ struct RuntimeGroup {
 struct DynGroup : detail::RuntimeGroup {
     using detail::RuntimeGroup::RuntimeGroup;
 };
-// One index per item (lid == i): the launch covers n, as in the WG = k kernels; no stride loop.
+// One index per item (lid == i), launch width == n as in the WG = k kernels: no loop, no guard.
 struct ItemGroup : detail::RuntimeGroup {
     using detail::RuntimeGroup::RuntimeGroup;
 };
@@ -63,9 +63,8 @@ template <class F> BATCHLAS_DLA_INLINE void for_each_owned(const DynGroup& ex, i
     for (int i = ex.lid(); i < n; i += w) f(i);
 }
 template <class F> BATCHLAS_DLA_INLINE void for_each_owned(const ItemGroup& ex, int n, F&& f) {
-    assert(n <= ex.width());
-    const int i = ex.lid();
-    if (i < n) f(i);
+    assert(n == ex.width());
+    f(ex.lid());
 }
 
 // ---- operands ------------------------------------------------------------------------------
@@ -156,13 +155,15 @@ template <class Ex, class Rv, class Cv, class MA> BATCHLAS_DLA_INLINE void laqge
     using Ar = Arith<typename MA::value_type>;
     static_assert(is_published_v<Cv> || is_generated_v<Cv>, "v2::laqge: c is read across owners; publish it");
     const auto& c = detail::unpub(cp);
-    const int n = a.cols();
+    const int n = a.cols(), ld = int(a.ld);
     for_each_owned(ex, a.rows(), [&](int i) {
         const auto ri = r(i);
+        auto* const ai = a.p + i;  // row i moved once; a per-element i + j*ld blocks the unroll
         for (int j = 0; j < n; ++j) {
             const auto s = ri * c(j);
-            if constexpr (Ar::is_complex) a(i, j) = Ar::make(Ar::re(a(i, j)) * s, Ar::im(a(i, j)) * s);
-            else a(i, j) = a(i, j) * s;
+            auto& e = ai[j * ld];
+            if constexpr (Ar::is_complex) e = Ar::make(Ar::re(e) * s, Ar::im(e) * s);
+            else e = e * s;
         }
     });
 }
@@ -177,6 +178,19 @@ template <Transpose TR, class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void l
         if constexpr (TR == Transpose::NoTrans) b(i, j) = v;
         else if constexpr (TR == Transpose::Trans) b(j, i) = v;
         else b(j, i) = Arith<T>::conj(v);
+    });
+}
+
+// B := op(A), run-time op (Trans acts as ConjTrans), branch inside one loop: two cost registers.
+template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void lacpy(const Ex& ex, Transpose tr, const MA& a, const MB& b) {
+    using T = typename MA::value_type;
+    const int m = a.rows();
+    const bool t = tr != Transpose::NoTrans;
+    for_each_owned(ex, m * a.cols(), [&](int lin) {
+        const int i = lin % m, j = lin / m;
+        const T v = a(i, j);
+        if (t) b(j, i) = Arith<T>::conj(v);
+        else b(i, j) = v;
     });
 }
 

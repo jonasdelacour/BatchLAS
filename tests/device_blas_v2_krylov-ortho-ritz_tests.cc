@@ -212,9 +212,11 @@ TYPED_TEST(DeviceBlasV2KrylovTest, DynGroupElementwise) {
         v2::copy(ex, yv, om.col(3));
         v2::add_scalar(ex, s, om.col(3));         // y + s
         const auto A = v2::mat(src + std::ptrdiff_t(b) * lds * c, m, c, lds);
-        v2::lacpy<Transpose::NoTrans>(ex, A, v2::mat(on + std::ptrdiff_t(b) * ldn * c, m, c, ldn));
+        // NoTrans and ConjTrans through the run-time-op form ortho's StridedCopyKernel uses.
+        const bool ct = b >= 0;  // true, but not a constant the op can fold
+        v2::lacpy(ex, ct ? Transpose::NoTrans : Transpose::ConjTrans, A, v2::mat(on + std::ptrdiff_t(b) * ldn * c, m, c, ldn));
         v2::lacpy<Transpose::Trans>(ex, A, v2::mat(ot + std::ptrdiff_t(b) * ldt * m, c, m, ldt));
-        v2::lacpy<Transpose::ConjTrans>(ex, A, v2::mat(oc + std::ptrdiff_t(b) * ldt * m, c, m, ldt));
+        v2::lacpy(ex, ct ? Transpose::ConjTrans : Transpose::NoTrans, A, v2::mat(oc + std::ptrdiff_t(b) * ldt * m, c, m, ldt));
     });
     const auto go = this->dev.down(o, ho.size()), gn = this->dev.down(on, hn.size()), gt = this->dev.down(ot, ht.size()),
                gc = this->dev.down(oc, hc.size());
@@ -262,7 +264,7 @@ TYPED_TEST(DeviceBlasV2KrylovTest, DynGroupElementwise) {
 
 // ---- ItemGroup: diagonal ops and laqge with a published scale ---------------------------------
 
-// k = 37 with ld = k + 2; WG = k (one index per item) and WG = 64 (items k..63 own nothing).
+// k = 37 with ld = k + 2; WG = k, ItemGroup's contract (one index per item, no guard).
 // trace via reduce over diag, add_scalar on diag, laqge(D, generated c) and laqge(D, D) with D
 // staged in SLM and published. The scalings are exact in T, so they are compared bit for bit.
 TYPED_TEST(DeviceBlasV2KrylovTest, ItemGroupDiagonalAndLaqge) {
@@ -274,7 +276,7 @@ TYPED_TEST(DeviceBlasV2KrylovTest, ItemGroupDiagonalAndLaqge) {
     auto hd = batched<R>(k, 34);
     for (auto& v : hd) v = R(0.5) + std::abs(v);  // positive scales, as rsqrt(diag) gives
     auto cgen = [](int j) { return R(1) + R(j) * R(0.125); };
-    for (int wg : {k, 64}) {
+    for (int wg : {k}) {
         // Padding rows i in [k, ld) carry the poison; the ops must leave them alone.
         auto pad = [&](std::vector<T> h) {
             for (int b = 0; b < kBatch; ++b)
