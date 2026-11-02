@@ -10,6 +10,16 @@
 #include <batchlas/blas/enums.hh>
 
 #include <complex>
+#include <cstdlib>
+
+// beta of the gemm benchmarks, from BATCHLAS_BENCH_BETA (default 1). beta decides whether C is
+// READ at all, so a beta=1-only harness cannot see an epilogue defect (see gemm_benchmark.cc).
+inline double bench_beta() {
+    if (const char* p = std::getenv("BATCHLAS_BENCH_BETA")) {
+        return std::atof(p);
+    }
+    return 1.0;
+}
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 #define BATCHLAS_BENCH_CUDA(name, sizes) \
