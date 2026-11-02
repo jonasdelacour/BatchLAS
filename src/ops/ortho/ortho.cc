@@ -20,11 +20,13 @@
 
 #include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/blas/device/v2/ext/krylov-ortho-ritz.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
 namespace batchlas {
+    namespace dla = device::v2;
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};
@@ -195,10 +197,6 @@ namespace batchlas {
             return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
         };
 
-
-        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
-        auto square = [](T value) { if constexpr (detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
-
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
@@ -258,33 +256,20 @@ namespace batchlas {
                 }
                 //Normalize A_i
                 ctx -> submit([&](sycl::handler& h){
-                    auto Anext_squared = sycl::local_accessor<float_t, 1>(m, h);
                     auto A_stride = A.stride();
                     auto Aptr = A.data_ptr();
                     const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
-                    const int64_t vstep = is_A_trans ? A.ld() : 1;
+                    const int vstep = is_A_trans ? A.ld() : 1;
 
                     batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}),
                         [=](sycl::nd_item<1> item){
-                            auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
-                            auto cta = item.get_group();
-                            if (masked && !mk[bid]) return;  // uniform per work-group, before the barrier
-                            T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
-                            auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
-
-                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                Anext_squared_span[j] = square(A_local_vector[j * vstep]);
-                            }
-
-                            sycl::group_barrier(cta);
-                            auto squared_norm = batchlas::portable::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
-                            auto norm = std::sqrt(squared_norm);
-
-                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                A_local_vector[j * vstep] /= norm;
-                            }
+                            if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
+                            const dla::DynGroup ex{item};
+                            const auto v = dla::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
+                            const float_t norm = std::sqrt(dla::sumsq<dla::alg::Unfused>(ex, v));
+                            dla::scal_div(ex, norm, v, v);
                         });
                 });
             }
@@ -296,17 +281,16 @@ namespace batchlas {
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                    auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
-                    auto cta = item.get_group();
                     if (masked && !mk[bid]) return;
-                    auto ATA_acc = ATA_ptr + bid * ATA_stride;
+                    const dla::ItemGroup ex{item};
+                    const auto d = dla::diag(dla::mat(ATA_ptr + bid * ATA_stride, k, k, k));
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
-                    const float_t fro2 = batchlas::portable::reduce_over_group(cta, real_part(ATA_acc[tid * k + tid]), sycl::plus<float_t>());
+                    const float_t fro2 = dla::reduce(ex, k, [&](int i) { return dla::Arith<T>::re(d(i)); });
                     const float_t eps = std::numeric_limits<float_t>::epsilon();
                     const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
-                    ATA_acc[tid * k + tid] += T(shift);
+                    dla::add_scalar(ex, shift, d);  // C + shift I
                 });
             });
             //Compute the Cholesky Factorization of StS
@@ -328,20 +312,19 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
                 // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
                 // as non-null), leaving stale diags.
-                auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
-                auto diags_acc = diags.subspan(bid * k, k);
-
+                const dla::ItemGroup ex{item};
                 // D = diag(A^H A)^(-1/2)
                 // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
                 // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
-                const float_t diag = sycl::fmax(float_t(0), real_part(ATA_acc[tid * k + tid]));
-                const float_t tau = std::numeric_limits<float_t>::min();
-                diags_acc[tid] = (diag <= tau) ? float_t(0) : sycl::rsqrt(diag);
+                const auto c_diag = dla::diag(dla::mat(ATA_ptr + bid * k * k, k, k, k));
+                dla::map(ex, dla::vec(diags.data() + bid * k, k), [](T c) {
+                    const float_t diag = sycl::fmax(float_t(0), dla::Arith<T>::re(c));
+                    return (diag <= std::numeric_limits<float_t>::min()) ? float_t(0) : sycl::rsqrt(diag);
+                }, c_diag);
                 });
             });
             //Compute StS = D * StS * D
@@ -349,18 +332,12 @@ namespace batchlas {
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                auto cta = item.get_group();
-                auto D_acc = diags.subspan(bid * k, k);
-                D_local[tid] = D_acc[tid];
-                sycl::group_barrier(cta);
-                auto AtA_acc = Span(ATA_ptr + bid * k * k, k * k);
-                auto D_tid = D_local[tid];
-                for(int i = 0; i < k; i++){
-                    auto D_i = D_local[i];
-                    AtA_acc[i * k + tid] *= D_tid * D_i;
-                }
+                const dla::ItemGroup ex{item};
+                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
+                dla::copy(ex, dla::vec(diags.data() + bid * k, k), d_slm);
+                const auto D = ex.publish(d_slm);
+                dla::laqge(ex, D, D, dla::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
                 });
             });
 
@@ -371,19 +348,15 @@ namespace batchlas {
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto C_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                auto cta = item.get_group();
-                auto D_acc = diags.subspan(bid * k, k);
-                D_local[tid] = D_acc[tid];
-                sycl::group_barrier(cta);
-                auto C_acc = Span(C_ptr + bid * k * k, k * k);
-                auto D_tid = D_local[tid];
-                auto tau = std::numeric_limits<float_t>::epsilon() * std::abs(lambdas[bid * k + k - 1]);
-                for(int i = 0; i < k; i++){
-                    auto lambda_i = lambdas[bid * k + i] < tau ? tau : lambdas[bid * k + i];
-                    C_acc[i * k + tid] *= D_tid * sycl::rsqrt(std::abs(real_part(lambda_i)));
-                }
+                const dla::ItemGroup ex{item};
+                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
+                dla::copy(ex, dla::vec(diags.data() + bid * k, k), d_slm);
+                const auto D = ex.publish(d_slm);
+                const float_t* lam = lambdas.data() + bid * k;
+                const float_t tau = std::numeric_limits<float_t>::epsilon() * std::abs(lam[k - 1]);
+                const auto lam_rsqrt = dla::generated(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
+                dla::laqge(ex, D, lam_rsqrt, dla::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
@@ -396,22 +369,17 @@ namespace batchlas {
             svqb_alg(A, output_view);
             auto A_stride = A.stride();
             auto A_ld = A.ld();
-            auto Adata = A.data();
+            auto Adata = A.data_ptr();
             auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
             ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
                 auto batch_idx = item.get_group().get_group_id()[0];
                 if (masked && !mk[batch_idx]) return;
-                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
-                    auto i = linear_ix % m;
-                    auto j = linear_ix / m;
-                    const T v = output_basis[batch_idx * m * k + j*m + i];
-                    if (is_A_trans) {
-                        if constexpr (detail::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
-                        else Adata[batch_idx * A_stride + i * A_ld + j] = v;
-                    } else {
-                        Adata[batch_idx * A_stride + j * A_ld + i] = v;
-                    }
-                }
+                const dla::DynGroup ex{item};
+                const auto Q = dla::mat(output_basis.data() + batch_idx * m * k, m, k, m);
+                T* const a = Adata + batch_idx * A_stride;
+                // A := Q, or rows of A := Q^H
+                dla::lacpy(ex, is_A_trans ? Transpose::ConjTrans : Transpose::NoTrans, Q,
+                           dla::mat(a, is_A_trans ? k : m, is_A_trans ? m : k, A_ld));
             });
         };
 
