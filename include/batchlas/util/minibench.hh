@@ -24,6 +24,7 @@
 #include <sstream>
 #include <iomanip>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/util/miniacc.hh>
 #include <type_traits>
 
 namespace minibench {
@@ -93,15 +94,8 @@ inline std::vector<int> parse_range_or_list(const std::string& str) {
     return vals;
 }
 
-inline std::vector<std::string> parse_list(const std::string& str) {
-    std::vector<std::string> vals;
-    std::stringstream ss(str);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        if (!item.empty()) vals.push_back(item);
-    }
-    return vals;
-}
+// One splitter for both harnesses; miniacc.hh owns it because it is the installed one.
+using miniacc::parse_list;
 
 using MetricsFunc = std::function<void(Result&)>;
 
