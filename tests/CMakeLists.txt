@@ -328,6 +328,24 @@ function(batchlas_test_component out_var test_name)
     set(${out_var} "unlabelled" PARENT_SCOPE)
 endfunction()
 
+# The command and ENVIRONMENT_MODIFICATION of a _heavy or _slow split, named <stem>.
+# Its XML must not collide with <name>.xml under GTEST_OUTPUT=xml:<dir>/:
+# tests/ctest_gpu_env.sh renames it from BATCHLAS_GTEST_XML_STEM, so it needs the
+# launcher even without GPU slots. Not on Apple: SIP strips DYLD_* through /bin/sh.
+function(batchlas_split_test_command cmd_var env_mod_var stem)
+    set(_split_cmd ${ARGN})
+    set(_split_env_mod "")
+    if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
+        set(_split_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${ARGN})
+    elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
+        # No sh: append the stem to a directory-mode GTEST_OUTPUT in ctest itself. A
+        # single-file or unset GTEST_OUTPUT gets a value gtest rejects with a warning.
+        set(_split_env_mod "GTEST_OUTPUT=string_append:${stem}.xml")
+    endif()
+    set(${cmd_var} ${_split_cmd} PARENT_SCOPE)
+    set(${env_mod_var} "${_split_env_mod}" PARENT_SCOPE)
+endfunction()
+
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
     if(test_name STREQUAL "sg_partition_tests")
@@ -499,29 +517,11 @@ function(batchlas_add_test_target test_name)
     endif()
     if(_heavy)
         add_test(NAME ${test_name} COMMAND ${_cmd} "--gtest_filter=-${BATCHLAS_HEAVY_TEST_FILTER}")
-        # The _heavy XML must not collide with <name>.xml under GTEST_OUTPUT=xml:<dir>/:
-        # tests/ctest_gpu_env.sh renames it from BATCHLAS_GTEST_XML_STEM, so it needs the
-        # launcher even without GPU slots. Not on Apple: SIP strips DYLD_* through /bin/sh.
-        set(_heavy_cmd ${_cmd})
-        set(_heavy_env_mod "")
-        if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
-            set(_heavy_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
-        elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
-            # No sh: append the stem to a directory-mode GTEST_OUTPUT in ctest itself. A
-            # single-file or unset GTEST_OUTPUT gets a value gtest rejects with a warning.
-            set(_heavy_env_mod "GTEST_OUTPUT=string_append:${test_name}_heavy.xml")
-        endif()
+        batchlas_split_test_command(_heavy_cmd _heavy_env_mod ${test_name}_heavy ${_cmd})
         add_test(NAME ${test_name}_heavy COMMAND ${_heavy_cmd} "--gtest_filter=${BATCHLAS_HEAVY_TEST_FILTER}")
         list(APPEND _entries ${test_name}_heavy)
     elseif(BATCHLAS_SLOW_CASES_${test_name})
-        # Its XML is renamed from BATCHLAS_GTEST_XML_STEM as _heavy's is.
-        set(_slow_cmd ${_cmd})
-        set(_slow_env_mod "")
-        if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
-            set(_slow_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
-        elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
-            set(_slow_env_mod "GTEST_OUTPUT=string_append:${test_name}_slow.xml")
-        endif()
+        batchlas_split_test_command(_slow_cmd _slow_env_mod ${test_name}_slow ${_cmd})
         add_test(NAME ${test_name} COMMAND ${_cmd} "--gtest_filter=-${BATCHLAS_SLOW_CASES_${test_name}}")
         add_test(NAME ${test_name}_slow COMMAND ${_slow_cmd} "--gtest_filter=${BATCHLAS_SLOW_CASES_${test_name}}")
         list(APPEND _entries ${test_name}_slow)
