@@ -196,10 +196,13 @@ template <class Ex> BATCHLAS_DLA_INLINE auto team_handle(const Ex& ex) {
     else if constexpr (requires { ex.sg; }) return ex.sg;
     else return ex.it.get_sub_group();
 }
+#ifndef BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE
 template <class H, class R> BATCHLAS_DLA_INLINE R select_lane(const H& h, R v, std::uint32_t src) {
     if constexpr (sycl::is_group_v<H>) return batchlas::portable::select_from_group(h, v, src);
     else return select_from_group(h, v, src);  // ADL: SubGroupPartition (src/kernels/common)
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE
 // Read across owners: Published, or one item is the executor.
 template <class Ex, class V> constexpr void require_pub() {
     static_assert(is_published_v<V> || is_thread_v<Ex>, "v2: this operand is read across owners; publish it");
@@ -606,7 +609,7 @@ template <class Ex, class SX> BATCHLAS_DLA_INLINE BcastRowLocal<Ex, SX> bcast_ro
 }
 
 // v from lane src of the team, to every lane (complex: two real selects).
-template <class Ex, class T> BATCHLAS_DLA_INLINE T bcast(const Ex& ex, T v, std::uint32_t src) {
+template <class Ex, class T> BATCHLAS_DLA_INLINE T bcast_team(const Ex& ex, T v, std::uint32_t src) {
     using A = Arith<T>;
     const auto h = detail::team_handle(ex);
     if constexpr (A::is_complex) {
@@ -623,14 +626,14 @@ template <class Ex> struct BcastShuffle {
     const Ex& ex;
     template <int NC, class T> BATCHLAS_DLA_INLINE void publish(int, const Frag<T, NC>&, int, PivotWinner) const {}
     template <int NC, class T> BATCHLAS_DLA_INLINE T pivot(int j, const Frag<T, NC>& rA, PivotWinner w) const {
-        return bcast(ex, rA[j], static_cast<std::uint32_t>(w.src));
+        return bcast_team(ex, rA[j], static_cast<std::uint32_t>(w.src));
     }
     template <int NC, class T, class F>
     BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const Frag<T, NC>& rA, PivotWinner w, F&& f) const {
         BATCHLAS_DLA_UNROLL_FULL
         for (int k = j + 1; k < NC; ++k) {
             if (k >= ncols) continue;
-            f(k, bcast(ex, rA[k], static_cast<std::uint32_t>(w.src)));
+            f(k, bcast_team(ex, rA[k], static_cast<std::uint32_t>(w.src)));
         }
     }
 };

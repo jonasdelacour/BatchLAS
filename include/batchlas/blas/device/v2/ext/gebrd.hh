@@ -30,6 +30,8 @@ struct RowPerLane {};
 // ---- elementwise and views -----------------------------------------------------------------
 
 // |x|^2 = re^2 + im^2, by value: a caller's `acc += abs2(x)` is an add, not an FMA.
+#ifndef BATCHLAS_DLA_V2_INTEG_ABS2  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_ABS2
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T x) {
     using A = Arith<std::remove_cv_t<T>>;
     if constexpr (A::is_complex) {
@@ -39,6 +41,7 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T x) {
         return x * x;
     }
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_ABS2
 
 // x := conj(x) (LAPACK lacgv); the identity for real T.
 template <class Ex, class X> BATCHLAS_DLA_INLINE void lacgv(const Ex& ex, const X& x) {

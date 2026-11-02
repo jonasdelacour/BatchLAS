@@ -30,11 +30,14 @@ struct ExplicitOps {};  // Arith<T>, real rotation coefficients
 
 // ---- scalar helpers ------------------------------------------------------------------------
 // |x|^2 as one expression; a caller accumulating it in its own statement does not fuse the sum.
+#ifndef BATCHLAS_DLA_V2_INTEG_ABS2  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_ABS2
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T x) {
     using A = Arith<T>;
     if constexpr (A::is_complex) return A::re(x) * A::re(x) + A::im(x) * A::im(x);
     else return static_cast<real_t<T>>(x * x);
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_ABS2
 // |x| without overflow (hypot for complex).
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs_hypot(T x) {
     using A = Arith<T>;

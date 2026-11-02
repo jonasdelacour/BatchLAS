@@ -34,7 +34,7 @@ inline D dev_zero() {
     }
 }
 
-template <typename D> using LarfgScalars = batchlas::device::v2::LarfgScalars<D>;
+template <typename D> using LarfgScalars = batchlas::device::v2::QrLarfgScalars<D>;
 
 template <typename D>
 struct GeqrfGlobalTile {

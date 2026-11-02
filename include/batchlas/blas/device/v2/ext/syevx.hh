@@ -91,11 +91,14 @@ template <class M> struct ColsFlipped {
 template <class M> BATCHLAS_DLA_INLINE ColsFlipped<M> cols_flipped(M a, bool rev) { return {a, rev}; }
 
 // re^2 + im^2 in real arithmetic (never the Annex-G operator*); norm_squared up to contraction.
+#ifndef BATCHLAS_DLA_V2_INTEG_ABS2  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_ABS2
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T x) {
     using A = Arith<std::remove_cv_t<T>>;
     if constexpr (A::is_complex) return A::re(x) * A::re(x) + A::im(x) * A::im(x);
     else return x * x;
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_ABS2
 // s x for a real s: two real products for complex x, no cross terms.
 template <class T> BATCHLAS_DLA_INLINE T scale_re(real_t<T> s, T x) {
     using A = Arith<T>;
@@ -157,12 +160,15 @@ template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void lacpy(const Ex&
 }
 
 namespace detail {
+#ifndef BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 template <class T, class S> BATCHLAS_DLA_INLINE T tag_value(S s) {
     if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
     else if constexpr (std::is_same_v<S, One>) return Arith<T>::one();
     else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(Arith<T>::one());
     else return static_cast<T>(s.v);
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 template <class S> inline constexpr bool is_fixed_tag_v =
     std::is_same_v<S, Zero> || std::is_same_v<S, One> || std::is_same_v<S, NegOne>;
 }  // namespace detail

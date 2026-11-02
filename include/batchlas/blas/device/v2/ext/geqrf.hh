@@ -363,7 +363,7 @@ template <class Ex, class X, class F> BATCHLAS_DLA_INLINE void for_each_owned_el
 // ---- xLARFG ----------------------------------------------------------------------------
 // identity: tau = 0, H = I, alpha and x unchanged. Otherwise alpha := beta and
 // x := x * vfactor (use_mul) or x / vfactor (the reciprocal overflowed or vanished).
-template <class T> struct LarfgScalars {
+template <class T> struct QrLarfgScalars {
     T tau;
     T beta;
     T vfactor;
@@ -372,11 +372,11 @@ template <class T> struct LarfgScalars {
 };
 
 // The scalars from alpha, s = max |component| over (alpha, x) and ssq = sum |x_i / s|^2.
-template <Conv C = Conv::Lapack, class T> BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_from_ssq(T alpha, real_t<T> s, real_t<T> ssq) {
+template <Conv C = Conv::Lapack, class T> BATCHLAS_DLA_INLINE QrLarfgScalars<T> larfg_from_ssq(T alpha, real_t<T> s, real_t<T> ssq) {
     static_assert(C == Conv::Lapack, "v2::larfg: Conv::Lapack is the only convention");
     using A = Arith<T>;
     using R = real_t<T>;
-    LarfgScalars<T> out;
+    QrLarfgScalars<T> out;
     out.tau = A::zero();
     out.beta = alpha;
     out.vfactor = A::one();
@@ -408,7 +408,7 @@ template <Conv C = Conv::Lapack, class T> BATCHLAS_DLA_INLINE LarfgScalars<T> la
 // xLARFG on (alpha, x) distributed Cyclic over ex: every item seeds its max with alpha, two
 // executor-scope reductions (max, then the scaled sum of squares). No barrier.
 template <Conv C = Conv::Lapack, class Ex, class T, class X>
-BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_scalars(const Ex& ex, T alpha, const X& x) {
+BATCHLAS_DLA_INLINE QrLarfgScalars<T> larfg_scalars(const Ex& ex, T alpha, const X& x) {
     using R = real_t<T>;
     R smax = absmax_ri(alpha);
     for_each_owned_elem(ex, x, [&](const auto& e) { smax = sycl::fmax(smax, absmax_ri(static_cast<T>(e))); });
@@ -422,7 +422,7 @@ BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_scalars(const Ex& ex, T alpha, const X
 }
 
 // x := x * vfactor or x / vfactor, the arm larfg chose. Cyclic, no barrier.
-template <class Ex, class T, class X> BATCHLAS_DLA_INLINE void scal_or_div(const Ex& ex, const LarfgScalars<T>& h, const X& x) {
+template <class Ex, class T, class X> BATCHLAS_DLA_INLINE void scal_or_div(const Ex& ex, const QrLarfgScalars<T>& h, const X& x) {
     if (h.use_mul) {
         for_each_owned_elem(ex, x, [&](auto& e) { e = mul_fma(static_cast<T>(e), h.vfactor); });
     } else {

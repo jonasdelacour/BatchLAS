@@ -147,12 +147,15 @@ BATCHLAS_DLA_INLINE VMat<T, M> mat_item(const KernelMatrixView<T, MatrixFormat::
 // ---- elementwise -------------------------------------------------------------------------
 
 namespace detail {
+#ifndef BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 template <class T, class S> BATCHLAS_DLA_INLINE T tag_value(S s) {
     if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
     else if constexpr (std::is_same_v<S, One>) return Arith<T>::one();
     else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(Arith<T>::one());
     else return static_cast<T>(s.v);
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 }  // namespace detail
 
 // x := alpha (LAPACK laset on a vector).

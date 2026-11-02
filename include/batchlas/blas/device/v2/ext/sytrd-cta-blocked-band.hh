@@ -177,6 +177,8 @@ template <Mem M = Mem::Global, class B> BATCHLAS_DLA_INLINE OffMat<B, Dyn, Dyn, 
 
 // ---- scalars and element kernels -----------------------------------------------------------
 // |a|^2 as one expression (re*re + im*im).
+#ifndef BATCHLAS_DLA_V2_INTEG_ABS2  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_ABS2
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T a) {
     using A = Arith<T>;
     if constexpr (A::is_complex) {
@@ -187,6 +189,7 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T a) {
         return a * a;
     }
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_ABS2
 
 // x1 conj(y1) + x2 conj(y2): one term of a rank-2 Hermitian update (her2, her2k).
 template <class T> BATCHLAS_DLA_INLINE T her2_term(T x1, T y1, T x2, T y2) {
@@ -195,11 +198,14 @@ template <class T> BATCHLAS_DLA_INLINE T her2_term(T x1, T y1, T x2, T y2) {
     else return x1 * y1 + x2 * y2;  // one expression: fma(x1, y1, x2 * y2)
 }
 
+#ifndef BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3
 template <class T> struct LarfgScalars {
     T tau;
     T beta;
     T scale;  // x := scale x gives v (implicit unit)
 };
+#endif  // BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3
 
 // DLARFG's scalars for a reflector of length >= 2 from alpha and ||x||_2: beta = -sign(alpha)
 // ||(alpha, x)||, tau = (beta - alpha) / beta, scale = 1 / (alpha - beta). x == 0 with a real

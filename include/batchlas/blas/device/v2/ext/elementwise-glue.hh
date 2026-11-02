@@ -52,12 +52,15 @@ template <class D> BATCHLAS_DLA_INLINE constexpr bool is_unit(D d) {
     if constexpr (std::is_same_v<D, Diag>) return d == Diag::Unit;
     else return D::value == Diag::Unit;
 }
+#ifndef BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 template <class T, class S> BATCHLAS_DLA_INLINE T tag_value(S s) {
     if constexpr (std::is_same_v<S, One>) return Arith<T>::one();
     else if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
     else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(Arith<T>::one());
     else return static_cast<T>(s.v);
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_DETAIL_TAG_VALUE
 }  // namespace detail
 
 // ---- scalar element helpers ---------------------------------------------------------------
@@ -84,11 +87,14 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> modulus(T a) {
     if constexpr (A::is_complex) return sycl::hypot(A::re(a), A::im(a));
     else return sycl::fabs(a);
 }
+#ifndef BATCHLAS_DLA_V2_INTEG_ABS2  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_ABS2
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T a) {
     using A = Arith<std::remove_cv_t<T>>;
     if constexpr (A::is_complex) return A::re(a) * A::re(a) + A::im(a) * A::im(a);
     else return a * a;
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_ABS2
 
 // ---- the batched 2-D executor --------------------------------------------------------------
 // Local range (LB, GC, GR), dimension 2 fastest, so consecutive items walk a column and both
@@ -529,10 +535,13 @@ BATCHLAS_DLA_INLINE T load_or_identity(const T* __restrict p, int r, int c, int 
 }
 
 namespace detail {
+#ifndef BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE
 template <class Impl, class V> BATCHLAS_DLA_INLINE V select_lane(const Impl& part, V v, std::uint32_t src) {
     if constexpr (sycl::is_group_v<Impl>) return batchlas::portable::select_from_group(part, v, src);
     else return select_from_group(part, v, src);  // ADL: SubGroupPartition (src/kernels/common)
 }
+#endif  // BATCHLAS_DLA_V2_INTEG_DETAIL_SELECT_LANE
 }  // namespace detail
 
 // v of lane src, to every lane of the group / partition. COLLECTIVE: every lane must reach it.
@@ -658,11 +667,14 @@ struct Phase {};
 struct RealBeta {};
 }  // namespace conv
 
+#ifndef BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3  // integ/dla-v2-all: defined by several ext headers
+#define BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3
 template <class T> struct LarfgScalars {
     T tau;
     T beta;
     T scale;
 };
+#endif  // BATCHLAS_DLA_V2_INTEG_LARFG_SCALARS3
 
 template <class Conv = conv::Phase, class T>
 inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
