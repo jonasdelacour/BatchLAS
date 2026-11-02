@@ -939,9 +939,15 @@ TYPED_TEST(DeviceBlasV2Test, RtGroupBcastAndSyncAtARuntimeWidth) {
         T* slm = reinterpret_cast<T*>(lm);
         const T g = ex.bcast(mine, (b * 7 + 37) % ex.width());
         const T s = ex.team_exec().bcast(mine, (b + 5) % 32);
-        slm[l] = mine;
+        // The reader's slot belongs to another sub-group that writes late (a dependent chain
+        // first), so a missing barrier reads the slot before it is written.
+        T late = mine;
+        const T z = T(v2::Arith<T>::re(mine) * real_of<T>(0));  // a zero the compiler cannot fold
+        if (ex.team() != 0)
+            for (int k = 0; k < 4000; ++k) late = v2::Arith<T>::add(late, z);
+        slm[l] = late;
         v2::sync(ex);
-        const T nb = slm[(l + 1) % ex.width()];
+        const T nb = slm[(l + 32) % ex.width()];
         T* ob = o + std::ptrdiff_t(b) * WG * 3;
         ob[l] = g, ob[WG + l] = s, ob[2 * WG + l] = nb;
     });
@@ -953,7 +959,7 @@ TYPED_TEST(DeviceBlasV2Test, RtGroupBcastAndSyncAtARuntimeWidth) {
             const T* ob = got.data() + std::size_t(b) * WG * 3;
             bad += !same_bits(ob[l], xb[(b * 7 + 37) % WG]);
             bad += !same_bits(ob[WG + l], xb[(l / 32) * 32 + (b + 5) % 32]);
-            bad += !same_bits(ob[2 * WG + l], xb[(l + 1) % WG]);
+            bad += !same_bits(ob[2 * WG + l], xb[(l + 32) % WG]);
         }
     EXPECT_EQ(bad, 0);
 }
@@ -985,6 +991,123 @@ TYPED_TEST(DeviceBlasV2Test, Batched2dLauncherCoversEveryItemPastTheGroupLimit) 
                 const std::size_t k = std::size_t(b) * ld * n + c * ld + r;
                 bad += !same_bits(got[k], r < m ? T(ha[k] + T(real_of<T>(b))) : T(-7));
             }
+    EXPECT_EQ(bad, 0);
+}
+
+// ---- v2.1 operands ---------------------------------------------------------------------------
+
+// The same elements through every base and index width: A goes to local memory through an
+// accessor view at an int32 offset, then back out through an aligned view (column 0), the row
+// view of the wide (ptrdiff_t) view (row 0) and its sub-block (1:, 1:). Rows past m are padding
+// that must keep their sentinel. Every item bit for bit.
+TYPED_TEST(DeviceBlasV2Test, OperandBasesAndIndexWidthsAddressTheSameElements) {
+    using T = TypeParam;
+    constexpr int WG = 64, m = 13, n = 11, ld = m + 3, stride = ld * n + 5, slm_off = 7;
+    const auto ha = batched<T>(stride, 111);
+    T* a = this->dev.up(ha);
+    std::vector<T> ho(std::size_t(kBatch) * stride, T(-3));
+    T* o = this->dev.up(ho);
+    this->dev.q()
+        .submit([&](sycl::handler& h) {
+            sycl::local_accessor<T, 1> acc(sycl::range<1>(slm_off + ld * n), h);
+            h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                const v2::WorkGroup<WG> ex{it};
+                const int b = static_cast<int>(it.get_group_linear_id());
+                T* ob = o + std::ptrdiff_t(b) * stride;
+                const auto src = v2::mat(a + std::ptrdiff_t(b) * stride, m, n, ld);
+                const auto slm = v2::mat(acc, m, n, ld, slm_off);
+                v2::for_each_owned_2d(ex, m, n, [&](int r, int c) { slm(r, c) = src(r, c); });
+                ex.barrier();
+                const auto wide = v2::mat_wide(ob, m, n, ld);
+                const auto al = v2::mat_aligned<alignof(T)>(ob, m, n, ld);
+                v2::copy(ex, slm.col(0), al.col(0));
+                v2::copy(ex, slm.row(0).tail(1), wide.row(0).tail(1));
+                const auto ws = wide.sub(1, 1, m - 1, n - 1);
+                const auto ss = slm.sub(1, 1, m - 1, n - 1);
+                v2::for_each_owned_2d(ex, m - 1, n - 1, [&](int r, int c) { ws(r, c) = ss(r, c); });
+            });
+        })
+        .wait_and_throw();
+    const auto got = this->dev.down(o, ho.size());
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b)
+        for (int k = 0; k < stride; ++k) {
+            const int r = k % ld, c = k / ld;
+            const T want = (r < m && c < n) ? ha[std::size_t(b) * stride + k] : T(-3);
+            bad += !same_bits(got[std::size_t(b) * stride + k], want);
+        }
+    EXPECT_EQ(bad, 0);
+}
+
+// item(view, b) addresses exactly what v1's operator()(i, j, b) / (i, b) addresses.
+TYPED_TEST(DeviceBlasV2Test, ItemAddressesExactlyAsTheV1View) {
+    using T = TypeParam;
+    constexpr int WG = 64, m = 9, n = 7, ld = m + 2, stride = ld * n + 3, inc = 3, vstride = n * inc + 4;
+    std::vector<T> ha(std::size_t(kBatch) * stride, T(0)), hx(std::size_t(kBatch) * vstride, T(0));
+    std::vector<int> ho(kBatch, -1);
+    T* a = this->dev.up(ha);
+    T* x = this->dev.up(hx);
+    int* o = this->dev.up(ho);
+    const KernelMatrixView<T, MatrixFormat::Dense> kv(a, m, n, ld, stride, kBatch);
+    const VectorView<T> xv(x, n, kBatch, inc, vstride);
+    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::WorkGroup<WG> ex{it};
+        const int b = static_cast<int>(it.get_group_linear_id());
+        const auto im = v2::item(kv, b), ie = v2::item(kv, b, m, n);
+        const auto iv = v2::item(xv, b);
+        int bad = (im.rows() != m) + (im.cols() != n) + (iv.size() != n);
+        v2::for_each_owned_2d(ex, m, n, [&](int r, int c) { bad += (&im(r, c) != &kv(r, c, b)) + (&ie(r, c) != &kv(r, c, b)); });
+        v2::for_each_owned(ex, n, [&](int i) { bad += &iv(i) != &xv(i, b); });
+        bad = ex.group_reduce(bad);
+        if (ex.leader()) o[b] = bad;
+    });
+    const auto got = this->dev.down(o, ho.size());
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b) bad += got[b] != 0;
+    EXPECT_EQ(bad, 0);
+}
+
+// Frag and Tile moves: loads zero-fill past the live bound, stores write only inside it (the
+// poison sentinel past it survives). One Thread executor per item.
+TYPED_TEST(DeviceBlasV2Test, FragAndTileMovesHonourTheLiveBound) {
+    using T = TypeParam;
+    constexpr int WG = 32, N = 8, ld = 9, per = ld * N;
+    const auto hx = batched<T>(per, 121);
+    T* x = this->dev.up(hx);
+    const T poison = T(-5);
+    std::vector<T> ho(std::size_t(kBatch) * 3 * per, poison);
+    T* o = this->dev.up(ho);
+    this->dev.template run<WG>(kBatch / WG, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        using A = v2::Arith<T>;
+        const int b = static_cast<int>(it.get_global_linear_id());
+        const auto xa = v2::mat(x + std::ptrdiff_t(b) * per, N, N, ld);
+        T* ob = o + std::ptrdiff_t(b) * 3 * per;
+        v2::Frag<T, N, v2::Cyclic> f;
+        v2::load(f, xa.col(1), 5);
+#pragma unroll
+        for (int k = 0; k < N; ++k) f[k] = A::add(f[k], A::one());
+        v2::store(f, v2::vec(ob, N), 6);
+        v2::Frag<T, N> g;
+        v2::load_row(g, xa, 2, 6);
+        v2::store_row(g, v2::mat(ob + per, N, N, ld), 1, 7);
+        v2::Tile<T, 4, 3> t;
+        v2::load(t, xa.sub(1, 1, 4, 3), 3, 2);
+        v2::store(t, v2::mat(ob + 2 * per, 4, 3, ld));
+    });
+    const auto got = this->dev.down(o, ho.size());
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b) {
+        const T* xb = hx.data() + std::size_t(b) * per;
+        const T* ob = got.data() + std::size_t(b) * 3 * per;
+        for (int k = 0; k < per; ++k) {
+            T w0 = poison, w1 = poison, w2 = poison;
+            const int r = k % ld, c = k / ld;
+            if (k < 6) w0 = k < 5 ? T(xb[ld + k] + T(1)) : T(1);
+            if (r == 1 && c < 7) w1 = c < 6 ? xb[2 + c * ld] : T(0);
+            if (r < 4 && c < 3) w2 = (r < 3 && c < 2) ? xb[(1 + r) + (1 + c) * ld] : T(0);
+            bad += !same_bits(ob[k], w0) + !same_bits(ob[per + k], w1) + !same_bits(ob[2 * per + k], w2);
+        }
+    }
     EXPECT_EQ(bad, 0);
 }
 
