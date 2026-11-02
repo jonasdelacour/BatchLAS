@@ -41,7 +41,7 @@ inline int ldl_factor(const Tile<D>& S, int n, bool rev, const v2::RtGroup& g, v
     while (k < n) {
         int kstep = 1;
         int kp = k;
-        const R absakk = v2::abs1(S(k, k));
+        const R absakk = v2::sfp::cabs1(S(k, k));
         // ?sytf2's I?AMAX takes the first maximum in storage order: the smallest physical row,
         // which for the reversed (upper) form is the largest logical one.
         const v2::ArgMax<R> col = v2::iamax_bk(g, am, v2::col_of(S, k), {k + 1, n}, !rev);
@@ -50,7 +50,7 @@ inline int ldl_factor(const Tile<D>& S, int n, bool rev, const v2::RtGroup& g, v
         const int stage = v2::bk_stage(g, absakk, colmax, alpha);
         if (stage == v2::kBkNeedRow) {
             const v2::ArgMax<R> row = v2::iamax_bk(g, am, v2::sym_row_lower(S, imax), {k, n}, true, v2::SkipAt{imax});
-            v2::bk_choice(g, absakk, colmax, row.v, v2::abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
+            v2::bk_choice(g, absakk, colmax, row.v, v2::sfp::cabs1(S(imax, imax)), alpha, k, imax, kp, kstep);
         }
         if (stage == v2::kBkZero) {
             if (info == 0) info = phys(k) + 1;
@@ -117,24 +117,25 @@ inline int ldl_panel(const Tile<D>& S, const v2::RevMat<D>& W, int n, int k0, in
     g.barrier();
     // W(k:n, c) := source - A(k:n, start:k) W(r, start-k0:k-k0): the panel's finished columns only.
     const auto L = v2::cols_from(S, k0);
+    auto update_col = [&](int k, int dst, int r, auto&& source) {
+        v2::gemv_sub(g, L, row_of(W, r), source, col_of(W, dst), {k, n}, start - k0, k - k0);
+        g.barrier();
+    };
     int k = start;
     while (k < k0 + nb) {
         const int c = k - k0;
-        v2::gemv_sub(g, L, row_of(W, k), col_of(S, k), col_of(W, c), {k, n}, start - k0, k - k0);
-        g.barrier();
+        update_col(k, c, k, col_of(S, k));
         int kstep = 1;
         int kp = k;
-        const R absakk = v2::abs1(W(k, c));
+        const R absakk = v2::sfp::cabs1(W(k, c));
         const v2::ArgMax<R> col = v2::iamax_bk(g, am, col_of(W, c), {k + 1, n}, !rev);
         const R colmax = col.v < R(0) ? R(0) : col.v;
         const int imax = col.i;
         const int stage = v2::bk_stage(g, absakk, colmax, alpha);
         if (stage == v2::kBkNeedRow) {
-            v2::gemv_sub(g, L, row_of(W, imax), [&](int i) { return i < imax ? S(imax, i) : S(i, imax); }, col_of(W, c + 1),
-                         {k, n}, start - k0, k - k0);
-            g.barrier();
+            update_col(k, c + 1, imax, [&](int i) { return i < imax ? S(imax, i) : S(i, imax); });
             const v2::ArgMax<R> row = v2::iamax_bk(g, am, col_of(W, c + 1), {k, n}, true, v2::SkipAt{imax});
-            v2::bk_choice(g, absakk, colmax, row.v, v2::abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
+            v2::bk_choice(g, absakk, colmax, row.v, v2::sfp::cabs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k) v2::copy(g, col_of(W, c + 1), col_of(W, c), {k, n});
             g.barrier();
         }

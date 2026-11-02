@@ -20,6 +20,11 @@
 //    (dev_mul, dev_div, dev_recip), so ports stay bit-identical. A complex fma product is not
 //    commutative in the last bit: each op states its operand order.
 //  - No op contains a barrier unless it takes scratch; the caller owns every other barrier.
+//  - Inlining follows the code each op replaced, because the attribute changes SASS (the
+//    inliner's order moves unrolling, select-vs-branch and register allocation): an op that was
+//    loop text in the kernel body is BATCHLAS_DLA_INLINE; one that was an `inline` helper
+//    (scalar arithmetic, CABS1, the group reductions and pivot tests, the view accessors, the
+//    register broadcast, the ?SYCONV column, the D-solve row) is BATCHLAS_DLA_SY_HELPER.
 
 #include <array>
 #include <cstddef>
@@ -39,11 +44,19 @@
 #endif
 #endif
 
+#ifndef BATCHLAS_DLA_SY_HELPER
+#define BATCHLAS_DLA_SY_HELPER inline
+#endif
+// The per-item body of a loop op, spliced into the caller like the loop text it replaced.
+#ifndef BATCHLAS_DLA_SY_BODY
+#define BATCHLAS_DLA_SY_BODY __attribute__((always_inline))
+#endif
+
 namespace batchlas::device::v2 {
 
 // ---- scalar arithmetic: the device_scalar.hh forms -----------------------------------------
 namespace sfp {
-template <class T> BATCHLAS_DLA_INLINE T mul(T a, T b) {
+template <class T> BATCHLAS_DLA_SY_HELPER T mul(T a, T b) {
     using A = Arith<T>;
     if constexpr (A::is_complex) {
         return A::make(sycl::fma(A::re(a), A::re(b), -A::im(a) * A::im(b)),
@@ -52,19 +65,25 @@ template <class T> BATCHLAS_DLA_INLINE T mul(T a, T b) {
         return a * b;
     }
 }
-template <class T> BATCHLAS_DLA_INLINE T add(T a, T b) { return Arith<T>::add(a, b); }
-template <class T> BATCHLAS_DLA_INLINE T sub(T a, T b) { return Arith<T>::sub(a, b); }
-template <class T> BATCHLAS_DLA_INLINE T neg(T a) { return Arith<T>::neg(a); }
-template <class T> BATCHLAS_DLA_INLINE T zero() { return Arith<T>::zero(); }
-template <class T> BATCHLAS_DLA_INLINE T one() { return Arith<T>::one(); }
-template <class T> BATCHLAS_DLA_INLINE T nan() {
+template <class T> BATCHLAS_DLA_SY_HELPER T add(T a, T b) { return Arith<T>::add(a, b); }
+template <class T> BATCHLAS_DLA_SY_HELPER T sub(T a, T b) { return Arith<T>::sub(a, b); }
+template <class T> BATCHLAS_DLA_SY_HELPER T neg(T a) { return Arith<T>::neg(a); }
+template <class T> BATCHLAS_DLA_SY_HELPER T zero() { return Arith<T>::zero(); }
+template <class T> BATCHLAS_DLA_SY_HELPER T one() { return Arith<T>::one(); }
+// CABS1, |re| + |im|: LAPACK's Bunch-Kaufman pivot metric.
+template <class T> BATCHLAS_DLA_SY_HELPER real_t<T> cabs1(T a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return sycl::fabs(A::re(a)) + sycl::fabs(A::im(a));
+    else return sycl::fabs(a);
+}
+template <class T> BATCHLAS_DLA_SY_HELPER T nan() {
     using R = real_t<T>;
     constexpr R q = std::numeric_limits<R>::quiet_NaN();
     if constexpr (Arith<T>::is_complex) return Arith<T>::make(q, q);
     else return q;
 }
 // Smith's reciprocal and quotient (never (c - di) / (c^2 + d^2), which overflows).
-template <class T> BATCHLAS_DLA_INLINE T recip(T d) {
+template <class T> BATCHLAS_DLA_SY_HELPER T recip(T d) {
     using A = Arith<T>;
     using R = real_t<T>;
     if constexpr (A::is_complex) {
@@ -81,7 +100,7 @@ template <class T> BATCHLAS_DLA_INLINE T recip(T d) {
         return T(1) / d;
     }
 }
-template <class T> BATCHLAS_DLA_INLINE T div(T a, T b) {
+template <class T> BATCHLAS_DLA_SY_HELPER T div(T a, T b) {
     using A = Arith<T>;
     using R = real_t<T>;
     if constexpr (A::is_complex) {
@@ -100,10 +119,10 @@ template <class T> BATCHLAS_DLA_INLINE T div(T a, T b) {
 }
 // A NaN key ranks above every number (so a NaN column is found, and a lane's pick never
 // depends on a NaN compare).
-template <class R> BATCHLAS_DLA_INLINE R nan_as_inf(R v) { return sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v; }
+template <class R> BATCHLAS_DLA_SY_HELPER R nan_as_inf(R v) { return sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v; }
 }  // namespace sfp
 
-template <class T> BATCHLAS_DLA_INLINE void swap_elem(T& a, T& b) {
+template <class T> BATCHLAS_DLA_SY_HELPER void swap_elem(T& a, T& b) {
     const T t = a;
     a = b;
     b = t;
@@ -120,15 +139,15 @@ struct RtGroup {
     int nl;
     bool sg_only = false;
 
-    BATCHLAS_DLA_INLINE int lid() const { return lid_; }
-    BATCHLAS_DLA_INLINE int width() const { return nl; }
-    BATCHLAS_DLA_INLINE bool leader() const { return lid_ == 0; }
-    BATCHLAS_DLA_INLINE void barrier(Mem = Mem::Local) const {
+    BATCHLAS_DLA_SY_HELPER int lid() const { return lid_; }
+    BATCHLAS_DLA_SY_HELPER int width() const { return nl; }
+    BATCHLAS_DLA_SY_HELPER bool leader() const { return lid_ == 0; }
+    BATCHLAS_DLA_SY_HELPER void barrier(Mem = Mem::Local) const {
         if (sg_only) sycl::group_barrier(it.get_sub_group());
         else sycl::group_barrier(it.get_group());
     }
     // Item 0's value, to every item.
-    BATCHLAS_DLA_INLINE int bcast(int v) const {
+    BATCHLAS_DLA_SY_HELPER int bcast(int v) const {
         if (sg_only) return batchlas::portable::group_broadcast(it.get_sub_group(), v, 0);
         return batchlas::portable::group_broadcast(it.get_group(), v, 0);
     }
@@ -166,7 +185,7 @@ template <class T> struct RevMat {
     int m;
     int n;
     bool rev;
-    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const {
+    BATCHLAS_DLA_SY_HELPER T& operator()(int i, int j) const {
         return p[static_cast<std::ptrdiff_t>(rev ? m - 1 - i : i) + static_cast<std::ptrdiff_t>(rev ? n - 1 - j : j) * ld];
     }
 };
@@ -180,30 +199,30 @@ template <class T> struct RevVec {
     T* p;
     int n;
     bool rev;
-    BATCHLAS_DLA_INLINE T& operator()(int i) const { return p[rev ? n - 1 - i : i]; }
+    BATCHLAS_DLA_SY_HELPER T& operator()(int i) const { return p[rev ? n - 1 - i : i]; }
 };
 
 template <class M> struct ColOf {
     M a;
     int j;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return a(i, j); }
+    BATCHLAS_DLA_SY_HELPER decltype(auto) operator()(int i) const { return a(i, j); }
 };
 template <class M> struct RowOf {
     M a;
     int i;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int j) const { return a(i, j); }
+    BATCHLAS_DLA_SY_HELPER decltype(auto) operator()(int j) const { return a(i, j); }
 };
 // Columns j0, j0 + 1, ... as columns 0, 1, ...
 template <class M> struct ColsFrom {
     M a;
     int j0;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int l) const { return a(i, j0 + l); }
+    BATCHLAS_DLA_SY_HELPER decltype(auto) operator()(int i, int l) const { return a(i, j0 + l); }
 };
 // Row r of a symmetric matrix, read from its lower triangle.
 template <class M> struct SymRowLower {
     M a;
     int r;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int j) const { return j > r ? a(j, r) : a(r, j); }
+    BATCHLAS_DLA_SY_HELPER decltype(auto) operator()(int j) const { return j > r ? a(j, r) : a(r, j); }
 };
 template <class M> BATCHLAS_DLA_INLINE ColOf<M> col_of(const M& a, int j) { return {a, j}; }
 template <class M> BATCHLAS_DLA_INLINE RowOf<M> row_of(const M& a, int i) { return {a, i}; }
@@ -218,31 +237,31 @@ template <class T> struct Minus {
 template <class T> Minus(T) -> Minus<T>;
 
 template <class Ex, class T, class Y> BATCHLAS_DLA_INLINE void fill(const Ex& ex, T v, const Y& y, IdxRange r) {
-    for_range(ex, r, [&](int i) { y(i) = v; });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { y(i) = v; });
 }
 template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void copy(const Ex& ex, const X& x, const Y& y, IdxRange r) {
-    for_range(ex, r, [&](int i) { y(i) = x(i); });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { y(i) = x(i); });
 }
 template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void swap(const Ex& ex, const X& x, const Y& y, IdxRange r) {
-    for_range(ex, r, [&](int i) { swap_elem(x(i), y(i)); });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { swap_elem(x(i), y(i)); });
 }
 // x(i) := alpha * x(i) (product alpha first).
 template <class Ex, class T, class X> BATCHLAS_DLA_INLINE void scal(const Ex& ex, T alpha, const X& x, IdxRange r) {
-    for_range(ex, r, [&](int i) { x(i) = sfp::mul(alpha, x(i)); });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { x(i) = sfp::mul(alpha, x(i)); });
 }
 // y(i) := f(i)
 template <class Ex, class Y, class F> BATCHLAS_DLA_INLINE void map_range(const Ex& ex, const Y& y, IdxRange r, F&& f) {
-    for_range(ex, r, [&](int i) { y(i) = f(i); });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { y(i) = f(i); });
 }
 // y(i) := y(i) - x(i) a (product x first).
 template <class Ex, class T, class X, class Y>
 BATCHLAS_DLA_INLINE void axpy(const Ex& ex, Minus<T> a, const X& x, const Y& y, IdxRange r) {
-    for_range(ex, r, [&](int i) { y(i) = sfp::sub(y(i), sfp::mul(static_cast<T>(x(i)), a.v)); });
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY { y(i) = sfp::sub(y(i), sfp::mul(static_cast<T>(x(i)), a.v)); });
 }
 // y(i) := (y(i) - x0(i) a0) - x1(i) a1, one pass.
 template <class Ex, class T, class X0, class X1, class Y>
 BATCHLAS_DLA_INLINE void axpy2(const Ex& ex, Minus<T> a0, const X0& x0, Minus<T> a1, const X1& x1, const Y& y, IdxRange r) {
-    for_range(ex, r, [&](int i) {
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         y(i) = sfp::sub(sfp::sub(y(i), sfp::mul(static_cast<T>(x0(i)), a0.v)), sfp::mul(static_cast<T>(x1(i)), a1.v));
     });
 }
@@ -260,9 +279,13 @@ template <class T, class FA, class FB> BATCHLAS_DLA_INLINE T sub_dot(T acc, int 
 // sum one term at a time from b(i). b may be y. Item per row, no reduction.
 template <class Ex, class MA, class X, class B, class Y>
 BATCHLAS_DLA_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& x, const B& b, const Y& y, IdxRange r, int l0, int l1) {
-    for_range(ex, r, [&](int i) {
+    // The body must be spliced in (BATCHLAS_DLA_SY_BODY): simplified as its own function, the l
+    // loop is IV-canonicalised (exit `==`) and the device link then runtime-unrolls it 8x.
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         using T = std::remove_cvref_t<decltype(b(i))>;
-        y(i) = detail_sy::sub_dot(static_cast<T>(b(i)), l0, l1, [&](int l) -> T { return a(i, l); }, [&](int l) -> T { return x(l); });
+        T acc = b(i);
+        for (int l = l0; l < l1; ++l) acc = sfp::sub(acc, sfp::mul(static_cast<T>(a(i, l)), static_cast<T>(x(l))));
+        y(i) = acc;
     });
 }
 
@@ -273,7 +296,7 @@ BATCHLAS_DLA_INLINE void syr(const Ex& ex, T alpha, const X& x, const MA& a, Idx
     static_assert(UL == Uplo::Lower, "v2::syr (range form): only Uplo::Lower is implemented");
     for (int j = r.lo; j < r.hi; ++j) {
         const T t = sfp::mul(alpha, static_cast<T>(x(j)));
-        for_range(ex, IdxRange{j, r.hi}, [&](int i) { a(i, j) = sfp::add(static_cast<T>(a(i, j)), sfp::mul(static_cast<T>(x(i)), t)); });
+        for_range(ex, IdxRange{j, r.hi}, [&](int i) BATCHLAS_DLA_SY_BODY { a(i, j) = sfp::add(static_cast<T>(a(i, j)), sfp::mul(static_cast<T>(x(i)), t)); });
     }
 }
 
@@ -287,7 +310,7 @@ BATCHLAS_DLA_INLINE void gemmt2_sub(const Ex& ex, const X0& x0, W0&& w0, const X
     for (int j = r.lo; j < r.hi; ++j) {
         const T c0 = w0(j);
         const T c1 = w1(j);
-        for_range(ex, IdxRange{j, r.hi}, [&](int i) {
+        for_range(ex, IdxRange{j, r.hi}, [&](int i) BATCHLAS_DLA_SY_BODY {
             a(i, j) = sfp::sub(sfp::sub(static_cast<T>(a(i, j)), sfp::mul(static_cast<T>(x0(i)), c0)),
                                sfp::mul(static_cast<T>(x1(i)), c1));
         });
@@ -326,7 +349,7 @@ BATCHLAS_DLA_INLINE void lacpy_flat(const Ex& ex, const MA& a, const MB& b, int 
 
 // Rows r of the first ncols columns := v.
 template <class Ex, class T, class MA> BATCHLAS_DLA_INLINE void fill_rows(const Ex& ex, T v, const MA& a, IdxRange r, int ncols) {
-    for_range(ex, r, [&](int i) {
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         for (int c = 0; c < ncols; ++c) a(i, c) = v;
     });
 }
@@ -346,13 +369,13 @@ template <class R> struct SumScratch {
 };
 
 // (ov, oi) beats (bv, bi): a larger value; on a tie the preferred index.
-template <class R> BATCHLAS_DLA_INLINE bool argmax_beats(R ov, int oi, R bv, int bi, bool prefer_low) {
+template <class R> BATCHLAS_DLA_SY_HELPER bool argmax_beats(R ov, int oi, R bv, int bi, bool prefer_low) {
     return ov > bv || (ov == bv && (prefer_low ? oi < bi : oi > bi));
 }
 
 // Uniform (v, idx): a 32-lane xor butterfly (offsets 16 .. 1), then with more than one
 // sub-group the sub-group winners in sub-group order through scratch (two barriers).
-template <class R> BATCHLAS_DLA_INLINE void argmax_reduce(const RtGroup& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
+template <class R> BATCHLAS_DLA_SY_HELPER void argmax_reduce(const RtGroup& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
     auto sg = ex.it.get_sub_group();
     for (unsigned off = 16; off > 0; off >>= 1) {
         const R ov = sycl::permute_group_by_xor(sg, v, off);
@@ -391,11 +414,11 @@ template <class Skip = NoSkip, class X, class R>
 BATCHLAS_DLA_INLINE ArgMax<R> iamax_bk(const RtGroup& ex, ArgMaxScratch<R> scr, const X& x, IdxRange r, bool prefer_low, Skip skip = {}) {
     R cv = R(-1);
     int ci = -1;
-    for_range(ex, r, [&](int i) {
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         if constexpr (std::is_same_v<Skip, SkipAt>) {
             if (i == skip.i) return;
         }
-        const R v = sfp::nan_as_inf(abs1(x(i)));
+        const R v = sfp::nan_as_inf(sfp::cabs1(x(i)));
         if (argmax_beats(v, i, cv, ci, prefer_low)) {
             cv = v;
             ci = i;
@@ -406,7 +429,7 @@ BATCHLAS_DLA_INLINE ArgMax<R> iamax_bk(const RtGroup& ex, ArgMaxScratch<R> scr, 
 }
 
 // Uniform sum: the butterfly, then the sub-group sums in sub-group order through `slots`.
-template <class R> BATCHLAS_DLA_INLINE R sum_reduce_real(const RtGroup& ex, R v, R* slots) {
+template <class R> BATCHLAS_DLA_SY_HELPER R sum_reduce_real(const RtGroup& ex, R v, R* slots) {
     auto sg = ex.it.get_sub_group();
     for (unsigned off = 16; off > 0; off >>= 1) v += sycl::permute_group_by_xor(sg, v, off);
     const int nsg = ex.nl / 32;
@@ -418,7 +441,7 @@ template <class R> BATCHLAS_DLA_INLINE R sum_reduce_real(const RtGroup& ex, R v,
     ex.barrier();
     return v;
 }
-template <class T, class R> BATCHLAS_DLA_INLINE T sum_reduce(const RtGroup& ex, SumScratch<R> scr, T v) {
+template <class T, class R> BATCHLAS_DLA_SY_HELPER T sum_reduce(const RtGroup& ex, SumScratch<R> scr, T v) {
     using A = Arith<T>;
     if constexpr (A::is_complex) {
         const R re = sum_reduce_real(ex, A::re(v), scr.re);
@@ -434,7 +457,7 @@ template <class T, class R> BATCHLAS_DLA_INLINE T sum_reduce(const RtGroup& ex, 
 template <class T, class R, class X0, class X1, class Y>
 BATCHLAS_DLA_INLINE std::array<T, 2> dotu2_sum(const RtGroup& ex, SumScratch<R> scr, bool two, const X0& x0, const X1& x1, const Y& y, IdxRange r) {
     T p0 = sfp::zero<T>(), p1 = sfp::zero<T>();
-    for_range(ex, r, [&](int i) {
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         p0 = sfp::add(p0, sfp::mul(static_cast<T>(x0(i)), static_cast<T>(y(i))));
         if (two) p1 = sfp::add(p1, sfp::mul(static_cast<T>(x1(i)), static_cast<T>(y(i))));
     });
@@ -450,9 +473,9 @@ inline constexpr int kBkNeedRow = 0;
 inline constexpr int kBkZero = 1;
 inline constexpr int kBkKeep = 2;
 
-template <class R> BATCHLAS_DLA_INLINE R bk_alpha() { return (R(1) + sycl::sqrt(R(17))) / R(8); }
+template <class R> BATCHLAS_DLA_SY_HELPER R bk_alpha() { return (R(1) + sycl::sqrt(R(17))) / R(8); }
 
-template <class R> BATCHLAS_DLA_INLINE int bk_stage(const RtGroup& ex, R absakk, R colmax, R alpha) {
+template <class R> BATCHLAS_DLA_SY_HELPER int bk_stage(const RtGroup& ex, R absakk, R colmax, R alpha) {
     return ex.bcast(sycl::fmax(absakk, colmax) == R(0) || sycl::isnan(absakk) ? kBkZero
                     : absakk >= alpha * colmax                                ? kBkKeep
                                                                               : kBkNeedRow);
@@ -460,7 +483,7 @@ template <class R> BATCHLAS_DLA_INLINE int bk_stage(const RtGroup& ex, R absakk,
 
 // ?SYTF2's second test after the row search: kp (k or imax) and kstep (1 or 2), item 0's.
 template <class R>
-BATCHLAS_DLA_INLINE void bk_choice(const RtGroup& ex, R absakk, R colmax, R rowmax, R absimax, R alpha, int k, int imax, int& kp, int& kstep) {
+BATCHLAS_DLA_SY_HELPER void bk_choice(const RtGroup& ex, R absakk, R colmax, R rowmax, R absimax, R alpha, int k, int imax, int& kp, int& kstep) {
     kp = imax;
     kstep = 1;
     if (absakk >= alpha * colmax * (colmax / rowmax)) kp = k;
@@ -489,7 +512,7 @@ template <class T> BATCHLAS_DLA_INLINE BkBlock2<T> bk_block2(T akk, T ak1k, T ak
 // [y0 y1](i) := [x0 x1](i) D^-1 for i in r (x may be y).
 template <class Ex, class T, class X0, class X1, class Y0, class Y1>
 BATCHLAS_DLA_INLINE void bk_apply2(const Ex& ex, const BkBlock2<T>& blk, const X0& x0, const X1& x1, const Y0& y0, const Y1& y1, IdxRange r) {
-    for_range(ex, r, [&](int i) {
+    for_range(ex, r, [&](int i) BATCHLAS_DLA_SY_BODY {
         const T u = x0(i), v = x1(i);
         const T a = blk.first(u, v);
         const T b = blk.second(u, v);
@@ -519,7 +542,7 @@ template <class T> BATCHLAS_DLA_INLINE LdlD2<T> ldl_d2(T off, T dkk, T dk1k1) {
 // Row t of D^-1 x for a block of kind kd (0: 1 x 1; 1 / 2: the first / second row of a 2 x 2):
 // x row t's value, xp its partner's, dtt and dpp their diagonals, off the block's off-diagonal.
 // ?SYTRS's arithmetic, so both rows of a block agree with LdlD2.
-template <class T> BATCHLAS_DLA_INLINE T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
+template <class T> BATCHLAS_DLA_SY_HELPER T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
     if (kd == 0) return sfp::mul(x, sfp::recip(dtt));
     const T akm1 = sfp::div(kd == 1 ? dtt : dpp, off);
     const T ak = sfp::div(kd == 1 ? dpp : dtt, off);
@@ -532,7 +555,7 @@ template <class T> BATCHLAS_DLA_INLINE T ldl_dsolve_row(int kd, T x, T xp, T dtt
 // ?SYCONV on column j of a staged lower factor (one item): the interchanges of the steps after j
 // in step order (a 2 x 2 step at k swaps row k + 1), and the 2 x 2 off-diagonal of a block
 // starting at j moved to e[j] (when e is set). ps is the logical ipiv (+(p + 1) / -(p + 1)).
-template <class T, class ML> BATCHLAS_DLA_INLINE void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
+template <class T, class ML> BATCHLAS_DLA_SY_HELPER void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
     for (int k = 0; k < n;) {
         const int v = ps[k];
         if (v > 0) {
@@ -553,7 +576,7 @@ template <class T, class ML> BATCHLAS_DLA_INLINE void syconv_col(const ML& l, co
 // x[r] of lane l holds logical row l + 32 r.
 
 // Row k, to every lane. Collective.
-template <int R, class T, class SG> BATCHLAS_DLA_INLINE T frag_get(const SG& sg, const T (&x)[R], int k) {
+template <int R, class T, class SG> BATCHLAS_DLA_SY_HELPER T frag_get(const SG& sg, const T (&x)[R], int k) {
     T v = x[0];
     BATCHLAS_DLA_UNROLL_FULL
     for (int r = 1; r < R; ++r)
