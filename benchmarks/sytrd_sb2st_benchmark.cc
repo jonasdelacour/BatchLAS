@@ -14,23 +14,6 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-inline void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>& A,
-                                      MatrixView<T, MatrixFormat::Dense> AB,
-                                      int n,
-                                      int kd) {
-    // AB is (kd+1) x n, lower band: AB(r,j) = A(j+r, j)
-    for (int j = 0; j < n; ++j) {
-        const int rmax = std::min(kd, n - 1 - j);
-        for (int r = 0; r <= rmax; ++r) {
-            AB(r, j, 0) = A(j + r, j, 0);
-        }
-        for (int r = rmax + 1; r <= kd; ++r) {
-            AB(r, j, 0) = T(0);
-        }
-    }
-}
-
 template <typename Benchmark>
 inline void SytrdSb2stBenchSizes(Benchmark* b) {
     for (int n : {128, 256, 512}) {

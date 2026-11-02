@@ -2,6 +2,8 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
 
+#include <benchmarks/bench_utils.hh>
+
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
@@ -17,23 +19,6 @@
 using namespace batchlas;
 
 namespace {
-
-template <typename T>
-inline void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>& A,
-                                       MatrixView<T, MatrixFormat::Dense> AB,
-                                       int n,
-                                       int kd) {
-    // AB is (kd+1) x n, lower band: AB(r,j) = A(j+r, j)
-    for (int j = 0; j < n; ++j) {
-        const int rmax = std::min(kd, n - 1 - j);
-        for (int r = 0; r <= rmax; ++r) {
-            AB(r, j, 0) = A(j + r, j, 0);
-        }
-        for (int r = rmax + 1; r <= kd; ++r) {
-            AB(r, j, 0) = T(0);
-        }
-    }
-}
 
 inline void usage(const char* argv0) {
     std::cerr << "Usage: " << argv0 << " --dump-dir <path> [options]\n";
