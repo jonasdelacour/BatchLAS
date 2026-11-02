@@ -9,6 +9,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
+#include <src/ops/syev/steqr/steqr_internal.hh>
 
 #include <algorithm>
 #include <array>
@@ -717,7 +718,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
 // returned, and the caller read eigenvalues that were simply wrong for it.
 //
 // TWO TIERS, ONE SPAN. `steqr` picks steqr_cta when n <= the device sub-group
-// width and steqr_wg otherwise (src/ops/syev/steqr/steqr.cc:44), so at n = 32 these
+// width and steqr_wg otherwise (the steqr_cta_can_run branch in steqr_dispatch, steqr.cc), so at n = 32 these
 // cases exercise the CTA arm on CUDA and the work-group arm on the host -- which
 // is deliberate: the two tiers derive the status by completely different means
 // (a bool out of steqr_cta_solve vs. a post-hoc scan of `e`), and a test that
@@ -800,7 +801,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
     // "nothing wrote it at all", and "nothing wrote it" is the exact failure this
     // mechanism exists to make impossible: a status channel that is never filled
     // reports universal success. steqr clears the span itself
-    // (src/ops/syev/steqr/steqr.cc:67), so a surviving -1 means that clear never ran.
+    // (the detail::info_clear call in steqr(), steqr.cc), so a surviving -1 means that clear never ran.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     auto ws = UnifiedVector<std::byte>(
@@ -831,7 +832,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
 // vacuously. Calling steqr directly avoids the rewrite; 1 escapes it regardless.
 //
 // One sweep per pass gives the CTA arm a budget of max_sweeps*n = 32 sweeps
-// (steqr_cta_device.hh:765) and the work-group arm n-1 = 31 passes of one sweep
+// (sweep_budget = max_sweeps * t.n in steqr_cta_device.hh) and the work-group arm n-1 = 31 passes of one sweep
 // each, against a 32x32 Toeplitz that needs 2-3 sweeps per eigenvalue.
 TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     using T = typename TestFixture::ScalarType;
@@ -1287,7 +1288,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
 
         for (const auto scheme : kSteqrUpdateSchemes) {
             for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
-                // NETLIB's host queue never takes steqr_cta (should_use_cta, src/ops/syev/steqr/steqr.cc:15-24,40-43)
+                // NETLIB's host queue never takes steqr_cta (steqr_cta_can_run, src/ops/syev/steqr/steqr_internal.hh)
                 // and steqr_wg reads no cta_* field: every (scheme, shift) pair there is the same run.
                 if (B == Backend::NETLIB && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack))
                     continue;
@@ -1464,10 +1465,11 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
 // The output hashes (w_hash, z_hash in benchmarks/steqr_accuracy.cc) compare base and branch at
 // one batch size; this pins the other axis. Item k of a batch-4099 solve equals, bit for bit, the
 // same item solved alone: eigenvalues and eigenvectors. An item that reads a neighbour's lane,
-// chunk or work-group state goes red. On a GPU, n = 4, 13 and 32 take steqr_cta (8, 2 and 1
-// items per warp) under every scheme and shift; n = 33 and 48 take steqr_wg, which reads no cta_*
-// field. The host tier never takes steqr_cta, so there every n is steqr_wg. Probes sit at chunk,
-// warp and work-group edges and in the ragged tail; d and e are padded per item.
+// chunk or work-group state goes red. Where steqr_cta_can_run holds and B is not ROCm (the
+// router's rule), n = 4, 13 and 32 call steqr_cta directly (8, 2 and 1 items per warp) under every
+// scheme and shift; elsewhere, and at n = 33 and 48, steqr runs steqr_wg, which reads no cta_*
+// field. Probes sit at chunk, warp and work-group edges and in the ragged tail; d and e are padded
+// per item.
 // ---------------------------------------------------------------------------
 TYPED_TEST(SteqrTest, BatchPositionChangesNoBit) {
     using T = typename TestFixture::ScalarType;
@@ -1503,17 +1505,21 @@ TYPED_TEST(SteqrTest, BatchPositionChangesNoBit) {
             std::memcpy(v.data_ptr(), h.data() + static_cast<size_t>(stride) * first, sizeof(Real) * Vector<Real>::required_span_length(size, 1, stride, count));
             return v;
         };
+        const bool cta = B != Backend::ROCM && steqr_cta_can_run(select::device_of<B>(*this->ctx), n);
         auto solve = [&](int first, int count, SteqrParams<Real> params, Vector<Real>& w, Matrix<Real>& Z) {
             auto d = slice(hd, n, sd, first, count);
             auto e = slice(he, n - 1, se, first, count);
             params.sort = true;
             params.sort_order = SortOrder::Ascending;
             UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params));
-            (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Z);
+            if (cta) {
+                (void)steqr_cta<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Z);
+            } else {
+                (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Z);
+            }
             this->ctx->wait();
         };
 
-        const bool cta = B != Backend::NETLIB && n <= 32;
         for (const auto scheme : kSteqrUpdateSchemes) {
             for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
                 if (!cta && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack)) continue;

@@ -457,7 +457,8 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
 // random T scaled by 1e+6 and 1e-6. n = 320 pads to 32 * 2^4. One item per picked kind; the data
 // of a kind does not depend on which kinds are picked. Eigenvalues against host LAPACKE per item,
 // then residual and orthogonality through batchlas::verify. On a GPU the Levels driver runs under
-// both fused merge variants; the host tier's stedc reads neither knob, so it runs once.
+// both fused merge variants, and so does Recursive at n = 64 and 320; the host tier's stedc reads
+// none of these knobs, so it runs once.
 // ---------------------------------------------------------------------------
 namespace {
 constexpr int kHardKinds = 6;
@@ -511,13 +512,18 @@ void expect_hard_spectra_solved(Queue& ctx, const std::vector<int>& kinds) {
 
         std::vector<StedcMergeVariant> variants{StedcMergeVariant::Fused, StedcMergeVariant::FusedCta};
         if constexpr (B == Backend::NETLIB) variants.resize(1);
+        // stedc_impl (Recursive) assembles Z on its own; this is its only eigenvector check.
+        std::vector<StedcAlgorithm> algorithms{StedcAlgorithm::Levels};
+        if (B != Backend::NETLIB && n != 128) algorithms.push_back(StedcAlgorithm::Recursive);
+        for (const auto algorithm : algorithms)
         for (const auto variant : variants) {
-            SCOPED_TRACE("n=" + std::to_string(n) + " merge_variant=" + std::to_string(static_cast<int>(variant)));
+            SCOPED_TRACE("n=" + std::to_string(n) + " merge_variant=" + std::to_string(static_cast<int>(variant)) +
+                         " algorithm=" + std::to_string(static_cast<int>(algorithm)));
             auto d = upload(hd, n, sd);
             auto e = upload(he, n - 1, se);
             UnifiedVector<Real> W(static_cast<size_t>(n) * batch);
             auto Z = Matrix<Real>::Identity(n, batch);
-            const StedcParams<Real> params{.algorithm = StedcAlgorithm::Levels, .merge_variant = variant};
+            const StedcParams<Real> params{.algorithm = algorithm, .merge_variant = variant};
             UnifiedVector<std::byte> ws(stedc_buffer_size<B, Real>(ctx, n, batch, JobType::EigenVectors, params));
             (void)stedc<B, Real>(ctx, d, e, VectorView<Real>(W, n, batch), ws, JobType::EigenVectors, params, Z);
             ctx.wait();
@@ -636,14 +642,14 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 //
 //   * `leaf_steqr_params.max_sweeps` is real. It caps the leaf steqr, and the
 //     level-synchronous driver -- the default -- folds each leaf's status back
-//     into the caller's span (src/ops/syev/stedc/stedc.cc:922-937; the fold is
+//     into the caller's span (the leaf_info fold in stedc_levels_impl, stedc.cc; the fold is
 //     needed because that one steqr call solves leaves*batch problems, so its
 //     batch axis is LONGER than `info`). This is what the forced case below
 //     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
 //   * `max_sec_iter` is NOT reachable on the arms that run by default:
 //     src/ops/syev/stedc/stedc_secular.cc:298 and :521 hardcode `i < 50` and :700
 //     hardcodes `iter >= 100`, so the parameter never reaches the loop. Only
-//     Fused/FusedCta honour it (stedc_merge_cta.cc:1006). A test that set
+//     Fused/FusedCta honour it (the max_iter use in stedc_merge_cta.cc). A test that set
 //     max_sec_iter, ran the default arm and watched nothing fail would look
 //     exactly like a working guard while testing a value that never left the
 //     parameter struct -- so it is not written here.
