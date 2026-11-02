@@ -1,0 +1,27 @@
+tag hashed_configs throw_configs pinned_routes_reached
+potrf:cta 14 10 potrf->ctax14
+potrf:lpanel 12 12 potrf->lpanel:panel=8x12
+potrf:lpanel16 3 3 potrf->lpanel:panel=16x3
+potrf:blocked 8 0 potrf->blockedx8
+potri:cta 64 0 potri->ctax64
+potri:blocked64 32 0 potri->blocked:nb=64x32
+potri:blocked128 4 0 potri->blocked:nb=128x4
+geqrf:tiny 11 1 geqrf->tinyx11
+geqrf:cta 19 1 geqrf->ctax19
+geqrf:blocked 16 0 geqrf->blockedx16
+geqrf:blocked+LEAFreg 12 0 geqrf->blockedx12
+geqrf_leaf 46 2 (direct call)
+orgqr:blocked 12 0 geqrf->vendorx12 orgqr->blockedx12
+ormqx_cta 160 0 (direct call)
+ormqr:blocked 48 0 ormqr->blockedx48
+ormqr:blocked+IMPLdevice 48 0 ormqr->blockedx48
+syev:cta 64 0 syev->ctax64
+syev:cta_fused 64 0 syev->cta_fusedx64
+syev:blocked 32 0 syev->blockedx32
+tridiag_solver 16 0 (direct call)
+stebz_stein 18 0 (direct call)
+syevx_subset 16 0 (direct call)
+gesvd:blocked+bdsdc 108 0 gesvd->blockedx108
+gesvd:blocked+bdsqr 108 0 gesvd->blockedx108
+gesvd:herm+blocked 48 0 gesvd->blockedx48
+gebrd 44 40 (direct call)

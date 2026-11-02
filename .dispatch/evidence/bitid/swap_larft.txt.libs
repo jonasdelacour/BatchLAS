@@ -1,0 +1,36 @@
+LD_LIBRARY_PATH=/home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src:/opt/dpcpp-cuda/lib
+	libbatchlas_core.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_core.so.0 (0x0000085941600000)
+	libbatchlas_backends.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_backends.so.0 (0x000008593d800000)
+	libbatchlas_extensions_eigen.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_eigen.so.0 (0x000008593b600000)
+	libbatchlas_extensions_factorization.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_factorization.so.0 (0x0000085938400000)
+	libbatchlas_extensions_tridiag.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_tridiag.so.0 (0x0000085938000000)
+	libbatchlas_extensions_sytrd.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_sytrd.so.0 (0x0000085936600000)
+	libbatchlas_extensions_latrd.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_latrd.so.0 (0x0000085935a00000)
+	libbatchlas_extensions_stedc.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_stedc.so.0 (0x0000085935400000)
+	libbatchlas_extensions_cta.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_cta.so.0 (0x0000085930a00000)
+	libbatchlas_extensions_posv.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_posv.so.0 (0x0000085930000000)
+	libbatchlas_extensions_gesv.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_gesv.so.0 (0x000008592f800000)
+	libbatchlas_extensions_level3.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_level3.so.0 (0x000008592c800000)
+	libbatchlas_util.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_util.so.0 (0x0000085941552000)
+	libbatchlas_extra.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extra.so.0 (0x000008592c400000)
+	libbatchlas_sycl.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_sycl.so.0 (0x000008591b400000)
+	libbatchlas_backends_cuda.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_backends_cuda.so.0 (0x0000085937e66000)
+	libsycl.so.9 => /opt/dpcpp-cuda/lib/libsycl.so.9 (0x000008591aa00000)
+	libur_loader.so.0 => /opt/dpcpp-cuda/lib/libur_loader.so.0 (0x00000858d7400000)
+--- LD_DEBUG=libs (batchlas lookups)
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_backends_cuda.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_backends.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_core.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_cta.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_eigen.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_factorization.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_gesv.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_latrd.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_level3.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_posv.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_stedc.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_sytrd.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extensions_tridiag.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_extra.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_sycl.so.0
+    181885:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-larft-orgqr-ormqr/build/src/libbatchlas_util.so.0

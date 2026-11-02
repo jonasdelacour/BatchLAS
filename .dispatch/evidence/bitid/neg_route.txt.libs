@@ -1,0 +1,36 @@
+LD_LIBRARY_PATH=/home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src:/opt/dpcpp-cuda/lib
+	libbatchlas_core.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_core.so.0 (0x0000105cfda00000)
+	libbatchlas_backends.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_backends.so.0 (0x0000105cf9a00000)
+	libbatchlas_extensions_eigen.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_eigen.so.0 (0x0000105cf7600000)
+	libbatchlas_extensions_factorization.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_factorization.so.0 (0x0000105cf4200000)
+	libbatchlas_extensions_tridiag.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_tridiag.so.0 (0x0000105cf3c00000)
+	libbatchlas_extensions_sytrd.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_sytrd.so.0 (0x0000105cf2200000)
+	libbatchlas_extensions_latrd.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_latrd.so.0 (0x0000105cf1600000)
+	libbatchlas_extensions_stedc.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_stedc.so.0 (0x0000105cf1000000)
+	libbatchlas_extensions_cta.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_cta.so.0 (0x0000105cec800000)
+	libbatchlas_extensions_posv.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_posv.so.0 (0x0000105ceb600000)
+	libbatchlas_extensions_gesv.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_gesv.so.0 (0x0000105cea600000)
+	libbatchlas_extensions_level3.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_level3.so.0 (0x0000105ce7a00000)
+	libbatchlas_util.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_util.so.0 (0x0000105cfe1ce000)
+	libbatchlas_extra.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extra.so.0 (0x0000105ce7600000)
+	libbatchlas_sycl.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_sycl.so.0 (0x0000105cd6600000)
+	libbatchlas_backends_cuda.so.0 => /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_backends_cuda.so.0 (0x0000105cf4017000)
+	libsycl.so.9 => /opt/dpcpp-cuda/lib/libsycl.so.9 (0x0000105cd5c00000)
+	libur_loader.so.0 => /opt/dpcpp-cuda/lib/libur_loader.so.0 (0x0000105c92600000)
+--- LD_DEBUG=libs (batchlas lookups)
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_backends_cuda.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_backends.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_core.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_cta.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_eigen.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_factorization.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_gesv.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_latrd.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_level3.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_posv.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_stedc.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_sytrd.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extensions_tridiag.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_extra.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_sycl.so.0
+    175706:	calling init: /home/jonaslacour/BatchLAS/.claude/worktrees/val-base/build/src/libbatchlas_util.so.0

@@ -1,0 +1,123 @@
+TIMING_START potrf-cta-lpanel 11:52
+factor_bench potrf float n=16 batch=32768 route=cta | potrf float n=16 batch=32768 native:cta | base 0.1221 ms [0.1219-0.3502] | cand 0.1323 ms [0.1321-0.4666] | cand/base 1.084 | n=14
+factor_bench potrf float n=48 batch=32768 route=cta | potrf float n=48 batch=32768 native:cta | base 1.1696 ms [1.1654-1.5347] | cand 1.1758 ms [1.1749-1.1993] | cand/base 1.005 | n=14
+factor_bench potrf cfloat n=16 batch=32768 route=cta | potrf cfloat n=16 batch=32768 native:cta | base 0.2532 ms [0.2522-0.6080] | cand 0.2266 ms [0.2252-0.5867] | cand/base 0.895 | n=14
+factor_bench potrf cfloat n=48 batch=32768 route=cta | potrf cfloat n=48 batch=32768 native:cta | base 2.4669 ms [2.4617-5.2238] | cand 2.6150 ms [2.6092-2.6182] | cand/base 1.060 | n=14
+factor_bench potrf float n=16 batch=32768 route=lpanel:panel=8 | potrf float n=16 batch=32768 native:lpanel:panel=8 | base 0.0949 ms [0.0943-0.1019] | cand 0.0966 ms [0.0943-0.4395] | cand/base 1.018 | n=14
+factor_bench potrf float n=32 batch=32768 route=lpanel:panel=8 | potrf float n=32 batch=32768 native:lpanel:panel=8 | base 0.2227 ms [0.2130-0.4879] | cand 0.2159 ms [0.2123-0.2328] | cand/base 0.970 | n=14
+factor_bench potrf float n=64 batch=32768 route=lpanel:panel=8 | potrf float n=64 batch=32768 native:lpanel:panel=8 | base 0.8023 ms [0.8013-0.8034] | cand 0.8040 ms [0.8032-1.6167] | cand/base 1.002 | n=14
+factor_bench potrf cfloat n=256 batch=512 route=blocked | potrf cfloat n=256 batch=512 native:blocked | base 2.0500 ms [1.9688-2.1057] | cand 2.0974 ms [2.0119-2.1589] | cand/base 1.023 | n=14
+factor_bench potrf cfloat n=512 batch=128 route=blocked | potrf cfloat n=512 batch=128 native:blocked | base 1.9532 ms [1.9387-2.0789] | cand 2.1240 ms [1.9801-2.1344] | cand/base 1.087 | n=14
+TIMING_DONE potrf-cta-lpanel 13:16
+TIMING_START bdsqr-bdsdc 13:16
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED float 16 1024 1 1 | base 0.6160 ms [0.6140-0.6240] | cand 0.6158 ms [0.6128-0.6197] | cand/base 1.000 | n=14
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED float 32 1024 1 1 | base 1.5372 ms [1.5327-1.5420] | cand 1.5360 ms [1.5317-1.5426] | cand/base 0.999 | n=14
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED float 64 1024 1 1 | base 3.7318 ms [3.7238-3.7389] | cand 3.7308 ms [3.7257-3.7407] | cand/base 1.000 | n=14
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED complex<float> 16 1024 1 1 | base 2.5489 ms [2.5459-2.5528] | cand 2.5507 ms [2.5458-2.5700] | cand/base 1.001 | n=14
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED complex<float> 32 1024 1 1 | base 5.8682 ms [5.8638-5.8775] | cand 5.8669 ms [5.8652-5.8775] | cand/base 1.000 | n=14
+gesvd_blocked BIDIAG=bdsdc | BM_GESVD_BLOCKED complex<float> 64 1024 1 1 | base 13.6625 ms [13.6451-13.6761] | cand 13.6561 ms [13.6495-13.6666] | cand/base 1.000 | n=14
+TIMING_DONE bdsqr-bdsdc 13:17
+TIMING_START gebrd 13:17
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 32 256 1 1 | base 0.7742 ms [0.7733-2.9872] | cand 0.8127 ms [0.8098-3.0281] | cand/base 1.050 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 64 256 1 1 | base 1.6089 ms [1.6061-3.8161] | cand 1.6741 ms [1.6712-3.8850] | cand/base 1.040 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 128 256 1 1 | base 3.2976 ms [3.2921-7.7504] | cand 3.2997 ms [3.2932-7.7513] | cand/base 1.001 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 32 256 1 1 | base 1.6946 ms [1.6881-3.9032] | cand 1.3243 ms [1.3201-3.5368] | cand/base 0.781 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 64 256 1 1 | base 4.0338 ms [4.0248-8.4870] | cand 3.0343 ms [3.0280-7.5232] | cand/base 0.752 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 128 256 1 1 | base 8.0601 ms [8.0402-17.0108] | cand 5.9517 ms [5.9421-12.6990] | cand/base 0.738 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED float 32 256 1 1 | base 9.6141 ms [9.5905-21.3754] | cand 14.2462 ms [8.6885-20.5480] | cand/base 1.482 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED float 64 256 1 1 | base 35.6833 ms [35.6429-82.7732] | cand 52.0206 ms [30.9404-73.2632] | cand/base 1.458 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED complex<float> 32 256 1 1 | base 28.6067 ms [27.5195-68.1091] | cand 17.9704 ms [10.7089-25.3015] | cand/base 0.628 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED complex<float> 64 256 1 1 | base 175.3635 ms [108.4780-286.9280] | cand 72.1487 ms [41.4338-103.5360] | cand/base 0.411 | n=14
+RESTART (no GPU0 gate, flock, GPU1 contention check) 15:28
+TIMING_START gebrd 15:28
+gesvd_blocked (blocked gebrd panel): GPU0 util median 38% [0-81]
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 32 256 1 1 | base 0.7804 ms [0.7731-0.8038] | cand 0.8150 ms [0.8088-0.8338] | cand/base 1.044 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 64 256 1 1 | base 1.6146 ms [1.6062-1.6408] | cand 1.6808 ms [1.6629-1.7049] | cand/base 1.041 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED float 128 256 1 1 | base 3.3068 ms [3.2943-3.3443] | cand 3.3046 ms [3.2975-3.3320] | cand/base 0.999 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 32 256 1 1 | base 1.6999 ms [1.6931-1.7247] | cand 1.3278 ms [1.3183-1.3484] | cand/base 0.781 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 64 256 1 1 | base 4.0370 ms [4.0240-4.0852] | cand 3.0383 ms [3.0319-3.0727] | cand/base 0.753 | n=14
+gesvd_blocked (blocked gebrd panel) | BM_GESVD_BLOCKED complex<float> 128 256 1 1 | base 8.0549 ms [8.0281-8.1289] | cand 5.9534 ms [5.9465-5.9962] | cand/base 0.739 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000): GPU0 util median 86% [0-95]
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED float 32 256 1 1 | base 9.6700 ms [9.5931-9.6831] | cand 8.7581 ms [8.6906-9.3889] | cand/base 0.906 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED float 64 256 1 1 | base 35.7193 ms [35.6461-41.6867] | cand 31.0174 ms [30.9421-31.5939] | cand/base 0.868 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED complex<float> 32 256 1 1 | base 27.5851 ms [27.5497-27.8419] | cand 10.7732 ms [10.7124-13.4966] | cand/base 0.391 | n=14
+gesvd_blocked unblocked gebrd (GEBRD_MIN=100000) | BM_GESVD_BLOCKED complex<float> 64 256 1 1 | base 108.5410 ms [108.4600-108.6120] | cand 41.4951 ms [41.4507-41.5691] | cand/base 0.382 | n=14
+gesvd_cta (gebrd_cta): GPU0 util median 0% [0-0]
+gesvd_cta (gebrd_cta) | BM_GESVD_CTA float 16 16384 1 1 | base 1.1504 ms [1.1050-1.5767] | cand 1.1456 ms [1.1001-1.2383] | cand/base 0.996 | n=14
+gesvd_cta (gebrd_cta) | BM_GESVD_CTA float 32 16384 1 1 | base 6.7998 ms [6.6326-7.4143] | cand 6.8298 ms [6.6855-6.9296] | cand/base 1.004 | n=14
+TIMING_DONE gebrd 15:34
+TIMING_START larft-orgqr-ormqr 15:34
+ormqr_cta Right: GPU0 util median 0% [0-0]
+ormqr_cta Right | BM_ORMQR_CTA float 13 16384 1 1 0 | base 0.0628 ms [0.0596-0.0670] | cand 0.0520 ms [0.0486-0.0577] | cand/base 0.828 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 13 16384 1 1 1 | base 0.0635 ms [0.0603-0.0674] | cand 0.0533 ms [0.0499-0.0580] | cand/base 0.839 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 16 16384 1 1 0 | base 0.0839 ms [0.0812-0.0883] | cand 0.0666 ms [0.0633-0.0709] | cand/base 0.795 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 16 16384 1 1 1 | base 0.0854 ms [0.0823-0.0888] | cand 0.0677 ms [0.0653-0.0722] | cand/base 0.792 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 29 16384 1 1 0 | base 0.3585 ms [0.3556-0.3639] | cand 0.2670 ms [0.2639-0.2725] | cand/base 0.745 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 29 16384 1 1 1 | base 0.3598 ms [0.3557-0.3663] | cand 0.2698 ms [0.2669-0.2740] | cand/base 0.750 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 32 16384 1 1 0 | base 0.4340 ms [0.4301-0.4411] | cand 0.3116 ms [0.3076-0.3223] | cand/base 0.718 | n=14
+ormqr_cta Right | BM_ORMQR_CTA float 32 16384 1 1 1 | base 0.4334 ms [0.4302-0.4472] | cand 0.3130 ms [0.3111-0.3181] | cand/base 0.722 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 13 16384 1 1 0 | base 0.1199 ms [0.1171-0.1255] | cand 0.0800 ms [0.0783-0.0833] | cand/base 0.667 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 13 16384 1 1 1 | base 0.1218 ms [0.1191-0.1271] | cand 0.0832 ms [0.0812-0.0859] | cand/base 0.683 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 16 16384 1 1 0 | base 0.1668 ms [0.1643-0.1734] | cand 0.1072 ms [0.1052-0.1106] | cand/base 0.643 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 16 16384 1 1 1 | base 0.1704 ms [0.1675-0.1773] | cand 0.1105 ms [0.1084-0.1128] | cand/base 0.648 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 29 16384 1 1 0 | base 1.1348 ms [1.1294-1.1548] | cand 0.5420 ms [0.5402-0.5485] | cand/base 0.478 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 29 16384 1 1 1 | base 1.1481 ms [1.1426-1.1637] | cand 0.5810 ms [0.5775-0.5863] | cand/base 0.506 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 32 16384 1 1 0 | base 1.3768 ms [1.3702-1.3926] | cand 0.6199 ms [0.6183-0.6297] | cand/base 0.450 | n=14
+ormqr_cta Right | BM_ORMQR_CTA complex<float> 32 16384 1 1 1 | base 1.4017 ms [1.3927-1.4164] | cand 0.6764 ms [0.6692-0.6825] | cand/base 0.483 | n=14
+ormqr_cta Left: GPU0 util median 0% [0-0]
+ormqr_cta Left | BM_ORMQR_CTA float 13 16384 1 0 0 | base 0.0447 ms [0.0426-0.0462] | cand 0.0437 ms [0.0427-0.0451] | cand/base 0.978 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 13 16384 1 0 1 | base 0.0446 ms [0.0430-0.0727] | cand 0.0438 ms [0.0430-0.0455] | cand/base 0.981 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 16 16384 1 0 0 | base 0.0569 ms [0.0544-0.0597] | cand 0.0560 ms [0.0550-0.0584] | cand/base 0.985 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 16 16384 1 0 1 | base 0.0562 ms [0.0542-0.0641] | cand 0.0564 ms [0.0552-0.0578] | cand/base 1.005 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 29 16384 1 0 0 | base 0.2179 ms [0.2133-0.2220] | cand 0.2162 ms [0.2128-0.2218] | cand/base 0.992 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 29 16384 1 0 1 | base 0.2205 ms [0.2165-0.2260] | cand 0.2199 ms [0.2172-0.2500] | cand/base 0.997 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 32 16384 1 0 0 | base 0.2237 ms [0.2210-0.2940] | cand 0.2238 ms [0.2200-0.2747] | cand/base 1.000 | n=14
+ormqr_cta Left | BM_ORMQR_CTA float 32 16384 1 0 1 | base 0.2222 ms [0.2192-0.2589] | cand 0.2215 ms [0.2189-0.2271] | cand/base 0.997 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 13 16384 1 0 0 | base 0.1456 ms [0.1432-0.1732] | cand 0.1046 ms [0.1023-0.1129] | cand/base 0.718 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 13 16384 1 0 1 | base 0.1439 ms [0.1418-0.1481] | cand 0.1025 ms [0.1002-0.1066] | cand/base 0.712 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 16 16384 1 0 0 | base 0.3086 ms [0.3050-0.4094] | cand 0.2650 ms [0.2610-0.3431] | cand/base 0.859 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 16 16384 1 0 1 | base 0.3103 ms [0.3075-0.3729] | cand 0.2671 ms [0.2620-0.3155] | cand/base 0.861 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 29 16384 1 0 0 | base 1.5177 ms [1.5111-1.5636] | cand 0.7905 ms [0.7823-0.8211] | cand/base 0.521 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 29 16384 1 0 1 | base 1.5246 ms [1.5153-1.6409] | cand 0.7900 ms [0.7854-0.8143] | cand/base 0.518 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 32 16384 1 0 0 | base 1.7101 ms [1.7007-1.7858] | cand 0.9612 ms [0.9519-1.1136] | cand/base 0.562 | n=14
+ormqr_cta Left | BM_ORMQR_CTA complex<float> 32 16384 1 0 1 | base 1.7164 ms [1.7072-2.0035] | cand 0.9615 ms [0.9557-0.9893] | cand/base 0.560 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset): GPU0 util median 0% [0-0]
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 64 256 0 0 32 | base 0.4931 ms [0.4920-0.5338] | cand 0.1611 ms [0.1594-0.1699] | cand/base 0.327 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 64 256 0 1 32 | base 0.4922 ms [0.4893-0.5432] | cand 0.1607 ms [0.1580-0.1900] | cand/base 0.326 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 128 256 0 0 32 | base 1.0447 ms [1.0411-1.1153] | cand 0.3676 ms [0.3643-0.3962] | cand/base 0.352 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 128 256 0 1 32 | base 1.0339 ms [1.0305-1.0448] | cand 0.3568 ms [0.3539-0.3647] | cand/base 0.345 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 256 256 0 0 32 | base 2.7512 ms [2.7385-2.7858] | cand 1.3941 ms [1.3891-1.4375] | cand/base 0.507 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED float 256 256 0 1 32 | base 2.7419 ms [2.7288-2.7753] | cand 1.4201 ms [1.4082-1.4391] | cand/base 0.518 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 64 256 0 0 32 | base 1.0716 ms [1.0680-1.0960] | cand 0.1916 ms [0.1898-0.1939] | cand/base 0.179 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 64 256 0 1 32 | base 1.0696 ms [1.0669-1.0925] | cand 0.1898 ms [0.1887-0.2128] | cand/base 0.177 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 128 256 0 0 32 | base 2.2950 ms [2.2928-2.8287] | cand 0.5400 ms [0.5370-0.5442] | cand/base 0.235 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 128 256 0 1 32 | base 2.2859 ms [2.2817-2.3238] | cand 0.5323 ms [0.5291-0.5402] | cand/base 0.233 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 256 256 0 0 32 | base 7.0068 ms [6.9872-7.1914] | cand 3.2627 ms [3.2426-3.3072] | cand/base 0.466 | n=14
+ormqr_blocked IMPL=device vs unset (cand tree; base column = unset) | BM_ORMQR_BLOCKED complex<float> 256 256 0 1 32 | base 6.9663 ms [6.9480-7.0857] | cand 3.2143 ms [3.2068-3.2407] | cand/base 0.461 | n=14
+ormqr_blocked base vs cand, IMPL=device: GPU0 util median 0% [0-0]
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 64 256 0 0 32 | base 0.3984 ms [0.3959-0.4197] | cand 0.1610 ms [0.1558-0.1634] | cand/base 0.404 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 64 256 0 1 32 | base 0.3959 ms [0.3932-0.4334] | cand 0.1584 ms [0.1541-0.1702] | cand/base 0.400 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 128 256 0 0 32 | base 0.9178 ms [0.9136-0.9231] | cand 0.3668 ms [0.3598-0.3992] | cand/base 0.400 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 128 256 0 1 32 | base 0.9082 ms [0.9015-0.9446] | cand 0.3547 ms [0.3508-0.3630] | cand/base 0.391 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 256 256 0 0 32 | base 2.8266 ms [2.8125-2.8427] | cand 1.3946 ms [1.3824-1.4222] | cand/base 0.493 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED float 256 256 0 1 32 | base 2.8104 ms [2.8007-2.8247] | cand 1.4212 ms [1.4135-1.4331] | cand/base 0.506 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 64 256 0 0 32 | base 0.8303 ms [0.8250-0.8351] | cand 0.1916 ms [0.1863-0.1957] | cand/base 0.231 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 64 256 0 1 32 | base 0.8278 ms [0.8229-0.8325] | cand 0.1894 ms [0.1863-0.1937] | cand/base 0.229 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 128 256 0 0 32 | base 2.1584 ms [2.1470-2.1698] | cand 0.5409 ms [0.5328-0.5482] | cand/base 0.251 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 128 256 0 1 32 | base 2.1391 ms [2.1317-2.1611] | cand 0.5317 ms [0.5258-0.7429] | cand/base 0.249 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 256 256 0 0 32 | base 7.0942 ms [7.0623-7.1101] | cand 3.2571 ms [3.2284-3.3835] | cand/base 0.459 | n=14
+ormqr_blocked base vs cand, IMPL=device | BM_ORMQR_BLOCKED complex<float> 256 256 0 1 32 | base 7.0521 ms [7.0411-7.1171] | cand 3.2127 ms [3.1964-3.2257] | cand/base 0.456 | n=14
+TIMING_DONE larft-orgqr-ormqr 15:43
+TIMING_START tridiag-stebz-stein 15:43
+tridiagonal_solver (stehr): GPU0 util median 0% [0-0]
+tridiagonal_solver (stehr) | BM_STEHR float 32 1024 | base 0.5373 ms [0.5258-1.0922] | cand 0.5590 ms [0.5343-0.6339] | cand/base 1.040 | n=14
+tridiagonal_solver (stehr) | BM_STEHR float 64 1024 | base 2.7688 ms [2.7537-3.5467] | cand 2.7776 ms [2.7598-2.8647] | cand/base 1.003 | n=14
+tridiagonal_solver (stehr) | BM_STEHR float 128 1024 | base 15.5699 ms [15.5341-16.7632] | cand 15.1995 ms [15.1568-15.3723] | cand/base 0.976 | n=14
+syevx DirectSubset vectors (stebz+stein): GPU0 util median 0% [0-0]
+syevx DirectSubset vectors (stebz+stein) | BM_SYEVX_CrossoverVectors float 64 1024 8 2 | base 2.1477 ms [2.1311-2.4905] | cand 2.1333 ms [2.1136-2.4397] | cand/base 0.993 | n=14
+syevx DirectSubset vectors (stebz+stein) | BM_SYEVX_CrossoverVectors float 128 1024 8 2 | base 7.5457 ms [7.4798-8.1663] | cand 7.4796 ms [7.4412-7.7546] | cand/base 0.991 | n=14
+syevx DirectSubset values (stebz): GPU0 util median 0% [0-0]
+syevx DirectSubset values (stebz) | BM_SYEVX_Crossover float 64 1024 8 2 | base 1.2824 ms [1.2799-1.2903] | cand 1.2606 ms [1.2571-1.2659] | cand/base 0.983 | n=14
+syevx DirectSubset values (stebz) | BM_SYEVX_Crossover float 128 1024 8 2 | base 5.5898 ms [5.5761-5.6004] | cand 5.5450 ms [5.5334-5.5671] | cand/base 0.992 | n=14
+TIMING_DONE tridiag-stebz-stein 15:46
+TIMING_REST_DONE
