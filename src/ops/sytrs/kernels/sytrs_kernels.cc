@@ -39,8 +39,7 @@ template <typename T> class SytrsScatterKernel;
 namespace {
 
 using sytrf_device::Staged;
-using sytrf_device::Tile;
-using sytrf_device::Vec;
+namespace v2 = batchlas::device::v2;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -94,16 +93,13 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 const Staged<D> S{&lm[0], ldt, n, &lm[static_cast<std::size_t>(n) * ldt], &im[0], &im[n], &im[2 * n]};
-                const Tile<D> G{const_cast<D*>(ap) + b * stra, lda, n, rev};
-                for (int idx = lid; idx < n * n; idx += wg) {
-                    const int i = idx % n, j = idx / n;
-                    if (i >= j) S(i, j) = G(i, j);
-                }
+                const v2::RtGroup all{it, lid, wg};
+                const auto G = v2::rev_mat(const_cast<D*>(ap) + b * stra, lda, n, rev);
+                v2::lacpy_flat<Uplo::Lower>(all, G, S, n);
                 const int* const gp = piv + b * n;
-                for (int k = lid; k < n; k += wg) S.ps[k] = sytrf_device::logical_piv(gp[rev ? n - 1 - k : k], n, rev);
-                auto bar = [&] { sycl::group_barrier(it.get_group()); };
-                bar();
-                const bool ok = sytrf_device::ldl_convert<D>(S, n, S.ps, S.perm, S.kind, S.e, lid, wg, &im[3 * n], bar);
+                v2::for_range(all, {0, n}, [&](int k) { S.ps[k] = sytrf_device::logical_piv(gp[rev ? n - 1 - k : k], n, rev); });
+                all.barrier();
+                const bool ok = sytrf_device::ldl_convert<D>(S, n, S.ps, S.perm, S.kind, S.e, all, &im[3 * n]);
                 sytrf_device::solve_columns<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
             });
     });
@@ -178,33 +174,30 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t nn = static_cast<std::ptrdiff_t>(n) * n, nb = static_cast<std::ptrdiff_t>(n) * nrhs;
-                const Tile<D> G{const_cast<D*>(ap) + i0 * stra, lda, n, rev};
-                const Tile<D> W{lw + i0 * nn, n, n, rev};
+                const v2::RtGroup ex{it, lid, wg};
+                const auto G = v2::rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
+                const auto W = v2::rev_mat(lw + i0 * nn, n, n, rev);
                 int* const ps = psw + i0 * n;
                 int* const perm = pw + i0 * n;
                 int* const kind = kw + i0 * n;
-                for (int k = lid; k < n; k += wg) ps[k] = sytrf_device::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
-                auto bar = [&] { sycl::group_barrier(it.get_group()); };
-                bar();
-                if (lid == 0) {
+                v2::for_range(ex, {0, n}, [&](int k) { ps[k] = sytrf_device::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev); });
+                ex.barrier();
+                if (ex.leader()) {
                     const bool valid = sytrf_device::piv_list_valid(ps, n);
                     flag[0] = valid ? 1 : 0;
                     if (valid) sytrf_device::build_perm(ps, n, perm, kind);
                 }
-                bar();
+                ex.barrier();
                 const bool ok = flag[0] != 0;
                 if (ok) {
-                    sytrf_device::convert_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, lid, wg, bar);
-                } else {
-                    for (std::ptrdiff_t idx = lid; idx < nn; idx += wg) {
-                        const int i = static_cast<int>(idx % n), j = static_cast<int>(idx / n);
-                        if (i > j) W(i, j) = G(i, j);
-                    }
-                    for (int t = lid; t < n; t += wg) {
+                    sytrf_device::convert_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, ex);
+                } else {  // an invalid list: L as stored, P the identity, every block 1 x 1
+                    v2::lacpy_flat<Uplo::Lower, Diag::Unit, std::ptrdiff_t>(ex, G, W, n);
+                    v2::for_range(ex, {0, n}, [&](int t) {
                         perm[t] = t;
                         kind[t] = 0;
-                    }
-                    bar();
+                    });
+                    ex.barrier();
                 }
                 D* const y = bw + i0 * nb;
                 const D* const src = bp + i0 * strb;
@@ -241,8 +234,8 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int kd = kw[i0 * n + t];
                 if (kd == 2) return;
-                const Tile<D> G{const_cast<D*>(ap) + i0 * stra, lda, n, rev};
-                const Vec<D> x{bw + static_cast<std::ptrdiff_t>(rest) * n, n, rev};
+                const auto G = v2::rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
+                const sytrf_device::Vec<D> x{bw + static_cast<std::ptrdiff_t>(rest) * n, n, rev};
                 if (kd == 0) {
                     x(t) = sytrf_device::d_solve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
                     return;
