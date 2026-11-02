@@ -32,6 +32,7 @@ namespace sycl_getrf {
 namespace {
 
 namespace gn = ::batchlas::getrf_native;
+namespace v2 = ::batchlas::device::v2;
 
 // Convenience overloads only; every real decision re-reads the device, never
 // device_limits.hh. evidence: docs/perf/lu.md#one-spelling-per-ceiling
@@ -160,16 +161,13 @@ Event getrf_panel_resident_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const auto sg = it.get_sub_group();
+                const gn::LuExec<SC> ex{it};
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
-                int b, slot, tid, lwg;
+                int b, slot;
                 if constexpr (SC == gn::LuScope::SubGroup) {
-                    const int sg_id = static_cast<int>(sg.get_group_linear_id());
-                    b = wg_id * G + sg_id;
-                    slot = sg_id;
-                    tid = static_cast<int>(sg.get_local_linear_id());
-                    lwg = static_cast<int>(sg.get_local_linear_range());
+                    slot = ex.team();
+                    b = wg_id * G + slot;
                     // Sub-group-uniform, and this scope executes only sub-group
                     // barriers -- an early return under a work-group barrier hangs.
                     // The mask test is the same sub-group's item, so uniform too.
@@ -177,55 +175,20 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;
-                    tid = static_cast<int>(it.get_local_linear_id());
-                    lwg = static_cast<int>(it.get_local_range(0));
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before B0
                 }
 
-                D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
-                                               static_cast<std::ptrdiff_t>(ldt) * n;
-                D* const src = ap + static_cast<std::ptrdiff_t>(b) * stride;
-                const std::size_t used =
-                    static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
-
-                // Logical m x n extent scattered into the padded tile ld, hence `used`.
-                for (std::size_t e = static_cast<std::size_t>(tid); e < used;
-                     e += static_cast<std::size_t>(lwg)) {
-                    const int r = static_cast<int>(e % static_cast<std::size_t>(m));
-                    const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-                    mine[static_cast<std::ptrdiff_t>(r) +
-                         static_cast<std::ptrdiff_t>(c) * ldt] =
-                        src[static_cast<std::ptrdiff_t>(r) +
-                            static_cast<std::ptrdiff_t>(c) * ld];
-                }
-                if constexpr (SC == gn::LuScope::SubGroup) {
-                    sycl::group_barrier(sg);                  // B0
-                } else {
-                    sycl::group_barrier(it.get_group());      // B0
-                }
-
-                gn::LuRawTile<D> A{mine, ldt};
-                gn::getf2_panel_device<D, SC>(
-                    it, A, m, n, kmax,
+                const auto At = v2::abs_mat<v2::Mem::Local>(
+                    &tile[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(ldt) * n, m, n, ldt);
+                const auto Ag = v2::abs_mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
+                v2::lacpy<v2::alg::Flat, std::size_t>(ex, Ag, At);   // stage m x n into the padded ld
+                ex.barrier();                                 // B0
+                gn::getf2_panel_device<SC>(
+                    ex, At, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
-                    piv_base,
-                    info_ptr + b,
-                    rval, ridx);
-
-                if constexpr (SC == gn::LuScope::SubGroup) {
-                    sycl::group_barrier(sg);                  // B5
-                } else {
-                    sycl::group_barrier(it.get_group());      // B5
-                }
-                for (std::size_t e = static_cast<std::size_t>(tid); e < used;
-                     e += static_cast<std::size_t>(lwg)) {
-                    const int r = static_cast<int>(e % static_cast<std::size_t>(m));
-                    const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-                    src[static_cast<std::ptrdiff_t>(r) +
-                        static_cast<std::ptrdiff_t>(c) * ld] =
-                        mine[static_cast<std::ptrdiff_t>(r) +
-                             static_cast<std::ptrdiff_t>(c) * ldt];
-                }
+                    piv_base, info_ptr + b, rval, ridx);
+                ex.barrier();                                 // B5
+                v2::lacpy<v2::alg::Flat, std::size_t>(ex, At, Ag);   // store
             });
     });
     return ctx.get_event();
@@ -260,15 +223,12 @@ Event getrf_panel_global_launch(Queue& ctx,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
-                gn::LuGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
-                // Always WorkGroup: the global leaf's panel is a full column block,
-                // far taller than one sub-group should serve alone.
-                gn::getf2_panel_device<D, gn::LuScope::WorkGroup>(
-                    it, A, m, n, kmax,
+                // Always WorkGroup: a full column block is far too tall for one sub-group.
+                gn::getf2_panel_device<gn::LuScope::WorkGroup>(
+                    gn::LuExec<gn::LuScope::WorkGroup>{it},
+                    v2::abs_mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
-                    piv_base,
-                    info_ptr + b,
-                    rval, ridx);
+                    piv_base, info_ptr + b, rval, ridx);
             });
     });
     return ctx.get_event();

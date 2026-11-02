@@ -12,6 +12,7 @@
 #include <src/queue.hh>
 
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/blas/device/v2/ext/getrf.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -20,6 +21,8 @@
 #include <cstdint>
 
 namespace batchlas::lu_native {
+
+namespace v2 = ::batchlas::device::v2;
 
 template <typename Tag, typename T> class LuLaswpKernel;
 
@@ -51,31 +54,15 @@ Event lu_laswp_launch(Queue& ctx,
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int c = static_cast<int>(it.get_id(1));
 
-                D* const col = bp + static_cast<std::ptrdiff_t>(b) * stride +
-                               static_cast<std::ptrdiff_t>(c) * ld;
+                // ?LASWP on one (matrix, column); extent = the window, targets below it too.
+                const auto x = v2::vec(bp + static_cast<std::ptrdiff_t>(b) * stride +
+                                           static_cast<std::ptrdiff_t>(c) * ld, k1);
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
-
-                if (forward) {
-                    for (int k = k0; k < k1; ++k) {
-                        const int p = ip[k] - 1;      // 1-BASED on the wire
-                        if (p != k) {
-                            const D t = col[k];
-                            col[k] = col[p];
-                            col[p] = t;
-                        }
-                    }
-                } else {
-                    // REVERSE ORDER: the same list applied forwards computes P,
-                    // not P^T -- a silently wrong answer in a transposed getrs.
-                    for (int k = k1 - 1; k >= k0; --k) {
-                        const int p = ip[k] - 1;
-                        if (p != k) {
-                            const D t = col[k];
-                            col[k] = col[p];
-                            col[p] = t;
-                        }
-                    }
-                }
+                const auto to = [ip](int k) { return ip[k] - 1; };   // 1-BASED on the wire
+                // Backward is REVERSE ORDER: the same list applied forwards computes P,
+                // not P^T -- a silently wrong answer in a transposed getrs.
+                if (forward) v2::laswp<v2::LaswpDir::Forward>(v2::Thread{}, x, to, k0, k1);
+                else v2::laswp<v2::LaswpDir::Backward>(v2::Thread{}, x, to, k0, k1);
             });
     });
     return ctx.get_event();
@@ -168,9 +155,8 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const auto grp = it.get_group();
+                const v2::DynGroup<v2::Scope::Group> ex{it, wg};
                 const int gid = static_cast<int>(it.get_group(0));
-                const int lid = static_cast<int>(it.get_local_id(0));
                 const int r = gid / batch;
                 const int b = gid - r * batch;
 
@@ -187,52 +173,35 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                 D* const Ab = bp + static_cast<std::ptrdiff_t>(b) * stride;
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                for (int i = lid; i < R; i += wg) {
+                // ips = relative pivots, idxs = identity. p in [i, R) is the contract; clamped
+                // anyway: a bad value corrupts the index array for the WHOLE block.
+                v2::for_each_owned(ex, R, [&](int i) {
                     int p = ip[k0 + i] - 1 - k0;
-                    // Contract is p in [i, R); clamped anyway because a bad
-                    // value corrupts the index array for the WHOLE block.
                     if (p < 0 || p >= R) p = i;
                     ips[i] = p;
                     idxs[i] = i;
+                });
+                ex.barrier();
+                // idxs := P idxs, ?LASWP on the INT array: the only serial phase.
+                if (ex.leader()) {
+                    v2::laswp<v2::LaswpDir::Forward>(v2::Thread{}, v2::vec<v2::Mem::Local>(idxs, R),
+                                                     [ips](int i) { return ips[i]; }, 0, R);
                 }
-                sycl::group_barrier(grp);
+                ex.barrier();
 
-                // The only serial phase, and it is on the INT array.
-                if (lid == 0) {
-                    for (int i = 0; i < R; ++i) {
-                        const int p = ips[i];
-                        if (p != i) {
-                            const int t = idxs[i];
-                            idxs[i] = idxs[p];
-                            idxs[p] = t;
-                        }
-                    }
-                }
-                sycl::group_barrier(grp);
-
+                // Per chunk: ?LACPY to the tile, then A(row) = T(idxs(row)); ROW fastest (contiguous).
                 for (int cb = 0; cb < ib; cb += Cs) {
                     const int cw = ((ib - cb) < Cs) ? (ib - cb) : Cs;
-
-                    // Flat over (column, row), ROW fastest -- the contiguous direction.
-                    int col = lid / R;
-                    int row = lid - col * R;
-                    while (col < cw) {
+                    v2::for_each_owned_2d<v2::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         tile[static_cast<std::size_t>(col) * ldt + row] =
                             Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row];
-                        row += wg;
-                        while (row >= R) { row -= R; ++col; }
-                    }
-                    sycl::group_barrier(grp);
-
-                    col = lid / R;
-                    row = lid - col * R;
-                    while (col < cw) {
+                    });
+                    ex.barrier();
+                    v2::for_each_owned_2d<v2::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row] =
                             tile[static_cast<std::size_t>(col) * ldt + idxs[row]];
-                        row += wg;
-                        while (row >= R) { row -= R; ++col; }
-                    }
-                    sycl::group_barrier(grp);
+                    });
+                    ex.barrier();
                 }
             });
     });
@@ -287,9 +256,8 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const auto grp = it.get_group();
+                const v2::DynGroup<v2::Scope::Group> ex{it, wg};
                 const int gid = static_cast<int>(it.get_group(0));
-                const int lid = static_cast<int>(it.get_local_id(0));
                 const int t = gid / batch;
                 const int b = gid - t * batch;
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
@@ -299,37 +267,33 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                 D* const Ab = bp + static_cast<std::ptrdiff_t>(b) * stride;
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                for (int i = lid; i < R; i += wg) idxs[i] = i;
-                sycl::group_barrier(grp);
-                // L serial swaps on the int array; clamped as the deferred gather is.
-                if (lid == 0) {
-                    for (int i = 0; i < L; ++i) {
+                int* const ix = &idxs[0];
+                v2::for_each_owned(ex, R, [&](int i) { ix[i] = i; });
+                ex.barrier();
+                // idxs := P idxs over the panel's L pivots, ?LASWP on the INT array (serial);
+                // clamped as the deferred gather is.
+                if (ex.leader()) {
+                    v2::laswp<v2::LaswpDir::Forward>(v2::Thread{}, v2::vec<v2::Mem::Local>(ix, R), [=](int i) {
                         int p = ip[k0 + i] - 1 - k0;
                         if (p < 0 || p >= R) p = i;
-                        if (p != i) {
-                            const int s = idxs[i];
-                            idxs[i] = idxs[p];
-                            idxs[p] = s;
-                        }
-                    }
+                        return p;
+                    }, 0, L);
                 }
 
-                // Row fastest, the contiguous direction; overlaps the serial phase.
-                for (int e = lid; e < cw * R; e += wg) {
-                    const int col = e / R, row = e - col * R;
+                // ?LACPY into the tile, row fastest; overlaps the serial phase.
+                v2::for_each_owned_2d<v2::alg::Flat>(ex, R, cw, [&](int row, int col) {
                     tile[static_cast<std::size_t>(col) * ldt + row] =
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row];
-                }
-                sycl::group_barrier(grp);
-
-                for (int e = lid; e < cw * R; e += wg) {
-                    const int col = e / R, row = e - col * R;
-                    const int src = idxs[row];
+                });
+                ex.barrier();
+                // The row gather; only rows the permutation MOVES are written back.
+                v2::for_each_owned_2d<v2::alg::Flat>(ex, R, cw, [&](int row, int col) {
+                    const int src = ix[row];
                     if (src != row) {
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row] =
                             tile[static_cast<std::size_t>(col) * ldt + src];
                     }
-                }
+                });
             });
     });
     return true;
