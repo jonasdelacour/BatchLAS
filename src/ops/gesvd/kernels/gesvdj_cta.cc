@@ -174,23 +174,20 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 constexpr int kP = static_cast<int>(P);
                 constexpr int kC = static_cast<int>(C);
                 constexpr int K = static_cast<int>(kGramChunk);
-                using Tile = v2::Mat<T, v2::Ext<kC>, v2::Ext<kC>, v2::Ext<LD>, v2::Mem::Local>;
                 using Rows = v2::Frag<T, static_cast<int>(kRPL)>;  // one column on this lane's rows
-                const auto conj_op = [](T x) { return v2::Arith<T>::conj(x); };
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
 
                 const int32_t pairs_per_round = mp / 2;
                 const int32_t rounds = mp - 1;
-                std::int16_t* const pair_tab = util::get_raw_ptr(Pair_local);
 
                 // Pair table: stride kRotSlots (not pairs_per_round, they differ
                 // when CC < P); unused slots hold a sentinel failing `< CC`.
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
-                    pair_tab[idx] = v2::pack_pair(k < pairs_per_round ? v2::round_robin_pair(mp, t, k) : v2::PivotPair{kC, kC});
+                    Pair_local[idx] = v2::pack_pair(k < pairs_per_round ? v2::round_robin_pair(mp, t, k) : v2::PivotPair{kC, kC});
                 }
                 sycl::group_barrier(wg);
 
@@ -211,30 +208,32 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 auto U_prob = U_view.batch_item(pid);
                 auto Vh_prob = Vh_view.batch_item(pid);
 
-                const Tile A{util::get_raw_ptr(A_local) + part_id * static_cast<int32_t>(kTileElems), {}, {}, {}};
-                const Tile V{util::get_raw_ptr(V_local) + (ComputeV ? part_id * static_cast<int32_t>(kTileElems) : 0),
-                             {}, {}, {}};
-                Real* const nrm = util::get_raw_ptr(Nrm_local) + part_id * kC;
-                std::int16_t* const inv = util::get_raw_ptr(Inv_local) + part_id * kC;
+                // Tiles and slot arrays index the kernel's accessors (acc[base + i + j*LD]).
+                const auto A = v2::acc_tile<kC, kC, LD>(A_local, part_id * static_cast<int32_t>(kTileElems));
+                // Without V, V_local is never named, so the kernel does not capture it (an extra
+                // local accessor argument moves the shared-memory layout).
+                std::conditional_t<ComputeV, decltype(v2::acc_tile<kC, kC, LD>(V_local, 0)), v2::NoPhase> V{};
+                if constexpr (ComputeV) V = v2::acc_tile<kC, kC, LD>(V_local, part_id * static_cast<int32_t>(kTileElems));
+                const auto nrm = v2::acc_vec(Nrm_local, part_id * kC);
+                const auto inv = v2::acc_vec(Inv_local, part_id * kC);
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-                sycl::vec<Real, 2>* const rcs = util::get_raw_ptr(Rcs_local) + base_r;
-                T* const rd = util::get_raw_ptr(Rd_local) + (kNeedPhase ? base_r : 0);
 
                 // ---- Load. lane = ROW (rows lane, lane+P, ...), coalesced. ----
                 // m < n is transposed at load time. The pad is exact zero so a
                 // padded pair's Gram is 0 and falls below any threshold.
-                v2::for_each_owned_static<kC>(ex, [&](int, int row) {
+                for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
+                    const int32_t row = lane + rr * kP;
                     for (int32_t c = 0; c < kC; ++c) {
                         T v = T(0);
                         if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
-                            v = transposed_f ? v2::Arith<T>::conj(A_prob(c, row)) : A_prob(row, c);
+                            v = transposed_f ? v2::detail::conj_ref<T>(A_prob(c, row)) : A_prob(row, c);
                         }
                         A(row, c) = v;
                         if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? T(1) : T(0);
                     }
-                });
+                }
                 v2::sub_barrier(ex);
 
                 // ---- Exact column norms: lane c ends holding ||A_c||^2. ----
@@ -269,9 +268,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // saved no sweeps and an untaken branch cost 13%.
                 // evidence: docs/perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected
                 if (beta != Real(1)) {
-                    v2::for_each_owned_static<kC>(ex, [&](int, int row) {
-                        v2::map(v2::Thread{}, A.row(row), [&](T a) { return a * T(beta); }, A.row(row));
-                    });
+                    for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
+                        const int32_t row = lane + rr * kP;
+                        for (int32_t c = 0; c < kC; ++c) A(row, c) = A(row, c) * T(beta);
+                    }
                     v2::sub_barrier(ex);
                     exact_norms();
                     v2::sub_barrier(ex);
@@ -297,22 +297,30 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // perfect matching: chunks touch disjoint columns. Also caps
                         // live registers (80 T, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
-                        const v2::RotRound<T> rnd{rcs + ch * K, rd + (kNeedPhase ? ch * K : 0),
-                                                  pair_tab + t * static_cast<int32_t>(kRotSlots) + ch * K};
+                        // Real T never names Rd_local, so the kernel does not capture it.
+                        std::conditional_t<kNeedPhase, v2::AccVec<decltype(Rd_local)>, v2::NoPhase> rd{};
+                        if constexpr (kNeedPhase) rd = v2::acc_vec(Rd_local, base_r + ch * K);
+                        const auto rnd = v2::rot_round<T>(v2::acc_vec(Rcs_local, base_r + ch * K), rd,
+                                                          v2::acc_vec(Pair_local, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
                         // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
-                        // rows. Every index into pq/ap/aq/g must be compile-time or they spill.
-                        v2::PivotPair pq[K];
-                        Rows ap[K];
-                        Rows aq[K];
+                        // rows. Every index into pk/qk/ap/aq/g must be compile-time or they spill.
+                        // Plain arrays and one fused load+dot loop: a PivotPair array with split
+                        // load_owned / dotc_owned loops gave complex T +8..17 BRA.
+                        int32_t pk[K];
+                        int32_t qk[K];
+                        T ap[K][kRPL];
+                        T aq[K][kRPL];
                         v2::Frag<T, K> g;
 BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < K; ++k) {
-                            pq[k] = rnd.pair(k);
-                            const bool ok = (pq[k].p < CC) && (pq[k].q < CC);
-                            v2::load_owned(ex, A.col(ok ? pq[k].p : 0), ap[k]);
-                            v2::load_owned(ex, A.col(ok ? pq[k].q : 0), aq[k]);
-                            g[k] = ok ? v2::dotc_owned(ap[k], aq[k]) : T(0);
+                            const v2::PivotPair pqk = rnd.pair(k);
+                            pk[k] = pqk.p;
+                            qk[k] = pqk.q;
+                            const bool ok = (pk[k] < CC) && (qk[k] < CC);
+                            const T acc = v2::load_dotc_owned<static_cast<int>(kRPL)>(ex, A.col(ok ? pk[k] : 0),
+                                                                                     A.col(ok ? qk[k] : 0), ap[k], aq[k]);
+                            g[k] = ok ? acc : T(0);
                         }
 
                         // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32: lane l ends
@@ -363,9 +371,9 @@ BATCHLAS_UNROLL_FULL
                             const v2::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
                             v2::for_each_owned_static<kC, true>(ex, [&](int rr, int row) {
                                 const v2::Pair2<T> r = v2::rot_right(u, ap[k][rr], aq[k][rr]);
-                                A(row, pq[k].p) = r.x;
-                                A(row, pq[k].q) = r.y;
-                                if constexpr (ComputeV) v2::rot_right_inplace(u, V(row, pq[k].p), V(row, pq[k].q));
+                                A(row, pk[k]) = r.x;
+                                A(row, qk[k]) = r.y;
+                                if constexpr (ComputeV) v2::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
                             });
                         }
                         v2::sub_barrier(ex);
@@ -398,10 +406,16 @@ BATCHLAS_UNROLL_FULL
                 // Rank sort, DESCENDING (the gesvd contract), ties on index. The
                 // identity seed makes a rank collision a wrong permutation, not
                 // a garbage LDS index. Here lane is a COLUMN index.
-                v2::for_each_owned_static<kC>(ex, [&](int, int col) { inv[col] = static_cast<int16_t>(col); });
+                // Plain owned-column loops here: a for_each_owned_static lambda is simplified and
+                // unrolled as its own function before inlining, which moved LDS/STS and REG.
+                for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                    const int32_t col = lane + cc * kP;
+                    inv[col] = static_cast<int16_t>(col);
+                }
                 v2::sub_barrier(ex);
 
-                v2::for_each_owned_static<kC>(ex, [&](int, int col) {
+                for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                    const int32_t col = lane + cc * kP;
                     const Real sigma_col = (col < CC) ? (inv_beta * sycl::sqrt(nrm[col])) : Real(0);
                     if (col < CC) {
                         int32_t rank = 0;
@@ -417,7 +431,7 @@ BATCHLAS_UNROLL_FULL
                     if (col >= CC && col < RR) {
                         inv[col] = static_cast<int16_t>(col);
                     }
-                });
+                }
                 v2::sub_barrier(ex);
 
                 const Real sigma_max = (CC > 0) ? (inv_beta * sycl::sqrt(nrm[static_cast<int32_t>(inv[0])])) : Real(0);
@@ -425,35 +439,39 @@ BATCHLAS_UNROLL_FULL
                 // every sigma of a uniformly small input.
                 const Real tol_zero = zero_mult * std::numeric_limits<Real>::epsilon() * sigma_max;
 
-                v2::for_each_owned_static<kC>(ex, [&](int, int col) {
+                for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                    const int32_t col = lane + cc * kP;
                     if (live && col < CC) {
-                        S[static_cast<int64_t>(prob_id) * CC + col] = inv_beta * sycl::sqrt(nrm[static_cast<int32_t>(inv[col])]);
+                        const int32_t src = static_cast<int32_t>(inv[col]);
+                        S[static_cast<int64_t>(prob_id) * CC + col] = inv_beta * sycl::sqrt(nrm[src]);
                     }
-                });
+                }
 
                 // ---- Left factor: U_c = A_c / sigma_c ----
                 if (want_left_f) {
                     // Normalise in place by the SCALED norm sqrt(n2_c), not sigma; A
                     // is fully consumed into sigma.
-                    v2::for_each_owned_static<kC>(ex, [&](int, int col) {
-                        if (col >= CC) return;
+                    for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                        const int32_t col = lane + cc * kP;
+                        if (col >= CC) continue;
                         const Real n2_c = nrm[col];
                         const Real s_c = inv_beta * sycl::sqrt(n2_c);
                         if (s_c > tol_zero && n2_c > Real(0)) {
                             const Real inv_s = Real(1) / sycl::sqrt(n2_c);
-                            v2::map(v2::Thread{}, A.col(col), [&](T a) { return a * T(inv_s); }, A.col(col));
+                            for (int32_t r = 0; r < kC; ++r) A(r, col) = A(r, col) * T(inv_s);
                         }
-                    });
+                    }
                     v2::sub_barrier(ex);
 
                     // Completion of columns CC..RR-1 and any sigma <= tol_zero,
                     // behind a warp-uniform gate.
                     int32_t deficient_here = 0;
-                    v2::for_each_owned_static<kC>(ex, [&](int, int col) {
+                    for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                        const int32_t col = lane + cc * kP;
                         if (col < CC && inv_beta * sycl::sqrt(nrm[col]) <= tol_zero) {
                             ++deficient_here;
                         }
-                    });
+                    }
                     const int32_t any_def = ex.team_reduce(deficient_here);
 
                     // LC, not RR: Thin skips completion unless a column is deficient.
@@ -501,22 +519,26 @@ BATCHLAS_UNROLL_FULL
                     }
                     v2::sub_barrier(ex);
 
-                    // Writeback, each orientation coalescing its own output.
+                    // Writeback, each orientation coalescing its own output. Hand loops through
+                    // the v1 views: v2::copy/map over v2::mat(..).row() sub-views changed the
+                    // unrolling (STG +17..+36).
                     if (!transposed_f) {
                         // U(lane, dst) = A(lane, inv[dst]): dst is the output COLUMN, Thin truncates it.
-                        v2::for_each_owned_static<kC>(ex, [&](int, int row) {
-                            if (!live || row >= RR) return;
-                            v2::copy(v2::Thread{}, v2::gather(A.row(row), inv, LC), v2::mat(U_prob).row(row).head(LC));
-                        });
+                        for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
+                            const int32_t row = lane + rr * kP;
+                            if (!live || row >= RR) continue;
+                            for (int32_t dst = 0; dst < LC; ++dst) U_prob(row, dst) = A(row, static_cast<int32_t>(inv[dst]));
+                        }
                     } else {
                         // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW,
                         // so Thin bounds `lane`, never `r` (wrong shape, plausible
                         // numbers).
-                        v2::for_each_owned_static<kC>(ex, [&](int, int dst) {
-                            if (!live || dst >= LC) return;
-                            v2::map(v2::Thread{}, v2::mat(Vh_prob).row(dst).head(RR), conj_op,
-                                    A.col(static_cast<int32_t>(inv[dst])));
-                        });
+                        for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                            const int32_t dst = lane + cc * kP;
+                            if (!live || dst >= LC) continue;
+                            const int32_t c = static_cast<int32_t>(inv[dst]);
+                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = v2::detail::conj_ref<T>(A(r, c));
+                        }
                     }
                 }
 
@@ -524,17 +546,19 @@ BATCHLAS_UNROLL_FULL
                 if constexpr (ComputeV) {
                     if (!transposed_f) {
                         // Vh(lane, r) = conj(V(r, c_lane))
-                        v2::for_each_owned_static<kC>(ex, [&](int, int dst) {
-                            if (!live || dst >= CC) return;
-                            v2::map(v2::Thread{}, v2::mat(Vh_prob).row(dst).head(CC), conj_op,
-                                    V.col(static_cast<int32_t>(inv[dst])));
-                        });
+                        for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
+                            const int32_t dst = lane + cc * kP;
+                            if (!live || dst >= CC) continue;
+                            const int32_t c = static_cast<int32_t>(inv[dst]);
+                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = v2::detail::conj_ref<T>(V(r, c));
+                        }
                     } else {
                         // U = V' directly. Here lane is the output ROW.
-                        v2::for_each_owned_static<kC>(ex, [&](int, int row) {
-                            if (!live || row >= CC) return;
-                            v2::copy(v2::Thread{}, v2::gather(V.row(row), inv, CC), v2::mat(U_prob).row(row).head(CC));
-                        });
+                        for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
+                            const int32_t row = lane + rr * kP;
+                            if (!live || row >= CC) continue;
+                            for (int32_t dst = 0; dst < CC; ++dst) U_prob(row, dst) = V(row, static_cast<int32_t>(inv[dst]));
+                        }
                     }
                 }
             });

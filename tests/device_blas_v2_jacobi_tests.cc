@@ -296,7 +296,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         const Tile Z{tile + kTile, {}, {}, {}};
         const auto Ag = v2::mat(gA + std::ptrdiff_t(b) * lda * n, n, n, lda);
         for (int c = 0; c < P; ++c) {
-            A(lane, c) = (lane < n && c < n) ? v2::hermitian_entry<false>(Ag, lane, c) : T(0);
+            A(lane, c) = v2::hermitian_entry<false>(Ag, lane, c, lane < n && c < n);
             Z(lane, c) = (lane == c && lane < n) ? T(1) : T(0);
         }
         v2::sub_barrier(ex);
@@ -625,8 +625,8 @@ TYPED_TEST(DeviceBlasV2JacobiTest, HermitianEntryAndGatherCopyExactly) {
         T* ob = o + std::ptrdiff_t(b) * (2 * n * n + n);
         for (int jj = 0; jj < n; ++jj)
             for (int i = 0; i < n; ++i) {
-                ob[i + jj * n] = v2::hermitian_entry<true>(U, i, jj);
-                ob[n * n + i + jj * n] = v2::hermitian_entry<false>(L, i, jj);
+                ob[i + jj * n] = v2::hermitian_entry<true>(U, i, jj, true);
+                ob[n * n + i + jj * n] = v2::hermitian_entry<false>(L, i, jj, true);
             }
         const int perm[n] = {3, 0, 4, 2, 1};
         v2::copy(v2::Thread{}, v2::gather(v2::vec(x + std::ptrdiff_t(b) * n, n), perm, n), v2::vec(ob + 2 * n * n, n));

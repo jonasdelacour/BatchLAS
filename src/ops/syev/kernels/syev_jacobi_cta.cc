@@ -147,19 +147,17 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 constexpr int kP = static_cast<int>(P);
-                using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LD>, v2::Mem::Local>;
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
 
                 const int32_t pairs_per_round = mm / 2;
                 const int32_t rounds = mm - 1;
-                std::int16_t* const pair_tab = util::get_raw_ptr(Pair_local);
 
                 // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
-                    pair_tab[idx] = v2::pack_pair(v2::round_robin_pair(mm, t, idx - t * pairs_per_round));
+                    Pair_local[idx] = v2::pack_pair(v2::round_robin_pair(mm, t, idx - t * pairs_per_round));
                 }
                 sycl::group_barrier(wg);
 
@@ -178,16 +176,28 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
-                const Tile A{util::get_raw_ptr(A_local) + part_id * static_cast<int32_t>(kTileElems), {}, {}, {}};
-                const Tile Z{util::get_raw_ptr(Z_local) + (ComputeVectors ? part_id * static_cast<int32_t>(kTileElems) : 0),
-                             {}, {}, {}};
+                // Tiles and rotation slots index the kernel's accessors (acc[base + i + j*LD]).
+                const auto A = v2::acc_tile<kP, kP, LD>(A_local, part_id * static_cast<int32_t>(kTileElems));
+                // Without vectors Z_local is never named, so the kernel does not capture it.
+                std::conditional_t<ComputeVectors, decltype(v2::acc_tile<kP, kP, LD>(Z_local, 0)), v2::NoPhase> Z{};
+                if constexpr (ComputeVectors) Z = v2::acc_tile<kP, kP, LD>(Z_local, part_id * static_cast<int32_t>(kTileElems));
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-                sycl::vec<Real, 2>* const rcs = util::get_raw_ptr(Rcs_local) + base_r;
-                T* const rd = util::get_raw_ptr(Rd_local) + (kNeedPhase ? base_r : 0);
+                // Real T never names Rd_local, so the kernel does not capture it.
+                std::conditional_t<kNeedPhase, v2::AccVec<decltype(Rd_local)>, v2::NoPhase> rd{};
+                if constexpr (kNeedPhase) rd = v2::acc_vec(Rd_local, base_r);
 
                 // ---- Load: A = the Hermitian matrix of the stored triangle, Z = I, zero pad. ----
                 for (int32_t c = 0; c < kP; ++c) {
-                    A(lane, c) = (live && row_lane && c < nn) ? v2::hermitian_entry<Upper>(A_prob, lane, c) : T(0);
+                    T v = T(0);
+                    if (live && lane < nn && c < nn) {
+                        if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : v2::detail::conj_ref<T>(A_prob(c, lane));
+                        else v = (lane >= c) ? A_prob(lane, c) : v2::detail::conj_ref<T>(A_prob(c, lane));
+                        // The diagonal of a Hermitian matrix is real: drop imaginary noise.
+                        if (lane == c) {
+                            if constexpr (kNeedPhase) v = T(v.real(), Real(0));
+                        }
+                    }
+                    A(lane, c) = v;
                     if constexpr (ComputeVectors) Z(lane, c) = (lane == c && row_lane) ? T(1) : T(0);
                 }
                 v2::sub_barrier(ex);
@@ -200,7 +210,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const v2::RotRound<T> rnd{rcs, rd, pair_tab + t * pairs_per_round};
+                        const auto rnd = v2::rot_round<T>(v2::acc_vec(Rcs_local, base_r), rd,
+                                                          v2::acc_vec(Pair_local, t * pairs_per_round));
 
                         v2::PivotPair pq{0, 0};
                         bool active = false;
@@ -269,7 +280,9 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     W[static_cast<int64_t>(prob_id) * nn + dst] = wj;
 
                     if constexpr (ComputeVectors) {
-                        v2::copy(v2::Thread{}, Z.col(lane).head(nn), v2::mat(A_prob).col(dst).head(nn));
+                        // A hand loop through the v1 view: v2::copy over v2::mat(A_prob).col(dst)
+                        // changed the unrolling (STG 19 -> 42).
+                        for (int32_t r = 0; r < nn; ++r) A_prob(r, dst) = Z(r, lane);
                     }
                 }
             });

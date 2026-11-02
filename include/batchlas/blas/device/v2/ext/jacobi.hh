@@ -50,14 +50,65 @@ template <class T> BATCHLAS_DLA_INLINE T force_real(T x) {
 
 // Element (i, j) of the Hermitian (real: symmetric) matrix whose Upper or Lower triangle `a`
 // stores; the other triangle is never read and the diagonal is returned exactly real.
-template <bool Upper, class M> BATCHLAS_DLA_INLINE auto hermitian_entry(const M& a, int i, int j) {
+// Plain inline with a by-reference conj, as the hand loads: always_inline merged the two
+// triangle loads into one select-addressed load and flipped the loop's unroll decision.
+namespace detail {
+// conj of an element reference: the load happens inside, as with v1 device::detail::conj.
+template <class T> inline T conj_ref(const T& x) {
+    if constexpr (Arith<T>::is_complex) return T(x.real(), -x.imag());
+    else return x;
+}
+}  // namespace detail
+// in_range false gives 0 (the pad). The guard lives inside so that the zero and both triangle
+// loads meet in one phi: returning the bare ternary folded the two loads into one.
+template <bool Upper, class M> inline auto hermitian_entry(const M& a, int i, int j, bool in_range) {
     using T = std::remove_cvref_t<decltype(a(0, 0))>;
-    T v;
-    if constexpr (Upper) v = (i <= j) ? static_cast<T>(a(i, j)) : Arith<T>::conj(a(j, i));
-    else v = (i >= j) ? static_cast<T>(a(i, j)) : Arith<T>::conj(a(j, i));
-    if (i == j) v = force_real(v);
+    T v = T(0);
+    if (in_range) {
+        if constexpr (Upper) v = (i <= j) ? static_cast<T>(a(i, j)) : detail::conj_ref<T>(a(j, i));
+        else v = (i >= j) ? static_cast<T>(a(i, j)) : detail::conj_ref<T>(a(j, i));
+        if constexpr (Arith<T>::is_complex) {
+            if (i == j) v = T(v.real(), real_t<T>(0));
+        }
+    }
     return v;
 }
+
+// ---- local-accessor tile -------------------------------------------------------------------
+// Rows x Cols tile acc[base + i + j * LD], read through a pointer to the kernel's own accessor as
+// the hand CTA kernels index it. A v2::Mat over the raw local pointer changed unrolling, STG and
+// REG; a copy of the accessor adds REG.
+template <class Acc, int Rows, int LD> struct AccTileCol {
+    const Acc* a;
+    int base, j;
+    using value_type = std::remove_cvref_t<decltype(std::declval<const Acc&>()[0])>;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return (*a)[base + i + j * LD]; }
+    BATCHLAS_DLA_INLINE int size() const { return Rows; }
+};
+template <class Acc, int Rows, int Cols, int LD> struct AccTile {
+    const Acc* a;
+    int base;
+    Ext<Rows> m{};
+    Ext<Cols> n{};
+    using value_type = std::remove_cvref_t<decltype(std::declval<const Acc&>()[0])>;
+    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return (*a)[base + i + j * LD]; }
+    BATCHLAS_DLA_INLINE AccTileCol<Acc, Rows, LD> col(int j) const { return {a, base, j}; }
+    template <int R2, int C2> BATCHLAS_DLA_INLINE AccTile<Acc, R2, C2, LD> sub(int i, int j, Ext<R2>, Ext<C2>) const {
+        return {a, base + i + j * LD};
+    }
+};
+template <int Rows, int Cols, int LD, class Acc> BATCHLAS_DLA_INLINE AccTile<Acc, Rows, Cols, LD> acc_tile(const Acc& a, int base) {
+    return {&a, base};
+}
+// acc[base + k] as an indexable operand (a RotRound slot array).
+template <class Acc> struct AccVec {
+    const Acc* a;
+    int base;
+    BATCHLAS_DLA_INLINE decltype(auto) operator[](int k) const { return (*a)[base + k]; }
+};
+template <class Acc> BATCHLAS_DLA_INLINE AccVec<Acc> acc_vec(const Acc& a, int base) { return {&a, base}; }
+// The RotRound phase slot of real T (never indexed).
+struct NoPhase {};
 
 // ---- IEEE min / max reduction operators (a NaN operand loses, as sycl::fmin / fmax) --------
 struct FMax {
@@ -161,8 +212,24 @@ template <class Ops = alg::NativeOps, class T, int K> BATCHLAS_DLA_INLINE T dotc
     T acc = T(0);
 #pragma unroll
     for (int k = 0; k < K; ++k) {
-        if constexpr (std::is_same_v<Ops, alg::NativeOps>) acc = acc + Arith<T>::conj(x[k]) * y[k];
+        if constexpr (std::is_same_v<Ops, alg::NativeOps>) acc = acc + detail::conj_ref(x[k]) * y[k];
         else Arith<T>::mac_conj(acc, x[k], y[k]);
+    }
+    return acc;
+}
+// x[k] = u(l + k*size), y[k] = v(l + k*size) and the partial dotc sum_k conj(x[k]) y[k], in one
+// pass (x, y: Frag or T[K]). Splitting it into two loads and dotc_owned gave complex T extra BRA.
+template <int K, class Ex, class U, class V, class X>
+BATCHLAS_DLA_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v, X& x, X& y) {
+    using T = std::remove_cvref_t<decltype(x[0])>;
+    T acc = T(0);
+    const int l = ex.lid();
+#pragma unroll
+    for (int k = 0; k < K; ++k) {
+        const int r = l + k * Ex::size;
+        x[k] = u(r);
+        y[k] = v(r);
+        acc = acc + detail::conj_ref<T>(x[k]) * y[k];
     }
     return acc;
 }
@@ -372,11 +439,12 @@ template <class Ops = alg::NativeOps, class T> BATCHLAS_DLA_INLINE void rot_righ
 
 // One round of disjoint rotations as the caller published it: slot k holds (c, s) in one
 // 2-wide element, the phase d (complex T only; never touched for real T) and the pair (p, q).
-template <class T> struct RotRound {
+// Each slot array is anything indexable with [k]: a pointer, or an AccVec over the accessor.
+template <class T, class CS = sycl::vec<real_t<T>, 2>*, class D = T*, class PR = const std::int16_t*> struct RotRound {
     using R = real_t<T>;
-    sycl::vec<R, 2>* cs;
-    T* d;
-    const std::int16_t* pairs;
+    CS cs;
+    D d;
+    PR pairs;
 
     BATCHLAS_DLA_INLINE PivotPair pair(int k) const { return unpack_pair(pairs[k]); }
     BATCHLAS_DLA_INLINE void store(int k, const JacobiRotation<T>& r) const {
@@ -388,12 +456,15 @@ template <class T> struct RotRound {
         else return rot2<Conj, Ops, T>(c, s, T(1));
     }
 };
+template <class T, class CS, class D, class PR> BATCHLAS_DLA_INLINE RotRound<T, CS, D, PR> rot_round(CS cs, D d, PR pairs) {
+    return {cs, d, pairs};
+}
 
 // A_i := A_i U_k for every rotation k < npairs of the round (s == 0 skipped), on row `row` of
 // every A_i: the calling item owns that row, and the pairs of a round touch disjoint columns,
 // so no barrier is needed between rotations. One pass serves A and its accumulators (Z := Z U).
-template <class Ops = alg::NativeOps, class T, class N, class... Ms>
-BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T>& rd, N npairs, int row, const Ms&... ms) {
+template <class Ops = alg::NativeOps, class T, class CS, class D, class PR, class N, class... Ms>
+BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T, CS, D, PR>& rd, N npairs, int row, const Ms&... ms) {
     using R = real_t<T>;
     for (int k = 0; k < int(npairs); ++k) {
         const sycl::vec<R, 2> cs = rd.cs[k];
@@ -409,8 +480,8 @@ BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T>& rd, N npairs, int ro
 // A := U_k^H A for every rotation of the round, on column `col` (owned by the caller): the
 // second half of a two-sided Jacobi step on a Hermitian A. The pivot entries are stored as
 // their exact values (a_pq = a_qp = 0, real diagonal), not as rounding noise.
-template <class Ops = alg::NativeOps, class T, class N, class M>
-BATCHLAS_DLA_INLINE void rot_round_left_hermitian(const RotRound<T>& rd, N npairs, int col, const M& a) {
+template <class Ops = alg::NativeOps, class T, class CS, class D, class PR, class N, class M>
+BATCHLAS_DLA_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR>& rd, N npairs, int col, const M& a) {
     using R = real_t<T>;
     for (int k = 0; k < int(npairs); ++k) {
         const sycl::vec<R, 2> cs = rd.cs[k];
