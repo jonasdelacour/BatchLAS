@@ -55,10 +55,6 @@ inline void GesvdVendorBenchSizes(Benchmark* b) {
     }
 }
 
-inline SvdVectors parse_job(int v) {
-    return (v == 0) ? SvdVectors::None : SvdVectors::All;
-}
-
 } // namespace
 
 // cuSOLVER gesvdjBatched.
@@ -66,8 +62,8 @@ template <typename T, Backend B>
 static void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
-    const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
-    const SvdVectors jobvh = parse_job(static_cast<int>(state.range(3)));
+    const SvdVectors jobu = parse_svd_job(static_cast<int>(state.range(2)));
+    const SvdVectors jobvh = parse_svd_job(static_cast<int>(state.range(3)));
 
     // in-order queue: the native providers require one, so both sides of the
     // comparison are given the same queue semantics.
@@ -104,8 +100,8 @@ template <typename T, Backend B>
 static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
-    const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
-    const SvdVectors jobvh = parse_job(static_cast<int>(state.range(3)));
+    const SvdVectors jobu = parse_svd_job(static_cast<int>(state.range(2)));
+    const SvdVectors jobvh = parse_svd_job(static_cast<int>(state.range(3)));
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, true);
 
@@ -141,8 +137,8 @@ template <typename T, Backend B>
 static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
-    const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
-    const SvdVectors jobvh = parse_job(static_cast<int>(state.range(3)));
+    const SvdVectors jobu = parse_svd_job(static_cast<int>(state.range(2)));
+    const SvdVectors jobvh = parse_svd_job(static_cast<int>(state.range(3)));
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, true);
 

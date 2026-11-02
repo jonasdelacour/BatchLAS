@@ -37,13 +37,6 @@ inline void SyevBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-// arg5: 0 = Lower (default, and what every registered size uses), 1 = Upper. Upper exists so
-// the mirror path in syev_blocked / syev_two_stage can be measured against the vendor at all;
-// before it, no benchmark could express an Upper solve.
-inline Uplo parse_uplo(int v) {
-    return (v == 0) ? Uplo::Lower : Uplo::Upper;
-}
-
 } // namespace
 
 // Symmetric eigenvalue decomposition benchmark
@@ -54,6 +47,9 @@ static void BM_SYEV(minibench::State& state) {
     const int sytrd_block_size = static_cast<int>(state.range(2));
     const int fuse_panel_update = static_cast<int>(state.range(3));
     const JobType jobz = parse_jobz(static_cast<int>(state.range(4)));
+    // arg5: 0 = Lower (default, and what every registered size uses), 1 = Upper. Upper exists so
+    // the mirror path in syev_blocked / syev_two_stage can be measured against the vendor at all;
+    // before it, no benchmark could express an Upper solve.
     const Uplo uplo = parse_uplo(static_cast<int>(state.range(5)));
 
     // Bare ::setenv + explicit reload, not a ScopedEnvVar: minibench runs the kernel
