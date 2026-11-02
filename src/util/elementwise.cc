@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
+#include <batchlas/blas/device/v2/ext/elementwise-glue.hh>
 #include <batchlas/blas/linalg-ops.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
+#include <algorithm>
 #include <complex>
 #include <stdexcept>
 
@@ -22,7 +24,7 @@ struct ElementwiseBinaryKernel {};
 template <typename T>
 struct AxpbyKernel {};
 
-template <typename T>
+template <typename T, Uplo U>
 struct TriangularMaskKernel {};
 
 template <typename T, BinaryOp Op>
@@ -42,6 +44,30 @@ void check_same_shape(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
+namespace v2 = ::batchlas::device::v2;
+
+// One batched 2-D launch over a rows x cols shape (no flat index, no % or /); f(ex, b) runs
+// for every active item b. Views are indexed per item, so submatrices (ld > rows) work, and
+// operands may alias: each item touches one element of each.
+template <typename Name, typename F>
+Event launch_2d(Queue& ctx, int rows, int cols, int batch, const std::uint8_t* mask, F f) {
+    if (rows == 0 || cols == 0 || batch == 0) return ctx.get_event();
+    ctx->parallel_for<Name>(v2::batched2d_range(batch, rows, cols, v2::batched2d_shape(rows, cols)),
+                            [=](sycl::nd_item<3> item) {
+                                const v2::Grid2D<> ex{item};
+                                ex.for_each_batch(batch, [&](int b) {
+                                    if (mask && !mask[b]) return;
+                                    f(ex, b);
+                                });
+                            });
+    return ctx.get_event();
+}
+
+template <typename T>
+auto item_mat(const KernelMatrixView<T, MatrixFormat::Dense>& v, int b, int rows, int cols) {
+    return v2::mat(v.data_ + static_cast<int64_t>(b) * v.stride_, rows, cols, v.ld_);
+}
+
 }  // namespace
 
 template <typename T, BinaryOp Op>
@@ -54,34 +80,14 @@ Event elementwise_into(Queue& ctx,
     check_same_shape(A, C, "linalg::elementwise_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::elementwise_into", A, B, C));
 
-    const size_t rows = static_cast<size_t>(A.rows());
-    const size_t cols = static_cast<size_t>(A.cols());
-    const size_t total = rows * cols * static_cast<size_t>(A.batch_size());
-    if (total == 0) return ctx.get_event();
-
-    auto [global_size, local_size] =
-        compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
-
-    // Indexed through kernel views rather than raw pointers so that strided and
-    // non-contiguous views (submatrices, in particular) work the same as dense
-    // ones. The views may alias: every work-item touches one element of each.
+    const int m = A.rows(), n = A.cols();
     auto Av = A.kernel_view();
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
-
-    ctx->parallel_for<ElementwiseBinaryKernel<T, Op>>(
-        sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            const size_t stride = item.get_global_range(0);
-            for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
-                const size_t b = flat / (rows * cols);
-                if (mask && !mask[b]) continue;
-                const size_t rem = flat % (rows * cols);
-                const size_t col = rem / rows;
-                const size_t row = rem % rows;
-                Cv(row, col, b) = apply<T, Op>(Av(row, col, b), Bv(row, col, b));
-            }
-        });
-    return ctx.get_event();
+    return launch_2d<ElementwiseBinaryKernel<T, Op>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
+        v2::map2d(ex, item_mat(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, item_mat(Av, b, m, n),
+                  item_mat(Bv, b, m, n));
+    });
 }
 
 template <typename T>
@@ -96,31 +102,13 @@ Event axpby_into(Queue& ctx,
     check_same_shape(A, C, "linalg::axpby_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::axpby_into", A, B, C));
 
-    const size_t rows = static_cast<size_t>(A.rows());
-    const size_t cols = static_cast<size_t>(A.cols());
-    const size_t total = rows * cols * static_cast<size_t>(A.batch_size());
-    if (total == 0) return ctx.get_event();
-
-    auto [global_size, local_size] =
-        compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
-
+    const int m = A.rows(), n = A.cols();
     auto Av = A.kernel_view();
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
-
-    ctx->parallel_for<AxpbyKernel<T>>(
-        sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            const size_t stride = item.get_global_range(0);
-            for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
-                const size_t b = flat / (rows * cols);
-                if (mask && !mask[b]) continue;
-                const size_t rem = flat % (rows * cols);
-                const size_t col = rem / rows;
-                const size_t row = rem % rows;
-                Cv(row, col, b) = alpha * Av(row, col, b) + beta * Bv(row, col, b);
-            }
-        });
-    return ctx.get_event();
+    return launch_2d<AxpbyKernel<T>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
+        v2::geam(ex, alpha, item_mat(Av, b, m, n), beta, item_mat(Bv, b, m, n), item_mat(Cv, b, m, n));
+    });
 }
 
 template <typename T>
@@ -133,39 +121,19 @@ Event triangular_mask_into(Queue& ctx,
     check_same_shape(A, C, "linalg::triangular_mask_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::triangular_mask_into", A, C));
 
-    const size_t rows = static_cast<size_t>(A.rows());
-    const size_t cols = static_cast<size_t>(A.cols());
-    const size_t total = rows * cols * static_cast<size_t>(A.batch_size());
-    if (total == 0) return ctx.get_event();
-
-    auto [global_size, local_size] =
-        compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
-
-    // Same reasoning as elementwise_into: kernel views so that a submatrix (any
-    // ld > rows view) is indexed correctly, and A may alias C because each
-    // work-item touches one element of each.
+    const int m = A.rows(), n = A.cols();
+    // Signed and clamped: below the main diagonal the offset is negative, and any |k| past the
+    // shape keeps or drops everything, so int32 holds every distinct case.
+    const int kc = static_cast<int>(std::clamp<int64_t>(k, -static_cast<int64_t>(m), n));
     auto Av = A.kernel_view();
     auto Cv = C.kernel_view();
-    const bool upper = (uplo == Uplo::Upper);
-
-    ctx->parallel_for<TriangularMaskKernel<T>>(
-        sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            const size_t stride = item.get_global_range(0);
-            for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
-                const size_t b = flat / (rows * cols);
-                if (mask && !mask[b]) continue;
-                const size_t rem = flat % (rows * cols);
-                const size_t col = rem / rows;
-                const size_t row = rem % rows;
-                // Signed: the diagonal offset is negative below the main
-                // diagonal, and an unsigned difference would wrap there and keep
-                // exactly the elements the mask is meant to drop.
-                const int64_t d = static_cast<int64_t>(col) - static_cast<int64_t>(row);
-                const bool keep = upper ? (d >= k) : (d <= k);
-                Cv(row, col, b) = keep ? Av(row, col, b) : T(0);
-            }
+    const auto run = [&](auto uplo_tag) {
+        return launch_2d<TriangularMaskKernel<T, decltype(uplo_tag)::value>>(ctx, m, n, A.batch_size(), mask,
+                                                                            [=](const auto& ex, int b) {
+            v2::trimask(ex, v2::tri(uplo_tag, kc), item_mat(Av, b, m, n), item_mat(Cv, b, m, n));
         });
-    return ctx.get_event();
+    };
+    return uplo == Uplo::Upper ? run(v2::UpperC{}) : run(v2::LowerC{});
 }
 
 template <typename T>
