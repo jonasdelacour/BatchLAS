@@ -24,8 +24,11 @@
 #include <src/sycl/kernel_attrs.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
+#include <batchlas/blas/device/v2/ext/gemm-components.hh>
 
 namespace batchlas::sycl_gemm_small {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
@@ -95,7 +98,6 @@ Event launch_small_batched(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                using sycl_device::dev_conj;
                 const int t = static_cast<int>(it.get_local_id(0));
                 const int slot = t / kTpm;
                 const int tt = t % kTpm;
@@ -114,75 +116,41 @@ Event launch_small_batched(Queue& ctx,
                 // stored k x m, so a lane's row is a stored column, lda from its neighbours':
                 // it goes through sB in storage order (coalesced) as sB[r + l * kLdb], and the
                 // second barrier keeps it there until every lane of the slot has read its row.
+                const v2::WorkGroupNd<kSmallWg, 1> ex{it};
+                using Ar = v2::FmaArith<D>;
                 D a[NB];
                 if (ta) {
-                    for (int e = tt; e < NB * NB; e += kTpm) {
-                        const int l = e % NB, rr = e / NB;
-                        D v{};
-                        if (live && l < k && rr < m) v = Ab[l + rr * lda];
-                        sB[rr + l * kLdb] = ca ? dev_conj(v) : v;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-BATCHLAS_UNROLL_FULL
-                    for (int l = 0; l < NB; ++l) a[l] = sB[r + l * kLdb];
-                    it.barrier(sycl::access::fence_space::local_space);
+                    v2::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, live, Ab, lda, false, ca, k, m,
+                                            [&](int l, int rr) -> D& { return sB[rr + l * kLdb]; });
+                    ex.barrier();
+                    v2::frag_load(a, [&](int l) { return sB[r + l * kLdb]; });
+                    ex.barrier();
                 } else {
-BATCHLAS_UNROLL_FULL
-                    for (int l = 0; l < NB; ++l) {
+                    v2::frag_load(a, [&](int l) {
                         D v{};
                         if (live && r < m && l < k) v = Ab[r + l * lda];
-                        a[l] = v;
-                    }
+                        return v;
+                    });
                 }
 
                 // op(B) into sB[l + c * kLdb], walked in STORAGE order so the global
                 // read is coalesced either way; zero outside k x n.
-                for (int e = tt; e < NB * NB; e += kTpm) {
-                    const int s0 = e % NB, s1 = e / NB;
-                    const int l = tb ? s1 : s0;
-                    const int c = tb ? s0 : s1;
-                    D v{};
-                    if (live && l < k && c < n) v = Bb[s0 + s1 * ldb];
-                    sB[l + c * kLdb] = cb ? dev_conj(v) : v;
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                v2::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, live, Bb, ldb, tb, cb, k, n,
+                                        [&](int l, int c) -> D& { return sB[l + c * kLdb]; });
+                ex.barrier();
 
+                // acc(j) := op(A)(r, :) op(B)(:, c0 + j) in kLc-wide unrolled chunks: one complex loop
+                // over all 64 l is past LLVM's pragma unroll threshold, so a[] went to the stack (512 B).
                 D acc[kCpt];
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < kCpt; ++j) acc[j] = D{};
-                // Sequential (not nested) loops of kLc l each: one complex loop over all 64 l is
-                // past LLVM's pragma unroll threshold, so a[] went to the stack (512 B). A macro: a
-                // lambda per chunk put 160-184 B of stack on every bucket, real ones included.
-#define BATCHLAS_SMALL_DOT(L0)                                                                  \
-    BATCHLAS_UNROLL_FULL                                                                        \
-    for (int l = (L0); l < (L0) + kLc; ++l) {                                                   \
-        if (l >= k) continue; /* uniform; `continue` keeps the unroll, so a[] stays put */       \
-        BATCHLAS_UNROLL_FULL                                                                    \
-        for (int j = 0; j < kCpt; ++j) sycl_device::fma_acc(acc[j], a[l], sB[l + (c0 + j) * kLdb]); \
-    }
-                BATCHLAS_SMALL_DOT(0)
-                if constexpr (NB / kLc > 1) {
-                    BATCHLAS_SMALL_DOT(kLc)
-                    BATCHLAS_SMALL_DOT(2 * kLc)
-                    BATCHLAS_SMALL_DOT(3 * kLc)
-                }
-#undef BATCHLAS_SMALL_DOT
+                v2::frag_fill(acc, D{});
+                v2::gemv_t_frag<kLc, Ar>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
 
                 if (live && r < m) {
                     D* const Cb = c_ptr + bi * sc;
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) {
-                            D* const dst = Cb + r + c * ldc;
-                            if constexpr (kCx) {
-                                D out = sycl_device::dev_mul(alpha_d, acc[j]);
-                                if (!beta_zero) sycl_device::fma_acc(out, beta_d, *dst);
-                                *dst = out;
-                            } else {
-                                *dst = beta_zero ? alpha_d * acc[j] : alpha_d * acc[j] + beta_d * *dst;
-                            }
-                        }
+                        if (c < n) v2::epilogue_store_fused<Ar>(Cb + r + c * ldc, alpha_d, beta_d, beta_zero, acc[j]);
                     }
                 }
             });
@@ -239,15 +207,12 @@ Event launch_small_tiled(Queue& ctx,
                 const T* const Ab = a_ptr + bi * sa;
                 const T* const Bb = b_ptr + bi * sb;
                 T* const Cb = c_ptr + bi * sc;
+                const v2::WorkGroupNd<kWg, 1> ex{it};
                 // Storage order, so both reads are coalesced; zero-padded.
-                for (int e = t; e < NB * kp; e += kWg) {
-                    const int r = e % NB, l = e / NB;
-                    sA[l * kLd + r] = (r < m && l < k) ? Ab[r + l * lda] : T(0);
-                }
-                for (int e = t; e < kp * NB; e += kWg) {
-                    const int l = e % kp, c = e / kp;
-                    sB[c * kLd + l] = (l < k && c < n) ? Bb[l + c * ldb] : T(0);
-                }
+                v2::stage_storage<kWg>(t, v2::Ext<NB>{}, v2::Dyn{kp}, true, Ab, lda, false, false, m, k,
+                                       [&](int r, int l) -> T& { return sA[l * kLd + r]; });
+                v2::stage_storage<kWg>(t, v2::Dyn{kp}, v2::Ext<NB>{}, true, Bb, ldb, false, false, k, n,
+                                       [&](int l, int c) -> T& { return sB[c * kLd + l]; });
                 const int tr = t % kTr, tc = t / kTr;
                 T prior[4][4];
                 if constexpr (PrefetchC) {
@@ -260,14 +225,11 @@ BATCHLAS_UNROLL_FULL
                         }
                     }
                 }
-                it.barrier(sycl::access::fence_space::local_space);
+                ex.barrier();
 
+                // acc += A(:, l) B(l, :) on the lane's 4x4 tile, four l per 16-byte read of each operand.
                 T acc[4][4];
-BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < 4; ++i) {
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < 4; ++j) acc[i][j] = T(0);
-                }
+                v2::frag_fill(acc, T(0));
                 for (int l0 = 0; l0 < kp; l0 += 4) {
                     V4 bv[4];
 BATCHLAS_UNROLL_FULL
@@ -277,11 +239,9 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int ll = 0; ll < 4; ++ll) {
                         const V4 av = *reinterpret_cast<const V4*>(&sA[(l0 + ll) * kLd + tr * 4]);
-BATCHLAS_UNROLL_FULL
-                        for (int i = 0; i < 4; ++i) {
-BATCHLAS_UNROLL_FULL
-                            for (int j = 0; j < 4; ++j) acc[i][j] += av[i] * bv[j][ll];
-                        }
+                        const T a4[4] = {av[0], av[1], av[2], av[3]};
+                        const T b4[4] = {bv[0][ll], bv[1][ll], bv[2][ll], bv[3][ll]};
+                        v2::outer_mac(acc, a4, b4);
                     }
                 }
 
@@ -293,11 +253,8 @@ BATCHLAS_UNROLL_FULL
                         const int r = tr * 4 + i;
                         if (r < m && c < n) {
                             T* const dst = Cb + r + c * ldc;
-                            if constexpr (PrefetchC) {
-                                *dst = alpha * acc[i][j] + beta * prior[i][j];
-                            } else {
-                                *dst = beta_zero ? alpha * acc[i][j] : alpha * acc[i][j] + beta * *dst;
-                            }
+                            if constexpr (PrefetchC) *dst = v2::axpby_value(alpha, acc[i][j], beta, prior[i][j]);
+                            else v2::epilogue_store_fused<v2::FmaArith<T>>(dst, alpha, beta, beta_zero, acc[i][j]);
                         }
                     }
                 }
