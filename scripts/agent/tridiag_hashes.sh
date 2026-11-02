@@ -11,18 +11,21 @@
 #      AdaptiveCpp Metal, TYPES=float without device fp64), plus the NETLIB cells.
 # Environment: REPS (2), SAMPLES (cpu 64, gpu 512), STEDC_SAMPLES (cpu 16, gpu 128),
 #   POS (cpu 64, gpu 4099; the batch-position cells' sample count), COND (3; one log10-cond bin),
-#   SEED (1234), TYPES ("float double"), SECTIONS ("netlib steqr_cta steqr_wg stedc"),
+#   SEED (20261101; tridiag_inputs.py's seed, another value gets its own _seed<SEED> input dirs),
+#   TYPES ("float double"), SECTIONS ("netlib steqr_cta steqr_wg stedc"),
 #   INPUTS (<out dir>/tridiag-inputs: tridiag_inputs.py writes hard T there once, shared by trees).
 #   Input directories are read-only once written, so a missing chunk fails the run instead of
-#   letting share_inputs write the blind generator's matrix.
+#   letting share_inputs write the blind generator's matrix. *_wide cells (double only) use
+#   tridiag_wide inputs, whose 6e+153/1e-130 classes switch double block scaling on.
 # Output: <out.csv> holds rep,cell,batch,impl,n,dtype,items,w_hash,z_hash (one line per cell and
-# rep); per-sample CSVs go to <out.csv>.d/. The verdicts (self-check, run-to-run, batch-position)
+# rep); per-sample CSVs go to <out.csv>.d/. The verdicts (self-check, run-to-run, batch-position, env knob)
 # are printed and written to <out.csv>.summary. A selfcheck_* cell reruns with e[0] of item 0
-# scaled by 1 + 2^-10 and must change both hashes. Exit 1 on a failed run, an empty grid, a blind
-# self-check or a nondeterministic cell; 2 on usage.
+# scaled by 1 + 2^-10 and must change both hashes. Exit 1 on a failed run (a run with no hash_total
+# line counts), an empty grid, a blind self-check, a nondeterministic cell or an ignored env knob;
+# 2 on usage.
 set -euo pipefail
 
-[ "$#" -eq 3 ] || [ "$#" -eq 4 ] || { sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[ "$#" -eq 3 ] || [ "$#" -eq 4 ] || { sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 build=$1 out=$2 mode=$3 gpu_be=${4:-CUDA}
 case $mode in cpu|gpu) ;; *) echo "tridiag_hashes: mode must be cpu or gpu" >&2; exit 2 ;; esac
 case $gpu_be in CUDA|ROCM|SYCL) ;; *) echo "tridiag_hashes: backend must be CUDA, ROCM or SYCL" >&2; exit 2 ;; esac
@@ -35,7 +38,8 @@ if [ -d /opt/dpcpp-cuda/lib ]; then export LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib${
 
 if [ "$mode" = cpu ]; then dflt_s=64 dflt_sd=16 dflt_pos=64; else dflt_s=512 dflt_sd=128 dflt_pos=4099; fi
 reps=${REPS:-2} samples=${SAMPLES:-$dflt_s} stedc_samples=${STEDC_SAMPLES:-$dflt_sd} pos=${POS:-$dflt_pos}
-cond=${COND:-3} seed=${SEED:-1234} types=${TYPES:-float double}
+cond=${COND:-3} seed=${SEED:-20261101} types=${TYPES:-float double}
+in_sfx=; [ "$seed" = 20261101 ] || in_sfx=_seed$seed
 sections=" ${SECTIONS:-netlib steqr_cta steqr_wg stedc} "
 here=$(cd "$(dirname "$0")" && pwd)
 inputs=${INPUTS:-$(dirname "$out")/tridiag-inputs}
@@ -43,7 +47,7 @@ want() { [[ $sections == *" $1 "* ]]; }
 dir="$out.d"
 mkdir -p "$dir"
 echo "rep,cell,batch,impl,n,dtype,items,w_hash,z_hash" > "$out"
-failed=0 perturb=0
+failed=0 perturb=0 kind=tridiag
 
 # run REP CELL SAMPLES BATCH [env VAR=VALUE ...] -- [steqr_accuracy args ...]
 run() {
@@ -59,8 +63,8 @@ run() {
         prev=$a
     done
     # Written before the run: --inputs falls back to writing the generated matrix when a chunk is missing.
-    local in="$inputs/tridiag_${t}_n${n}_s${s}_b${b}"
-    [ -f "$in/.done" ] || { python3 -I "$here/tridiag_inputs.py" "$in" "$n" "$s" "$b" tridiag "$t" && touch "$in/.done"; }
+    local in="$inputs/${kind}_${t}_n${n}_s${s}_b${b}${in_sfx}"
+    [ -f "$in/.done" ] || { python3 -I "$here/tridiag_inputs.py" "$in" "$n" "$s" "$b" "$kind" "$t" "$seed" && touch "$in/.done"; }
     chmod a-w "$in"
     if [ "$perturb" = 1 ]; then
         local src=$in
@@ -82,7 +86,10 @@ n = int(sys.argv[3]); a[1] *= 1 + 2.0 ** -10; a[n] *= 1 + 2.0 ** -10; a.flush()'
             echo "tridiag_hashes: no SYCL device; check ONEAPI_DEVICE_SELECTOR and LD_LIBRARY_PATH" >&2; exit 1
         fi
         return 0; }
-    { grep '^hash_total,' "$dir/$tag.out" || true; } | sed "s/^hash_total,/$rep,$cell,$b,/" >> "$out"
+    # Exit 0 and no line (a misspelled --impl runs no arm) must not drop the cell from every verdict.
+    grep -q '^hash_total,' "$dir/$tag.out" || {
+        echo "tridiag_hashes: NO HASH $tag (see $dir/$tag.out)" >&2; failed=$((failed + 1)); return 0; }
+    grep '^hash_total,' "$dir/$tag.out" | sed "s/^hash_total,/$rep,$cell,$b,/" >> "$out"
 }
 
 # cell REP NAME SAMPLES POSITION(0|1) [env ...] -- [args ...]: at batch SAMPLES, and at batch 1 too
@@ -93,6 +100,9 @@ cell() {
     run "$rep" "$name" "$s" "$s" "$@"
     if [ "$position" = 1 ]; then run "$rep" "$name" "$s" 1 "$@"; fi
 }
+
+# wide CELL-ARGS: cell on tridiag_wide inputs (double: classes 4/5 are 6e+153/1e-130 and scale).
+wide() { kind=tridiag_wide; cell "$@"; kind=tridiag; }
 
 # selfcheck REP NAME [env ...] -- [args ...]: 64 items as given, then with item 0's e[0] perturbed.
 # A solver that never reads the off-diagonal (a diagonal input, say) leaves the hashes unchanged.
@@ -123,6 +133,10 @@ for rep in $(seq 1 "$reps"); do
             cell "$rep" "netlib_stedc_legacy" "$( [ "$p" = 1 ] && echo "$pos" || echo "$stedc_samples" )" "$p" -- \
                 --backend NETLIB --type "$t" --n "$n" --impl stedc
         done
+        if [ "$t" = double ] && want netlib; then
+            for n in 13 48; do wide "$rep" netlib_steqr_wg_wide "$samples" 0 -- --backend NETLIB --type double --n "$n" --impl steqr; done
+            wide "$rep" netlib_stedc_legacy_wide "$stedc_samples" 0 -- --backend NETLIB --type double --n 64 --impl stedc
+        fi
         [ "$mode" = gpu ] || continue
         want steqr_cta && selfcheck "$rep" steqr_cta -- --backend "$gpu_be" --type "$t" --n 13 --impl steqr_cta --scheme exp --cta-shift lapack
         want steqr_wg && selfcheck "$rep" steqr_wg -- --backend "$gpu_be" --type "$t" --n 48 --impl steqr
@@ -154,11 +168,28 @@ for rep in $(seq 1 "$reps"); do
                         --backend "$gpu_be" --type "$t" --n "$n" --impl stedc --stedc-algorithm "$algo" \
                         --stedc-variant fusedcta --stedc-tpr "$tpr"
                 done
+                # tpr > 32 takes stedc_merge_fused_wg (stedc_merge_cta.cc), which no tpr <= 32 cell reaches.
+                p=0; [ "$algo" = levels ] && case $n in 64|320) p=1 ;; esac
+                cell "$rep" "stedc_${algo}_fusedwg_tpr64" "$( [ "$p" = 1 ] && echo "$pos" || echo "$stedc_samples" )" "$p" -- \
+                    --backend "$gpu_be" --type "$t" --n "$n" --impl stedc --stedc-algorithm "$algo" \
+                    --stedc-variant fusedcta --stedc-tpr 64
             done
-            # The env knob reaches the same field as --stedc-tpr: equal hashes prove it is read.
+            # The env knob reaches the same field as --stedc-tpr: the summary requires the tpr16 hashes
+            # and not the default tpr8 ones.
             cell "$rep" "stedc_levels_fusedcta_envtpr16" "$stedc_samples" 0 BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT=16 -- \
                 --backend "$gpu_be" --type "$t" --n "$n" --impl stedc --stedc-algorithm levels --stedc-variant fusedcta
         done
+        if [ "$t" = double ]; then
+            want steqr_cta && for n in 13 32; do
+                wide "$rep" steqr_cta_exp_lapack_wide "$samples" 0 -- \
+                    --backend "$gpu_be" --type double --n "$n" --impl steqr_cta --scheme exp --cta-shift lapack
+            done
+            want steqr_wg && wide "$rep" steqr_wg_wide "$samples" 0 -- --backend "$gpu_be" --type double --n 48 --impl steqr
+            want stedc && for n in 64 320; do
+                wide "$rep" stedc_levels_fusedcta_wide "$stedc_samples" 0 -- \
+                    --backend "$gpu_be" --type double --n "$n" --impl stedc --stedc-algorithm levels --stedc-variant fusedcta
+            done
+        fi
     done
 done
 
@@ -192,5 +223,17 @@ for (k, b), v in by_rep.items():
             if v["1"][1:] != v2["1"][1:]: pos_bad.append((k, b2))
 print(f"batch_position: {pos_n - len(pos_bad)}/{pos_n} cells equal at batch 1 and batch N")
 for k, b in pos_bad: print("  POSITION-DEPENDENT", *k, "batch", b)
-sys.exit(1 if rr_bad or pos_bad or blind or failed or not by_rep or pairs == 0 else 0)
+hz = lambda c, k, b: {r: h[1:] for r, h in by_rep.get(((c,) + k[1:], b), {}).items()}
+# envtpr16 must equal tpr16, and differ from the default tpr8 where that cell ran at the same batch
+# (at n = 64 and 320 tpr8 is a batch-position cell, so its inputs differ).
+env_bad, env_n, env_t8 = [], 0, 0
+for (k, b), v in by_rep.items():
+    if k[0] != "stedc_levels_fusedcta_envtpr16": continue
+    env_n += 1
+    e, t16, t8 = hz(k[0], k, b), hz("stedc_levels_fusedcta_tpr16", k, b), hz("stedc_levels_fusedcta_tpr8", k, b)
+    env_t8 += bool(t8)
+    if not t16 or e != t16 or any(e[r] == t8.get(r) for r in e): env_bad.append((k, b))
+print(f"env_knob: {env_n - len(env_bad)}/{env_n} envtpr16 cells equal tpr16 ({env_t8} also checked against tpr8)")
+for k, b in env_bad: print("  ENV-KNOB-IGNORED", *k, "batch", b)
+sys.exit(1 if rr_bad or pos_bad or blind or env_bad or failed or not by_rep or pairs == 0 else 0)
 PY
