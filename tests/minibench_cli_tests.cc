@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/minibench.hh>
+#include <batchlas/util/miniacc.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/backend_config.h>
 #include <benchmarks/bench_utils.hh>
+
+#include <string>
+#include <utility>
+#include <vector>
 
 static int last_arg = 0;
 static void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
@@ -54,6 +59,31 @@ TEST(MiniBenchCliTest, OverridesRegisteredArgs) {
     last_arg = 0;
     minibench::run_benchmark(bench, bench.args_list[0], opts.cfg);
     EXPECT_EQ(last_arg, 5);
+}
+
+// Pins the --backend/--type/--name list splitter of both harnesses: split on ',',
+// drop empty items, keep everything else verbatim (no trimming, no case change).
+TEST(MiniBenchCliTest, ParseListSplitsOnCommaAndDropsEmptyItems) {
+    using List = std::vector<std::string>;
+    const std::vector<std::pair<std::string, List>> cases = {
+        {"float,double,cfloat", {"float", "double", "cfloat"}},
+        {"NETLIB", {"NETLIB"}},
+        {"", {}},
+        {",", {}},
+        {",,,", {}},
+        {"CUDA,", {"CUDA"}},
+        {",CUDA", {"CUDA"}},
+        {"a,,b", {"a", "b"}},
+        {" a , b ", {" a ", " b "}},
+        {" ", {" "}},
+        {"Cuda,cuda", {"Cuda", "cuda"}},
+        {"1:4:2;x", {"1:4:2;x"}},
+        {"x,x", {"x", "x"}},
+    };
+    for (const auto& [in, want] : cases) {
+        EXPECT_EQ(minibench::parse_list(in), want) << "minibench input '" << in << "'";
+        EXPECT_EQ(miniacc::parse_list(in), want) << "miniacc input '" << in << "'";
+    }
 }
 
 TEST(MiniBenchCliTest, BackendTypeFiltering) {
