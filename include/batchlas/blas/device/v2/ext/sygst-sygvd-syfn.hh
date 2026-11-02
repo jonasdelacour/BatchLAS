@@ -151,14 +151,13 @@ template <class M> BATCHLAS_DLA_INLINE HermView<M> herm(M a, Uplo uplo) { return
 // The trip count is n's compile-time value for an Ext<K> n, else N with an `i < n` guard.
 template <class NE, int N> inline constexpr int frag_trip_v = static_extent_v<NE> ? static_extent_v<NE> : N;
 
-// x[i] = v(i) for i < n; x[i] for i >= n unchanged.
+// x[i] = v(i) for i < n; x[i] for i >= n unchanged. In place, as trsv_frag.
 template <class NE, class V, class T, int N, class L>
-BATCHLAS_DLA_INLINE Frag<T, N, L> frag_load(const Thread&, NE n, const V& v, Frag<T, N, L> x) {
+BATCHLAS_DLA_INLINE void frag_load(const Thread&, NE n, const V& v, Frag<T, N, L>& x) {
     static_assert(frag_trip_v<NE, N> <= N, "v2::frag_load: the extent exceeds the fragment");
     BATCHLAS_DLA_UNROLL_FULL
     for (int i = 0; i < frag_trip_v<NE, N>; ++i)
         if (i < int(n)) x[i] = v(i);
-    return x;
 }
 
 // v(i) = x[i] for i < n.
@@ -206,7 +205,7 @@ template <bool Solve, bool Conj, class T> BATCHLAS_DLA_INLINE T coldot_step(T ac
 // Below: the terms p < i (A upper), else p > i (A lower). Solve: x_i = (x_i - sum) / a_ii, else
 // x_i = a_ii x_i + sum. In place, so the order visits i before any entry its sum still needs.
 template <bool Below, bool Solve, bool Conj, int W, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE Frag<T, N, L> coldot_tri(const MA& a, Frag<T, N, L> x) {
+BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
     using A = Arith<T>;
     constexpr int V = pack16_elems<T>;
     constexpr int Trip = frag_trip_v<std::remove_cv_t<decltype(a.n)>, N>;
@@ -246,25 +245,25 @@ BATCHLAS_DLA_INLINE Frag<T, N, L> coldot_tri(const MA& a, Frag<T, N, L> x) {
             else x[i] = A::add(fused::scale_real(x[i], d), sum);
         }
     }
-    return x;
 }
 }  // namespace detail
 
-// x := op(A)^-1 x, op = Trans or ConjTrans, A n x n triangular (uplo) with a real diagonal.
-// By value: an array out-parameter spills once the caller is not inlined.
+// x := op(A)^-1 x in place, op = Trans or ConjTrans, A n x n triangular (uplo) with a real
+// diagonal. x is the caller's fragment, not a by-value copy: a whole-fragment copy at entry lets
+// LLVM hoist every load of A above the dependent divisions (sygst_diag: 37 -> 70 registers).
 template <Uplo UP, Transpose TR, class Dg = RealDiag, class Alg = alg::ColDotPacked<4>, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE Frag<T, N, L> trsv_frag(const Thread&, const MA& a, Frag<T, N, L> x) {
+BATCHLAS_DLA_INLINE void trsv_frag(const Thread&, const MA& a, Frag<T, N, L>& x) {
     static_assert(TR != Transpose::NoTrans, "v2::trsv_frag: the column-dot form is op(A) = A^T or A^H");
     static_assert(std::is_same_v<Dg, RealDiag>, "v2::trsv_frag: only RealDiag is implemented");
-    return detail::coldot_tri<UP == Uplo::Upper, true, TR == Transpose::ConjTrans, detail::coldot_ways<Alg>::value>(a, x);
+    detail::coldot_tri<UP == Uplo::Upper, true, TR == Transpose::ConjTrans, detail::coldot_ways<Alg>::value>(a, x);
 }
 
-// x := op(A) x, op = Trans or ConjTrans, A n x n triangular (uplo) with a real diagonal.
+// x := op(A) x in place, op = Trans or ConjTrans, A n x n triangular (uplo) with a real diagonal.
 template <Uplo UP, Transpose TR, class Dg = RealDiag, class Alg = alg::ColDotPacked<4>, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE Frag<T, N, L> trmv_frag(const Thread&, const MA& a, Frag<T, N, L> x) {
+BATCHLAS_DLA_INLINE void trmv_frag(const Thread&, const MA& a, Frag<T, N, L>& x) {
     static_assert(TR != Transpose::NoTrans, "v2::trmv_frag: the column-dot form is op(A) = A^T or A^H");
     static_assert(std::is_same_v<Dg, RealDiag>, "v2::trmv_frag: only RealDiag is implemented");
-    return detail::coldot_tri<UP == Uplo::Upper, false, TR == Transpose::ConjTrans, detail::coldot_ways<Alg>::value>(a, x);
+    detail::coldot_tri<UP == Uplo::Upper, false, TR == Transpose::ConjTrans, detail::coldot_ways<Alg>::value>(a, x);
 }
 
 // ---- run-time-width group sweeps -----------------------------------------------------------

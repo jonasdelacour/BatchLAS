@@ -165,9 +165,9 @@ void check_tri(Dev& dev, int n, const char* what) {
         v2::Frag<T, N> x;
 #pragma unroll
         for (int i = 0; i < N; ++i) x[i] = v2::Arith<T>::make(std::numeric_limits<real_of<T>>::quiet_NaN(), real_of<T>(0));
-        x = v2::frag_load(th, ne, v2::vec(X + std::ptrdiff_t(b) * n, n), x);
-        if constexpr (Solve) x = v2::trsv_frag<UP, TR>(th, a, x);
-        else x = v2::trmv_frag<UP, TR>(th, a, x);
+        v2::frag_load(th, ne, v2::vec(X + std::ptrdiff_t(b) * n, n), x);
+        if constexpr (Solve) v2::trsv_frag<UP, TR>(th, a, x);
+        else v2::trmv_frag<UP, TR>(th, a, x);
         v2::frag_store(th, ne, x, v2::vec(Y + std::ptrdiff_t(b) * 2 * n, n, 2));
     });
     const auto got = dev.down(Y, hy.size());
@@ -260,9 +260,9 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
         const Uplo u = lower ? Uplo::Lower : Uplo::Upper;
         for (int j = 0; j < n; ++j) {
             v2::Frag<T, N> x{};
-            x = v2::frag_load(th, ne, v2::herm(s, u).col(j), x);
+            v2::frag_load(th, ne, v2::herm(s, u).col(j), x);
             v2::frag_store(th, ne, x, o1.col(j));
-            x = v2::frag_load(th, ne, v2::conj_vec(s.row(j)), x);
+            v2::frag_load(th, ne, v2::conj_vec(s.row(j)), x);
             v2::frag_store(th, ne, x, o2.col(j));
         }
     });

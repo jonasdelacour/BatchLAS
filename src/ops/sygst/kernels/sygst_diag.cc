@@ -48,8 +48,18 @@ inline Col<D> apply(Col<D> c, const D* f, int ldf, int kb) {
     using KN = std::conditional_t<(KB > 0), v2::Ext<KB>, v2::Dyn>;
     const KN kn = [&] { if constexpr (KB > 0) return KN{}; else return KN{kb}; }();
     const v2::Mat<const D, KN, KN, v2::Dyn, v2::Mem::Local> fs{f, kn, kn, v2::Dyn{ldf}};
-    if constexpr (Inverse) return v2::trsv_frag<Uplo::Upper, Transpose::Trans>(v2::Thread{}, fs, c);
-    else return v2::trmv_frag<Uplo::Lower, Transpose::ConjTrans>(v2::Thread{}, fs, c);
+    if constexpr (Inverse) v2::trsv_frag<Uplo::Upper, Transpose::Trans>(v2::Thread{}, fs, c);
+    else v2::trmv_frag<Uplo::Lower, Transpose::ConjTrans>(v2::Thread{}, fs, c);
+    return c;
+}
+
+// An element of the 16-byte-aligned SLM packs: aligned to min(16, sizeof(D)). Said explicitly
+// because a v2 operand holds its pointer as a member, which drops the alignment clang derives from
+// pointer arithmetic on &slm[0]; without it a complex S column goes out as two 8-byte shared
+// stores per element instead of one 16-byte store.
+template <typename D>
+inline D* slm_elem(D* p) {
+    return static_cast<D*>(__builtin_assume_aligned(p, sizeof(D) < 16 ? sizeof(D) : 16));
 }
 
 template <bool Inverse, int KB, typename T, typename D>
@@ -73,7 +83,7 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                 D* const fbase = reinterpret_cast<D*>(&slm[0]);
                 D* const sbase = fbase + ipw * fper;
                 auto a_of = [=](std::ptrdiff_t itm) { return v2::mat(ap + itm * stride_a, kb, kb, lda); };
-                auto s_of = [=](int gi) { return v2::mat<v2::Mem::Local>(sbase + gi * sper, kb, kb, lds); };
+                auto s_of = [=](int gi) { return v2::mat<v2::Mem::Local>(slm_elem(sbase + gi * sper), kb, kb, lds); };
                 // ?LACPY of A's uplo triangle into S and of B's into F (conjugate-transposed from U),
                 // column-wise and coalesced. I2: a masked item is a dead partition, never loaded,
                 // computed or stored.
@@ -82,24 +92,24 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                     if (row >= kb || itm >= batch || (mask && !mask[itm]) || !v2::in_triangle(ul, row, c)) return;
                     s_of(gi)(row, c) = a_of(itm)(row, c);
                     const D bv = v2::mat(bp + itm * stride_b, kb, kb, ldb)(row, c);
-                    const auto fs = v2::mat<v2::Mem::Local>(fbase + gi * fper, kb, kb, ldf);
+                    const auto fs = v2::mat<v2::Mem::Local>(slm_elem(fbase + gi * fper), kb, kb, ldf);
                     if (lower) fat<Inverse>(fs, row, c) = bv;
                     else fat<Inverse>(fs, c, row) = v2::Arith<D>::conj(bv);
                 });
                 const int g = t / kb, j = t - g * kb;
                 const bool active = g < ipw && first + g < batch && (!mask || mask[first + g]);
                 const D* const f = fbase + (active ? g * fper : 0);
-                const v2::Mat<D, KN, KN, v2::Dyn, v2::Mem::Local> s{sbase + (active ? g * sper : 0), kn, kn, v2::Dyn{lds}};
+                const v2::Mat<D, KN, KN, v2::Dyn, v2::Mem::Local> s{slm_elem(sbase + (active ? g * sper : 0)), kn, kn, v2::Dyn{lds}};
                 it.barrier(sycl::access::fence_space::local_space);
                 // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
                 Col<D> col{};
-                if (active) col = v2::frag_load(th, kn, v2::herm(s, ul).col(j), col);
+                if (active) v2::frag_load(th, kn, v2::herm(s, ul).col(j), col);
                 it.barrier(sycl::access::fence_space::local_space);
                 if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
                 if (active) v2::frag_store(th, kn, col, s.col(j));
                 it.barrier(sycl::access::fence_space::local_space);
                 // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
-                if (active) col = v2::frag_load(th, kn, v2::conj_vec(s.row(j)), col);
+                if (active) v2::frag_load(th, kn, v2::conj_vec(s.row(j)), col);
                 it.barrier(sycl::access::fence_space::local_space);
                 if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
                 if (active) v2::frag_store(th, kn, col, s.col(j));
