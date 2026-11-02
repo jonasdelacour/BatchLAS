@@ -100,7 +100,9 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
     # force-inline it into the entry at stage 1; the hand-written kernel stayed a function of its own
     # until device link (SemaSYCL takes its first lambda callee as the body). Keep that schedule:
     # force-inlined, trti2's write-back moves (STS +8, total -5%) and fails the strict SASS gate.
+    set_source_files_properties(
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/potri/kernels/potri_cta.cc
+        PROPERTIES COMPILE_OPTIONS "-fno-sycl-force-inline-kernel-lambda")
 endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})
