@@ -77,6 +77,21 @@ template <int P, class O = bfly::Down, class Impl, class T, class Op> BATCHLAS_D
 
 inline constexpr bool is_pow2(int p) { return p > 0 && (p & (p - 1)) == 0; }
 
+// Work-group broadcast of a real word. NVPTX: portable::group_broadcast. Elsewhere an
+// OR-reduction of the source's bits (exact for every value, NaN payloads and -0 included):
+// DPC++'s CPU device returned another item's value for half the sources of
+// sycl::group_broadcast at WG 64..160 under reqd_sub_group_size(32) (2026-11-02).
+template <class G, class R> BATCHLAS_DLA_INLINE R group_bcast(const G& g, R x, int src, [[maybe_unused]] int lid) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    return batchlas::portable::group_broadcast(g, x, src);
+#else
+    using U = std::conditional_t<sizeof(R) == 8, std::uint64_t, std::uint32_t>;
+    static_assert(sizeof(R) == sizeof(U), "v2::group_bcast: a 4- or 8-byte word");
+    const U u = lid == src ? sycl::bit_cast<U>(x) : U(0);
+    return sycl::bit_cast<R>(sycl::reduce_over_group(g, u, sycl::bit_or<U>()));
+#endif
+}
+
 }  // namespace detail
 
 // Whole work-group of WG items in sub-groups of SG. The kernel must be launched with local
@@ -278,7 +293,7 @@ template <Scope S = Scope::Group, int SG = 32> struct RtGroup {
         using A = Arith<T>;
         auto one = [&](auto x) {
             if constexpr (S == Scope::Sub) return sycl::select_from_group(it.get_sub_group(), x, src);
-            else return sycl::group_broadcast(it.get_group(), x, src);
+            else return detail::group_bcast(it.get_group(), x, src, lid_);
         };
         if constexpr (A::is_complex) return A::make(one(A::re(v)), one(A::im(v)));
         else return one(v);

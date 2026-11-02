@@ -308,7 +308,7 @@ TYPED_TEST(DeviceBlasV2Test, ReductionsMatchHostOnEveryExecutor) {
 TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
     using T = TypeParam;
     using R = real_of<T>;
-    constexpr int WG = 128, n = 300, nitem = 4;
+    constexpr int WG = 128, n = 300, nitem = 5;
     const R big = std::sqrt(std::numeric_limits<R>::max()) * R(4), tiny = std::ldexp(std::sqrt(std::numeric_limits<R>::min()), -12);
     std::vector<T> hx(std::size_t(nitem) * n);
     for (int i = 0; i < n; ++i) {
@@ -316,6 +316,9 @@ TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
         hx[n + i] = val<T>(i) * R(0.5);
         hx[2 * n + i] = val<T>(i) * big;
         hx[3 * n + i] = val<T>(i) * tiny;
+        // Item 4 straddles Blue's tbig: even entries above it, odd ones below, both sums count.
+        const R tbig = std::ldexp(R(1), (std::numeric_limits<R>::max_exponent - std::numeric_limits<R>::digits + 1) / 2);
+        hx[4 * n + i] = val<T>(i) * (i % 2 == 0 ? R(8) * tbig : R(0.5) * tbig);
     }
     hx[37] = hx[37 + WG] = hx[37 + WG + 3] = T(R(2));  // tie on one owner (37, 165) and across owners (168)
     hx[n + 250] = hx[n + 20] = T(std::numeric_limits<R>::quiet_NaN());
@@ -353,6 +356,13 @@ TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
         // The unscaled form must fail here, or the item does not straddle the threshold.
         EXPECT_FALSE(batchlas::verify::within<T>(Check::blas, n, double(std::abs(gr[3 * b] - ref) / ref)))
             << "unscaled nrm2 survived item " << b << ": the threshold is not straddled";
+    }
+    {
+        long double s = 0;
+        for (int i = 0; i < n; ++i) s += std::norm(LD<T>(hx[std::size_t(4) * n + i]));
+        const long double ref = std::sqrt(s);
+        EXPECT_VERIFY(T, Check::blas, n, double(std::abs(gr[3 * 4 + 2] - ref) / ref)) << "Blue nrm2, big and medium sums both nonzero";
+        EXPECT_VERIFY(T, Check::blas, n, double(std::abs(gr[3 * 4 + 1] - ref) / ref)) << "scaled nrm2, item 4";
     }
 }
 
@@ -946,13 +956,17 @@ TYPED_TEST(DeviceBlasV2Test, RtGroupBcastAndSyncAtARuntimeWidth) {
     T* x = this->dev.up(hx);
     std::vector<T> ho(std::size_t(kBatch) * WG * 3, T(0));
     T* o = this->dev.up(ho);
+    std::vector<int> hsg(kBatch, 0);
+    int* sgs = this->dev.up(hsg);
     this->dev.template run<WG>(kBatch, sizeof(T) * WG, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const v2::RtGroup<> ex(it);
         const int b = int(it.get_group_linear_id()), l = ex.lid();
         const T mine = x[std::ptrdiff_t(b) * WG + l];
         T* slm = reinterpret_cast<T*>(lm);
         const T g = ex.bcast(mine, (b * 7 + 37) % ex.width());
-        const T s = ex.team_exec().bcast(mine, (b + 5) % 32);
+        const int sg = ex.team_size();  // the device's sub-group size (the CPU device may not honour 32)
+        const T s = ex.team_exec().bcast(mine, (b + 5) % sg);
+        if (l == 0) sgs[b] = sg;
         // The reader's slot belongs to another sub-group that writes late (a dependent chain
         // first), so a missing barrier reads the slot before it is written.
         T late = mine;
@@ -966,16 +980,20 @@ TYPED_TEST(DeviceBlasV2Test, RtGroupBcastAndSyncAtARuntimeWidth) {
         ob[l] = g, ob[WG + l] = s, ob[2 * WG + l] = nb;
     });
     const auto got = this->dev.down(o, ho.size());
-    int bad = 0;
+    const auto gsg = this->dev.down(sgs, hsg.size());
+    int bad_g = 0, bad_s = 0, bad_sync = 0;
     for (int b = 0; b < kBatch; ++b)
         for (int l = 0; l < WG; ++l) {
             const T* xb = hx.data() + std::size_t(b) * WG;
             const T* ob = got.data() + std::size_t(b) * WG * 3;
-            bad += !same_bits(ob[l], xb[(b * 7 + 37) % WG]);
-            bad += !same_bits(ob[WG + l], xb[(l / 32) * 32 + (b + 5) % 32]);
-            bad += !same_bits(ob[2 * WG + l], xb[(l + 32) % WG]);
+            bad_g += !same_bits(ob[l], xb[(b * 7 + 37) % WG]);
+            const int sg = gsg[b];
+            bad_s += !same_bits(ob[WG + l], xb[(l / sg) * sg + (b + 5) % sg]);
+            bad_sync += !same_bits(ob[2 * WG + l], xb[(l + 32) % WG]);
         }
-    EXPECT_EQ(bad, 0);
+    EXPECT_EQ(bad_g, 0) << "group bcast";
+    EXPECT_EQ(bad_s, 0) << "sub-group bcast (sub-group size " << gsg[0] << ")";
+    EXPECT_EQ(bad_sync, 0) << "sync";
 }
 
 // Grid2D through the batched2d launcher: B := A + b on a 5 x 9 grid, ld 7, batch 1031 over at
@@ -1407,7 +1425,7 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         const R bl = v2::nrm2<v2::alg::Blue>(ex, xv), un = v2::nrm2<v2::alg::Unscaled>(ex, yv), sc = v2::nrm2<v2::alg::Scaled>(ex, xv);
         const int ff = v2::find_first(ex, xv, [](const T& v) { return v2::abs1(v) > real_of<T>(0.99); });
         const auto alo = v2::argmax(ex, xv);
-        const auto ahi = v2::argmax<v2::tie::Highest>(ex, xv);
+        const auto ahi = v2::argmax<v2::tie::Highest, v2::nan::Skip>(ex, xv);
         const auto ask = v2::argmax<v2::tie::Lowest, v2::nan::Skip>(ex, xv);
         const auto aab = v2::argmax<v2::tie::Lowest, v2::nan::Skip, v2::key::Abs>(ex, yv);
         const auto are = v2::argmax<v2::tie::Lowest, v2::nan::Skip, v2::key::Real>(ex, yv);
@@ -1449,7 +1467,7 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
             if (std::abs(yi) > bab) bab = std::abs(yi), aab = i;
             if (std::real(yi) > bre) bre = std::real(yi), are = i;
         }
-        if (nan_at >= 0) alo = ahi = nan_at;
+        if (nan_at >= 0) alo = nan_at;
         const long double nx = std::sqrt(ssx), ny = std::sqrt(ssy);
         EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kSsqF]), LD<T>(ssy), ssy)) << where << " sumsq Fused";
         EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kSsqU0]), LD<T>(ssy), ssy)) << where << " sumsq Unfused";
@@ -1466,7 +1484,7 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kUnsc]), LD<T>(ny), ny)) << where << " nrm2 Unscaled";
         EXPECT_EQ(int(std::real(r[kFirst])), ff) << where << " find_first";
         EXPECT_EQ(int(std::real(r[kArgLo])), alo) << where << " argmax Lowest/First";
-        EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " argmax Highest/First";
+        EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " argmax Highest/Skip (the tie of item 1)";
         EXPECT_EQ(int(std::real(r[kArgSkip])), ask) << where << " argmax Skip";
         EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " argmax key::Abs";
         EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " argmax key::Real";
@@ -1551,7 +1569,7 @@ TYPED_TEST(DeviceBlasV2Test, LacpyLasetMirrorLaswpMatchAHostReplay) {
     T* a = this->dev.up(ha);
     std::vector<T> hb(std::size_t(kBatch) * per * 5, T(-1));
     T* bb = this->dev.up(hb);
-    std::vector<int> hp = {3, 2, 13, 1, 9, 6, 6};  // 1-based pivots for rows 0..6 (k2 = 7)
+    std::vector<int> hp = {3, 2, 4, 5, 9, 6, 6};  // 1-based pivots for rows 0..6 (k2 = 7); 2-3-4-8 chain
     int* piv = this->dev.up(hp);
     const T alpha = T(real_of<T>(0.25)), beta = T(real_of<T>(-4));
     this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
@@ -1567,7 +1585,7 @@ TYPED_TEST(DeviceBlasV2Test, LacpyLasetMirrorLaswpMatchAHostReplay) {
         v2::lacpy(ex, av.sub(0, 0, n, n), b3);
         v2::lacpy(ex, av, b4);
         ex.barrier(v2::Mem::Global);
-        v2::laset<v2::Part::StrictUpper>(ex, alpha, beta, b2);
+        v2::laset<v2::Part::Upper>(ex, alpha, beta, b2);
         v2::mirror<Uplo::Lower, true>(ex, b3);
         const auto pv = v2::vec(piv, 7);
         v2::laswp(ex, b4, pv, 0, 7);
@@ -1584,6 +1602,7 @@ TYPED_TEST(DeviceBlasV2Test, LacpyLasetMirrorLaswpMatchAHostReplay) {
                 if (i >= j) W(0, i, j) = A[i + j * ld];
                 W(2, i, j) = A[i + j * ld];
                 if (i < j) W(2, i, j) = alpha;
+                if (i == j) W(2, i, j) = beta;
                 W(4, i, j) = A[i + j * ld];
             }
         for (int j = 0; j < n; ++j)
@@ -1603,7 +1622,7 @@ TYPED_TEST(DeviceBlasV2Test, LacpyLasetMirrorLaswpMatchAHostReplay) {
     }
     EXPECT_EQ(bad[0], 0) << "lacpy<Lower>";
     EXPECT_EQ(bad[1], 0) << "lacpy<Full, ConjTrans>";
-    EXPECT_EQ(bad[2], 0) << "laset<StrictUpper>";
+    EXPECT_EQ(bad[2], 0) << "laset<Upper>";
     EXPECT_EQ(bad[3], 0) << "mirror<Lower, Herm>";
     EXPECT_EQ(bad[4], 0) << "laswp forward + backward";
 }
@@ -1757,10 +1776,15 @@ template <Uplo UL, Transpose TR, Diag DG, class T> void tri_case(Dev& dev, int& 
         const T* xb = x + std::ptrdiff_t(b) * 2 * nm;
         T* ob = o + std::ptrdiff_t(b) * 4 * nm;
         v2::Frag<T, N, v2::Cyclic> f;
+        const T tail_poison = T(real_of<T>(1e6));  // entries past n: never read, never written
         v2::load(f, v2::vec(const_cast<T*>(xb), nf), nf);
+#pragma unroll
+        for (int k = nf; k < N; ++k) f[k] = tail_poison;
         v2::trsv<UL, TR, DG>(v2::Thread{}, av, f, nf);
         v2::store(f, v2::vec(ob, N));
         v2::load(f, v2::vec(const_cast<T*>(xb), nf), nf);
+#pragma unroll
+        for (int k = nf; k < N; ++k) f[k] = tail_poison;
         v2::trmv<UL, TR, DG>(v2::Thread{}, av, f, nf);
         v2::store(f, v2::vec(ob + nm, N));
         for (int i = 0; i < nm; ++i) ob[2 * nm + i] = xb[nm + i], ob[3 * nm + i] = xb[nm + i];
@@ -1793,7 +1817,7 @@ template <Uplo UL, Transpose TR, Diag DG, class T> void tri_case(Dev& dev, int& 
                 worst = std::max({worst, rel(gm[i], ax, sx), rel(T(0), as - wide(x0[i]), ss)});
             }
             if (which == 0)
-                for (int i = nf; i < N; ++i) bad_frag += !same_bits(gs[i], T(0)) + !same_bits(gm[i], T(0));
+                for (int i = nf; i < N; ++i) bad_frag += !same_bits(gs[i], T(real_of<T>(1e6))) + !same_bits(gm[i], T(real_of<T>(1e6)));
         }
     }
 }
@@ -1810,7 +1834,7 @@ TYPED_TEST(DeviceBlasV2Test, TrsvTrmvEveryUploTransDiagOnFragAndVector) {
     tri_case<L, Tt, NU, T>(this->dev, bad, worst), tri_case<U, Tt, UN, T>(this->dev, bad, worst);
     tri_case<L, C, UN, T>(this->dev, bad, worst), tri_case<U, C, NU, T>(this->dev, bad, worst);
     EXPECT_VERIFY(T, Check::blas, 13, worst);
-    EXPECT_EQ(bad, 0) << "Frag entries past n must stay as loaded (zero)";
+    EXPECT_EQ(bad, 0) << "Frag entries past n must stay as they were (and not feed the solve)";
 }
 
 TYPED_TEST(DeviceBlasV2Test, GemvSubAndMultiTermGemvAcc) {
