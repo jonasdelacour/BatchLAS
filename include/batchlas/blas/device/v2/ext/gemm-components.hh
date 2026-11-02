@@ -106,18 +106,21 @@ template <Transpose Op, class T> BATCHLAS_DLA_INLINE T op_elem(const T* x, int l
     const bool transpose = Op != Transpose::NoTrans;
     const int source_row = transpose ? col : row;
     const int source_col = transpose ? row : col;
-    const T v = x[source_col * ld + source_row];
+    // The index sum carries no nsw (unsigned add, as the tuned OperandAccessor's reassociated
+    // sum): with nsw LLVM splits it into hoisted 64-bit addresses, +3 to +8 REG on the reg tiles.
+    const int index = static_cast<int>(static_cast<unsigned>(source_col * ld) + static_cast<unsigned>(source_row));
+    const T v = x[index];
     if constexpr (Op == Transpose::ConjTrans) return conj_value(v);
     else return v;
 }
 
 // ---- epilogues (beta is a kernel argument here, so a runtime test stands in for the tag) ----
 // alpha acc + beta prior; beta == 0 is alpha acc alone (0 * NaN is NaN, -0 + 0 is +0).
-template <class T> BATCHLAS_DLA_INLINE T epilogue_apply(T alpha, T beta, T acc, T prior) {
+template <class T> inline T epilogue_apply(T alpha, T beta, T acc, T prior) {
     return beta == T(0) ? alpha * acc : alpha * acc + beta * prior;
 }
 // *dst := alpha acc + beta *dst; beta == 0 never reads *dst.
-template <class T> BATCHLAS_DLA_INLINE void epilogue_store(T* dst, T alpha, T beta, T acc) {
+template <class T> inline void epilogue_store(T* dst, T alpha, T beta, T acc) {
     *dst = beta == T(0) ? alpha * acc : epilogue_apply(alpha, beta, acc, *dst);
 }
 // alpha acc + beta prior with beta known nonzero (a prefetched prior).
@@ -188,9 +191,11 @@ BATCHLAS_DLA_UNROLL_FULL
 
 // One staged k slab of the register-tiled micro-kernel: for each t < TileK (and kk0 + t < k
 // unless Exact) load a(i) = a_at(t, i), b(j) = b_at(t, j) and acc += a b^T. UnrollK k steps per
-// outer iteration; no pragmas (the compiler's own unroll, as tuned).
+// outer iteration; no pragmas (the compiler's own unroll, as tuned). k by reference, like the
+// tuned lambda's closure read: by value, SimplifyCFG merged the two exits first and the TileK = 8
+// slab stayed rolled (32x32x8: 34 -> 6 FFMA).
 template <int TileK, int UnrollK, bool Exact, class Ar = void, class T, int TR, int TC, class FA, class FB>
-BATCHLAS_DLA_INLINE void mma_slab(T (&acc)[TR][TC], int kk0, int k, FA&& a_at, FB&& b_at) {
+BATCHLAS_DLA_INLINE void mma_slab(T (&acc)[TR][TC], int kk0, const int& k, FA&& a_at, FB&& b_at) {
     auto step = [&](int t) __attribute__((always_inline)) {
         T a_frag[TR];
         T b_frag[TC];
@@ -247,9 +252,10 @@ BATCHLAS_DLA_INLINE void gemv_t_frag(T (&acc)[NC], const T (&a)[NA], FB&& b_at, 
 // ---- stagers: op(X) blocks into local memory, zero outside the matrix --------------------------
 // dst(r, c) := op(X)(r0 + r, c0 + c) for the R x C block, zero where row >= mr or col >= mc.
 // Items lid, lid + Threads, ... walk it with X's contiguous index fastest (r for NoTrans, c for
-// Trans), so a warp reads consecutive addresses whatever the slot map dst is.
+// Trans), so a warp reads consecutive addresses whatever the slot map dst is. x, ld and the
+// bounds are references for the same reason as mma_slab's k (the reg tiles' REG and LDG/STS).
 template <Transpose Op, int R, int C, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block(int lid, const T* x, int ld, int r0, int c0, int mr, int mc, Dst&& dst) {
+BATCHLAS_DLA_INLINE void stage_block(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr, const int& mc, Dst&& dst) {
     for (int index = lid; index < R * C; index += Threads) {
         const int r = Op == Transpose::NoTrans ? index % R : index / C;
         const int c = Op == Transpose::NoTrans ? index / R : index % C;
@@ -272,7 +278,7 @@ template <class Fn, int... I> BATCHLAS_DLA_INLINE void gc_static_for(Fn&& fn, st
 // 16-byte aligned for every in-range packet: the caller's ld and base test); a packet that
 // crosses the matrix edge falls back to predicated scalars.
 template <Transpose Op, int R, int C, int V, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block_packet(int lid, const T* x, int ld, int r0, int c0, int mr, int mc, Dst&& dst) {
+BATCHLAS_DLA_INLINE void stage_block_packet(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr, const int& mc, Dst&& dst) {
     if constexpr (Op == Transpose::NoTrans) {
         constexpr int PacketsPerCol = R / V;
         constexpr int PacketCount = PacketsPerCol * C;
@@ -319,7 +325,7 @@ BATCHLAS_DLA_INLINE void stage_block_packet(int lid, const T* x, int ld, int r0,
 // The unpredicated NoTrans form: the block lies inside X and every packet is aligned. One
 // statically unrolled pass per Threads packets.
 template <int R, int C, int V, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block_packet_aligned(int lid, const T* x, int ld, int r0, int c0, Dst&& dst) {
+BATCHLAS_DLA_INLINE void stage_block_packet_aligned(int lid, const T* const& x, const int& ld, int r0, int c0, Dst&& dst) {
     constexpr int PacketsPerCol = R / V;
     constexpr int PacketCount = PacketsPerCol * C;
     constexpr int Iterations = (PacketCount + Threads - 1) / Threads;

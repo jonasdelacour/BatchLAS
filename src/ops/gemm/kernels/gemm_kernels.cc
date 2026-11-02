@@ -5,8 +5,6 @@
 // are instantiated in the shard TUs beside this one (gemm_rows.hh).
 
 #include <src/ops/gemm/kernels/gemm_launch.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
-#include <batchlas/blas/device/v2/ext/gemm-components.hh>
 
 namespace batchlas::sycl_gemm {
 
@@ -45,7 +43,16 @@ Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int
                 const int e = static_cast<int>(g);
                 const int j = e / m, i = e - j * m;
                 const D* p = w_ptr + b * splits * stride_w + i + static_cast<std::ptrdiff_t>(j) * ldw;
-                const D acc = v2::sum_seq(p, splits, stride_w);
+                D acc = p[0];
+                for (int q = 1; q < splits; ++q) {
+                    const D v = p[q * stride_w];
+                    if constexpr (sycl_device::dev_is_complex_v<D>) {
+                        acc.re += v.re;
+                        acc.im += v.im;
+                    } else {
+                        acc += v;
+                    }
+                }
                 D* dst = c_ptr + b * stride_c + i + static_cast<std::ptrdiff_t>(j) * ldc;
                 const bool beta_zero = sycl_device::dev_is_zero(beta_d);
                 *dst = wide_scalar::lin_epi(alpha_d, beta_zero ? D{} : beta_d, acc, beta_zero ? D{} : *dst);

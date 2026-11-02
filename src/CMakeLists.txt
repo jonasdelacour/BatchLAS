@@ -89,6 +89,13 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/herk/herk.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/her2k/her2k.cc
         PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
+    # The register-tiled gemm body calls its stage lambdas through v2::kloop, so SemaSYCL now
+    # force-inlines the whole body at stage 1; the tuned kernel kept it inlinehint (it called a
+    # local lambda directly). Off for the reg shards keeps their SASS. evidence: potri_cta.cc
+    set_source_files_properties(
+        ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_0.cc
+        ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_1.cc
+        PROPERTIES COMPILE_OPTIONS "-fno-sycl-force-inline-kernel-lambda")
 endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})

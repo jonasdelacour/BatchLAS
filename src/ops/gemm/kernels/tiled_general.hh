@@ -64,19 +64,18 @@ Event launch_tiled_general(Queue& ctx,
             const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
             T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
             const v2::WorkGroupNd<Tile * Tile> ex{item};
-            T* const sa = &tile_a[0];
-            T* const sb = &tile_b[0];
-            // This item's row of the A tile and column of the B tile.
-            const v2::Vec<T, v2::Ext<Tile>, v2::Unit, v2::Mem::Local> a_row{sa + local_row * Tile, {}};
-            const v2::Vec<T, v2::Ext<Tile>, v2::Ext<Tile>, v2::Mem::Local> b_col{sb + local_col, {}};
+            // This item's row of the A tile and column of the B tile, read through the accessors
+            // (shared address space; a generic-pointer Vec cost 4 REG on complex<float> N/T x C).
+            auto a_row = [&](int t) -> const T& { return tile_a[local_row * Tile + t]; };
+            auto b_col = [&](int t) -> const T& { return tile_b[t * Tile + local_col]; };
             T sum = T(0);
 
             for (int kk0 = 0; kk0 < k; kk0 += Tile) {
                 const int tile_col = kk0 + local_col;
                 const int tile_row = kk0 + local_row;
-                sa[local_row * Tile + local_col] =
+                tile_a[local_row * Tile + local_col] =
                     (row < m && tile_col < k) ? v2::op_elem<OpA>(a_item, lda, row, tile_col) : T(0);
-                sb[local_row * Tile + local_col] =
+                tile_b[local_row * Tile + local_col] =
                     (col < n && tile_row < k) ? v2::op_elem<OpB>(b_item, ldb, tile_row, col) : T(0);
                 ex.barrier();
                 v2::dot_slab<Tile, v2::OpArith<T>>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned

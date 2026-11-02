@@ -204,7 +204,7 @@ Event launch_register_tiled(Queue& ctx,
                 // Stage op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B) (k x n; the
                 // swizzled b_slot) of k slab kk0 into local stage `stage`. Scalar staging (odd ld or
                 // base) walks the operand's contiguous index fastest; the shared layout is the same.
-                auto load_stage = [&](int kk0, int stage) {
+                auto load_stage = [&](int kk0, int stage) __attribute__((always_inline)) {
                     T* tile_a_stage = &tile_a[stage * Policy::StageASize];
                     T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
                     auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * Policy::TileAStride + r]; };
