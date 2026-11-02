@@ -202,23 +202,54 @@ BATCHLAS_DLA_INLINE T scope_reduce(const Ex& ex, T v, Op op = {}) {
     }
 }
 
+// One scope-S reduction per element of v, by pack expansion: never a `#pragma unroll` loop
+// around a collective (it leaks into the collective's own loops: stedc allreduce 32x vs 8x
+// unroll, +40%; bdsqr LDS 22 -> 52).
+template <Scope S, class Ex, class T, std::size_t K, class Op, std::size_t... I>
+BATCHLAS_DLA_INLINE void reduce_each(const Ex& ex, std::array<T, K>& v, Op op, std::index_sequence<I...>) {
+    ((v[I] = scope_reduce<S>(ex, v[I], op)), ...);
+}
+template <Scope S, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
+BATCHLAS_DLA_INLINE void reduce_each(const Ex& ex, std::array<T, K>& v, Op op = {}) {
+    reduce_each<S>(ex, v, op, std::make_index_sequence<K>{});
+}
+template <class Ex, class T, std::size_t K, std::size_t... I>
+BATCHLAS_DLA_INLINE void team_reduce_each(const Ex& ex, std::array<T, K>& v, std::index_sequence<I...>) {
+    ((v[I] = ex.team_reduce(v[I])), ...);
+}
+
+// Sub-group-size contract of the packed exchange: it assumes nteams = WG / SG hardware
+// sub-groups of SG lanes (team = lid / SG, leader = lane 0). NVPTX always runs SG = 32, so the
+// assumption is a compile-time fact there. Elsewhere (the CPU device, AdaptiveCpp, which may
+// ignore reqd_sub_group_size) the kernel checks the launch's uniform maximum sub-group size
+// and, on a mismatch, reduces each value over the work-group instead (portable, no Scratch).
+template <class Ex> BATCHLAS_DLA_INLINE bool packed_contract_holds(const Ex& ex) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (Ex::sg_size == 32) return true;
+#endif
+    const auto sg = ex.sub();
+    return static_cast<int>(sg.get_max_local_range()[0]) == Ex::sg_size &&
+           static_cast<int>(sg.get_group_linear_range()) == Ex::nteams;
+}
+
 // K sums from ONE scratch exchange: per-team butterfly, lane 0 writes K values, one barrier,
 // every item reads nteams*K in a fixed order (uniform result), one trailing barrier so the
 // scratch may be reused.
 template <int K, class Ex, class T, int Slots>
 BATCHLAS_DLA_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
     if constexpr (is_runtime_v<Ex>) {
-#pragma unroll
-        for (int k = 0; k < K; ++k) v[k] = ex.group_reduce(v[k]);
+        reduce_each<Scope::Group>(ex, v);
         return v;
     } else if constexpr (!is_work_group_v<Ex> || Ex::nteams == 1) {
-#pragma unroll
-        for (int k = 0; k < K; ++k) v[k] = ex.team_reduce(v[k]);
+        team_reduce_each(ex, v, std::make_index_sequence<K>{});
         return v;
     } else {
         static_assert(Slots >= Ex::nteams * K, "v2: Scratch smaller than scratch_elements<op::ReduceN<K>, Ex, T>()");
-#pragma unroll
-        for (int k = 0; k < K; ++k) v[k] = ex.team_reduce(v[k]);
+        if (!packed_contract_holds(ex)) {
+            reduce_each<Scope::Group>(ex, v);
+            return v;
+        }
+        team_reduce_each(ex, v, std::make_index_sequence<K>{});
         if (ex.lane() == 0) {
 #pragma unroll
             for (int k = 0; k < K; ++k) scr.p[ex.team() * K + k] = v[k];
@@ -328,8 +359,7 @@ BATCHLAS_DLA_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<
 template <bool Conj = false, Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
 BATCHLAS_DLA_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
     auto acc = detail::dot_many_partial<Conj, Ops>(ex, y, xs...);
-#pragma unroll
-    for (int k = 0; k < int(sizeof...(Xs)); ++k) acc[k] = detail::scope_reduce<S>(ex, acc[k]);
+    detail::reduce_each<S>(ex, acc);
     return acc;
 }
 
@@ -338,8 +368,7 @@ BATCHLAS_DLA_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
 template <int K, bool Conj = false, Scope S = Scope::Auto, class Ex, class X, class Y>
 BATCHLAS_DLA_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const Y& y) {
     auto acc = detail::dotn_partial<K, Conj>(ex, xs, y);
-#pragma unroll
-    for (int k = 0; k < K; ++k) acc[k] = detail::scope_reduce<S>(ex, acc[k]);
+    detail::reduce_each<S>(ex, acc);
     return acc;
 }
 
@@ -413,19 +442,251 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto las
     return ScaledSsq<R>{scale, detail::scope_reduce<S>(ex, ssq)};
 }
 
-// ||x||_2. Default alg::Scaled (lassq; Inf beats NaN, else NaN propagates); alg::Unscaled is
-// sqrt(re(x^H x)), one reduction, overflow past sqrt(max).
-template <class Alg = alg::Scaled, Scope S = Scope::Auto, class Ex, class X>
-BATCHLAS_DLA_INLINE auto nrm2(const Ex& ex, const X& x) {
+// ||x||_2 by Blue's three accumulators and constants (dnrm2.f90; a complex x accumulates |re|
+// and |im| separately, as dznrm2): overflow- and underflow-safe in one pass. The three sums
+// leave in one exchange: a sycl::vec<R, 3> group reduction on a work-group (stedc's
+// detail::nrm2), three butterflies on a team executor.
+namespace detail {
+template <class R> struct BlueConst {
+    static constexpr int radix = std::numeric_limits<R>::radix, p = std::numeric_limits<R>::digits;
+    static constexpr int emin = std::numeric_limits<R>::min_exponent, emax = std::numeric_limits<R>::max_exponent;
+    static constexpr int fdiv(int a, int b) { return a / b - (((a ^ b) < 0) && (a % b) ? 1 : 0); }
+    static constexpr int cdiv(int a, int b) { return a / b + (((a ^ b) >= 0) && (a % b) ? 1 : 0); }
+    static constexpr R pw(int e) {
+        R r = R(1);
+        for (int i = 0; i < (e < 0 ? -e : e); ++i) r *= R(radix);
+        return e < 0 ? R(1) / r : r;
+    }
+    static constexpr R tsml = pw(cdiv(emin - 1, 2)), tbig = pw(fdiv(emax - p + 1, 2));
+    static constexpr R ssml = pw(-fdiv(emin - p, 2)), sbig = pw(-cdiv(emax + p - 1, 2));
+};
+template <class R> BATCHLAS_DLA_INLINE void blue_acc(R ax, R& abig, R& amed, R& asml) {
+    using C = BlueConst<R>;
+    if (ax > C::tbig) {
+        const R t = ax * C::sbig;
+        abig += t * t;
+    } else if (ax < C::tsml) {
+        const R t = ax * C::ssml;
+        asml += t * t;
+    } else {
+        amed += ax * ax;
+    }
+}
+template <class R> BATCHLAS_DLA_INLINE R blue_finish(R abig, R amed, R asml) {
+    using C = BlueConst<R>;
+    const R maxN = std::numeric_limits<R>::max();
+    R scl = R(1), ss = R(0);
+    if (abig > R(0)) {
+        if ((amed > R(0)) || (amed > maxN) || (amed != amed)) abig += (amed * C::sbig) * C::sbig;
+        scl = R(1) / C::sbig;
+        ss = abig;
+    } else if (asml > R(0)) {
+        if ((amed > R(0)) || (amed > maxN) || (amed != amed)) {
+            const R am = sycl::sqrt(amed), as = sycl::sqrt(asml) / C::ssml;
+            const R ymin = sycl::fmin(am, as), ymax = sycl::fmax(am, as);
+            ss = ymax * ymax * (R(1) + (ymin / ymax) * (ymin / ymax));
+        } else {
+            scl = R(1) / C::ssml;
+            ss = asml;
+        }
+    } else {
+        ss = amed;
+    }
+    return scl * sycl::sqrt(ss);
+}
+}  // namespace detail
+
+// ||x||_2 with the algorithm named (no default: alg::Blue is overflow-safe in one pass and one
+// exchange but costs more than Unscaled; see docs in the v2.1 report):
+//   alg::Unscaled  sqrt(re(x^H x)), one reduction; overflows past sqrt(max), underflows below
+//                  sqrt(min). Inf beats NaN only by accident of the sum.
+//   alg::Blue      dnrm2.f90's three accumulators, one exchange.
+//   alg::Scaled    two-pass lassq (max, then the scaled sum): two exchanges.
+template <class Alg, Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto nrm2(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using R = real_t<T>;
     if constexpr (std::is_same_v<Alg, alg::Unscaled>) {
         return static_cast<R>(sycl::sqrt(Arith<T>::re(dotc<S>(ex, x, x))));
+    } else if constexpr (std::is_same_v<Alg, alg::Blue>) {
+        using A = Arith<T>;
+        R abig = R(0), amed = R(0), asml = R(0);
+        for_each_owned(ex, x.size(), [&](int i) {
+            const T v = x(i);
+            detail::blue_acc(sycl::fabs(A::re(v)), abig, amed, asml);
+            if constexpr (A::is_complex) detail::blue_acc(sycl::fabs(A::im(v)), abig, amed, asml);
+        });
+        if constexpr (detail::resolve_scope<S, Ex>() == Scope::Group && !Ex::sub_whole) {
+            const sycl::vec<R, 3> t = batchlas::portable::reduce_over_group(ex.it.get_group(), sycl::vec<R, 3>{abig, amed, asml},
+                                                                             sycl::plus<sycl::vec<R, 3>>());
+            return detail::blue_finish<R>(t[0], t[1], t[2]);
+        } else {
+            std::array<R, 3> t{abig, amed, asml};
+            detail::reduce_each<S>(ex, t);
+            return detail::blue_finish<R>(t[0], t[1], t[2]);
+        }
     } else {
-        static_assert(std::is_same_v<Alg, alg::Scaled>, "v2::nrm2: Alg is alg::Scaled or alg::Unscaled");
+        static_assert(std::is_same_v<Alg, alg::Scaled>, "v2::nrm2: Alg is alg::Unscaled, alg::Blue or alg::Scaled");
         const auto q = lassq<S>(ex, x);
         if (sycl::isinf(q.scale)) return q.scale;
         return q.scale > R(0) ? q.scale * sycl::sqrt(q.ssq) : sycl::sqrt(q.ssq);
+    }
+}
+
+// ---- v2.1 reductions -------------------------------------------------------------------------
+
+// v reduced over scope S (T, or std::array<T, K>: one reduction per value, pack-expanded).
+template <Scope S = Scope::Auto, class Ex, class T, class Op = sycl::plus<T>>
+BATCHLAS_DLA_INLINE T allreduce(const Ex& ex, T v, Op op = {}) {
+    return detail::scope_reduce<S>(ex, v, op);
+}
+template <Scope S = Scope::Auto, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
+BATCHLAS_DLA_INLINE std::array<T, K> allreduce(const Ex& ex, std::array<T, K> v, Op op = {}) {
+    detail::reduce_each<S>(ex, v, op);
+    return v;
+}
+// K sums in one packed exchange through Scratch (scratch_elements<op::ReduceN<K>, Ex, T>()).
+template <class Ex, class T, int Slots, std::size_t K>
+BATCHLAS_DLA_INLINE std::array<T, K> allreduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
+    return detail::packed_sum<int(K)>(ex, scr, v);
+}
+
+// sum |x_i|^2 for one operand (-> R) or K operands of equal size in one loop (-> std::array<R, K>,
+// one reduction each). Alg: alg::Fused accumulates re^2 then im^2 into the running sum (each a
+// contractible a*a + acc: 2 FMA per complex element); alg::Unfused adds abs2(x) (its own
+// rounding: FMUL + FFMA + FADD), the spelling of the hand kernels that call abs2.
+namespace detail {
+template <class Alg, class R, class T> BATCHLAS_DLA_INLINE void acc_abs2(R& acc, const T& x) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (std::is_same_v<Alg, alg::Unfused>) {
+        acc += abs2(x);
+    } else {
+        static_assert(std::is_same_v<Alg, alg::Fused>, "v2::sumsq: alg::Fused or alg::Unfused");
+        const R re = A::re(x);
+        acc = acc + re * re;
+        if constexpr (A::is_complex) {
+            const R im = A::im(x);
+            acc = acc + im * im;
+        }
+    }
+}
+}  // namespace detail
+template <class Alg = alg::Fused, Scope S = Scope::Auto, class Ex, class X, class... Xs>
+BATCHLAS_DLA_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
+    using R = real_t<elem_t<X>>;
+    constexpr std::size_t K = 1 + sizeof...(Xs);
+    std::array<R, K> acc{};
+    for_each_owned(ex, x.size(), [&](int i) {
+        std::size_t k = 0;
+        detail::acc_abs2<Alg>(acc[k++], x(i));
+        (detail::acc_abs2<Alg>(acc[k++], xs(i)), ...);
+    });
+    detail::reduce_each<S>(ex, acc);
+    if constexpr (K == 1) return acc[0];
+    else return acc;
+}
+
+// The first i in [0, n) with pred(i), or -1 (uniform). Each item stops at its first owned hit
+// (owned indices ascend), then one min-reduction. The x overload tests pred(x(i)).
+template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DLA_INLINE int find_first(const Ex& ex, int n, P&& pred) {
+    int first = INT_MAX;
+    const int step = detail::size_of(ex);
+    for (int i = ex.lid(); i < n; i += step)
+        if (pred(i)) {
+            first = i;
+            break;
+        }
+    first = detail::scope_reduce<S>(ex, first, sycl::minimum<int>());
+    return first == INT_MAX ? -1 : first;
+}
+template <Scope S = Scope::Auto, class Ex, class X, class P>
+    requires(requires(const X& x) { x.size(); x(0); })
+BATCHLAS_DLA_INLINE int find_first(const Ex& ex, const X& x, P&& pred) {
+    return find_first<S>(ex, x.size(), [&](int i) { return pred(x(i)); });
+}
+
+// argmax over i of key(x(i)): {index, key}. Tie: tie::Lowest | tie::Highest index among equal
+// keys. NaN: nan::First (the lowest index holding a NaN key wins, as iamax), nan::Skip (NaN keys
+// never win; all NaN -> {-1, -inf-like}). Key: key::Abs1 (|re| + |im|, BLAS), key::Abs (hypot),
+// key::Real (re). Uniform result; n <= 0 -> index -1.
+namespace tie {
+struct Lowest {};
+struct Highest {};
+}  // namespace tie
+namespace nan {
+struct First {};
+struct Skip {};
+struct Propagate {};
+}  // namespace nan
+namespace key {
+struct Abs1 {};
+struct Abs {};
+struct Real {};
+}  // namespace key
+template <class R> struct ArgMax {
+    int index;
+    R value;
+};
+template <class Tie = tie::Lowest, class NaN = nan::First, class Key = key::Abs1, Scope S = Scope::Auto, class Ex, class X>
+BATCHLAS_DLA_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x) {
+    using T = elem_t<X>;
+    using R = real_t<T>;
+    constexpr bool low = std::is_same_v<Tie, tie::Lowest>;
+    static_assert(low || std::is_same_v<Tie, tie::Highest>, "v2::argmax: tie::Lowest or tie::Highest");
+    static_assert(std::is_same_v<NaN, nan::First> || std::is_same_v<NaN, nan::Skip>, "v2::argmax: nan::First or nan::Skip");
+    auto keyf = [](const T& v) -> R {
+        if constexpr (std::is_same_v<Key, key::Abs1>) return abs1(v);
+        else if constexpr (std::is_same_v<Key, key::Abs>) return modulus(v);
+        else return Arith<T>::re(v);
+    };
+    const R lowest = -std::numeric_limits<R>::infinity();
+    R best = lowest;
+    int bi = low ? INT_MAX : -1, nani = INT_MAX;
+    for_each_owned(ex, x.size(), [&](int i) {
+        const R a = keyf(x(i));
+        if (sycl::isnan(a)) {
+            if constexpr (std::is_same_v<NaN, nan::First>) nani = i < nani ? i : nani;
+        } else if (a > best || (a == best && !low)) {
+            best = a;
+            bi = i;
+        } else if (low && a == best && bi == INT_MAX) {
+            bi = i;  // the first -inf key
+        }
+    });
+    if constexpr (std::is_same_v<NaN, nan::First>) {
+        nani = detail::scope_reduce<S>(ex, nani, sycl::minimum<int>());
+        if (nani != INT_MAX) return {nani, std::numeric_limits<R>::quiet_NaN()};
+    }
+    const R m = detail::scope_reduce<S>(ex, best, sycl::maximum<R>());
+    int idx;
+    if constexpr (low) {
+        idx = detail::scope_reduce<S>(ex, best == m ? bi : INT_MAX, sycl::minimum<int>());
+        idx = idx == INT_MAX ? -1 : idx;
+    } else {
+        idx = detail::scope_reduce<S>(ex, best == m ? bi : -1, sycl::maximum<int>());
+    }
+    return {idx, m};
+}
+
+// max key over x with a NaN policy: nan::Propagate (any NaN -> NaN, as amax) or nan::Skip
+// (fmax: NaN ignored, the bdsqr / tridiag rule).
+template <class NaN = nan::Propagate, class Key = key::Abs1, Scope S = Scope::Auto, class Ex, class X>
+BATCHLAS_DLA_INLINE auto amax_by(const Ex& ex, const X& x) {
+    using T = elem_t<X>;
+    using R = real_t<T>;
+    if constexpr (std::is_same_v<NaN, nan::Propagate> && std::is_same_v<Key, key::Abs1>) {
+        return amax<S>(ex, x);
+    } else {
+        static_assert(std::is_same_v<NaN, nan::Skip>, "v2::amax_by: nan::Propagate (key::Abs1) or nan::Skip");
+        R m = R(0);
+        for_each_owned(ex, x.size(), [&](int i) {
+            const T v = x(i);
+            R a;
+            if constexpr (std::is_same_v<Key, key::Abs1>) a = abs1(v);
+            else if constexpr (std::is_same_v<Key, key::Abs>) a = modulus(v);
+            else a = sycl::fabs(Arith<T>::re(v));
+            m = sycl::fmax(m, a);
+        });
+        return detail::scope_reduce<S>(ex, m, sycl::maximum<R>());
     }
 }
 

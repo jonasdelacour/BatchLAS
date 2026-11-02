@@ -216,7 +216,7 @@ void run_reductions(Dev& dev, int n, int inc, std::vector<T>& hx, std::vector<T>
                 if (ex.leader()) ob[kDot] = r0, ob[kDotc] = r1, ob[kAsum] = r2, ob[kAmax] = r3, ob[kReduce] = r4;
             }
             if constexpr (P < 0 || P == 1) {
-                const T r0 = T(v2::nrm2(ex, xv)), r1 = T(v2::nrm2<v2::alg::Unscaled>(ex, xv)), r2 = T(real_of<T>(v2::iamax(ex, xv)));
+                const T r0 = T(v2::nrm2<v2::alg::Scaled>(ex, xv)), r1 = T(v2::nrm2<v2::alg::Unscaled>(ex, xv)), r2 = T(real_of<T>(v2::iamax(ex, xv)));
                 if (ex.leader()) ob[kNrm2] = r0, ob[kNrm2U] = r1, ob[kIamax] = r2;
             }
             if constexpr (P < 0 || P == 2) {
@@ -322,7 +322,7 @@ TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
     hx[n + 7] = T(R(9));
     T* x = this->dev.up(hx);
     std::vector<int> hi(nitem * 2, -7);
-    std::vector<R> hr(nitem * 2, R(-1));
+    std::vector<R> hr(nitem * 3, R(-1));
     int* io = this->dev.up(hi);
     R* ro = this->dev.up(hr);
     this->dev.template run<WG>(nitem, 0, [=](sycl::nd_item<1> it, unsigned char*) {
@@ -331,9 +331,10 @@ TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
         const auto xv = v2::vec(x + std::ptrdiff_t(b) * n, n);
         const int im = v2::iamax(ex, xv);
         const int im_sub = v2::iamax(v2::SubGroup<32>{it.get_sub_group()}, xv);
-        const R am = v2::amax(ex, xv), nr = v2::nrm2(ex, xv), nu = v2::nrm2<v2::alg::Unscaled>(ex, xv);
-        if (ex.leader()) io[2 * b] = im, io[2 * b + 1] = im_sub, ro[2 * b] = am, ro[2 * b + 1] = nr;
-        if (ex.leader() && b >= 2) ro[2 * b] = nu;
+        const R am = v2::amax(ex, xv), nr = v2::nrm2<v2::alg::Scaled>(ex, xv), nu = v2::nrm2<v2::alg::Unscaled>(ex, xv);
+        const R nb = v2::nrm2<v2::alg::Blue>(ex, xv);
+        if (ex.leader()) io[2 * b] = im, io[2 * b + 1] = im_sub, ro[3 * b] = am, ro[3 * b + 1] = nr, ro[3 * b + 2] = nb;
+        if (ex.leader() && b >= 2) ro[3 * b] = nu;
     });
     const auto gi = this->dev.down(io, hi.size());
     const auto gr = this->dev.down(ro, hr.size());
@@ -341,15 +342,16 @@ TYPED_TEST(DeviceBlasV2Test, IamaxTiesNanAndNrm2Thresholds) {
     EXPECT_EQ(gi[1], 37) << "tie: lowest index (Scope::Sub)";
     EXPECT_EQ(gi[2], 20) << "NaN: lowest NaN index";
     EXPECT_EQ(gi[3], 20);
-    EXPECT_TRUE(std::isnan(gr[2])) << "amax propagates NaN";
+    EXPECT_TRUE(std::isnan(gr[3])) << "amax propagates NaN";
     for (int b = 2; b < 4; ++b) {
         long double s = 0;
         const long double scale = b == 2 ? big : tiny;
         for (int i = 0; i < n; ++i) s += std::norm(LD<T>(hx[std::size_t(b) * n + i]) / scale);
         const long double ref = std::sqrt(s) * scale;
-        EXPECT_VERIFY(T, Check::blas, n, double(std::abs(gr[2 * b + 1] - ref) / ref)) << "scaled nrm2, item " << b;  // NaN fails
+        EXPECT_VERIFY(T, Check::blas, n, double(std::abs(gr[3 * b + 1] - ref) / ref)) << "scaled nrm2, item " << b;  // NaN fails
+        EXPECT_VERIFY(T, Check::blas, n, double(std::abs(gr[3 * b + 2] - ref) / ref)) << "Blue nrm2, item " << b;
         // The unscaled form must fail here, or the item does not straddle the threshold.
-        EXPECT_FALSE(batchlas::verify::within<T>(Check::blas, n, double(std::abs(gr[2 * b] - ref) / ref)))
+        EXPECT_FALSE(batchlas::verify::within<T>(Check::blas, n, double(std::abs(gr[3 * b] - ref) / ref)))
             << "unscaled nrm2 survived item " << b << ": the threshold is not straddled";
     }
 }
@@ -1366,6 +1368,488 @@ TYPED_TEST(DeviceBlasV2Test, ScalarLapackMatchesReferenceLapack) {
     EXPECT_EQ(bad_realbeta, 0) << "larfg_scalars<RealBeta> vs ?larfg";
     EXPECT_EQ(bad_phase, 0) << "larfg_scalars<Phase> reflects [alpha; x] onto [beta; 0]";
     EXPECT_EQ(bad_2x2, 0) << "lae2 / laev2 / las2 / wilkinson_shift vs long-double closed forms; first: " << first_2x2;
+}
+
+// ---- v2.1 reductions ---------------------------------------------------------------------------
+
+// Per item: sumsq (Fused, and Unfused over two operands in one loop), nrm2 Blue / Unscaled /
+// Scaled, find_first, argmax under each tie / NaN / key policy, amax_by<Skip>, allreduce of an
+// array, on WorkGroup, RtGroup @96, Teams<128, 16> (one item per team) and Thread. Items
+// b % 3 == 1 carry a NaN at index 40 and a tie of the maximum at 100 / 500; items b % 3 == 2
+// are scaled to 1e30 (float) / 1e300 (double), where the unscaled sum overflows.
+enum R2 { kSsqF, kSsqU0, kSsqU1, kBlue, kUnsc, kScal, kFirst, kArgLo, kArgHi, kArgSkip, kArgAbs, kArgRe, kAmaxSkip, kAll0, kAll1, kR2 };
+template <class T, int WG, class MakeEx>
+void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per_item, const char* where) {
+    using R = real_of<T>;
+    constexpr int n = 777;
+    const R big = std::is_same_v<R, float> ? R(1e30) : R(1e300);
+    auto hx = batched<T>(n, 141, [&](T* x) {
+        static int rep = 0;
+        if (rep % 3 == 1) {
+            x[40] = T(std::numeric_limits<R>::quiet_NaN());
+            x[100] = T(R(5)), x[500] = T(R(-5));  // the abs1 maximum, tied
+        } else if (rep % 3 == 2) {
+            for (int i = 0; i < n; ++i) x[i] = T(x[i] * big);
+        }
+        ++rep;
+    });
+    auto hy = batched<T>(n, 142);
+    T* x = dev.up(hx);
+    T* y = dev.up(hy);
+    std::vector<T> ho(std::size_t(kBatch) * kR2, T(-9));
+    T* o = dev.up(ho);
+    dev.template run<WG>(kBatch / items_per_wg, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int b = static_cast<int>(it.get_group_linear_id()) * items_per_wg + static_cast<int>(it.get_local_linear_id()) / lanes_per_item;
+        const auto ex = make_ex(it);
+        const auto xv = v2::vec(x + std::ptrdiff_t(b) * n, n), yv = v2::vec(y + std::ptrdiff_t(b) * n, n);
+        const R sf = v2::sumsq(ex, yv);
+        const auto su = v2::sumsq<v2::alg::Unfused>(ex, yv, xv);
+        const R bl = v2::nrm2<v2::alg::Blue>(ex, xv), un = v2::nrm2<v2::alg::Unscaled>(ex, yv), sc = v2::nrm2<v2::alg::Scaled>(ex, xv);
+        const int ff = v2::find_first(ex, xv, [](const T& v) { return v2::abs1(v) > real_of<T>(0.99); });
+        const auto alo = v2::argmax(ex, xv);
+        const auto ahi = v2::argmax<v2::tie::Highest>(ex, xv);
+        const auto ask = v2::argmax<v2::tie::Lowest, v2::nan::Skip>(ex, xv);
+        const auto aab = v2::argmax<v2::tie::Lowest, v2::nan::Skip, v2::key::Abs>(ex, yv);
+        const auto are = v2::argmax<v2::tie::Lowest, v2::nan::Skip, v2::key::Real>(ex, yv);
+        const R ams = v2::amax_by<v2::nan::Skip>(ex, xv);
+        const auto all = v2::allreduce(ex, std::array<R, 2>{R(ex.lid() + 1), R(1)});
+        if (ex.leader()) {
+            T* ob = o + std::ptrdiff_t(b) * kR2;
+            ob[kSsqF] = T(sf), ob[kSsqU0] = T(su[0]), ob[kSsqU1] = T(su[1]), ob[kBlue] = T(bl), ob[kUnsc] = T(un), ob[kScal] = T(sc);
+            ob[kFirst] = T(R(ff)), ob[kArgLo] = T(R(alo.index)), ob[kArgHi] = T(R(ahi.index)), ob[kArgSkip] = T(R(ask.index));
+            ob[kArgAbs] = T(R(aab.index)), ob[kArgRe] = T(R(are.index)), ob[kAmaxSkip] = T(ams), ob[kAll0] = T(all[0]), ob[kAll1] = T(all[1]);
+        }
+    });
+    const auto got = dev.down(o, ho.size());
+    int bitdiff = 0;
+    for (int b = 0; b < kBatch; ++b)
+        for (int k = 0; k < kR2; ++k) bitdiff += !same_bits(got[std::size_t(b) * kR2 + k], got[std::size_t(b % kPeriod) * kR2 + k]);
+    EXPECT_EQ(bitdiff, 0) << where;
+    for (int b = 0; b < kPeriod; ++b) {
+        const T* xb = hx.data() + std::size_t(b) * n;
+        const T* yb = hy.data() + std::size_t(b) * n;
+        const T* r = got.data() + std::size_t(b) * kR2;
+        long double ssy = 0, ssx = 0;
+        int ff = -1, alo = -1, ahi = -1, ask = -1, aab = -1, are = -1, nan_at = -1;
+        long double blo = -1, bsk = -1, bab = -1, bre = -std::numeric_limits<long double>::infinity(), amax = 0;
+        for (int i = 0; i < n; ++i) {
+            const LD<T> xi = wide(xb[i]), yi = wide(yb[i]);
+            ssy += std::norm(yi);
+            const long double a1 = std::abs(std::real(xi)) + std::abs(std::imag(xi));
+            if (std::isnan(a1)) {
+                if (nan_at < 0) nan_at = i;
+                continue;
+            }
+            ssx += std::norm(xi);
+            if (ff < 0 && a1 > 0.99L) ff = i;
+            if (a1 > blo) blo = a1, alo = i;
+            if (a1 >= blo) ahi = i;
+            if (a1 > bsk) bsk = a1, ask = i;
+            amax = std::max(amax, a1);
+            if (std::abs(yi) > bab) bab = std::abs(yi), aab = i;
+            if (std::real(yi) > bre) bre = std::real(yi), are = i;
+        }
+        if (nan_at >= 0) alo = ahi = nan_at;
+        const long double nx = std::sqrt(ssx), ny = std::sqrt(ssy);
+        EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kSsqF]), LD<T>(ssy), ssy)) << where << " sumsq Fused";
+        EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kSsqU0]), LD<T>(ssy), ssy)) << where << " sumsq Unfused";
+        if (nan_at < 0) {
+            if (b == 0)  // sumsq is unscaled: the 1e30 / 1e300 item overflows it by design
+                EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kSsqU1]), LD<T>(ssx), ssx)) << where << " sumsq Unfused x";
+            else
+                EXPECT_TRUE(std::isinf(std::real(r[kSsqU1]))) << where << " sumsq of the scaled item overflows (the threshold is straddled)";
+            EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kBlue]), LD<T>(nx), nx)) << where << " nrm2 Blue (item " << b << ")";
+            EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kScal]), LD<T>(nx), nx)) << where << " nrm2 Scaled";
+        } else {
+            EXPECT_TRUE(std::isnan(std::real(r[kBlue]))) << where << " nrm2 Blue propagates NaN";
+        }
+        EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kUnsc]), LD<T>(ny), ny)) << where << " nrm2 Unscaled";
+        EXPECT_EQ(int(std::real(r[kFirst])), ff) << where << " find_first";
+        EXPECT_EQ(int(std::real(r[kArgLo])), alo) << where << " argmax Lowest/First";
+        EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " argmax Highest/First";
+        EXPECT_EQ(int(std::real(r[kArgSkip])), ask) << where << " argmax Skip";
+        EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " argmax key::Abs";
+        EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " argmax key::Real";
+        EXPECT_EQ(std::real(r[kAmaxSkip]), R(amax)) << where << " amax_by<Skip> is exact";
+        const int w = make_ex.width;
+        EXPECT_EQ(std::real(r[kAll0]), R(w * (w + 1) / 2)) << where << " allreduce[0]";
+        EXPECT_EQ(std::real(r[kAll1]), R(w)) << where << " allreduce[1]";
+    }
+}
+
+TYPED_TEST(DeviceBlasV2Test, ReductionsV21OnEveryExecutor) {
+    using T = TypeParam;
+    struct Wg { int width = 128; auto operator()(sycl::nd_item<1> it) const { return v2::WorkGroup<128>{it}; } };
+    struct Rt { int width = 96; auto operator()(sycl::nd_item<1> it) const { return v2::RtGroup<>(it); } };
+    struct Tm { int width = 16; auto operator()(sycl::nd_item<1> it) const { return v2::Teams<128, 16>{it}; } };
+    struct Th { int width = 1; auto operator()(sycl::nd_item<1>) const { return v2::Thread{}; } };
+    reductions21_case<T, 128>(this->dev, Wg{}, 1, 128, "WorkGroup<128>");
+    reductions21_case<T, 96>(this->dev, Rt{}, 1, 96, "RtGroup @96");
+    reductions21_case<T, 128>(this->dev, Tm{}, 8, 16, "Teams<128, 16>");
+    reductions21_case<T, 32>(this->dev, Th{}, 32, 1, "Thread");
+}
+
+// The packed exchange in a kernel WITHOUT reqd_sub_group_size: on a device whose sub-groups
+// are not 32 lanes (the CPU device, AdaptiveCpp) the contract check must take the portable
+// path; on NVPTX the 32-lane form is a compile-time fact. dotN<3> and allreduce with Scratch.
+TYPED_TEST(DeviceBlasV2Test, PackedExchangeHonoursTheSubGroupContract) {
+    using T = TypeParam;
+    constexpr int WG = 128, n = 333;
+    auto hx = batched<T>(n, 151), hy = batched<T>(n, 152);
+    T* x = this->dev.up(hx);
+    T* y = this->dev.up(hy);
+    std::vector<T> ho(std::size_t(kBatch) * 5, T(0));
+    T* o = this->dev.up(ho);
+    constexpr int slots = v2::scratch_elements<v2::op::ReduceN<3>, v2::WorkGroup<WG>, T>();
+    this->dev.q()
+        .submit([&](sycl::handler& h) {
+            sycl::local_accessor<T, 1> lm(sycl::range<1>(slots), h);
+            h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG), [=](sycl::nd_item<1> it) {
+                const v2::WorkGroup<WG> ex{it};
+                const int b = static_cast<int>(it.get_group_linear_id());
+                const auto xv = v2::vec(x + std::ptrdiff_t(b) * n, n), yv = v2::vec(y + std::ptrdiff_t(b) * n, n);
+                const v2::Scratch<T, slots> scr{batchlas::util::get_raw_ptr(lm)};
+                const auto d3 = v2::dotN<3>(ex, scr, std::array<decltype(xv), 3>{xv, yv, xv}, yv);
+                const auto a2 = v2::allreduce(ex, scr, std::array<T, 2>{T(real_of<T>(1)), xv(ex.lid())});
+                if (ex.leader()) {
+                    T* ob = o + std::ptrdiff_t(b) * 5;
+                    ob[0] = d3[0], ob[1] = d3[1], ob[2] = d3[2], ob[3] = a2[0], ob[4] = a2[1];
+                }
+            });
+        })
+        .wait_and_throw();
+    const auto got = this->dev.down(o, ho.size());
+    double worst = 0;
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b) {
+        const T* xb = hx.data() + std::size_t(b) * n;
+        const T* yb = hy.data() + std::size_t(b) * n;
+        LD<T> xy = 0, yy = 0, x128 = 0;
+        long double s = 0, syy = 0, s128 = 0;
+        for (int i = 0; i < n; ++i) {
+            xy += wide(xb[i]) * wide(yb[i]), yy += wide(yb[i]) * wide(yb[i]);
+            s += std::abs(wide(xb[i])) * std::abs(wide(yb[i])), syy += std::norm(wide(yb[i]));
+            if (i < WG) x128 += wide(xb[i]), s128 += std::abs(wide(xb[i]));
+        }
+        const T* r = got.data() + std::size_t(b) * 5;
+        worst = std::max({worst, rel(r[0], xy, s), rel(r[1], yy, syy), rel(r[2], xy, s), rel(r[4], x128, s128)});
+        bad += std::real(r[3]) != real_of<T>(WG);
+    }
+    EXPECT_VERIFY(T, Check::blas, n, worst);
+    EXPECT_EQ(bad, 0);
+}
+
+// ---- v2.1 LAPACK auxiliaries ---------------------------------------------------------------------
+
+// lacpy (Lower; ConjTrans of a square block), laset (StrictUpper), mirror (Lower -> Upper,
+// Hermitian), laswp forward and backward with repeated and identity pivots: every item against
+// a host replay, bit for bit (these ops move and conjugate, they do not round).
+TYPED_TEST(DeviceBlasV2Test, LacpyLasetMirrorLaswpMatchAHostReplay) {
+    using T = TypeParam;
+    constexpr int WG = 64, m = 13, n = 11, ld = m + 3, per = ld * n;
+    const auto ha = batched<T>(per, 161);
+    T* a = this->dev.up(ha);
+    std::vector<T> hb(std::size_t(kBatch) * per * 5, T(-1));
+    T* bb = this->dev.up(hb);
+    std::vector<int> hp = {3, 2, 13, 1, 9, 6, 6};  // 1-based pivots for rows 0..6 (k2 = 7)
+    int* piv = this->dev.up(hp);
+    const T alpha = T(real_of<T>(0.25)), beta = T(real_of<T>(-4));
+    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::WorkGroup<WG> ex{it};
+        const int b = static_cast<int>(it.get_group_linear_id());
+        const auto av = v2::mat(a + std::ptrdiff_t(b) * per, m, n, ld);
+        T* ob = bb + std::ptrdiff_t(b) * per * 5;
+        const auto b0 = v2::mat(ob, m, n, ld), b1 = v2::mat(ob + per, n, n, ld), b2 = v2::mat(ob + 2 * per, m, n, ld);
+        const auto b3 = v2::mat(ob + 3 * per, n, n, ld), b4 = v2::mat(ob + 4 * per, m, n, ld);
+        v2::lacpy<v2::Part::Lower>(ex, av, b0);
+        v2::lacpy<v2::Part::Full, Transpose::ConjTrans>(ex, av.sub(0, 0, n, n), b1);
+        v2::lacpy(ex, av, b2);
+        v2::lacpy(ex, av.sub(0, 0, n, n), b3);
+        v2::lacpy(ex, av, b4);
+        ex.barrier(v2::Mem::Global);
+        v2::laset<v2::Part::StrictUpper>(ex, alpha, beta, b2);
+        v2::mirror<Uplo::Lower, true>(ex, b3);
+        const auto pv = v2::vec(piv, 7);
+        v2::laswp(ex, b4, pv, 0, 7);
+        v2::laswp<v2::dir::Backward>(ex, b4.sub(0, 0, m, 5), pv, 2, 6);
+    });
+    const auto got = this->dev.down(bb, hb.size());
+    int bad[5] = {0, 0, 0, 0, 0};
+    for (int b = 0; b < kBatch; ++b) {
+        const T* A = ha.data() + std::size_t(b) * per;
+        std::vector<T> want(std::size_t(per) * 5, T(-1));
+        auto W = [&](int k, int i, int j) -> T& { return want[std::size_t(k) * per + i + j * ld]; };
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i) {
+                if (i >= j) W(0, i, j) = A[i + j * ld];
+                W(2, i, j) = A[i + j * ld];
+                if (i < j) W(2, i, j) = alpha;
+                W(4, i, j) = A[i + j * ld];
+            }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                W(1, i, j) = conj_h(A[j + i * ld]);
+                W(3, i, j) = i < j ? conj_h(A[j + i * ld]) : A[i + j * ld];
+                if constexpr (is_cplx<T>)
+                    if (i == j) W(3, i, j) = T(std::real(A[i + j * ld]), 0);
+            }
+        auto swaprows = [&](int k, int p, int cols) {
+            for (int j = 0; j < cols; ++j) std::swap(W(4, k, j), W(4, p, j));
+        };
+        for (int k = 0; k < 7; ++k) swaprows(k, hp[k] - 1, n);
+        for (int k = 5; k >= 2; --k) swaprows(k, hp[k] - 1, 5);
+        for (int k = 0; k < 5; ++k)
+            for (int e = 0; e < per; ++e) bad[k] += !same_bits(got[std::size_t(b) * per * 5 + std::size_t(k) * per + e], want[std::size_t(k) * per + e]);
+    }
+    EXPECT_EQ(bad[0], 0) << "lacpy<Lower>";
+    EXPECT_EQ(bad[1], 0) << "lacpy<Full, ConjTrans>";
+    EXPECT_EQ(bad[2], 0) << "laset<StrictUpper>";
+    EXPECT_EQ(bad[3], 0) << "mirror<Lower, Herm>";
+    EXPECT_EQ(bad[4], 0) << "laswp forward + backward";
+}
+
+// rot (Lapack convention, from lartg) zeroes y(0) of the pair; lasr_rows (Transposed) against
+// a host replay; larfg<Lapack> on a WorkGroup against reference ?larfg; larf Left (team
+// executor) and Right (row owner) against H C formed on the host in long double.
+TYPED_TEST(DeviceBlasV2Test, RotLasrLarfgLarfMatchReferences) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    constexpr int WG = 128, m = 38, nc = 9, ld = m + 2;  // reflector length m = 1 + 37
+    const auto hc = batched<T>(ld * nc, 171);
+    const auto hv = batched<T>(m, 172);
+    T* c = this->dev.up(hc);
+    T* v = this->dev.up(hv);
+    std::vector<T> hcl(hc), hcr(hc), hv2(hv), hrot(std::size_t(kBatch) * 2 * nc, T(0)), htau(kBatch * 2, T(0));
+    T* cl = this->dev.up(hcl);
+    T* cr = this->dev.up(hcr);
+    T* v2p = this->dev.up(hv2);
+    T* ro = this->dev.up(hrot);
+    T* tau = this->dev.up(htau);
+    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::WorkGroup<WG> ex{it};
+        const int b = static_cast<int>(it.get_group_linear_id());
+        // rot from lartg on the first two columns' leading entries, applied along the rows.
+        const auto cv = v2::mat(c + std::ptrdiff_t(b) * ld * nc, m, nc, ld);
+        const auto g = v2::lartg(T(cv(0, 0)), T(cv(1, 0)));
+        T* rb = ro + std::ptrdiff_t(b) * 2 * nc;
+        v2::for_each_owned(ex, nc, [&](int j) { rb[j] = cv(0, j), rb[nc + j] = cv(1, j); });
+        const auto r0 = v2::vec(rb, nc), r1 = v2::vec(rb + nc, nc);
+        v2::rot(ex, v2::Givens<R, T>{g.c, g.s}, r0, r1);
+        // larfg on (v(0), v(1:)), then larf with H = I - tau u u^H, u = unit_head(v, 0).
+        T* vb = v2p + std::ptrdiff_t(b) * m;
+        T alpha = vb[0];
+        const auto h = v2::larfg(ex, alpha, v2::vec(vb + 1, m - 1));
+        ex.barrier(v2::Mem::Global);
+        if (ex.leader()) vb[0] = alpha, tau[2 * b] = h.tau, tau[2 * b + 1] = T(R(h.identity));
+        const auto u = v2::unit_head(v2::vec(vb, m), 0);
+        v2::larf<Side::Left>(ex, h.tau, u, v2::mat(cl + std::ptrdiff_t(b) * ld * nc, m, nc, ld));
+        v2::larf<Side::Right>(ex, h.tau, v2::assume_published(v2::unit_head(v2::vec(vb, nc), 0)), v2::mat(cr + std::ptrdiff_t(b) * ld * nc, m, nc, ld));
+    });
+    const auto grot = this->dev.down(ro, hrot.size()), gv = this->dev.down(v2p, hv2.size()), gt = this->dev.down(tau, htau.size());
+    const auto gl = this->dev.down(cl, hcl.size()), gr = this->dev.down(cr, hcr.size());
+    const long double eps = std::numeric_limits<R>::epsilon();
+    int bad_rot = 0, bad_larfg = 0;
+    double worst = 0;
+    for (int b = 0; b < kPeriod; ++b) {
+        const T* C = hc.data() + std::size_t(b) * ld * nc;
+        // rot: y'(0) = 0 within rounding; the pair's norm is kept.
+        long double nn = std::abs(wide(C[0])) + std::abs(wide(C[1]));
+        bad_rot += std::abs(wide(grot[std::size_t(b) * 2 * nc + nc])) > 8 * eps * nn;
+        for (int j = 0; j < nc; ++j) {
+            const long double before = std::norm(wide(C[j * ld])) + std::norm(wide(C[1 + j * ld]));
+            const long double after = std::norm(wide(grot[std::size_t(b) * 2 * nc + j])) + std::norm(wide(grot[std::size_t(b) * 2 * nc + nc + j]));
+            bad_rot += std::abs(after - before) > 16 * eps * before;
+        }
+        // larfg vs reference.
+        T alpha = hv[std::size_t(b) * m], rtau;
+        std::vector<T> x(hv.begin() + std::size_t(b) * m + 1, hv.begin() + std::size_t(b + 1) * m);
+        if (lapack_ref::larfg(m, alpha, x.data(), rtau)) {
+            long double sc = 0;
+            for (int i = 0; i < m; ++i) sc += std::abs(wide(hv[std::size_t(b) * m + i]));
+            bad_larfg += std::abs(wide(gt[2 * b]) - wide(rtau)) > 32 * eps * 2;
+            bad_larfg += std::abs(wide(gv[std::size_t(b) * m]) - wide(alpha)) > 32 * eps * sc;
+            for (int i = 1; i < m; ++i) bad_larfg += std::abs(wide(gv[std::size_t(b) * m + i]) - wide(x[i - 1])) > 64 * eps * (1 + std::abs(wide(x[i - 1])));
+        }
+        // larf against H C / C H in long double, with the device's own (v, tau).
+        std::vector<LD<T>> u(m);
+        for (int i = 0; i < m; ++i) u[i] = i == 0 ? LD<T>(1) : wide(gv[std::size_t(b) * m + i]);
+        const LD<T> t = wide(gt[2 * b]);
+        for (int j = 0; j < nc; ++j) {
+            LD<T> w = 0;
+            long double sw = 0;
+            for (int i = 0; i < m; ++i) w += conj_h(u[i]) * wide(C[i + j * ld]), sw += std::abs(u[i]) * std::abs(wide(C[i + j * ld]));
+            for (int i = 0; i < m; ++i) {
+                const LD<T> want = wide(C[i + j * ld]) - t * u[i] * w;
+                worst = std::max(worst, rel(gl[std::size_t(b) * ld * nc + i + j * ld], want, std::abs(wide(C[i + j * ld])) + std::abs(t) * std::abs(u[i]) * sw));
+            }
+        }
+        for (int i = 0; i < m; ++i) {
+            LD<T> w = 0;
+            long double sw = 0;
+            for (int j = 0; j < nc; ++j) w += wide(C[i + j * ld]) * u[j], sw += std::abs(wide(C[i + j * ld])) * std::abs(u[j]);
+            for (int j = 0; j < nc; ++j) {
+                const LD<T> want = wide(C[i + j * ld]) - t * w * conj_h(u[j]);
+                worst = std::max(worst, rel(gr[std::size_t(b) * ld * nc + i + j * ld], want, std::abs(wide(C[i + j * ld])) + std::abs(t) * sw));
+            }
+        }
+    }
+    EXPECT_EQ(bad_rot, 0) << "rot<Lapack> with lartg's (c, s)";
+    EXPECT_EQ(bad_larfg, 0) << "larfg<Lapack> vs ?larfg";
+    EXPECT_VERIFY(T, Check::blas, m, worst) << "larf Left / Right";
+}
+
+// lasr_rows (Transposed convention) against a host replay in long double.
+TYPED_TEST(DeviceBlasV2Test, LasrRowsAppliesTheRotationChain) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    constexpr int WG = 32, m = 21, n = 8, ld = m + 1;
+    const auto ha = batched<T>(ld * n, 181);
+    std::vector<R> hg(2 * (n - 1));
+    for (int j = 0; j < n - 1; ++j) hg[2 * j] = std::cos(R(0.3) * (j + 1)), hg[2 * j + 1] = std::sin(R(0.3) * (j + 1));
+    T* a = this->dev.up(ha);
+    R* g = this->dev.up(hg);
+    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::WorkGroup<WG> ex{it};
+        const int b = static_cast<int>(it.get_group_linear_id());
+        auto rots = [&](int j) { return v2::Givens<R>{g[2 * j], g[2 * j + 1]}; };
+        v2::lasr_rows(ex, rots, v2::mat(a + std::ptrdiff_t(b) * ld * n, m, n, ld));
+    });
+    const auto got = this->dev.down(a, ha.size());
+    double worst = 0;
+    for (int b = 0; b < kPeriod; ++b)
+        for (int i = 0; i < m; ++i) {
+            std::vector<LD<T>> row(n);
+            long double s = 0;
+            for (int j = 0; j < n; ++j) row[j] = wide(ha[std::size_t(b) * ld * n + i + j * ld]), s += std::abs(row[j]);
+            for (int j = 0; j < n - 1; ++j) {
+                const long double cc = hg[2 * j], ss = hg[2 * j + 1];
+                const LD<T> x = row[j], y = row[j + 1];
+                row[j] = cc * x - ss * y, row[j + 1] = ss * x + cc * y;
+            }
+            for (int j = 0; j < n; ++j) worst = std::max(worst, rel(got[std::size_t(b) * ld * n + i + j * ld], row[j], s));
+        }
+    EXPECT_VERIFY(T, Check::blas, n, worst);
+}
+
+// trsv / trmv on one item for every (Uplo, Trans, Diag), on a register Frag<T, 8> with 6 live
+// entries and on a memory vector of 13; gemv_sub and gemv_acc (two terms) on a WorkGroup. All
+// against long-double host references; the opposite triangle and (Unit) the diagonal hold a
+// poison that must not be read.
+template <Uplo UL, Transpose TR, Diag DG, class T> void tri_case(Dev& dev, int& bad_frag, double& worst) {
+    using R = real_of<T>;
+    constexpr int WG = 32, N = 8, nf = 6, nm = 13, ld = nm + 2, per = ld * nm;
+    auto ha = batched<T>(per, 191, [](T* a) {
+        for (int j = 0; j < nm; ++j)
+            for (int i = 0; i < nm; ++i) {
+                const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
+                if (!stored || (DG == Diag::Unit && i == j)) a[i + j * ld] = T(R(1e6));
+                else if (i == j) a[i + j * ld] = T(a[i + j * ld] + T(R(4)));  // well conditioned
+            }
+    });
+    const auto hx = batched<T>(2 * nm, 192);
+    T* a = dev.up(ha);
+    T* x = dev.up(hx);
+    std::vector<T> ho(std::size_t(kBatch) * 4 * nm, T(0));
+    T* o = dev.up(ho);
+    dev.template run<WG>(kBatch / WG, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int b = static_cast<int>(it.get_global_linear_id());
+        const auto av = v2::mat(a + std::ptrdiff_t(b) * per, nm, nm, ld);
+        const T* xb = x + std::ptrdiff_t(b) * 2 * nm;
+        T* ob = o + std::ptrdiff_t(b) * 4 * nm;
+        v2::Frag<T, N, v2::Cyclic> f;
+        v2::load(f, v2::vec(const_cast<T*>(xb), nf), nf);
+        v2::trsv<UL, TR, DG>(v2::Thread{}, av, f, nf);
+        v2::store(f, v2::vec(ob, N));
+        v2::load(f, v2::vec(const_cast<T*>(xb), nf), nf);
+        v2::trmv<UL, TR, DG>(v2::Thread{}, av, f, nf);
+        v2::store(f, v2::vec(ob + nm, N));
+        for (int i = 0; i < nm; ++i) ob[2 * nm + i] = xb[nm + i], ob[3 * nm + i] = xb[nm + i];
+        v2::trsv<UL, TR, DG>(v2::Thread{}, av, v2::vec(ob + 2 * nm, nm));
+        v2::trmv<UL, TR, DG>(v2::Thread{}, av, v2::vec(ob + 3 * nm, nm));
+    });
+    const auto got = dev.down(o, ho.size());
+    for (int b = 0; b < kPeriod; ++b) {
+        const T* A = ha.data() + std::size_t(b) * per;
+        auto op = [&](int i, int j) -> LD<T> {
+            if (i == j && DG == Diag::Unit) return LD<T>(1);
+            const int r = TR == Transpose::NoTrans ? i : j, c = TR == Transpose::NoTrans ? j : i;
+            const bool stored = UL == Uplo::Lower ? r >= c : r <= c;
+            if (!stored) return LD<T>(0);
+            const LD<T> e = wide(A[r + c * ld]);
+            return TR == Transpose::ConjTrans ? conj_h(e) : e;
+        };
+        for (int which = 0; which < 2; ++which) {
+            const int n = which == 0 ? nf : nm;
+            const T* x0 = hx.data() + std::size_t(b) * 2 * nm + (which == 0 ? 0 : nm);
+            const T* gs = got.data() + std::size_t(b) * 4 * nm + (which == 0 ? 0 : 2 * nm);
+            const T* gm = got.data() + std::size_t(b) * 4 * nm + (which == 0 ? nm : 3 * nm);
+            for (int i = 0; i < n; ++i) {  // trmv: (op(A) x)(i); trsv: the residual (op(A) s - x)(i)
+                LD<T> ax = 0, as = 0;
+                long double sx = 0, ss = 0;
+                for (int j = 0; j < n; ++j) {
+                    ax += op(i, j) * wide(x0[j]), sx += std::abs(op(i, j)) * std::abs(wide(x0[j]));
+                    as += op(i, j) * wide(gs[j]), ss += std::abs(op(i, j)) * std::abs(wide(gs[j]));
+                }
+                worst = std::max({worst, rel(gm[i], ax, sx), rel(T(0), as - wide(x0[i]), ss)});
+            }
+            if (which == 0)
+                for (int i = nf; i < N; ++i) bad_frag += !same_bits(gs[i], T(0)) + !same_bits(gm[i], T(0));
+        }
+    }
+}
+
+TYPED_TEST(DeviceBlasV2Test, TrsvTrmvEveryUploTransDiagOnFragAndVector) {
+    using T = TypeParam;
+    int bad = 0;
+    double worst = 0;
+    constexpr auto L = Uplo::Lower, U = Uplo::Upper;
+    constexpr auto N = Transpose::NoTrans, Tt = Transpose::Trans, C = Transpose::ConjTrans;
+    constexpr auto NU = Diag::NonUnit, UN = Diag::Unit;
+    tri_case<L, N, NU, T>(this->dev, bad, worst), tri_case<L, N, UN, T>(this->dev, bad, worst);
+    tri_case<U, N, NU, T>(this->dev, bad, worst), tri_case<U, N, UN, T>(this->dev, bad, worst);
+    tri_case<L, Tt, NU, T>(this->dev, bad, worst), tri_case<U, Tt, UN, T>(this->dev, bad, worst);
+    tri_case<L, C, UN, T>(this->dev, bad, worst), tri_case<U, C, NU, T>(this->dev, bad, worst);
+    EXPECT_VERIFY(T, Check::blas, 13, worst);
+    EXPECT_EQ(bad, 0) << "Frag entries past n must stay as loaded (zero)";
+}
+
+TYPED_TEST(DeviceBlasV2Test, GemvSubAndMultiTermGemvAcc) {
+    using T = TypeParam;
+    constexpr int WG = 64, m = 41, n1 = 7, n2 = 5, ld = m + 3;
+    const auto ha = batched<T>(ld * (n1 + n2), 201), hx = batched<T>(n1 + n2, 202), hb = batched<T>(m, 203);
+    T* a = this->dev.up(ha);
+    T* x = this->dev.up(hx);
+    T* bv = this->dev.up(hb);
+    std::vector<T> ho(std::size_t(kBatch) * 2 * m, T(0));
+    T* o = this->dev.up(ho);
+    const T alpha = T(real_of<T>(-0.5));
+    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const v2::WorkGroup<WG> ex{it};
+        const int b = static_cast<int>(it.get_group_linear_id());
+        const auto av = v2::mat(a + std::ptrdiff_t(b) * ld * (n1 + n2), m, n1 + n2, ld);
+        const auto xv = v2::assume_published(v2::vec(x + std::ptrdiff_t(b) * (n1 + n2), n1 + n2));
+        const auto x1 = v2::assume_published(v2::vec(x + std::ptrdiff_t(b) * (n1 + n2), n1));
+        const auto x2 = v2::assume_published(v2::vec(x + std::ptrdiff_t(b) * (n1 + n2) + n1, n2));
+        const auto b0 = v2::vec(bv + std::ptrdiff_t(b) * m, m);
+        T* ob = o + std::ptrdiff_t(b) * 2 * m;
+        v2::gemv_sub(ex, av, xv, b0, v2::vec(ob, m));
+        v2::gemv_acc(ex, alpha, b0, v2::vec(ob + m, m), v2::term(av.sub(0, 0, m, n1), x1), v2::term(av.sub(0, n1, m, n2), x2));
+    });
+    const auto got = this->dev.down(o, ho.size());
+    double worst = 0;
+    for (int b = 0; b < kPeriod; ++b)
+        for (int r = 0; r < m; ++r) {
+            LD<T> ax = 0;
+            long double s = 0;
+            for (int c = 0; c < n1 + n2; ++c) {
+                const LD<T> e = wide(ha[std::size_t(b) * ld * (n1 + n2) + r + c * ld]), xc = wide(hx[std::size_t(b) * (n1 + n2) + c]);
+                ax += e * xc, s += std::abs(e) * std::abs(xc);
+            }
+            const LD<T> b0 = wide(hb[std::size_t(b) * m + r]);
+            worst = std::max({worst, rel(got[std::size_t(b) * 2 * m + r], b0 - ax, s + std::abs(b0)),
+                              rel(got[std::size_t(b) * 2 * m + m + r], b0 + wide(alpha) * ax, s + std::abs(b0))});
+        }
+    EXPECT_VERIFY(T, Check::blas, 12, worst);
 }
 
 // ---- register fragments on a Partition ----------------------------------------------------

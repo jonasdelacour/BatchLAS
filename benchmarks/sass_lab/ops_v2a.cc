@@ -55,6 +55,7 @@ template <bool Nrm, class Name, class T, int N, int V, int WG> sycl::event w_dot
             auto body = [&](const auto& ex) {
                 if constexpr (!Nrm) r = dv2::dot(ex, dv2::vec(x, n), dv2::vec(y, n));
                 else if constexpr (V == kV2) r = dv2::nrm2<dv2::alg::Unscaled>(ex, dv2::vec(x, n));
+                else if constexpr (V == kV2Blue) r = dv2::nrm2<dv2::alg::Blue>(ex, dv2::vec(x, n));
                 else r = dv2::nrm2<dv2::alg::Scaled>(ex, dv2::vec(x, n));
             };
             if constexpr (WG == 32) body(dv2::SubGroup<32>{it.get_sub_group()});
@@ -150,6 +151,7 @@ template <class T, int N, int WG> void reg_v2a_wg() {
     LAB_V(kHand) LAB_V(kLean) LAB_V(kV2)
 #undef LAB_V
     addw<T, N, kV2Scaled>("nrm2", WG, false, w_dot<true, KWNrm2<T, N, kV2Scaled, WG>, T, N, kV2Scaled, WG>);
+    addw<T, N, kV2Blue>("nrm2", WG, false, w_dot<true, KWNrm2<T, N, kV2Blue, WG>, T, N, kV2Blue, WG>);
     if constexpr (WG != 32) {
         addw<T, N, kHand>("dotN2", WG, false, w_dotn2<T, N, kHand, WG>);
         addw<T, N, kLean>("dotN2", WG, false, w_dotn2<T, N, kLean, WG>);

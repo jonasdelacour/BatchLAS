@@ -202,4 +202,164 @@ BATCHLAS_DLA_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, con
     geru<Alg>(ex, alpha, x, y, a);
 }
 
+// ---- v2.1: subtract-from and multi-term gemv, triangular solve / multiply -------------------
+
+// y := b - A x (NoTrans, RowOwner): the running value starts at b(r) and every term is
+// subtracted from it (Ops::msub), the order of the hand kernels' column updates. That rounding
+// is not alpha * (A x) + b, so a strict port of such a loop needs this form (latrd P3, sytrf).
+// y may alias b.
+template <class Ops = arith::Explicit, class Ex, class MA, class X, class B, class Y>
+BATCHLAS_DLA_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& xp, const B& b, const Y& y) {
+    using T = typename MA::value_type;
+    using Ar = arith_t<Ops, T>;
+    detail::require_published<Ex, X>();
+    const auto& x = detail::unpub(xp);
+    const int m = a.rows(), n = a.cols();
+    for_each_owned(ex, m, [&](int r) {
+        T acc = b(r);
+        for (int c = 0; c < n; ++c) Ar::msub(acc, static_cast<T>(a(r, c)), static_cast<T>(x(c)));
+        y(r) = acc;
+    });
+}
+
+// A term A_t x_t of gemv_acc.
+template <class MA, class X> struct GemvTerm {
+    MA a;
+    X x;
+};
+template <class MA, class X> BATCHLAS_DLA_INLINE GemvTerm<MA, X> term(const MA& a, const X& x) { return {a, x}; }
+
+// y := y0 + alpha * sum_t A_t x_t (NoTrans, RowOwner) in ONE accumulator per row: the terms'
+// products are summed in argument order, then scaled once (gebrd's gemv_pair, sytrd's Fit
+// gemv). Every x_t is read by every item (Published, or assume_published). y may alias y0.
+template <class Ops = arith::Explicit, class Ex, class AS, class Y0, class Y, class... Terms>
+BATCHLAS_DLA_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, const Y& y, const Terms&... terms) {
+    using T = elem_t<Y>;
+    using Ar = arith_t<Ops, T>;
+    (detail::require_published<Ex, decltype(terms.x)>(), ...);
+    const auto alpha = as_tag(alpha_);
+    for_each_owned(ex, y.size(), [&](int r) {
+        T acc = Ar::zero();
+        auto one = [&](const auto& t) {
+            const auto& x = detail::unpub(t.x);
+            for (int c = 0; c < t.a.cols(); ++c) Ar::mac(acc, static_cast<T>(t.a(r, c)), static_cast<T>(x(c)));
+        };
+        (one(terms), ...);
+        y(r) = Arith<T>::add(static_cast<T>(y0(r)), tag_mul(alpha, acc));
+    });
+}
+
+// x := op(A)^{-1} x (trsv) or op(A) x (trmv) in place, A n x n triangular (UL stored), on one
+// item: x is a register Frag<T, N> (n <= N live entries, every index a compile-time constant:
+// sygst trsv_frag, potrf trsm_rowfrag) or a memory vector (runtime n). Entries past n are not
+// touched. Diag::Unit never reads the diagonal; the opposite triangle is never read.
+namespace detail {
+template <class X> constexpr int tri_cap_of(const X*) { return 0; }
+template <class T, int N, class L> constexpr int tri_cap_of(const Frag<T, N, L>*) { return N; }
+
+// Element (i, j) of op(A) for a stored UL triangle; called only inside op(A)'s triangle.
+template <Transpose TR, class T, class MA> BATCHLAS_DLA_INLINE T op_at(const MA& a, int i, int j) {
+    if constexpr (TR == Transpose::NoTrans) return a(i, j);
+    else if constexpr (TR == Transpose::Trans) return a(j, i);
+    else return Arith<T>::conj(static_cast<T>(a(j, i)));
+}
+}  // namespace detail
+
+template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
+BATCHLAS_DLA_INLINE void trsv(const Thread&, const MA& a, X& x, int n) {
+    using T = typename MA::value_type;
+    using Ar = arith_t<Ops, T>;
+    constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
+    // op(A) lower triangular <=> forward substitution.
+    constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
+    if constexpr (N > 0) {
+        if constexpr (lower) {
+#pragma unroll
+            for (int i = 0; i < N; ++i) {
+                if (i >= n) break;
+                T xi = x[i];
+#pragma unroll
+                for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
+                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
+                x[i] = xi;
+            }
+        } else {
+#pragma unroll
+            for (int i = N - 1; i >= 0; --i) {
+                if (i >= n) continue;
+                T xi = x[i];
+#pragma unroll
+                for (int j = i + 1; j < N; ++j)
+                    if (j < n) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
+                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
+                x[i] = xi;
+            }
+        }
+    } else {
+        if constexpr (lower) {
+            for (int i = 0; i < n; ++i) {
+                T xi = x(i);
+                for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
+                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
+                x(i) = xi;
+            }
+        } else {
+            for (int i = n - 1; i >= 0; --i) {
+                T xi = x(i);
+                for (int j = i + 1; j < n; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
+                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
+                x(i) = xi;
+            }
+        }
+    }
+}
+
+template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
+BATCHLAS_DLA_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
+    using T = typename MA::value_type;
+    using Ar = arith_t<Ops, T>;
+    constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
+    constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
+    // Lower: x(i) depends on x(0..i), so go from the bottom up; upper from the top down.
+    auto row = [&](int i, auto&& xs) {
+        T acc = DG == Diag::Unit ? T(xs(i)) : Ar::mul(detail::op_at<TR, T>(a, i, i), T(xs(i)));
+        if constexpr (lower)
+            for (int j = 0; j < i; ++j) Ar::mac(acc, detail::op_at<TR, T>(a, i, j), T(xs(j)));
+        else
+            for (int j = i + 1; j < n; ++j) Ar::mac(acc, detail::op_at<TR, T>(a, i, j), T(xs(j)));
+        return acc;
+    };
+    if constexpr (N > 0) {
+        auto xs = [&](int j) -> T { return x[j]; };
+        if constexpr (lower) {
+#pragma unroll
+            for (int i = N - 1; i >= 0; --i)
+                if (i < n) x[i] = row(i, xs);
+        } else {
+#pragma unroll
+            for (int i = 0; i < N; ++i)
+                if (i < n) x[i] = row(i, xs);
+        }
+    } else {
+        auto xs = [&](int j) -> T { return x(j); };
+        if constexpr (lower)
+            for (int i = n - 1; i >= 0; --i) x(i) = row(i, xs);
+        else
+            for (int i = 0; i < n; ++i) x(i) = row(i, xs);
+    }
+}
+// Memory-vector forms take x by const view (the view, not the data, is const).
+template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
+    requires(requires(const X& v) { v.size(); })
+BATCHLAS_DLA_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
+    X xv = x;
+    trsv<UL, TR, DG, Ops>(th, a, xv, x.size());
+}
+template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
+    requires(requires(const X& v) { v.size(); })
+BATCHLAS_DLA_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
+    X xv = x;
+    trmv<UL, TR, DG, Ops>(th, a, xv, x.size());
+}
+
 }  // namespace batchlas::device::v2

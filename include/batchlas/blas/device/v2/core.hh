@@ -393,6 +393,9 @@ struct RowOwnerSplitStoredDiag {};  // hemv RowOwnerSplit reading A(r,r) as stor
 struct Cyclic {};               // ger: column loop outside, owned rows inside; no % or /
 struct Scaled {};               // nrm2: two-pass lassq, overflow-safe
 struct Unscaled {};             // nrm2: sqrt(dotc(x, x)); overflows past sqrt(max)
+struct Blue {};                 // nrm2: dnrm2.f90's three accumulators, one exchange
+struct Fused {};                // sumsq: re^2 and im^2 contract into the running sum
+struct Unfused {};              // sumsq: the running sum adds abs2(x), its own rounding
 // for_each_owned_2d: how an item walks the column-major m x n grid e = lid + s * size.
 struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: v1 index math)
 struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
