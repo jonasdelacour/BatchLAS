@@ -60,7 +60,7 @@ StedcMergeVariant parse_merge_variant(const std::string& value) {
     if (key == "0" || key == "baseline") return StedcMergeVariant::Baseline;
     if (key == "1" || key == "fused") return StedcMergeVariant::Fused;
     if (key == "2" || key == "fusedcta" || key == "fused_cta") return StedcMergeVariant::FusedCta;
-    throw batchlas::invalid_argument("Invalid --stedc-variant value (use auto, baseline, fused or fusedcta)");
+    throw batchlas::invalid_argument("steqr_accuracy: invalid --stedc-variant value (use auto, baseline, fused or fusedcta)");
 }
 
 StedcAlgorithm parse_stedc_algorithm(const std::string& value) {
@@ -68,7 +68,7 @@ StedcAlgorithm parse_stedc_algorithm(const std::string& value) {
     if (key == "auto") return StedcAlgorithm::Auto;
     if (key == "levels") return StedcAlgorithm::Levels;
     if (key == "recursive") return StedcAlgorithm::Recursive;
-    throw batchlas::invalid_argument("Invalid --stedc-algorithm value (use auto, levels or recursive)");
+    throw batchlas::invalid_argument("steqr_accuracy: invalid --stedc-algorithm value (use auto, levels or recursive)");
 }
 
 template <typename Real>
@@ -166,6 +166,10 @@ Options parse_args(int argc, char** argv) {
                       << "  --stedc-leaf N --stedc-tpr N --stedc-wgm N  (0 = tuned; BATCHLAS_TUNE_STEDC_* also apply)\n"
                       << "Prints one hash_total line per impl after the run (accuracy::RunHashes).\n";
             std::exit(0);
+        } else {
+            // A dropped flag would run the defaults, and base and branch would agree on the wrong cell.
+            std::cerr << "steqr_accuracy: unknown argument " << arg << " (see --help)\n";
+            std::exit(2);
         }
     }
     return opt;

@@ -532,9 +532,12 @@ TYPED_TEST(TridiagMath, BlockScaleBringsTheNormIntoRange) {
     for (T anorm : {T(0), T(1), detail::ssfmin<T>(), detail::ssfmax<T>()}) {
         EXPECT_FALSE(BlockScale<T>::for_norm(anorm).active()) << anorm;
     }
-    for (T anorm : {std::numeric_limits<T>::max(), std::numeric_limits<T>::min(), T(1e-30) * detail::ssfmin<T>()}) {
+    // One ulp past each threshold is active too: a `> 2 * ssfmax` or `< ssfmin / 2` mutant goes red.
+    for (T anorm : {std::nextafter(detail::ssfmax<T>(), std::numeric_limits<T>::infinity()),
+                    std::nextafter(detail::ssfmin<T>(), T(0)), std::numeric_limits<T>::max(),
+                    std::numeric_limits<T>::min(), T(1e-30) * detail::ssfmin<T>()}) {
         const auto s = BlockScale<T>::for_norm(anorm);
-        EXPECT_TRUE(s.active());
+        EXPECT_TRUE(s.active()) << anorm;
         EXPECT_BITEQ(s.inverse, T(1) / s.factor);
         const T safe = s.to_safe(anorm);
         EXPECT_NEAR(safe / (anorm > 1 ? detail::ssfmax<T>() : detail::ssfmin<T>()), T(1), 2 * eps<T>());
@@ -553,10 +556,13 @@ TYPED_TEST(TridiagMath, EigIsBitwiseLaev2) {
         EXPECT_BITEQ(E.rt2, rt2);
         EXPECT_BITEQ(E.R.c, cs);
         EXPECT_BITEQ(E.R.s, sn);
-        const auto D = A.congruence(E.R);  // R A R^T = diag(rt1, rt2)
+        // The BITEQ lines pin eig() to laev2; this residual checks laev2 itself: R A R^T = diag(rt1, rt2).
+        const auto D = A.congruence(E.R);
         const T scale = 16 * eps<T>() * (std::fabs(A.a) + std::fabs(A.b) + std::fabs(A.c));
         EXPECT_NEAR(D.a, rt1, scale);
         EXPECT_NEAR(D.b, T(0), scale);
+        EXPECT_NEAR(D.c, rt2, scale);
+        EXPECT_GE(std::fabs(rt1), std::fabs(rt2));
         if (::testing::Test::HasFailure()) return;
     }
 }
@@ -644,6 +650,8 @@ TYPED_TEST(TridiagMath, RationalStepAndBracketConvergeToTheLongDoubleRoot) {
                 Bracket<T> br = origin_lower ? Bracket<T>{T(0), gap / 2} : Bracket<T>{-gap / 2, T(0)};
                 T tau = (br.lo + br.hi) / 2;
                 const T origin = P.d[wi];
+                const long double tol = 16 * eps<T>() * std::fabs(root) + 4 * std::numeric_limits<T>::min();
+                int used = -1;  // steps until tau first meets tol
                 for (int it = 0; it < 40; ++it) {
                     auto s = eq.split(wi, Exclude::Pole, origin, tau);
                     const T ratio = P.z[wi] / (P.d[wi] - origin - tau);
@@ -658,9 +666,12 @@ TYPED_TEST(TridiagMath, RationalStepAndBracketConvergeToTheLongDoubleRoot) {
                     const T step = br.step_inside(tau, eta, s.w);
                     if (tau + step == tau) break;
                     tau += step;
+                    if (used < 0 && std::fabs(tau - root) <= tol) used = it + 1;
                 }
-                EXPECT_NEAR(tau, root, 16 * eps<T>() * std::fabs(root) + 4 * std::numeric_limits<T>::min())
-                    << "trial " << trial << " k " << k << " model " << int(model);
+                // Bisection (an overshooting rational_step clamped by step_inside) also meets tol in
+                // float, after ~20 steps; the two-pole model needs at most 6 here.
+                EXPECT_LE(used, 12) << "trial " << trial << " k " << k << " model " << int(model);
+                EXPECT_NEAR(tau, root, tol) << "trial " << trial << " k " << k << " model " << int(model);
             }
         }
         if (::testing::Test::HasFailure()) return;
