@@ -36,7 +36,7 @@ using accuracy::to_lower;
 
 struct Options {
     std::string impl = "steqr"; // steqr | steqr_cta | cuda_syev | netlib_syev32 | netlib_steqr | netlib_sterf | netlib_stedc | both | all
-    std::string backend = "CUDA"; // CUDA | ROCM | NETLIB
+    std::string backend = "CUDA"; // CUDA | ROCM | SYCL | NETLIB
     std::string dtype = "float"; // float | double
     int n = 32;
     int batch = 128;
@@ -147,7 +147,7 @@ Options parse_args(int argc, char** argv) {
                       << "Options:\n"
                       << "  --impl steqr|steqr_cta|cuda_syev|netlib_syev32|netlib_steqr|netlib_sterf|netlib_stedc|stedc|both|all\n"
                       << "  --scheme pg|exp|pg_guarded\n"
-                      << "  --backend CUDA|ROCM|NETLIB\n"
+                      << "  --backend CUDA|ROCM|SYCL|NETLIB (SYCL: AdaptiveCpp GPU, double only with device fp64)\n"
                       << "  --type float|double\n"
                       << "  --n N\n"
                       << "  --batch B\n"
@@ -544,6 +544,20 @@ int run_selected(const Options& opt) {
         return run_accuracy<Backend::ROCM, double>(opt);
 #else
         std::cerr << "ROCM backend not available in this build\n";
+        return 1;
+#endif
+    }
+    if (opt.backend == "SYCL") {
+#if BATCHLAS_HAS_SYCL_BACKEND
+        if (dtype == "float") return run_accuracy<Backend::SYCL, float>(opt);
+#if BATCHLAS_HAS_DEVICE_FP64
+        return run_accuracy<Backend::SYCL, double>(opt);
+#else
+        std::cerr << "SYCL backend has no device fp64 in this build\n";
+        return 1;
+#endif
+#else
+        std::cerr << "SYCL backend not available in this build\n";
         return 1;
 #endif
     }

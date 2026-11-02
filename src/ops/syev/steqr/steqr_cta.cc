@@ -209,7 +209,7 @@ namespace batchlas {
 
         // The CTA kernels build without CPU targets (NO_CPU_TARGETS), and the Intel OpenCL CPU
         // offers sub-group size 32, so only a GPU reaches the launch.
-        if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+        if (!steqr_cta_can_run(select::device_of<B>(ctx), n)) {
             return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
         }
 
