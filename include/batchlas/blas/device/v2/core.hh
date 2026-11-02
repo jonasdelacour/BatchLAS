@@ -112,6 +112,14 @@ template <class T> struct Arith {
     BATCHLAS_DLA_INLINE static T neg(T a) { return -a; }
     BATCHLAS_DLA_INLINE static T zero() { return T(0); }
     BATCHLAS_DLA_INLINE static T one() { return T(1); }
+    // c -= a * b as ONE expression (contracts to one FMA; two statements would round twice).
+    BATCHLAS_DLA_INLINE static void msub(T& c, const T& a, const T& b) { c = c - a * b; }
+    BATCHLAS_DLA_INLINE static T div(const T& a, const T& b) { return a / b; }
+    BATCHLAS_DLA_INLINE static T recip(const T& a) { return T(1) / a; }
+    BATCHLAS_DLA_INLINE static T div_real(const T& a, const T& s) { return a / s; }
+    BATCHLAS_DLA_INLINE static T scale_real(const T& s, const T& a) { return s * a; }
+    BATCHLAS_DLA_INLINE static bool is_zero(const T& a) { return a == T(0); }
+    BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a); }
 };
 
 template <class R> struct Arith<std::complex<R>> {
@@ -141,6 +149,33 @@ template <class R> struct Arith<std::complex<R>> {
     BATCHLAS_DLA_INLINE static T neg(T a) { return T(-a.real(), -a.imag()); }
     BATCHLAS_DLA_INLINE static T zero() { return T(R(0), R(0)); }
     BATCHLAS_DLA_INLINE static T one() { return T(R(1), R(0)); }
+    BATCHLAS_DLA_INLINE static void msub(T& c, const T& a, const T& b) {
+        const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+        c = T(c.real() - (ar * br - ai * bi), c.imag() - (ar * bi + ai * br));
+    }
+    // Smith's algorithm (no Annex-G, no (c - di) / (c^2 + d^2) overflow past ~1e19 / ~1e154).
+    BATCHLAS_DLA_INLINE static T div(const T& a, const T& b) {
+        const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+        if (sycl::fabs(br) >= sycl::fabs(bi)) {
+            const R r = bi / br, den = br + bi * r;
+            return T((ar + ai * r) / den, (ai - ar * r) / den);
+        }
+        const R r = br / bi, den = bi + br * r;
+        return T((ar * r + ai) / den, (ai * r - ar) / den);
+    }
+    BATCHLAS_DLA_INLINE static T recip(const T& d) {
+        const R dr = d.real(), di = d.imag();
+        if (sycl::fabs(dr) >= sycl::fabs(di)) {
+            const R r = di / dr, den = dr + di * r;
+            return T(R(1) / den, -r / den);
+        }
+        const R r = dr / di, den = di + dr * r;
+        return T(r / den, R(-1) / den);
+    }
+    BATCHLAS_DLA_INLINE static T div_real(const T& a, const R& s) { return T(a.real() / s, a.imag() / s); }
+    BATCHLAS_DLA_INLINE static T scale_real(const R& s, const T& a) { return T(s * a.real(), s * a.imag()); }
+    BATCHLAS_DLA_INLINE static bool is_zero(const T& a) { return a.real() == R(0) && a.imag() == R(0); }
+    BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.real()) && sycl::isfinite(a.imag()); }
 };
 
 template <class T> using real_t = typename Arith<std::remove_cv_t<T>>::real_t;
@@ -152,10 +187,16 @@ template <class T> using real_t = typename Arith<std::remove_cv_t<T>>::real_t;
 // calls, the hand kernels' helper form: LLVM applies `#pragma unroll 4` while the call is still
 // in the body, which leaves the loop open to runtime unrolling after inlining. The always_inline
 // form unrolls only by 4 (latrd symv: 47 vs 78 FFMA at f32 WG 128, hand = 78).
+// arith::Fma is explicit fma chains, bit-equal to sycl_device::dev_mul / fma_acc / dev_recip /
+// dev_div (src/sycl/device_scalar.hh): the arithmetic of gemm, gemv, potri, trsm, getrs, geqrf.
+// Complex rule (D6): a strict port of a kernel that uses std::complex operators takes Native
+// (bit identity, Annex-G kept); explicit real arithmetic (Explicit, ExplicitInline, Fma) is for
+// algo ports, under tolerance tests with an Inf/NaN case.
 namespace arith {
 struct Explicit {};
 struct Native {};
 struct ExplicitInline {};
+struct Fma {};
 }  // namespace arith
 
 // Operands by reference and complex parts read one at a time, as in the hand helper: the loads
@@ -201,12 +242,106 @@ template <class T> struct NativeArith {
     BATCHLAS_DLA_INLINE static T neg(T a) { return -a; }
     BATCHLAS_DLA_INLINE static T zero() { return T(0); }
     BATCHLAS_DLA_INLINE static T one() { return T(1); }
+    BATCHLAS_DLA_INLINE static real_t re(const T& a) { return Arith<T>::re(a); }
+    BATCHLAS_DLA_INLINE static real_t im(const T& a) { return Arith<T>::im(a); }
+    BATCHLAS_DLA_INLINE static T make(real_t r, real_t i) { return Arith<T>::make(r, i); }
+    BATCHLAS_DLA_INLINE static void msub(T& c, const T& a, const T& b) { c -= a * b; }
+    BATCHLAS_DLA_INLINE static T div(const T& a, const T& b) { return a / b; }
+    BATCHLAS_DLA_INLINE static T recip(const T& a) { return T(1) / a; }
+    BATCHLAS_DLA_INLINE static T div_real(const T& a, const real_t& s) { return a / s; }
+    BATCHLAS_DLA_INLINE static T scale_real(const real_t& s, const T& a) { return s * a; }
+    BATCHLAS_DLA_INLINE static bool is_zero(const T& a) { return a == T(0); }
+    BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return Arith<T>::isfinite(a); }
+};
+
+// Explicit fma chains (src/sycl/device_scalar.hh, bit for bit): real mac is one fma, complex
+// four; mul is dev_mul's two; div / recip are Smith's with fma denominators.
+template <class T> struct FmaArith : Arith<T> {
+    using A = Arith<T>;
+    using R = typename A::real_t;
+    BATCHLAS_DLA_INLINE static T mul(const T& a, const T& b) {
+        if constexpr (A::is_complex)
+            return A::make(sycl::fma(A::re(a), A::re(b), -A::im(a) * A::im(b)), sycl::fma(A::re(a), A::im(b), A::im(a) * A::re(b)));
+        else return a * b;
+    }
+    BATCHLAS_DLA_INLINE static void mac(T& acc, const T& a, const T& b) {
+        if constexpr (A::is_complex) {
+            R re = sycl::fma(A::re(a), A::re(b), A::re(acc));
+            re = sycl::fma(-A::im(a), A::im(b), re);
+            R im = sycl::fma(A::re(a), A::im(b), A::im(acc));
+            im = sycl::fma(A::im(a), A::re(b), im);
+            acc = A::make(re, im);
+        } else {
+            acc = sycl::fma(a, b, acc);
+        }
+    }
+    BATCHLAS_DLA_INLINE static void mac_conj(T& acc, const T& a, const T& b) {
+        if constexpr (A::is_complex) {
+            R re = sycl::fma(A::re(a), A::re(b), A::re(acc));
+            re = sycl::fma(A::im(a), A::im(b), re);
+            R im = sycl::fma(A::re(a), A::im(b), A::im(acc));
+            im = sycl::fma(-A::im(a), A::re(b), im);
+            acc = A::make(re, im);
+        } else {
+            acc = sycl::fma(a, b, acc);
+        }
+    }
+    BATCHLAS_DLA_INLINE static void msub(T& c, const T& a, const T& b) {
+        if constexpr (A::is_complex) {
+            R re = sycl::fma(-A::re(a), A::re(b), A::re(c));
+            re = sycl::fma(A::im(a), A::im(b), re);
+            R im = sycl::fma(-A::re(a), A::im(b), A::im(c));
+            im = sycl::fma(-A::im(a), A::re(b), im);
+            c = A::make(re, im);
+        } else {
+            c = sycl::fma(-a, b, c);
+        }
+    }
+    BATCHLAS_DLA_INLINE static T recip(const T& d) {
+        if constexpr (A::is_complex) {
+            const R dr = A::re(d), di = A::im(d);
+            if (sycl::fabs(dr) >= sycl::fabs(di)) {
+                const R r = di / dr;
+                const R den = sycl::fma(di, r, dr);
+                return A::make(R(1) / den, -r / den);
+            }
+            const R r = dr / di;
+            const R den = sycl::fma(dr, r, di);
+            return A::make(r / den, R(-1) / den);
+        } else {
+            return T(1) / d;
+        }
+    }
+    BATCHLAS_DLA_INLINE static T div(const T& a, const T& b) {
+        if constexpr (A::is_complex) {
+            const R ar = A::re(a), ai = A::im(a), br = A::re(b), bi = A::im(b);
+            if (sycl::fabs(br) >= sycl::fabs(bi)) {
+                const R r = bi / br;
+                const R den = sycl::fma(bi, r, br);
+                return A::make(sycl::fma(ai, r, ar) / den, sycl::fma(-ar, r, ai) / den);
+            }
+            const R r = br / bi;
+            const R den = sycl::fma(br, r, bi);
+            return A::make(sycl::fma(ar, r, ai) / den, sycl::fma(ai, r, -ar) / den);
+        } else {
+            return a / b;
+        }
+    }
 };
 
 template <class Ops, class T>
-using arith_t = std::conditional_t<std::is_same_v<Ops, arith::Native>, NativeArith<std::remove_cv_t<T>>,
-                                   std::conditional_t<std::is_same_v<Ops, arith::ExplicitInline>,
-                                                      ArithInline<std::remove_cv_t<T>>, Arith<std::remove_cv_t<T>>>>;
+using arith_t = std::conditional_t<
+    std::is_same_v<Ops, arith::Native>, NativeArith<std::remove_cv_t<T>>,
+    std::conditional_t<std::is_same_v<Ops, arith::ExplicitInline>, ArithInline<std::remove_cv_t<T>>,
+                       std::conditional_t<std::is_same_v<Ops, arith::Fma>, FmaArith<std::remove_cv_t<T>>, Arith<std::remove_cv_t<T>>>>>;
+
+// |a|^2 = re^2 + im^2, by value. Its result is a separate rounding: it cannot contract into the
+// caller's accumulation (syevx), so accumulate with sumsq / acc_abs2 (level1.hh) instead.
+template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2(T a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return A::re(a) * A::re(a) + A::im(a) * A::im(a);
+    else return a * a;
+}
 
 // BLAS |re| + |im| (dcabs1): the key of asum, amax and iamax.
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs1(T a) {

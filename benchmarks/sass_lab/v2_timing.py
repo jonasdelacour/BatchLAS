@@ -10,7 +10,7 @@ import csv
 import statistics
 import sys
 
-NAMES = {"0": "hand", "3": "lean", "9": "v2", "10": "v2_scaled"}
+NAMES = {"0": "hand", "3": "lean", "9": "v2", "10": "v2_scaled", "11": "v2_blue", "12": "v2_scratch"}
 
 
 def main():

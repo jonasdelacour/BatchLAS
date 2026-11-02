@@ -55,12 +55,49 @@ template <bool Nrm, class Name, class T, int N, int V, int WG> sycl::event w_dot
             auto body = [&](const auto& ex) {
                 if constexpr (!Nrm) r = dv2::dot(ex, dv2::vec(x, n), dv2::vec(y, n));
                 else if constexpr (V == kV2) r = dv2::nrm2<dv2::alg::Unscaled>(ex, dv2::vec(x, n));
-                else r = dv2::nrm2(ex, dv2::vec(x, n));
+                else r = dv2::nrm2<dv2::alg::Scaled>(ex, dv2::vec(x, n));
             };
             if constexpr (WG == 32) body(dv2::SubGroup<32>{it.get_sub_group()});
             else body(dv2::WorkGroup<WG>{it});
         }
         if (it.get_local_linear_id() == 0) dd.Out[static_cast<std::ptrdiff_t>(b) * Data<T>::ms] = r;
+    });
+}
+
+// out[b] = x.y, out[b] + ms/2 = y.y from one loop: the latrd gamma/delta pair. hand and lean are
+// the legacy idiom (one loop, two group reductions; lean has no fused pair, so it is the hand
+// body); v2 is dotN<2> without Scratch (one reduction per value, pack-expanded); kV2Scratch is
+// dotN<2> with Scratch (one packed exchange).
+template <class T, int N, int V, int WG> sycl::event w_dotn2(sycl::queue& q, Data<T>& d, int n_rt) {
+    const Data<T> dd = d;
+    return launch<KWDotN2<T, N, V, WG>, WG, T>(q, dd.batch, 0, 0, sizeof(T) * 2 * (WG / 32), [=](sycl::nd_item<1> it, auto, auto, auto scr) {
+        const int b = static_cast<int>(it.get_group_linear_id());
+        const int n = ext<N>(n_rt);
+        T* x = dd.X + static_cast<std::ptrdiff_t>(b) * Data<T>::vs;
+        T* y = dd.Y + static_cast<std::ptrdiff_t>(b) * Data<T>::vs;
+        T r0{}, r1{};
+        if constexpr (V == kHand || V == kLean) {
+            const int lid = static_cast<int>(it.get_local_linear_id());
+            T a0 = T(0), a1 = T(0);
+            for (int i = lid; i < n; i += WG) {
+                const T yi = y[i];
+                a0 += x[i] * yi;
+                a1 += y[i] * yi;
+            }
+            r0 = batchlas::device::detail::reduce_sum_group(it.get_group(), a0);
+            r1 = batchlas::device::detail::reduce_sum_group(it.get_group(), a1);
+        } else {
+            const dv2::WorkGroup<WG> ex{it};
+            const auto xs = std::array<decltype(dv2::vec(x, n)), 2>{dv2::vec(x, n), dv2::vec(y, n)};
+            std::array<T, 2> r;
+            if constexpr (V == kV2) r = dv2::dotN<2>(ex, xs, dv2::vec(y, n));
+            else r = dv2::dotN<2>(ex, dv2::Scratch<T, 2 * (WG / 32)>{raw(scr)}, xs, dv2::vec(y, n));
+            r0 = r[0], r1 = r[1];
+        }
+        if (it.get_local_linear_id() == 0) {
+            dd.Out[static_cast<std::ptrdiff_t>(b) * Data<T>::ms] = r0;
+            dd.Out[static_cast<std::ptrdiff_t>(b) * Data<T>::ms + 1] = r1;
+        }
     });
 }
 
@@ -113,6 +150,12 @@ template <class T, int N, int WG> void reg_v2a_wg() {
     LAB_V(kHand) LAB_V(kLean) LAB_V(kV2)
 #undef LAB_V
     addw<T, N, kV2Scaled>("nrm2", WG, false, w_dot<true, KWNrm2<T, N, kV2Scaled, WG>, T, N, kV2Scaled, WG>);
+    if constexpr (WG != 32) {
+        addw<T, N, kHand>("dotN2", WG, false, w_dotn2<T, N, kHand, WG>);
+        addw<T, N, kLean>("dotN2", WG, false, w_dotn2<T, N, kLean, WG>);
+        addw<T, N, kV2>("dotN2", WG, false, w_dotn2<T, N, kV2, WG>);
+        addw<T, N, kV2Scratch>("dotN2", WG, false, w_dotn2<T, N, kV2Scratch, WG>);
+    }
 }
 
 template <class T, int N> void reg_v2a() {

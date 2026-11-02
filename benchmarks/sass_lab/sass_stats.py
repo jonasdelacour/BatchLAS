@@ -13,7 +13,8 @@ import subprocess
 import sys
 
 VARIANTS = {0: "hand", 1: "dblas", 2: "dblas_ws", 3: "lean", 4: "lean_rtwg", 5: "lean_bv",
-            6: "dblas_reqd", 7: "dblas_static", 8: "hand_reqd", 9: "v2", 10: "v2_scaled"}
+            6: "dblas_reqd", 7: "dblas_static", 8: "hand_reqd", 9: "v2", 10: "v2_scaled",
+            11: "v2_blue", 12: "v2_scratch"}
 
 CLASSES = collections.OrderedDict([
     ("FMA", {"FFMA", "DFMA", "HFMA2", "FFMA32I"}),

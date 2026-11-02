@@ -12,6 +12,7 @@
 #include <utility>
 
 #include <batchlas/blas/device/v2/operand.hh>
+#include <batchlas/blas/device/v2/scalar.hh>
 
 namespace batchlas::device::v2 {
 
@@ -385,10 +386,6 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE int iama
 
 // LAPACK lassq without the incoming pair: scale = max |component|, scale^2 * ssq = sum |x_i|^2,
 // computed in two passes so no square overflows or underflows to zero.
-template <class R> struct ScaledSsq {
-    R scale;
-    R ssq;
-};
 template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DLA_INLINE auto lassq(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using A = Arith<T>;

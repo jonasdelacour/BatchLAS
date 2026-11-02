@@ -11,13 +11,16 @@
 namespace lab {
 
 constexpr int kV2 = 9;        // device LA v2 (include/batchlas/blas/device/v2)
-constexpr int kV2Scaled = 10; // nrm2 only: v2's default alg::Scaled (two-pass lassq)
+constexpr int kV2Scaled = 10; // nrm2 only: alg::Scaled (two-pass lassq)
+constexpr int kV2Blue = 11;   // nrm2 only: alg::Blue (three accumulators, one exchange)
+constexpr int kV2Scratch = 12; // dotN2 only: dotN<2> with Scratch (one packed exchange)
 
 namespace dv2 = batchlas::device::v2;
 
 template <class T, int N, int V, int WG> class KWAxpy;
 template <class T, int N, int V, int WG> class KWDot;
 template <class T, int N, int V, int WG> class KWNrm2;
+template <class T, int N, int V, int WG> class KWDotN2;
 template <class T, int N, int V, int WG> class KWGemvN;
 template <class T, int N, int V, int WG> class KWGemvT;
 template <class T, int N, int V, int WG> class KWSymv;

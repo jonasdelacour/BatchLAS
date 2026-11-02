@@ -7,6 +7,7 @@
 // NaN for iamax, nrm2 straddling the overflow / underflow thresholds.
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
+#include <src/sycl/device_scalar.hh>
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,17 @@
 
 using namespace batchlas;
 namespace v2 = batchlas::device::v2;
+
+// LAPACKE's ?larfg is the reflector oracle (linked through batchlas::verify; skipped when
+// BATCHLAS_VERIFY_HAVE_LAPACKE is 0). Declared here with std::complex (layout-compatible).
+extern "C" {
+int LAPACKE_slarfg(int, float*, float*, int, float*);
+int LAPACKE_dlarfg(int, double*, double*, int, double*);
+int LAPACKE_clarfg(int, std::complex<float>*, std::complex<float>*, int, std::complex<float>*);
+int LAPACKE_zlarfg(int, std::complex<double>*, std::complex<double>*, int, std::complex<double>*);
+}
+
+
 using batchlas::verify::Check;
 
 namespace {
@@ -1005,8 +1017,9 @@ TYPED_TEST(DeviceBlasV2Test, OperandBasesAndIndexWidthsAddressTheSameElements) {
     constexpr int WG = 64, m = 13, n = 11, ld = m + 3, stride = ld * n + 5, slm_off = 7;
     const auto ha = batched<T>(stride, 111);
     T* a = this->dev.up(ha);
-    std::vector<T> ho(std::size_t(kBatch) * stride, T(-3));
+    std::vector<T> ho(std::size_t(kBatch) * stride, T(-3)), ho2(std::size_t(kBatch) * (n + m), T(-3));
     T* o = this->dev.up(ho);
+    T* o2 = this->dev.up(ho2);
     this->dev.q()
         .submit([&](sycl::handler& h) {
             sycl::local_accessor<T, 1> acc(sycl::range<1>(slm_off + ld * n), h);
@@ -1025,6 +1038,12 @@ TYPED_TEST(DeviceBlasV2Test, OperandBasesAndIndexWidthsAddressTheSameElements) {
                 const auto ws = wide.sub(1, 1, m - 1, n - 1);
                 const auto ss = slm.sub(1, 1, m - 1, n - 1);
                 v2::for_each_owned_2d(ex, m - 1, n - 1, [&](int r, int c) { ws(r, c) = ss(r, c); });
+                // Row 2 through the accessor's row view; column 1 read back through a raw pointer
+                // at the offset, so the accessor view must have honoured it.
+                T* ob2 = o2 + std::ptrdiff_t(b) * (n + m);
+                v2::copy(ex, slm.row(2), v2::vec(ob2, n));
+                const auto raw = v2::mat(batchlas::util::get_raw_ptr(acc) + slm_off, m, n, ld);
+                v2::copy(ex, raw.col(1), v2::vec(ob2 + n, m));
             });
         })
         .wait_and_throw();
@@ -1036,6 +1055,11 @@ TYPED_TEST(DeviceBlasV2Test, OperandBasesAndIndexWidthsAddressTheSameElements) {
             const T want = (r < m && c < n) ? ha[std::size_t(b) * stride + k] : T(-3);
             bad += !same_bits(got[std::size_t(b) * stride + k], want);
         }
+    const auto got2 = this->dev.down(o2, ho2.size());
+    for (int b = 0; b < kBatch; ++b) {
+        for (int j = 0; j < n; ++j) bad += !same_bits(got2[std::size_t(b) * (n + m) + j], ha[std::size_t(b) * stride + 2 + j * ld]);
+        for (int i = 0; i < m; ++i) bad += !same_bits(got2[std::size_t(b) * (n + m) + n + i], ha[std::size_t(b) * stride + i + ld]);
+    }
     EXPECT_EQ(bad, 0);
 }
 
@@ -1109,6 +1133,239 @@ TYPED_TEST(DeviceBlasV2Test, FragAndTileMovesHonourTheLiveBound) {
         }
     }
     EXPECT_EQ(bad, 0);
+}
+
+// ---- v2.1 arithmetic policies and scalar LAPACK ---------------------------------------------
+
+namespace lapack_ref {
+// false when the build has no LAPACKE: the caller skips its reflector checks.
+template <class T> bool larfg([[maybe_unused]] int n, [[maybe_unused]] T& alpha, [[maybe_unused]] T* x, [[maybe_unused]] T& tau) {
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
+    if constexpr (std::is_same_v<T, float>) LAPACKE_slarfg(n, &alpha, x, 1, &tau);
+    else if constexpr (std::is_same_v<T, double>) LAPACKE_dlarfg(n, &alpha, x, 1, &tau);
+    else if constexpr (std::is_same_v<T, std::complex<float>>) LAPACKE_clarfg(n, &alpha, x, 1, &tau);
+    else LAPACKE_zlarfg(n, &alpha, x, 1, &tau);
+    return true;
+#else
+    return false;
+#endif
+}
+}  // namespace lapack_ref
+
+// Every policy against a long-double reference, and arith::Fma bit for bit against
+// src/sycl/device_scalar.hh (dev_mul, fma_acc, dev_recip, dev_div) in the same kernel. Inputs
+// take both Smith branches and a quotient whose naive form overflows.
+enum ArSlot { kMul, kMac, kMacC, kMsub, kDiv, kRecip, kDivR, kScaleR, kArSlots };
+TYPED_TEST(DeviceBlasV2Test, ArithPoliciesAgreeAndFmaMatchesDeviceScalar) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    constexpr int n = 256, P = 4;  // P policies: Explicit, ExplicitInline, Native, Fma
+    auto h = batched<T>(3 * n, 131, [](T*) {}, kPeriod);  // only representative 0 is used
+    const R big = std::is_same_v<R, float> ? R(1e30) : R(1e300);
+    if constexpr (is_cplx<T>) {
+        h[0] = T(big, big), h[n] = T(big, -big);           // (big + big i) / (big - big i)
+        h[1] = T(R(3), R(-2)), h[n + 1] = T(R(0.5), R(7));  // |im| > |re|: Smith's second branch
+    } else {
+        h[0] = big, h[n] = big;
+    }
+    T* x = this->dev.up(h);
+    std::vector<T> ho(std::size_t(n) * (P + 1) * kArSlots, T(0));
+    T* o = this->dev.up(ho);
+    this->dev.template run<32>(n / 32, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int i = static_cast<int>(it.get_global_linear_id());
+        const T a = x[i], b = x[n + i], c = x[2 * n + i];
+        const R sr = v2::Arith<T>::re(b);
+        auto one = [&](auto ops, int slot) {
+            using Ar = v2::arith_t<decltype(ops), T>;
+            T* ob = o + (std::ptrdiff_t(i) * (P + 1) + slot) * kArSlots;
+            T m1 = c, m2 = c, m3 = c;
+            Ar::mac(m1, a, b);
+            Ar::mac_conj(m2, a, b);
+            Ar::msub(m3, a, b);
+            ob[kMul] = Ar::mul(a, b), ob[kMac] = m1, ob[kMacC] = m2, ob[kMsub] = m3;
+            ob[kDiv] = Ar::div(a, b), ob[kRecip] = Ar::recip(b), ob[kDivR] = Ar::div_real(a, sr), ob[kScaleR] = Ar::scale_real(sr, a);
+        };
+        one(v2::arith::Explicit{}, 0);
+        one(v2::arith::ExplicitInline{}, 1);
+        one(v2::arith::Native{}, 2);
+        one(v2::arith::Fma{}, 3);
+        namespace sd = batchlas::sycl_device;
+        T* ob = o + (std::ptrdiff_t(i) * (P + 1) + P) * kArSlots;
+        if constexpr (is_cplx<T>) {
+            using Cx = sd::Cx<R>;
+            const Cx ca{a.real(), a.imag()}, cb{b.real(), b.imag()};
+            Cx m1{c.real(), c.imag()}, m2 = m1;
+            sd::fma_acc(m1, ca, cb);
+            sd::fma_acc(m2, sd::dev_conj(ca), cb);
+            auto put = [&](int k, Cx v) { ob[k] = T(v.re, v.im); };
+            put(kMul, sd::dev_mul(ca, cb)), put(kMac, m1), put(kMacC, m2), put(kDiv, sd::dev_div(ca, cb)), put(kRecip, sd::dev_recip(cb));
+        } else {
+            T m1 = c;
+            sd::fma_acc(m1, a, b);
+            ob[kMul] = sd::dev_mul(a, b), ob[kMac] = m1, ob[kMacC] = m1, ob[kDiv] = sd::dev_div(a, b), ob[kRecip] = sd::dev_recip(b);
+        }
+    });
+    const auto got = this->dev.down(o, ho.size());
+    int fma_bits = 0, special = 0;
+    double worst = 0;
+    for (int i = 0; i < n; ++i) {
+        const LD<T> a = wide(h[i]), b = wide(h[n + i]), c = wide(h[2 * n + i]);
+        const long double sr = std::real(b);
+        const LD<T> want[kArSlots] = {a * b, c + a * b, c + conj_h(a) * b, c - a * b, a / b, LD<T>(1) / b, a / sr, sr * a};
+        const long double scale[kArSlots] = {std::abs(a) * std::abs(b), std::abs(c) + std::abs(a) * std::abs(b),
+                                             std::abs(c) + std::abs(a) * std::abs(b), std::abs(c) + std::abs(a) * std::abs(b),
+                                             std::abs(a / b), std::abs(LD<T>(1) / b), std::abs(a / sr), std::abs(sr * a)};
+        for (int pol = 0; pol < P; ++pol)
+            for (int k = 0; k < kArSlots; ++k) {
+                if (i == 0 && k != kDiv && k != kRecip && k != kDivR) continue;  // big * big overflows by design
+                const T g = got[(std::size_t(i) * (P + 1) + pol) * kArSlots + k];
+                worst = std::max(worst, rel(g, want[k], scale[k]));
+            }
+        for (int k : {kMul, kMac, kMacC, kDiv, kRecip})
+            fma_bits += !same_bits(got[(std::size_t(i) * (P + 1) + 3) * kArSlots + k], got[(std::size_t(i) * (P + 1) + P) * kArSlots + k]);
+    }
+    for (int pol : {0, 1, 3}) special += !(std::abs(got[std::size_t(pol) * kArSlots + kDiv]) < R(2));  // Smith, not naive
+    EXPECT_VERIFY(T, Check::blas, 4, worst);
+    EXPECT_EQ(fma_bits, 0) << "arith::Fma must reproduce sycl_device::dev_mul / fma_acc / dev_div / dev_recip";
+    EXPECT_EQ(special, 0) << "a quotient of huge operands must not overflow";
+}
+
+// lartg (all types), larfg_scalars (three conventions), lae2 / laev2 / las2 / wilkinson_shift
+// (real) on device, against reference LAPACK on the host; inputs straddle the scaling
+// thresholds (1e-30 .. 1e30 float, 1e-300 .. 1e300 double), zeros and both signs.
+template <class R> std::vector<R> scalar_inputs() {
+    const R t = std::is_same_v<R, float> ? R(1e-30) : R(1e-300), u = std::is_same_v<R, float> ? R(1e30) : R(1e300);
+    return {R(0), R(1), R(-2.5), R(3), R(0.75), t, -t, u, -u, R(1e-3), R(-7e5), R(1) / R(3)};
+}
+
+TYPED_TEST(DeviceBlasV2Test, ScalarLapackMatchesReferenceLapack) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    const auto rv = scalar_inputs<R>();
+    const int nr = int(rv.size());
+    std::vector<T> in;
+    for (int i = 0; i < nr; ++i)
+        for (int j = 0; j < nr; ++j) {
+            if constexpr (is_cplx<T>) in.push_back(T(rv[i], rv[(i + 3) % nr])), in.push_back(T(rv[j], -rv[(j + 5) % nr]));
+            else in.push_back(rv[i]), in.push_back(rv[j]);
+        }
+    const int np = int(in.size()) / 2;
+    constexpr int kx = 5;  // larfg: alpha = f, x = {g, f, 2g, -f, g/3}
+    T* d_in = this->dev.up(in);
+    std::vector<T> ho(std::size_t(np) * 32, T(0));
+    T* o = this->dev.up(ho);
+    this->dev.template run<32>((np + 31) / 32, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int i = static_cast<int>(it.get_global_linear_id());
+        if (i >= np) return;
+        using A = v2::Arith<T>;
+        const T f = d_in[2 * i], g = d_in[2 * i + 1];
+        T* ob = o + std::ptrdiff_t(i) * 32;
+        const auto lr = v2::lartg(f, g);
+        ob[0] = T(lr.c), ob[1] = lr.s, ob[2] = lr.r;
+        const T xs[kx] = {g, f, A::add(g, g), A::neg(f), A::div_real(g, R(3))};
+        R s = v2::modulus(f) > R(0) ? sycl::fmax(sycl::fabs(A::re(f)), sycl::fabs(A::im(f))) : R(0);
+        for (int k = 0; k < kx; ++k) s = sycl::fmax(s, sycl::fmax(sycl::fabs(A::re(xs[k])), sycl::fabs(A::im(xs[k]))));
+        R ssq = 0, nrm2 = 0;
+        for (int k = 0; k < kx; ++k) {
+            if (s > R(0)) ssq += (A::re(xs[k]) / s) * (A::re(xs[k]) / s) + (A::im(xs[k]) / s) * (A::im(xs[k]) / s);
+            nrm2 += A::re(xs[k]) * A::re(xs[k]) + A::im(xs[k]) * A::im(xs[k]);
+        }
+        const auto hl = v2::larfg_scalars<v2::conv::Lapack>(f, v2::ScaledSsq<R>{s, ssq});
+        ob[3] = hl.tau, ob[4] = hl.beta;
+        for (int k = 0; k < kx; ++k) ob[5 + k] = hl.identity ? xs[k] : (hl.use_mul ? v2::FmaArith<T>::mul(xs[k], hl.scale) : v2::FmaArith<T>::div(xs[k], hl.scale));
+        const R xn = s * sycl::sqrt(ssq);
+        const auto hr = v2::larfg_scalars<v2::conv::RealBeta>(f, xn, kx + 1);
+        const auto hp = v2::larfg_scalars<v2::conv::Phase>(f, xn, kx + 1);
+        ob[10] = hr.tau, ob[11] = hr.beta, ob[12] = hr.scale, ob[13] = hp.tau, ob[14] = hp.beta, ob[15] = hp.scale;
+        if constexpr (!is_cplx<T>) {
+            const T h3 = A::add(f, g);
+            const auto e2 = v2::lae2(f, g, h3);
+            const auto ev = v2::laev2(f, g, h3);
+            const auto s2 = v2::las2(f, g, h3);
+            ob[16] = e2[0], ob[17] = e2[1], ob[18] = ev[0], ob[19] = ev[1], ob[20] = ev[2], ob[21] = ev[3], ob[22] = s2[0], ob[23] = s2[1];
+            if (g != T(0)) ob[24] = v2::wilkinson_shift(f, g, h3);
+        }
+        (void)nrm2;
+    });
+    const auto got = this->dev.down(o, ho.size());
+    const long double eps = std::numeric_limits<R>::epsilon();
+    auto close = [&](T a, T b, long double scale, double ulps) {
+        if (!std::isfinite(std::abs(LD<T>(b)))) return std::abs(LD<T>(a)) == std::abs(LD<T>(b));
+        return std::abs(wide(a) - wide(b)) <= ulps * eps * std::max(scale, (long double)std::numeric_limits<R>::min());
+    };
+    int bad_lartg = 0, bad_lapack = 0, bad_realbeta = 0, bad_phase = 0, bad_2x2 = 0;
+    std::string first_bad, first_2x2;
+    for (int i = 0; i < np; ++i) {
+        const T f = in[2 * i], g = in[2 * i + 1];
+        const T* ob = got.data() + std::size_t(i) * 32;
+        {  // lartg: a unit rotation that zeroes g, with LAPACK 3.10's sign of r (sgn(f) r >= 0).
+            const long double c = std::real(wide(ob[0]));
+            const LD<T> s = wide(ob[1]), r = wide(ob[2]), F = wide(f), G = wide(g);
+            const long double fg = std::abs(F) + std::abs(G);
+            bool ok = c >= 0 && c <= 1 && std::abs(c * c + std::norm(s) - 1) <= 8 * eps;
+            ok = ok && std::abs(c * F + s * G - r) <= 8 * eps * fg && std::abs(-conj_h(s) * F + c * G) <= 8 * eps * fg;
+            if (std::abs(G) == 0) ok = ok && c == 1 && std::abs(s) == 0 && same_bits(ob[2], f);  // G = 0: identity, r = f
+            else if (std::abs(F) > 0) ok = ok && std::abs(r / std::abs(r) - F / std::abs(F)) <= 8 * eps;
+            else ok = ok && c == 0 && std::imag(r) == 0 && std::real(r) >= 0;
+            bad_lartg += !ok;
+            if (!ok && first_bad.empty()) first_bad = "lartg(" + std::to_string(std::real(f)) + ", " + std::to_string(std::real(g)) + ")";
+        }
+        // xLARFG with the same (alpha, x).
+        T alpha = f, tau;
+        T xs[kx] = {g, f, T(g + g), T(-f), T(g / R(3))};
+        long double xs_abs = std::abs(wide(f));
+        for (const T& e : xs) xs_abs += std::abs(wide(e));
+        if (lapack_ref::larfg(kx + 1, alpha, xs, tau)) {
+            bool ok = close(ob[3], tau, 2, 16) && close(ob[4], alpha, xs_abs, 16);
+            for (int k = 0; k < kx; ++k) ok = ok && close(ob[5 + k], xs[k], std::abs(wide(xs[k])) + 1, 64);
+            bad_lapack += !ok;
+            bad_realbeta += !close(ob[10], tau, 2, 16) || !close(ob[11], alpha, xs_abs, 16);
+        }
+        // Phase: (I - tau v v^H)^H [f; x] = [beta; 0] with v = [1; scale * x] and real tau.
+        {
+            const LD<T> tp = wide(ob[13]), bp = wide(ob[14]), sp = wide(ob[15]);
+            const T x0[kx] = {g, f, T(g + g), T(-f), T(g / R(3))};
+            LD<T> vhw = wide(f);
+            for (int k = 0; k < kx; ++k) vhw += conj_h(sp * wide(x0[k])) * wide(x0[k]);
+            const LD<T> head = wide(f) - conj_h(tp) * vhw;
+            long double tail = 0;
+            for (int k = 0; k < kx; ++k) tail = std::max(tail, std::abs(wide(x0[k]) - conj_h(tp) * sp * wide(x0[k]) * vhw));
+            const bool fin = std::isfinite(std::abs(tp)) && std::isfinite(std::abs(bp));
+            bad_phase += fin && (std::abs(head - bp) > 64 * eps * xs_abs || tail > 64 * eps * xs_abs || std::abs(std::imag(tp)) > 8 * eps);
+        }
+        if constexpr (!is_cplx<T>) {  // the 2x2 routines against long-double closed forms
+            const long double A = f, B = g, C = T(f + g);
+            const long double mid = (A + C) / 2, rad = std::hypot((A - C) / 2, B);
+            const long double e1 = mid + rad, e2 = mid - rad;
+            const long double big = std::abs(e1) >= std::abs(e2) ? e1 : e2, small = std::abs(e1) >= std::abs(e2) ? e2 : e1;
+            const long double sc = std::abs(A) + std::abs(B) + std::abs(C);
+            bool ok2 = std::abs(ob[16] - big) <= 8 * eps * sc && std::abs(ob[17] - small) <= 8 * eps * sc;
+            ok2 = ok2 && std::abs(ob[18] - big) <= 8 * eps * sc && std::abs(ob[19] - small) <= 8 * eps * sc;
+            const long double cs = ob[20], sn = ob[21];  // (cs, sn): the unit eigenvector of rt1
+            ok2 = ok2 && std::abs(cs * cs + sn * sn - 1) <= 8 * eps;
+            ok2 = ok2 && std::abs(A * cs + B * sn - ob[18] * cs) <= 16 * eps * sc && std::abs(B * cs + C * sn - ob[18] * sn) <= 16 * eps * sc;
+            const long double p = A * A + B * B + C * C, q = std::abs(A * C);  // [[f, g], [0, h]] with h = f + g
+            // (p - 2q)(p + 2q) without cancellation: p -+ 2q = (|f| -+ |h|)^2 + g^2.
+            const long double dm = (std::abs(A) - std::abs(C)) * (std::abs(A) - std::abs(C)) + B * B;
+            const long double dp = (std::abs(A) + std::abs(C)) * (std::abs(A) + std::abs(C)) + B * B;
+            const long double smax = std::sqrt((p + std::sqrt(dm * dp)) / 2), smin = smax > 0 ? q / smax : 0;
+            ok2 = ok2 && std::abs(ob[22] - smin) <= 8 * eps * smax && std::abs(ob[23] - smax) <= 8 * eps * smax;
+            if (B != 0 && std::isfinite(e1) && std::isfinite(e2)) {
+                const long double near = std::abs(e1 - A) < std::abs(e2 - A) ? e1 : e2;
+                ok2 = ok2 && std::abs(ob[24] - near) <= 16 * eps * sc;
+            }
+            bad_2x2 += !ok2;
+            if (!ok2 && first_2x2.empty())
+                first_2x2 = "2x2(" + std::to_string(double(f)) + ", " + std::to_string(double(g)) + "): " + std::to_string(double(ob[16])) + " " +
+                            std::to_string(double(ob[17])) + " " + std::to_string(double(ob[20])) + " " + std::to_string(double(ob[21])) + " " +
+                            std::to_string(double(ob[22])) + " " + std::to_string(double(ob[23])) + " " + std::to_string(double(ob[24]));
+        }
+    }
+    EXPECT_EQ(bad_lartg, 0) << "lartg: unit rotation zeroing g, LAPACK sign of r; first: " << first_bad;
+    EXPECT_EQ(bad_lapack, 0) << "larfg_scalars<Lapack> vs ?larfg";
+    EXPECT_EQ(bad_realbeta, 0) << "larfg_scalars<RealBeta> vs ?larfg";
+    EXPECT_EQ(bad_phase, 0) << "larfg_scalars<Phase> reflects [alpha; x] onto [beta; 0]";
+    EXPECT_EQ(bad_2x2, 0) << "lae2 / laev2 / las2 / wilkinson_shift vs long-double closed forms; first: " << first_2x2;
 }
 
 // ---- register fragments on a Partition ----------------------------------------------------
