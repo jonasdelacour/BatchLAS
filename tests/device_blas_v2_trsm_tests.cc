@@ -313,9 +313,10 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
         const bool okr = r < n;
         const v2::CanonTri<const D, true, std::int64_t> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
         const v2::FlipRows<D, std::int64_t> Bc{b + std::ptrdiff_t(item) * sb, ldb, n, q, fwd};
-        const auto nL = v2::frag_row_lower<P>(v2::NegOne{}, L, r, okr);
+        v2::Frag<D, P> nL;
+        v2::frag_row_lower(nL, v2::NegOne{}, L, r, okr);
         D dd = Ar::one();
-        if (okr && !unit) dd = L(r, r);
+        if (okr && !unit) dd = L.diag(r);
         const auto dg = v2::guarded_recip<Ar>(ex, dd);
         if (r == 0 && chunk == 0) fl[item] = dg.divide ? 1 : 0;
         const int c0 = chunk * QC;

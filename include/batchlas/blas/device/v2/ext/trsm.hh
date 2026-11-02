@@ -130,6 +130,15 @@ template <class T, bool Left, class Ld = int> struct CanonTri {
         if (conj) v = Arith<value_type>::conj(v);
         return v;
     }
+    // Lc(s, s), addressed as rho(s) * (ld + 1). A kernel body calls this, never operator(): DPC++
+    // SemaSYCL takes a direct operator() callee of the kernel lambda for the kernel body and
+    // drops the lambda's forced inline.
+    BATCHLAS_DLA_INLINE value_type diag(int s) const {
+        const std::ptrdiff_t rs = fwd ? s : (n - 1 - s);
+        value_type v = a[rs + rs * static_cast<std::ptrdiff_t>(ld)];
+        if (conj) v = Arith<value_type>::conj(v);
+        return v;
+    }
 };
 
 // Right-hand side u in canonical order: element s is p[b0 + s*ds + u*du]. Left: column u of
@@ -287,17 +296,17 @@ template <int N, class T, class Y> BATCHLAS_DLA_INLINE void frag_store(const Fra
 }
 
 // f[t] := alpha * L(r, t) for t < r when ok, else 0: row r of the strict lower part.
-template <int N, class AS, class L, class T = typename L::value_type>
-BATCHLAS_DLA_INLINE Frag<T, N> frag_row_lower(AS alpha_, const L& l, int r, bool ok) {
+// An out-parameter, not a return: a rolled caller indexes f at run time (local memory), and a
+// returned Frag is stored there only after all N elements are live (2x REG, complex N=32).
+template <int N, class AS, class L, class T>
+BATCHLAS_DLA_INLINE void frag_row_lower(Frag<T, N>& f, AS alpha_, const L& l, int r, bool ok) {
     const auto alpha = as_tag(alpha_);
-    Frag<T, N> f;
     BATCHLAS_DLA_UNROLL_FULL
     for (int t = 0; t < N; ++t) {
         T v = Arith<T>::zero();
         if (ok && t < r) v = tag_mul(alpha, l(r, t));
         f[t] = v;
     }
-    return f;
 }
 
 // x[j] := alpha * src(r, c0 + j) for c0 + j < src.cols() when ok, else 0.
@@ -357,7 +366,7 @@ template <class Ar, int P, class T> BATCHLAS_DLA_INLINE GuardedRecip<T> guarded_
 template <int Unroll, class Ar, int P, int QC, class T>
 BATCHLAS_DLA_INLINE void trsm_lower_rowfrag(const Partition<P>& ex, const Frag<T, P>& nl, const GuardedRecip<T>& d, int n,
                                             bool unit, Frag<T, QC>& x) {
-    const int r = ex.lid();
+    const int r = static_cast<int>(ex.part.get_local_linear_id()) % P;   // = lid(); the kernels' form
     const bool any_divide = sycl::any_of_group(ex.part, d.divide);
 #pragma unroll Unroll
     for (int s = 0; s < P; ++s) {

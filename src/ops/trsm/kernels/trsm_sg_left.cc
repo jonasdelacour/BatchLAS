@@ -98,7 +98,9 @@ Event trsm_native_sg_left(Queue& ctx,
                 if (gsg >= nsg) return;
                 const v2::Partition<N> ex{sg};
                 const int mat = static_cast<int>(sg.get_local_linear_id()) / N;
-                const int r = ex.lid();
+                // lane % N, not ex.lid() (lane & (N-1)): the AND form shifts ptxas' register
+                // allocation in the unrolled N=16 kernels by 3-4% of the instructions.
+                const int r = static_cast<int>(sg.get_local_linear_id()) % N;
                 const int chunk = static_cast<int>(gsg % chunks);
                 const int64_t b = (gsg / chunks) * kMpw + mat;
                 bool okb = b < bs;
@@ -109,9 +111,10 @@ Event trsm_native_sg_left(Queue& ctx,
                 const v2::FlipRows<D, int64_t> Bc{b_ptr + (okb ? b : 0) * stride_b, ldb, n, q, fwd};
 
                 // Lane r: the AXPY multipliers -Lc(r, 0:r); pad rows are identity rows.
-                const auto nL = v2::frag_row_lower<N>(v2::NegOne{}, L, r, okr);
+                v2::Frag<D, N> nL;
+                v2::frag_row_lower(nL, v2::NegOne{}, L, r, okr);
                 D dd = Ar::one();
-                if (okr && !unit) dd = L(r, r);
+                if (okr && !unit) dd = L.diag(r);   // not L(r, r): see CanonTri::diag
                 // V1's fallback, per matrix: any non-finite reciprocal in this
                 // matrix's N lanes switches all of them to division.
                 const auto dg = v2::guarded_recip<Ar>(ex, dd);
