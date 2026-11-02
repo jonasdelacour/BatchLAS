@@ -148,11 +148,11 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
                 constexpr bool kConjC = Conjugate && !TransOperand;
 
                 for (int k0 = 0; k0 < k; k0 += TileK) {
-                    stage(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, sam, m0, scale_a});
-                    stage(k0, n, k, dla::Panel<T>{Bb, ldb, sbm, m0});
+                    stage.run(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, sam, m0, scale_a});
+                    stage.run(k0, n, k, dla::Panel<T>{Bb, ldb, sbm, m0});
                     if (!on_diagonal) {
-                        stage(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, san, n0, scale_a});
-                        stage(k0, n, k, dla::Panel<T>{Bb, ldb, sbn, n0});
+                        stage.run(k0, n, k, dla::Panel<T, dla::StageScale<T, Conjugate>>{Ab, lda, san, n0, scale_a});
+                        stage.run(k0, n, k, dla::Panel<T>{Bb, ldb, sbn, n0});
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 

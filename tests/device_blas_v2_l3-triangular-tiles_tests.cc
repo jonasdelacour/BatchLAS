@@ -170,7 +170,7 @@ void run_band_tile(Dev& dev, const BandCase& bc, double& worst, int& bitdiff, in
         const v2::Panel<T> px{x + std::ptrdiff_t(b) * per_x, ldx, sa, m0};
         const v2::Panel<T> py{y + std::ptrdiff_t(b) * per_x, ldx, sb, n0};
         for (int k0 = 0; k0 < k; k0 += K) {
-            stage(k0, n, k, px, py);
+            stage.run(k0, n, k, px, py);
             it.barrier(sycl::access::fence_space::local_space);
 #pragma unroll
             for (int kk = 0; kk < K; ++kk) {

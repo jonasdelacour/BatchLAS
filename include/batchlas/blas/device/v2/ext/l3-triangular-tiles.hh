@@ -5,9 +5,9 @@
 //   Packet4, ld4, st4             4-element packets; 128-bit forms only for a 4-byte T
 //   mac_value                     acc + a b by value, accumulator first (the kernels' rounding)
 //   RegTile, fill_tile, ger_acc   register accumulator tile and its rank-1 update (register ger)
-//   Bands4, frag_ld4              a lane's 4-wide fragment bands and their gather from a k-row
+//   Bands4, frag_ld4(x2)          a lane's 4-wide fragment bands and their gather from a k-row
 //   NoSwizzle, Swizzle<Packs>     shared packet placement: packet q of k-row kk at q ^ (kk / 4)
-//   Panel, PacketStager           one packet per item: Rows x K panels into k-major shared tiles
+//   Panel, PacketStager::run      one packet per item: Rows x K panels into k-major shared tiles
 //   stage_swz_kc, stage_swz_cc    flat-loop swizzled staging from a k- or column-contiguous source
 //   tri_tile_count, tri_tile_decode   the packed triangular tile grid
 //   trmat_op_at, sym_at           op(A)(i, p) of a triangular A; A(r, c) of a one-triangle symmetric A
@@ -148,6 +148,23 @@ BATCHLAS_DLA_INLINE void frag_ld4(Frag<T, N, FL>& f, const T* row, int lane, int
     }
 }
 
+// frag_ld4 of two fragments of one k-row, band by band in turn (fa band b, then fb band b): the
+// gram kernel's load order. Loading all of fa first moves its complex<double> spills (+6%).
+template <class LA, bool ConjA, class LB, bool ConjB, class Sw = NoSwizzle, class T, int NA, class FA, int NB, class FB>
+BATCHLAS_DLA_INLINE void frag_ld4x2(Frag<T, NA, FA>& fa, Frag<T, NB, FB>& fb, const T* row, int la, int lb, int kk = 0) {
+    static_assert(NA == LA::size && NB == LB::size && LA::bands == LB::bands, "v2: the fragments and band layouts differ");
+    BATCHLAS_DLA_UNROLL_FULL
+    for (int b = 0; b < LA::bands; ++b) {
+        const Packet4<T> va = ld4(row + (Sw::at(LA::packet(la, b), kk) << 2));
+        const Packet4<T> vb = ld4(row + (Sw::at(LB::packet(lb, b), kk) << 2));
+        BATCHLAS_DLA_UNROLL_FULL
+        for (int e = 0; e < 4; ++e) {
+            fa.v[b * 4 + e] = conj_when<ConjA>(va.v[e]);
+            fb.v[b * 4 + e] = conj_when<ConjB>(vb.v[e]);
+        }
+    }
+}
+
 // ---- staging ---------------------------------------------------------------------------
 struct AsIs {
     template <class T> BATCHLAS_DLA_INLINE T operator()(T v) const { return v; }
@@ -175,6 +192,8 @@ template <class T, class F = AsIs> struct Panel {
 // contiguous) and is transposed on the way in; else n x k. Aligned: whole tiles with 16-byte
 // packets; else bounds-checked against (n, k) and zero-filled, so the inner loop has no checks.
 // Two panels in one call interleave their loads and stores (syrk's A at two row offsets).
+// run(), not operator(): DPC++ SemaSYCL takes the first operator() call in a kernel body as the
+// body and leaves the kernel lambda un-inlined (complex syrk: CALL, generic LD/ST, 152 B stack).
 template <int Rows, int K, int Threads, bool Trans, bool Aligned> struct PacketStager {
     static_assert(Rows * K == 4 * Threads, "v2: the stager moves one packet per item");
     int s_row;
@@ -206,7 +225,7 @@ template <int Rows, int K, int Threads, bool Trans, bool Aligned> struct PacketS
             (row < n && gk < k) ? p.f(p.src[row + static_cast<std::ptrdiff_t>(gk) * p.ld]) : T(0);
     }
 
-    template <class T, class F> BATCHLAS_DLA_INLINE void operator()(int k0, int n, int k, const Panel<T, F>& p) const {
+    template <class T, class F> BATCHLAS_DLA_INLINE void run(int k0, int n, int k, const Panel<T, F>& p) const {
         if constexpr (Aligned && Trans) {
             const Packet4<T> v = load_t(p, k0);
             BATCHLAS_DLA_UNROLL_FULL
@@ -223,7 +242,7 @@ template <int Rows, int K, int Threads, bool Trans, bool Aligned> struct PacketS
         }
     }
     template <class T, class F0, class F1>
-    BATCHLAS_DLA_INLINE void operator()(int k0, int n, int k, const Panel<T, F0>& p, const Panel<T, F1>& q) const {
+    BATCHLAS_DLA_INLINE void run(int k0, int n, int k, const Panel<T, F0>& p, const Panel<T, F1>& q) const {
         if constexpr (Aligned && Trans) {
             const Packet4<T> vp = load_t(p, k0);
             const Packet4<T> vq = load_t(q, k0);

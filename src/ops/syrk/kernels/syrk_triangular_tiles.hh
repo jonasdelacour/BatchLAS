@@ -136,7 +136,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                 constexpr bool kConjB = Conjugate && !TransOperand;
 
                 for (int k0 = 0; k0 < k; k0 += TileK) {
-                    stage(k0, n, k, pa, pb);
+                    stage.run(k0, n, k, pa, pb);
                     item.barrier(sycl::access::fence_space::local_space);
 BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {

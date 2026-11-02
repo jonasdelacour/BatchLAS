@@ -114,11 +114,11 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                     // Zero-filled to the full KC x NTile, so the inner loop has no bounds checks.
                     if constexpr (TransOperand) {
                         // Coalesced global side; the shared side pays a conflict (written once).
-                        dla::stage_swz_kc<NTile, KC, Threads>(sh, tid, 0, k0, [&](int col, int gk) {
+                        dla::stage_swz_kc<NTile, KC, Threads>(sh, tid, 0, k0, [&](int col, int gk) __attribute__((always_inline)) {
                             return (col < n && gk < k) ? Ab[gk + static_cast<std::ptrdiff_t>(col) * lda] : T(0);
                         });
                     } else {
-                        dla::stage_swz_cc<NTile, KC, Threads, false>(sh, tid, 0, k0, [&](int col, int gk) {
+                        dla::stage_swz_cc<NTile, KC, Threads, false>(sh, tid, 0, k0, [&](int col, int gk) __attribute__((always_inline)) {
                             return (gk < k && col < n) ? Ab[col + static_cast<std::ptrdiff_t>(gk) * lda] : T(0);
                         });
                     }
@@ -130,8 +130,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             const T* row = &sh[p * SPad];
                             dla::Frag<T, ThreadTile> af;
                             dla::Frag<T, ThreadTile> bf;
-                            dla::frag_ld4<Band, kConjR, Sw>(af, row, tr, p);
-                            dla::frag_ld4<Band, kConjC, Sw>(bf, row, tc, p);
+                            dla::frag_ld4x2<Band, kConjR, Band, kConjC, Sw>(af, bf, row, tr, tc, p);
                             dla::ger_acc(acc, af, bf);
                         }
                     }
