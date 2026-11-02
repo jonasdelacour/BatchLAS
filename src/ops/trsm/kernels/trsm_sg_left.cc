@@ -12,6 +12,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -20,30 +21,16 @@
 #include <string>
 #include <type_traits>
 
+#include <batchlas/blas/device/v2/ext/trsm.hh>
+
 namespace batchlas::sycl_trsm {
+
+namespace v2 = batchlas::device::v2;
 
 namespace {
 
 template <typename T, int N, int QC, bool Masked>
 class TrsmSgLeftKernel;
-
-template <typename D>
-inline D sg_bcast(const sycl::sub_group& sg, D v, int src) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) {
-        return D{sycl::select_from_group(sg, v.re, src), sycl::select_from_group(sg, v.im, src)};
-    } else {
-        return sycl::select_from_group(sg, v, src);
-    }
-}
-
-template <typename D>
-inline D dev_neg(D v) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) {
-        return D{-v.re, -v.im};
-    } else {
-        return -v;
-    }
-}
 
 // Row bucket: N lanes per matrix, 32/N matrices per sub-group; 0 means no bucket.
 inline int sg_left_bucket(int n) {
@@ -103,96 +90,41 @@ Event trsm_native_sg_left(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(nwg) * kSgPerWg * kSg),
                               sycl::range<1>(kSgPerWg * kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                using Ar = v2::FmaArith<D>;
                 const auto sg = it.get_sub_group();
                 const int64_t gsg = static_cast<int64_t>(it.get_group_linear_id()) * kSgPerWg +
                                     static_cast<int64_t>(sg.get_group_linear_id());
                 // Uniform per sub-group, so no lane is left alone at a broadcast.
                 if (gsg >= nsg) return;
-                const int lane = static_cast<int>(sg.get_local_linear_id());
-                const int mat = lane / N;
-                const int r = lane % N;
+                const v2::Partition<N> ex{sg};
+                const int mat = static_cast<int>(sg.get_local_linear_id()) / N;
+                // lane % N, not ex.lid() (lane & (N-1)): the AND form shifts ptxas' register
+                // allocation in the unrolled N=16 kernels by 3-4% of the instructions.
+                const int r = static_cast<int>(sg.get_local_linear_id()) % N;
                 const int chunk = static_cast<int>(gsg % chunks);
                 const int64_t b = (gsg / chunks) * kMpw + mat;
                 bool okb = b < bs;
                 if constexpr (Masked) okb = okb && mask[b] != 0;
                 const bool okr = okb && r < n;
-                const D* Ab = a_ptr + (okb ? b : 0) * stride_a;
-                D* Bb = b_ptr + (okb ? b : 0) * stride_b;
-                const int64_t rs = fwd ? r : (n - 1 - r);
+                const v2::CanonTri<const D, true, int64_t> L{a_ptr + (okb ? b : 0) * stride_a, lda, n,
+                                                             fwd, do_trans, do_conj};
+                const v2::FlipRows<D, int64_t> Bc{b_ptr + (okb ? b : 0) * stride_b, ldb, n, q, fwd};
 
-                // nL[t] = -Lc(r,t) for t < r, else 0; pad rows are identity rows.
-                D nL[N];
-BATCHLAS_UNROLL_FULL
-                for (int t = 0; t < N; ++t) {
-                    D v{};
-                    if (okr && t < r) {
-                        const int64_t rt = fwd ? t : (n - 1 - t);
-                        v = do_trans ? Ab[rt + rs * lda] : Ab[rs + rt * lda];
-                        if (do_conj) v = sycl_device::dev_conj(v);
-                        v = dev_neg(v);
-                    }
-                    nL[t] = v;
-                }
-                D dd = sycl_device::dev_one<D>();
-                if (okr && !unit) {
-                    dd = Ab[rs + rs * lda];
-                    if (do_conj) dd = sycl_device::dev_conj(dd);
-                }
-                D rinv = sycl_device::dev_recip(dd);
+                // Lane r: the AXPY multipliers -Lc(r, 0:r); pad rows are identity rows.
+                v2::Frag<D, N> nL;
+                v2::frag_row_lower(nL, v2::NegOne{}, L, r, okr);
+                D dd = Ar::one();
+                if (okr && !unit) dd = L.diag(r);   // not L(r, r): see CanonTri::diag
                 // V1's fallback, per matrix: any non-finite reciprocal in this
                 // matrix's N lanes switches all of them to division.
-                int bad = sycl_device::dev_isfinite(rinv) ? 0 : 1;
-BATCHLAS_UNROLL_FULL
-                for (int off = N / 2; off > 0; off /= 2) {
-                    bad |= sycl::permute_group_by_xor(sg, bad, off);
-                }
-                const bool divide = bad != 0;
+                const auto dg = v2::guarded_recip<Ar>(ex, dd);
 
                 const int c0 = chunk * QC;
-                D x[QC];
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < QC; ++j) {
-                    D v{};
-                    if (okr && c0 + j < q) {
-                        v = sycl_device::dev_mul(alpha_d, Bb[rs + (c0 + j) * ldb]);
-                    }
-                    x[j] = v;
-                }
-
-                const int base = mat * N;
+                auto x = v2::frag_load_row<QC, Ar>(alpha_d, Bc, r, c0, okr);
                 // The division path sits behind a sub-group-uniform branch: as a
                 // per-lane select it kept QC divisions live at every step (2x at q=64).
-                const bool any_divide = sycl::any_of_group(sg, divide);
-#pragma unroll kUnrollS
-                for (int s = 0; s < N; ++s) {
-                    // Rows n..N-1 are identity padding. A break stops full unrolling.
-                    if (s >= n) {
-                        if constexpr (kRolled) break; else continue;
-                    }
-                    if (r == s && !unit) {
-                        if (any_divide) [[unlikely]] {
-BATCHLAS_UNROLL_FULL
-                            for (int j = 0; j < QC; ++j) {
-                                x[j] = divide ? sycl_device::dev_div(x[j], dd)
-                                              : sycl_device::dev_mul(x[j], rinv);
-                            }
-                        } else {
-BATCHLAS_UNROLL_FULL
-                            for (int j = 0; j < QC; ++j) x[j] = sycl_device::dev_mul(x[j], rinv);
-                        }
-                    }
-                    const D l = nL[s];
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < QC; ++j) {
-                        const D xs = sg_bcast(sg, x[j], base + s);
-                        sycl_device::fma_acc(x[j], l, xs);
-                    }
-                }
-
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < QC; ++j) {
-                    if (okr && c0 + j < q) Bb[rs + (c0 + j) * ldb] = x[j];
-                }
+                v2::trsm_lower_rowfrag<kUnrollS, Ar>(ex, nL, dg, n, unit, x);
+                v2::frag_store_row<QC>(x, Bc, r, c0, okr);
             });
     });
     return ctx.get_event();
