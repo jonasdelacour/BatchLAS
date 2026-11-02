@@ -56,6 +56,11 @@ inline int gemv_wg_ladder(int64_t work_units, int max_wg, int cu,
 // boundary. NO __restrict__ ON ANY OF THEM: ortho.cc passes views into the same
 // allocation, and __restrict__ is a promise about the object. Item b's views keep
 // the hand code's int64 index arithmetic (v2::WideMat / WideVec).
+// The alpha == 0 / beta == 0 flags are NOT members: each kernel captures them as
+// top-level bools. A bool inside this by-value struct is tested where it is used, so
+// beta's flag sat in a register across the dot loop (GemvDirectTKernel<double>: REG
+// 36 -> 40 in the sm_89 SASS gate); a top-level bool is an entry-block predicate.
+// `beta_zero` is what keeps y unread when beta == 0; y may be uninitialised.
 template <typename T>
 struct GemvOperands {
     using D = typename DevMap<T>::type;
@@ -66,8 +71,7 @@ struct GemvOperands {
     D* y;
     int64_t lda, stride_a, xinc, stride_x, yinc, stride_y;
     int m, n;
-    // `beta.zero` is what keeps y unread when beta == 0; y may be uninitialised.
-    v2::RtScalar<D> alpha, beta;
+    D alpha, beta;
 
     GemvOperands(const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X,
                  const VectorView<T>& Y, T alpha_, T beta_)
@@ -76,11 +80,8 @@ struct GemvOperands {
           y(reinterpret_cast<D*>(Y.data_ptr())),
           lda(A.ld()), stride_a(A.stride()), xinc(X.inc()), stride_x(X.stride()),
           yinc(Y.inc()), stride_y(Y.stride()), m(A.rows()), n(A.cols()) {
-        D av, bv;
-        __builtin_memcpy(&av, &alpha_, sizeof(D));
-        __builtin_memcpy(&bv, &beta_, sizeof(D));
-        alpha = v2::rt_scalar(av, alpha_ == T(0));
-        beta = v2::rt_scalar(bv, beta_ == T(0));
+        __builtin_memcpy(&alpha, &alpha_, sizeof(D));
+        __builtin_memcpy(&beta, &beta_, sizeof(D));
     }
 
     v2::WideMat<const D> mat(int64_t b) const { return v2::wide_mat(a + b * stride_a, m, n, lda); }
@@ -214,6 +215,7 @@ Event gemv_direct_notrans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const int64_t total = items;
 
         batchlas::impl::parallel_for<GemvDirectNKernel<T>>(h,
@@ -228,9 +230,12 @@ Event gemv_direct_notrans(Queue& ctx,
                 const int i = static_cast<int>(gid - b * op.m);
 
                 // y(i) := alpha A(i, :) x + beta y(i); alpha == 0 skips the dot.
+                const auto Ai = op.mat(b).row(i);
+                const auto xb = op.xvec(b, op.n);
+                const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!op.alpha.zero) acc = v2::dot_owned_fma(v2::Thread{}, op.mat(b).row(i), op.xvec(b, op.n));
-                v2::store_fma(op.alpha, acc, op.beta, op.yvec(b, op.m)(i));
+                if (!alpha_zero) acc = v2::dot_owned_fma(v2::Thread{}, Ai, xb);
+                v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(i));
             });
     });
 
@@ -263,6 +268,7 @@ Event gemv_seg_notrans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const int64_t nbatch = batch;
         const int sgs = sgs_per_wg;
 
@@ -285,11 +291,14 @@ Event gemv_seg_notrans(Queue& ctx,
                 const int i = lane % seg;
                 const int jsub = lane / seg;
 
+                const auto Ai = op.mat(b).row(i);
+                const auto xb = op.xvec(b, op.n);
+                const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!op.alpha.zero && jsub < W)
-                    acc = v2::dot_owned_fma(v2::Member<W>{jsub}, op.mat(b).row(i), op.xvec(b, op.n));
+                if (!alpha_zero && jsub < W) acc = v2::dot_owned_fma(v2::Member<W>{jsub}, Ai, xb);
                 acc = v2::fold_down<W>(sg, acc, v2::Dyn{seg});  // lanes i + seg*t onto lane i
-                if (lane < seg) v2::store_fma(op.alpha, acc, op.beta, op.yvec(b, op.m)(i));
+                if (lane < seg)
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(i));
             });
     });
 
@@ -320,6 +329,7 @@ Event gemv_direct_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
         const int64_t total = items;
 
@@ -335,10 +345,12 @@ Event gemv_direct_trans(Queue& ctx,
                 const int j = static_cast<int>(gid - b * op.n);
 
                 // y(j) := alpha op(A)(j, :) x + beta y(j), op(A)(j, :) = conj?(A(:, j))^T.
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!op.alpha.zero)
-                    acc = v2::dot_owned_fma(v2::Thread{}, v2::conj_rt(op.mat(b).col(j), conj), op.xvec(b, op.m));
-                v2::store_fma(op.alpha, acc, op.beta, op.yvec(b, op.n)(j));
+                if (!alpha_zero) acc = v2::dot_owned_fma(v2::Thread{}, Aj, xb);
+                v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
@@ -375,6 +387,7 @@ Event gemv_cta_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
@@ -398,11 +411,14 @@ Event gemv_cta_trans(Queue& ctx,
 
                 // The team's partial dots, a shift-down fold (no shared memory, unlike
                 // reduce_over_group), and the leader alone writes y(j).
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!op.alpha.zero)
-                    acc = v2::dot_owned_fma(team, v2::conj_rt(op.mat(b).col(j), conj), op.xvec(b, op.m));
+                if (!alpha_zero) acc = v2::dot_owned_fma(team, Aj, xb);
                 acc = v2::leader_sum(team, acc);
-                if (team.leader()) v2::store_fma(op.alpha, acc, op.beta, op.yvec(b, op.n)(j));
+                if (team.leader())
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
@@ -448,6 +464,7 @@ Event gemv_seg_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         const GemvOperands<T> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
         const bool conj = conjugate;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
@@ -482,11 +499,14 @@ Event gemv_seg_trans(Queue& ctx,
                 const bool active = in_range && (mask == nullptr || mask[b] != 0);
 
                 // L is compile-time, so the owned-slice loop unrolls -- W's point.
+                const auto Aj = v2::conj_rt(op.mat(b).col(j), conj);
+                const auto xb = op.xvec(b, op.m);
+                const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!op.alpha.zero && active)
-                    acc = v2::dot_owned_fma(team, v2::conj_rt(op.mat(b).col(j), conj), op.xvec(b, op.m));
+                if (!alpha_zero && active) acc = v2::dot_owned_fma(team, Aj, xb);
                 acc = v2::leader_sum(team, acc);
-                if (team.leader() && active) v2::store_fma(op.alpha, acc, op.beta, op.yvec(b, op.n)(j));
+                if (team.leader() && active)
+                    v2::store_fma(v2::rt_scalar(op.alpha, alpha_zero), acc, v2::rt_scalar(op.beta, beta_zero), yb(j));
             });
     });
 
