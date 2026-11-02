@@ -9,17 +9,6 @@
 
 namespace batchlas {
 
-// An unreduced block (D = d[0, len), E = e[0, len-1), physical) in its sweep's orientation: QL is
-// QR on J T J, so reversed maps virtual k to len-1-k. The sweep converges the virtual end len-1.
-template <typename T> struct OrientedBlock {
-    VectorView<T> D, E;
-    int32_t len;
-    bool reversed;
-
-    T& d(int32_t k) const { return D(reversed ? len - 1 - k : k); }
-    T& e(int32_t k) const { return E(reversed ? len - 2 - k : k); }
-};
-
 // Correctness only: a GPU with 32-wide sub-groups and 1 <= n <= 32. The routers also exclude
 // ROCm (wrong eigenvalues on gfx1200); steqr_cta falls back to steqr_wg when this is false.
 inline bool steqr_cta_can_run(const select::Device& d, int64_t n) {

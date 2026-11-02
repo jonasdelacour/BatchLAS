@@ -14,12 +14,87 @@
 #include <src/sort.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syev/steqr/ql_chase.hh>
+#include <src/math-helpers.hh>
+#include <array>
 #include <src/ops/syev/steqr/steqr_internal.hh>
 #include <src/ops/syev/tridiag/plane_rotation.hh>
-#include <src/ops/syev/tridiag/tridiag_math.hh>
 
 namespace batchlas {
+namespace detail {
+
+// {c, -s} of LAPACK lartg(a, b): the rotation convention of the work-group bulge chase.
+template <typename T>
+inline std::array<T, 2> givens_rotation(const T& a, const T& b) {
+    auto [c_l, s_l, r] = detail::lartg(a, b);
+    (void)r;
+    return std::array<T, 2>{c_l, -s_l};
+}
+
+// Similarity transform of rows/cols i, j of the tridiagonal (d, e); returns the new bulge.
+// QR == true indexes top-down (virtual k == physical k), false bottom-up (k -> n-1-k), so one
+// bulge chase implements both the QR and the QL iteration.
+template <typename T>
+inline T apply_givens_rotation(const VectorView<T>& d,
+                               const VectorView<T>& e,
+                               const T& prev_bulge,
+                               size_t i,
+                               size_t j,
+                               const std::array<T, 2>& givens,
+                               bool QR) {
+    const T c = givens[0];
+    const T s = givens[1];
+
+    const size_t n = d.size();
+    const size_t ne = e.size();
+
+    auto d_get = [&](size_t k) -> T {
+        return QR ? d(k) : d(n - 1 - k);
+    };
+    auto d_set = [&](size_t k, T val) {
+        if (QR) {
+            d(k) = val;
+        } else {
+            d(n - 1 - k) = val;
+        }
+    };
+    auto e_get = [&](size_t k) -> T {
+        return QR ? e(k) : e(ne - 1 - k);
+    };
+    auto e_set = [&](size_t k, T val) {
+        if (QR) {
+            e(k) = val;
+        } else {
+            e(ne - 1 - k) = val;
+        }
+    };
+
+    T di = d_get(i);
+    T dj = d_get(j);
+    T ei = e_get(i);
+    T ej = (j < ne) ? e_get(j) : T(0);
+
+    T di_new = c * (c * di - ei * s) - s * (ei * c - s * dj);
+    T dj_new = c * (c * dj + ei * s) + s * (ei * c + s * di);
+    d_set(i, di_new);
+    d_set(j, dj_new);
+
+    if (i > 0) {
+        T e_im1 = e_get(i - 1);
+        e_set(i - 1, e_im1 * c - prev_bulge * s);
+    }
+
+    T ei_new = c * (c * ei + s * di) - s * (c * dj + s * ei);
+    e_set(i, ei_new);
+
+    if (j < ne) {
+        e_set(j, c * ej);
+    }
+
+    return -ej * s;
+}
+
+} // namespace detail
+
 
 namespace {
 
@@ -34,78 +109,6 @@ inline std::pair<Span<int32_t>, VectorView<std::array<int32_t, 2>>> steqr_wg_pas
     auto tdi = pool.allocate<std::array<int32_t, 2>>(
         ctx, VectorView<std::array<int32_t, 2>>::required_span_length(n / 2, 1, n / 2, batch_size));
     return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2)};
-}
-
-// max(|d|, |e|) over the block, in physical order.
-template <typename T>
-T block_norm(const OrientedBlock<T>& B) {
-    T anorm = std::abs(B.D(B.len - 1));
-    for (int32_t p = 0; p + 1 < B.len; ++p) {
-        anorm = std::fmax(anorm, std::fmax(std::abs(B.D(p)), std::abs(B.E(p))));
-    }
-    return anorm;
-}
-
-// The block needs a scale iff its norm leaves [ssfmin, ssfmax].
-template <typename T>
-bool outside_safe_range(T anorm) {
-    return anorm > detail::ssfmax<T>() || (anorm < detail::ssfmin<T>() && anorm != T(0));
-}
-
-// The undo of BlockScale::for_norm(anorm), as anorm / ssfmax (or / ssfmin), not 1 / factor.
-template <typename T>
-T unscale_factor(T anorm) {
-    return anorm > detail::ssfmax<T>() ? anorm / detail::ssfmax<T>() : anorm / detail::ssfmin<T>();
-}
-
-template <typename T>
-void scale_block(const OrientedBlock<T>& B, T alpha) {
-    for (int32_t p = 0; p < B.len; ++p) B.D(p) *= alpha;
-    for (int32_t p = 0; p + 1 < B.len; ++p) B.E(p) *= alpha;
-}
-
-// e_j := 0 wherever it is negligible against its neighbours; true if the block split.
-template <typename T>
-bool split_negligible(const OrientedBlock<T>& B) {
-    bool split = false;
-    for (int32_t j = 0; j + 1 < B.len; ++j) {
-        if (tridiag::negligible(B.E(j), B.D(j), B.D(j + 1))) {
-            B.E(j) = T(0);
-            split = true;
-        }
-    }
-    return split;
-}
-
-// Plane (k, k+1) of the chase. R annihilates (pivot, bulge); with R^T = [[c, s], [-s, c]]:
-// [[d_k, e_k], [e_k, d_k+1]] <- R A R^T, e_k-1 <- c pivot - s bulge = r, e_k+1 <- c e_k+1, and
-// the new bulge -s e_k+1 sits one plane down. Returns the next (pivot, bulge) = (e_k, bulge).
-template <typename T>
-tridiag::ChaseState<T> rotate_plane(const OrientedBlock<T>& B, int32_t k, tridiag::Givens<T> R,
-                                    tridiag::ChaseState<T> st) {
-    const tridiag::Givens<T> Rt = R.transpose();
-    const bool has_below = k + 2 < B.len;
-    const T e_below = has_below ? B.e(k + 1) : T(0);
-    const tridiag::Sym2x2<T> A = tridiag::Sym2x2<T>{B.d(k), B.e(k), B.d(k + 1)}.congruence(R);
-    B.d(k) = A.a;
-    B.d(k + 1) = A.c;
-    if (k > 0) B.e(k - 1) = st.pivot * Rt.c - st.bulge * Rt.s;
-    B.e(k) = A.b;
-    if (has_below) B.e(k + 1) = Rt.c * e_below;
-    return {A.b, -e_below * Rt.s};
-}
-
-// One implicit QR sweep with the given shift: the first rotation brings the shift in through
-// (pivot, bulge) = (d_0 - shift, e_0), and each plane down to (len-2, len-1) annihilates the
-// bulge the plane above it left. `store(k, R^T)` records rotation k for Z <- Z R^T.
-template <typename T, typename Store>
-void implicit_qr_sweep(const OrientedBlock<T>& B, T shift, const Store& store) {
-    tridiag::ChaseState<T> st{B.d(0) - shift, B.e(0)};
-    for (int32_t k = 0; k + 1 < B.len; ++k) {
-        const tridiag::Givens<T> R = tridiag::annihilate(st.pivot, st.bulge).R;
-        store(k, R.transpose());
-        st = rotate_plane(B, k, R, st);
-    }
 }
 
 // One pass: split every item into unreduced blocks, run up to max_sweeps sweeps on each block
@@ -191,6 +194,8 @@ Event steqr_wg_impl(Queue& ctx,
                     const VectorView<T> D = d.batch_item(batch_ix)(Slice(start_ix, end_ix));
                     const VectorView<T> E = e.batch_item(batch_ix)(Slice(start_ix, end_ix - 1));
 
+                    // Converged1: a 1x1 block has no e to read and nothing to do.
+                    if (len == 1) continue;
                     // Exact2x2: R A R^T = diag(rt1, rt2), Z <- Z R^T on (0, 1).
                     if (len == 2) {
                         if (store_givens) {
@@ -210,24 +215,76 @@ Event steqr_wg_impl(Queue& ctx,
                         continue;
                     }
 
-                    // dsteqr's rule: converge the smaller |d| end first. The sweep converges the
-                    // virtual end len-1, so a block whose small end is physically first is reversed.
-                    const bool qr = std::abs(D(len - 1)) < std::abs(D(0));
-                    const OrientedBlock<T> B{D, E, len, !qr};
-                    order_view[gid] = qr ? ApplyOrder::Forward : ApplyOrder::Backward;
+                    // Sweep: base's statements verbatim. The OrientedBlock/Sym2x2 form of the same
+                    // arithmetic made CPU-queue (Backend::NETLIB) bits depend on batch position and
+                    // cost 4-6 registers on sm_89 (steqr_mask_tests CtaEveryPattern).
+                    const VectorView<T> d_ = D, e_ = E;
+                    const int32_t n_local = len;
+                    // The sweep converges the end the shift is taken from (virtual index
+                    // n_local - 1), so orient that end at the SMALLER |d|, as dsteqr does.
+                    bool QR = std::abs(d_(n_local - 1)) < std::abs(d_(0));
+                    order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        const T anorm = block_norm(B);
-                        const bool scaled = outside_safe_range(anorm);
-                        if (scaled) scale_block(B, tridiag::BlockScale<T>::for_norm(anorm).factor);
+                        auto anorm = std::abs(d_(n_local - 1));
+                        for (size_t idx = 0; idx < n_local - 1; ++idx) {
+                            anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
+                        }
 
-                        const T shift = tridiag::wilkinson_shift(SteqrShiftStrategy::Wilkinson, B.d(len - 1), B.e(len - 2), B.d(len - 2));
-                        implicit_qr_sweep(B, shift, [&](int32_t j, tridiag::Givens<T> Rt) {
-                            if (store_givens) rotations_view(j, k, gid) = {Rt.c, Rt.s};
-                        });
-                        const bool split = split_negligible(B);
+                        if (anorm > detail::ssfmax<T>()) {
+                            auto alpha = detail::ssfmax<T>() / anorm;
+                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
+                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            auto alpha = detail::ssfmin<T>() / anorm;
+                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
+                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
+                        }
 
-                        if (scaled) scale_block(B, unscale_factor(anorm));
-                        if (split) break;
+                        auto d_get = [&](size_t idx) -> T {
+                            return QR ? d_(idx) : d_(n_local - 1 - idx);
+                        };
+                        auto e_get = [&](size_t idx) -> T {
+                            return QR ? e_(idx) : e_(n_local - 2 - idx);
+                        };
+
+                        const auto shift = detail::wilkinson_shift(d_get(n_local - 2),
+                                                           e_get(n_local - 2),
+                                                           d_get(n_local - 1));
+
+                        auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
+                        if (store_givens) {
+                            rotations_view(0, k, gid) = {c0, s0};
+                        }
+                        auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+
+                        for (size_t j = 1; j < n_local - 1; ++j) {
+                            auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
+                            if (store_givens) {
+                                rotations_view(j, k, gid) = {cj, sj};
+                            }
+                            bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                        }
+
+                        bool deflatable = false;
+                        for (size_t j = 0; j < n_local - 1; ++j) {
+                            if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j)) * std::abs(d_(j + 1)) +
+                                                                   detail::safmin<T>()) {
+                                e_(j) = T(0);
+                                deflatable = true;
+                            }
+                        }
+
+                        if (anorm > detail::ssfmax<T>()) {
+                            auto alpha = anorm / detail::ssfmax<T>();
+                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
+                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            auto alpha = anorm / detail::ssfmin<T>();
+                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
+                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
+                        }
+
+                        if (deflatable) break;
                     }
                 }
             });
