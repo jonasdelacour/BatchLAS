@@ -12,6 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <batchlas/blas/device/v2/ext/getrs-getri-gesv.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <complex>
@@ -27,6 +28,8 @@ namespace batchlas {
 namespace sycl_getrs {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 // Per-TU tag: this cluster's own instantiation of the shared LASWP kernel.
 struct GetrsLaswpTag {};
@@ -112,67 +115,43 @@ bool getrs_perm_gather_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const auto grp = it.get_group();
                 const int b = static_cast<int>(it.get_group(0));
                 const int lid = static_cast<int>(it.get_local_id(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
+                const v2::WorkGroupRt<32> ex{it, lid, wg, 0};
 
                 int* const idxs = &ints[0];
                 int* const ips = &ints[static_cast<std::size_t>(n)];
-
-                D* const Bb = bp + static_cast<std::ptrdiff_t>(b) * stride;
+                const v2::MatZ<D> bm{bp + static_cast<std::ptrdiff_t>(b) * stride, n, nrhs, ld};
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                for (int i = lid; i < n; i += wg) {
-                    int p = ip[i] - 1;          // GLOBAL 1-BASED on the wire
-                    // ?GETRF guarantees p in [i, n); clamped anyway, since a
-                    // bad value corrupts the index array for the WHOLE item.
+                v2::for_each_owned(ex, n, [&](int i) {
+                    int p = ip[i] - 1;  // GLOBAL 1-BASED on the wire
+                    // ?GETRF guarantees p in [i, n); clamped anyway, since a bad value
+                    // corrupts the index array for the WHOLE item.
                     if (p < 0 || p >= n) p = i;
                     ips[i] = p;
                     idxs[i] = i;
-                }
-                sycl::group_barrier(grp);
+                });
+                ex.group_barrier();
 
+                // idxs := the interchange list applied to the identity. REVERSE ORDER for the
+                // inverse: forwards, this list builds P, not P^T.
                 if (lid == 0) {
-                    if (forward) {
-                        for (int k = 0; k < n; ++k) {
-                            const int p = ips[k];
-                            if (p != k) { const int t = idxs[k]; idxs[k] = idxs[p]; idxs[p] = t; }
-                        }
-                    } else {
-                        // REVERSE ORDER: forwards, this list builds P, not
-                        // P^T; each transposition is its own inverse.
-                        for (int k = n - 1; k >= 0; --k) {
-                            const int p = ips[k];
-                            if (p != k) { const int t = idxs[k]; idxs[k] = idxs[p]; idxs[p] = t; }
-                        }
-                    }
+                    const auto idx = v2::vec<v2::Mem::Local>(idxs, n);
+                    if (forward) v2::laswp<ApplyOrder::Forward>(v2::Thread{}, idx, v2::Ipiv0{ips}, 0, n);
+                    else v2::laswp<ApplyOrder::Backward>(v2::Thread{}, idx, v2::Ipiv0{ips}, 0, n);
                 }
-                sycl::group_barrier(grp);
+                ex.group_barrier();
 
+                const v2::MatZ<D> tv{&tile[0], n, Cs, ldt};
                 for (int cb = 0; cb < nrhs; cb += Cs) {
                     const int cw = ((nrhs - cb) < Cs) ? (nrhs - cb) : Cs;
-
-                    int col = lid / n;
-                    int row = lid - col * n;
-                    while (col < cw) {
-                        tile[static_cast<std::size_t>(col) * ldt + row] =
-                            Bb[static_cast<std::ptrdiff_t>(cb + col) * ld + row];
-                        row += wg;
-                        while (row >= n) { row -= n; ++col; }
-                    }
-                    sycl::group_barrier(grp);
-
-                    col = lid / n;
-                    row = lid - col * n;
-                    while (col < cw) {
-                        Bb[static_cast<std::ptrdiff_t>(cb + col) * ld + row] =
-                            tile[static_cast<std::size_t>(col) * ldt + idxs[row]];
-                        row += wg;
-                        while (row >= n) { row -= n; ++col; }
-                    }
+                    v2::lacpy_flat<v2::alg::Walk>(ex, bm.sub(0, cb, n, cw), tv.sub(0, 0, n, cw));
+                    ex.group_barrier();
+                    v2::lapmr_copy<v2::alg::Walk>(ex, tv, v2::vec<v2::Mem::Local>(idxs, n), bm.sub(0, cb, n, cw));
                     // The write-back must finish before the next chunk overwrites the tile.
-                    sycl::group_barrier(grp);
+                    ex.group_barrier();
                 }
             });
     });

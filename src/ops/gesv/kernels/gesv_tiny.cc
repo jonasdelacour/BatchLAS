@@ -25,6 +25,7 @@
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
 
+#include <batchlas/blas/device/v2/ext/getrs-getri-gesv.hh>
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
 
@@ -47,6 +48,7 @@ namespace {
 namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
+namespace v2 = ::batchlas::device::v2;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSize");
@@ -197,25 +199,16 @@ BATCHLAS_UNROLL_FULL
                 sycl::group_barrier(sg);
             }
 
-            D piv;   // --- 4. ?GETF2
+            D piv;   // --- 4. ?GETF2: scale by the reciprocal, or divide (the sfmin arm)
             if constexpr (Slm) {
                 piv = tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
             } else {
-                piv = tn::tiny_bcast<D>(part, rA[j], pl);
+                piv = v2::frag_bcast(part, rA[j], pl);
             }
-            const bool zero = sd::dev_is_zero(piv);   // EXACT zero, no epsilon
-            if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
-            const D rc = sd::dev_recip(piv);
-            const bool use_mul =
-                !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const auto sr = v2::RecipOrDiv<D>::make(piv);
+            if (sr.zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);   // EXACT zero, no epsilon
             const bool act = (rowid > j);   // NEW rowid: the pivot row is excluded
-            if (act) {
-                if (use_mul) {
-                    rA[j] = sd::dev_mul(rA[j], rc);
-                } else if (!zero) {
-                    rA[j] = sd::dev_div(rA[j], piv);   // ?GETF2's sfmin arm
-                }
-            }
+            if (act) rA[j] = sr.solve(rA[j], rA[j]);
 
             // --- 5. rank-1 update and, THE FUSION, forward substitution: the same
             // update applied to the RHS with the multiplier step 4 just produced, so
@@ -246,58 +239,17 @@ BATCHLAS_UNROLL_FULL
                     }
                 }
             } else {
-BATCHLAS_UNROLL_FULL
-                for (int k = j + 1; k < NC; ++k) {
-                    if (k >= n) continue;
-                    const D u = tn::tiny_bcast<D>(part, rA[k], pl);
-                    if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
-                }
-BATCHLAS_UNROLL_FULL
-                for (int k = 0; k < NR; ++k) {
-                    if (k >= nrhs) continue;   // kernel-uniform
-                    const D ub = tn::tiny_bcast<D>(part, rB[k], pl);
-                    if (act) rB[k] = sd::dev_sub(rB[k], sd::dev_mul(rA[j], ub));
-                }
+                v2::ger_frag_bcast(part, rA[j], rA, pl, j + 1, n, act);
+                v2::ger_frag_bcast(part, rA[j], rB, pl, 0, nrhs, act);   // nrhs: kernel-uniform
             }
         }
 
-        // --- 6. back substitution, U x = y. `il` is the lane holding row i, read
-        // from lane i's `row_lane` with a partition-UNIFORM source, as
-        // tiny_device.hh's tiny_bcast contract requires.
-BATCHLAS_UNROLL_FULL
-        for (int i = NC - 1; i >= 0; --i) {
-            if (i >= n) continue;
-
-            const uint32_t il = static_cast<uint32_t>(
-                select_from_group(part, row_lane, static_cast<uint32_t>(i)));
-            const D dii = tn::tiny_bcast<D>(part, rA[i], il);
-            const bool zero = sd::dev_is_zero(dii);
-            const D rc = sd::dev_recip(dii);
-            const bool use_mul =
-                !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
-
-BATCHLAS_UNROLL_FULL
-            for (int k = 0; k < NR; ++k) {
-                if (k >= nrhs) continue;   // kernel-uniform
-                const D yi = tn::tiny_bcast<D>(part, rB[k], il);
-                // A singular U is reported through `info` and LAPACK leaves X
-                // undefined; zero is chosen over the inf a bare divide would
-                // write. A BRANCH on the partition-uniform flags, not a select: a
-                // select pays the divide on every step. evidence: docs/perf/lu.md#the-rhs-pad-column-cost
-                D xi = D{};
-                if (use_mul) {
-                    xi = sd::dev_mul(yi, rc);
-                } else if (!zero) {
-                    xi = sd::dev_div(yi, dii);
-                }
-
-                // Lane `il` writes rX, never rB: it is this step's shuffle source
-                // and a self-update would race every read above it.
-                rX[k] = tn::tiny_select(rowid == i, xi, rX[k]);
-                const D upd = sd::dev_sub(rB[k], sd::dev_mul(rA[i], xi));
-                rB[k] = tn::tiny_select(rowid < i, upd, rB[k]);
-            }
-        }
+        // --- 6. back substitution, U x = y, on the relabelled rows: `row_lane` at lane i
+        // names the lane holding row i. A singular U is reported through `info` and LAPACK
+        // leaves X undefined; zero is chosen over the inf a bare divide would write, on a
+        // BRANCH, not a select, which would pay the divide on every step.
+        // evidence: docs/perf/lu.md#the-rhs-pad-column-cost
+        v2::trsm_frag_upper_relabel(part, rA, rB, rX, rowid, row_lane, n, nrhs);
 
         if (live && lane < n) {  // not `rowid < n`: equivalent, loop-invariant
             D* const dstA = ap + static_cast<std::ptrdiff_t>(b) * strap;

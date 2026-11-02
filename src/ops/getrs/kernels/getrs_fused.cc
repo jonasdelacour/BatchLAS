@@ -16,6 +16,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/kernel_attrs.hh>
 
+#include <batchlas/blas/device/v2/ext/getrs-getri-gesv.hh>
 #include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
@@ -33,6 +34,7 @@ namespace sycl_getrs {
 namespace {
 
 using namespace batchlas::sycl_device;
+namespace v2 = batchlas::device::v2;
 
 // nb must not exceed the sub-group size: the block solve is a sub-group shuffle
 // recurrence with lane i owning row i.
@@ -187,29 +189,12 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                      static_cast<std::size_t>(getrs_fused_blk_ld(nb))) * scalar_bytes);
 }
 
-// A sub-group sum, hand-rolled with shift_group_left rather than
-// sycl::reduce_over_group, which puts static shared into the kernel and reopens the
-// 48 KB hole. Afterwards only LANE 0 holds the total.
-template <typename SG, typename D>
-inline D sg_sum(const SG& sg, D v) {
-    if constexpr (dev_is_complex_v<D>) {
-        auto re = v.re, im = v.im;
-        for (int off = 16; off > 0; off >>= 1) {
-            re += sycl::shift_group_left(sg, re, off);
-            im += sycl::shift_group_left(sg, im, off);
-        }
-        return D{re, im};
-    } else {
-        for (int off = 16; off > 0; off >>= 1) v += sycl::shift_group_left(sg, v, off);
-        return v;
-    }
-}
-
-template <typename D>
-inline D dev_zero_of() {
-    if constexpr (dev_is_complex_v<D>) return D{0, 0};
-    else return D(0);
-}
+// The bodies are device LA v2 ops (include/batchlas/blas/device/v2/ext/getrs-getri-gesv.hh): the
+// RHS y is resident in local memory, the block solve is v2::trsm_lane (one sub-group, lane i owns
+// row i, shuffles only), the off-diagonal update v2::gemm_nr (NoTrans: row-parallel axpy form;
+// Trans: one sub-group per column, a shift-down sum with no static local memory, which would
+// reopen the 48 KB hole). NR == 1 keeps the sub-group-0 form: the round-robin over sub-groups
+// cannot help there and cost ~3%.
 
 template <typename T, int NR> class GetrsFusedNKernel;
 template <typename T, int NR> class GetrsFusedTKernel;
@@ -244,162 +229,55 @@ Event fused_launch_notrans(Queue& ctx,
                 const std::size_t b = it.get_group(0);
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 const int nsg = static_cast<int>(sg.get_group_linear_range());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
+                const v2::WorkGroupRt<32> ex{it, tid, wg, nsg};
+                const v2::SubGroup<32> sx{sg};
 
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                const int* const pv = piv + b * static_cast<std::size_t>(pstride);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
+                const v2::MatZ<const D> a{Ap + b * static_cast<std::size_t>(strideA), n, n, lda};
+                const v2::MatZ<D> bm{Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb};
+                const v2::MatZ<D, true> y{&slm[0], n, nrhs, n};
+                D* const blk_p = &slm[rhs_elems];
+                const v2::Ipiv1 ipiv{piv + b * static_cast<std::size_t>(pstride)};
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // F: the interchange list, walked FORWARDS, in LOCAL memory
-                if (tid < nrhs) {
-                    D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
-                    for (int k = 0; k < n; ++k) {
-                        const int p = pv[k] - 1;          // 1-BASED on the wire
-                        if (p != k) { const D t = yc[k]; yc[k] = yc[p]; yc[p] = t; }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                v2::lacpy_flat(ex, bm, y);
+                ex.barrier();
+                v2::laswp_cols<ApplyOrder::Forward>(ex, y, ipiv);  // F b: item c walks column c
+                ex.barrier();
 
                 // L y = F b, unit lower, forward
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j + i) +
-                               static_cast<std::size_t>(j + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // The block solve runs inside ONE sub-group: lane i owns row j+i in
-                    // a register and the recurrence takes no work-group barrier.
-                    // group_broadcast is a collective and must not be called under
-                    // divergence -- the lane guards are INSIDE it, not around.
-                    if (c_active && jb > 1) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
-                            for (int kk = 0; kk < jb - 1; ++kk) {
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane > kk && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // Parallel over rows, so the read of A[i, j+kk] is coalesced.
-                    for (int i = j + jb + tid; i < n; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
+                    v2::lacpy_flat(ex, a.sub(j, j, jb, jb), blk);
+                    ex.barrier();
+                    if (c_active && jb > 1)
+                        v2::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
+                    v2::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                                                        y.sub(j, 0, jb, nrhs), v2::One{},
+                                                        y.sub(j + jb, 0, n - j - jb, nrhs));
+                    ex.barrier();
                 }
 
                 // U x = y, non-unit upper, backward
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j0 + i) +
-                               static_cast<std::size_t>(j0 + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
-                            for (int kk = jb - 1; kk >= 0; --kk) {
-                                if (lane == kk)
-                                    v = dev_div(v, blk[static_cast<std::size_t>(kk) +
-                                                       static_cast<std::size_t>(kk) *
-                                                       static_cast<std::size_t>(bld)]);
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane < kk)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j0 + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    for (int i = tid; i < j0; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j0 + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j0 + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
+                    v2::lacpy_flat(ex, a.sub(j0, j0, jb, jb), blk);
+                    ex.barrier();
+                    if (c_active) v2::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
+                    v2::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(0, j0, j0, jb), y.sub(j0, 0, jb, nrhs),
+                                                        v2::One{}, y.sub(0, 0, j0, nrhs));
+                    ex.barrier();
                 }
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
+                v2::lacpy_flat(ex, y, bm);
             });
     });
     return ctx.get_event();
@@ -441,168 +319,60 @@ Event fused_launch_trans(Queue& ctx,
                 const std::size_t b = it.get_group(0);
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
+                const v2::WorkGroupRt<32> ex{it, tid, wg, nsg};
+                const v2::SubGroup<32> sx{sg};
 
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                const int* const pv = piv + b * static_cast<std::size_t>(pstride);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
+                const v2::MatZ<const D> a{Ap + b * static_cast<std::size_t>(strideA), n, n, lda};
+                const v2::MatZ<D> bm{Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb};
+                const v2::MatZ<D, true> y{&slm[0], n, nrhs, n};
+                D* const blk_p = &slm[rhs_elems];
+                const v2::Ipiv1 ipiv{piv + b * static_cast<std::size_t>(pstride)};
+                // op(A) = conj(A) when conj, read straight from A; blk holds op(A) and the block
+                // solves read it transposed, blk[s + t*bld], stride bld across lanes (the pad).
+                auto op_a = [&](int i, int j, int m, int nc) { return v2::conj_if(a.sub(i, j, m, nc), conj); };
 
-                auto ld_a = [&](int i, int c) {
-                    const D a = Ab[static_cast<std::size_t>(i) +
-                                   static_cast<std::size_t>(c) * static_cast<std::size_t>(lda)];
-                    return conj ? dev_conj(a) : a;
-                };
+                v2::lacpy_flat(ex, bm, y);
+                ex.barrier();
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // op(U) z = b : op(U) is LOWER, non-unit, forward
+                // op(U) z = b : op(U) is LOWER, non-unit, forward. The PAST contribution is the dot
+                // form, one sub-group per column, its 32 lanes reading 32 consecutive elements.
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    // Staged contiguously in i; indexed below as blk[s + t*bld].
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            ld_a(j + i, j + c);
-                    }
-
-                    // The PAST contribution: y[j+t] -= sum_{i<j} op(A[i, j+t]) y[i]. ONE
-                    // SUB-GROUP PER COLUMN, so its 32 lanes read 32 consecutive elements.
-                    for (int t = sgid; t < jb; t += nsg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int i = lane; i < j; i += 32) {
-                            const D a = ld_a(i, j + t);
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(i)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                const D s = sg_sum(sg, acc[c]);
-                                if (lane == 0) {
-                                    D* const yc = y + static_cast<std::size_t>(c) *
-                                                      static_cast<std::size_t>(n);
-                                    yc[j + t] = dev_sub(yc[j + t], s);
-                                }
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // The diagonal block, by ONE sub-group. Lane t owns row t and
-                    // reads blk[s + t*bld], stride bld across lanes -- the pad.
-                    if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
-                            for (int s = 0; s < jb; ++s) {
-                                if (lane == s)
-                                    v = dev_div(v, blk[static_cast<std::size_t>(s) +
-                                                       static_cast<std::size_t>(s) *
-                                                       static_cast<std::size_t>(bld)]);
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane > s && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
-                                                               static_cast<std::size_t>(lane) *
-                                                               static_cast<std::size_t>(bld)], vs));
-                            }
-                            if (lane < jb) yc[j + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
+                    v2::lacpy_flat(ex, op_a(j, j, jb, jb), blk);
+                    v2::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, op_a(0, j, j, jb), y.sub(0, 0, j, nrhs),
+                                                      v2::One{}, y.sub(j, 0, jb, nrhs));
+                    ex.barrier();
+                    if (c_active)
+                        v2::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::trans(blk), y.sub(j, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
                 }
 
                 // op(L) w = z : op(L) is UPPER, UNIT, backward
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            ld_a(j0 + i, j0 + c);
-                    }
-
-                    for (int t = sgid; t < jb; t += nsg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int i = jend + lane; i < n; i += 32) {
-                            const D a = ld_a(i, j0 + t);
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(i)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                const D s = sg_sum(sg, acc[c]);
-                                if (lane == 0) {
-                                    D* const yc = y + static_cast<std::size_t>(c) *
-                                                      static_cast<std::size_t>(n);
-                                    yc[j0 + t] = dev_sub(yc[j0 + t], s);
-                                }
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // UNIT diagonal: no division, and the recurrence runs
-                    // BACKWARDS because op(L) is upper.
-                    if (c_active && jb > 1) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
-                            for (int s = jb - 1; s > 0; --s) {
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane < s)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
-                                                               static_cast<std::size_t>(lane) *
-                                                               static_cast<std::size_t>(bld)], vs));
-                            }
-                            if (lane < jb) yc[j0 + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
+                    v2::lacpy_flat(ex, op_a(j0, j0, jb, jb), blk);
+                    v2::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, op_a(jend, j0, n - jend, jb),
+                                                      y.sub(jend, 0, n - jend, nrhs), v2::One{},
+                                                      y.sub(j0, 0, jb, nrhs));
+                    ex.barrier();
+                    if (c_active && jb > 1)
+                        v2::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::trans(blk), y.sub(j0, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
                 }
 
-                // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every
-                // transposition is its own inverse, so only the ORDER changes.
-                if (tid < nrhs) {
-                    D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
-                    for (int k = n - 1; k >= 0; --k) {
-                        const int p = pv[k] - 1;
-                        if (p != k) { const D t = yc[k]; yc[k] = yc[p]; yc[p] = t; }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every transposition is
+                // its own inverse, so only the ORDER changes.
+                v2::laswp_cols<ApplyOrder::Backward>(ex, y, ipiv);
+                ex.barrier();
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
+                v2::lacpy_flat(ex, y, bm);
             });
     });
     return ctx.get_event();
@@ -655,183 +425,80 @@ Event potrs_fused_launch(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
+                const v2::WorkGroupRt<32> ex{it, tid, wg, nsg};
+                const v2::SubGroup<32> sx{sg};
 
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
-                const std::size_t ldz = static_cast<std::size_t>(lda);
-                const std::size_t nz = static_cast<std::size_t>(n);
-                const std::size_t bz = static_cast<std::size_t>(bld);
-
-                auto ld_a = [&](int i, int c) {
-                    return Ab[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) * ldz];
+                const v2::MatZ<const D> a{Ap + b * static_cast<std::size_t>(strideA), n, n, lda};
+                const v2::MatZ<D> bm{Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb};
+                const v2::MatZ<D, true> y{&slm[0], n, nrhs, n};
+                D* const blk_p = &slm[rhs_elems];
+                // Up to P right-hand sides per sub-group, one per w-lane slot: a block of jb <= 16 rows
+                // otherwise idles lanes jb..31. NR <= 2 never packs (cs >= 2), and folding to the
+                // unpacked loop keeps its register count (occupancy).
+                auto slots = [&](int jb) {
+                    const int w = NR <= 2 ? 32 : potrs_slot_width(jb), P = NR <= 2 ? 1 : potrs_slots(w, nrhs, cs);
+                    return v2::LaneSlots{w, P, NR <= 2 ? lane : lane % w, NR <= 2 ? 0 : lane / w};
                 };
-                // The adjoint's element, op(A)[i, c] = conj(A[c, i]), read at A[i, c].
-                auto ld_h = [&](int i, int c) { return dev_conj(ld_a(i, c)); };
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                v2::lacpy_flat(ex, bm, y);
+                ex.barrier();
 
-                // ---- forward: L y = b (axpy) or U^H y = b (dot); both lower, non-unit
+                // ---- forward: L y = b (axpy) or U^H y = b (dot); both lower, non-unit.
+                // blk holds the LOWER operator either way.
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    // blk[s + t*bld] holds op[j+s, j+t] of the LOWER operator either way.
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int s = e % jb, t = e / jb;
-                        blk[static_cast<std::size_t>(s) + static_cast<std::size_t>(t) * bz] =
-                            Lower ? ld_a(j + s, j + t) : ld_h(j + t, j + s);
-                    }
-                    if constexpr (!Lower) {
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
+                    if constexpr (Lower) {
+                        v2::lacpy_flat(ex, a.sub(j, j, jb, jb), blk);
+                    } else {
+                        v2::lacpy_flat(ex, v2::conj(v2::trans(a.sub(j, j, jb, jb))), blk);
                         // The PAST contribution, dot form: column j+t of U, rows above j.
-                        for (int t = sgid; t < jb; t += nsg) {
-                            D acc[NR];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                            for (int i = lane; i < j; i += 32) {
-                                const D a = ld_h(i, j + t);
-                                BATCHLAS_UNROLL_FULL
-                                for (int c = 0; c < NR; ++c)
-                                    if (c < nrhs) fma_acc(acc[c], a, y[c * nz + i]);
-                            }
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
-                                    if (lane == 0) y[c * nz + j + t] = dev_sub(y[c * nz + j + t], s);
-                                }
-                        }
+                        v2::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj(a.sub(0, j, j, jb)),
+                                                          y.sub(0, 0, j, nrhs), v2::One{}, y.sub(j, 0, jb, nrhs));
                     }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (c_active) {
-                        // Up to P right-hand sides per sub-group, one per w-lane slot: a block of jb <= 16 rows
-                        // otherwise idles lanes jb..31. Each column's arithmetic is unchanged, bit for bit. An idle
-                        // lane must not divide: 0 / d takes the slow division path (FCHK). NR <= 2 never packs
-                        // (cs >= 2), and folding to the unpacked loop keeps its register count (occupancy).
-                        const int w = NR <= 2 ? 32 : potrs_slot_width(jb), P = NR <= 2 ? 1 : potrs_slots(w, nrhs, cs);
-                        const int l = NR <= 2 ? lane : lane % w, h = NR <= 2 ? 0 : lane / w;
-                        for (int g = c0; g * P < nrhs; g += cs) {
-                            const int c = g * P + h;
-                            const bool on = h < P && c < nrhs && l < jb;
-                            D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j + l] : dev_zero_of<D>();
-                            for (int s = 0; s < jb; ++s) {
-                                if (on && l == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
-                                if (on && l > s)
-                                    v = dev_sub(v, dev_mul(blk[l + s * bz], vs));
-                            }
-                            if (on) yc[j + l] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
+                    ex.barrier();
+                    if (c_active) v2::trsm_lane_slots<Uplo::Lower>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs, slots(jb));
+                    ex.barrier();
                     if constexpr (Lower) {
                         // The FUTURE contribution, axpy form: rows below the block.
-                        for (int i = j + jb + tid; i < n; i += wg) {
-                            D acc[NR];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                            for (int kk = 0; kk < jb; ++kk) {
-                                const D a = ld_a(i, j + kk);
-                                BATCHLAS_UNROLL_FULL
-                                for (int c = 0; c < NR; ++c)
-                                    if (c < nrhs) fma_acc(acc[c], a, y[c * nz + j + kk]);
-                            }
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs) y[c * nz + i] = dev_sub(y[c * nz + i], acc[c]);
-                        }
-                        it.barrier(sycl::access::fence_space::local_space);
+                        v2::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                                                            y.sub(j, 0, jb, nrhs), v2::One{},
+                                                            y.sub(j + jb, 0, n - j - jb, nrhs));
+                        ex.barrier();
                     }
                 }
 
-                // ---- backward: L^H x = y (dot) or U x = y (axpy); both upper, non-unit
+                // ---- backward: L^H x = y (dot) or U x = y (axpy); both upper, non-unit.
+                // blk holds the UPPER operator transposed: blk(s, t) = op(j0 + t, j0 + s).
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-
-                    // blk[s + t*bld] holds op[j0+t, j0+s] of the UPPER operator.
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int s = e % jb, t = e / jb;
-                        blk[static_cast<std::size_t>(s) + static_cast<std::size_t>(t) * bz] =
-                            Lower ? ld_h(j0 + s, j0 + t) : ld_a(j0 + t, j0 + s);
-                    }
+                    const v2::MatZ<D> blk{blk_p, jb, jb, bld};
                     if constexpr (Lower) {
+                        v2::lacpy_flat(ex, v2::conj(a.sub(j0, j0, jb, jb)), blk);
                         // The PAST contribution, dot form: column j0+t of L, rows below.
-                        for (int t = sgid; t < jb; t += nsg) {
-                            D acc[NR];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                            for (int i = jend + lane; i < n; i += 32) {
-                                const D a = ld_h(i, j0 + t);
-                                BATCHLAS_UNROLL_FULL
-                                for (int c = 0; c < NR; ++c)
-                                    if (c < nrhs) fma_acc(acc[c], a, y[c * nz + i]);
-                            }
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
-                                    if (lane == 0) y[c * nz + j0 + t] = dev_sub(y[c * nz + j0 + t], s);
-                                }
-                        }
+                        v2::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj(a.sub(jend, j0, n - jend, jb)),
+                                                          y.sub(jend, 0, n - jend, nrhs), v2::One{},
+                                                          y.sub(j0, 0, jb, nrhs));
+                    } else {
+                        v2::lacpy_flat(ex, v2::trans(a.sub(j0, j0, jb, jb)), blk);
                     }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (c_active) {
-                        const int w = NR <= 2 ? 32 : potrs_slot_width(jb), P = NR <= 2 ? 1 : potrs_slots(w, nrhs, cs);
-                        const int l = NR <= 2 ? lane : lane % w, h = NR <= 2 ? 0 : lane / w;
-                        for (int g = c0; g * P < nrhs; g += cs) {
-                            const int c = g * P + h;
-                            const bool on = h < P && c < nrhs && l < jb;
-                            D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j0 + l] : dev_zero_of<D>();
-                            for (int s = jb - 1; s >= 0; --s) {
-                                if (on && l == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
-                                if (on && l < s) v = dev_sub(v, dev_mul(blk[s + l * bz], vs));
-                            }
-                            if (on) yc[j0 + l] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
+                    ex.barrier();
+                    if (c_active)
+                        v2::trsm_lane_slots<Uplo::Upper>(sx, v2::trans(blk), y.sub(j0, 0, jb, nrhs), c0, cs, slots(jb));
+                    ex.barrier();
                     if constexpr (!Lower) {
                         // The FUTURE contribution, axpy form: rows above the block.
-                        for (int i = tid; i < j0; i += wg) {
-                            D acc[NR];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                            for (int kk = 0; kk < jb; ++kk) {
-                                const D a = ld_a(i, j0 + kk);
-                                BATCHLAS_UNROLL_FULL
-                                for (int c = 0; c < NR; ++c)
-                                    if (c < nrhs) fma_acc(acc[c], a, y[c * nz + j0 + kk]);
-                            }
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs) y[c * nz + i] = dev_sub(y[c * nz + i], acc[c]);
-                        }
-                        it.barrier(sycl::access::fence_space::local_space);
+                        v2::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(0, j0, j0, jb),
+                                                            y.sub(j0, 0, jb, nrhs), v2::One{}, y.sub(0, 0, j0, nrhs));
+                        ex.barrier();
                     }
                 }
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
+                v2::lacpy_flat(ex, y, bm);
             });
     });
     return ctx.get_event();

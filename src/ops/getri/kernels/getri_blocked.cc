@@ -12,6 +12,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <batchlas/blas/device/v2/ext/getrs-getri-gesv.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <sycl/sycl.hpp>
@@ -28,6 +29,8 @@ namespace batchlas {
 namespace sycl_getri {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T> class GetriZeroKernel;
 template <typename T> class GetriPermKernel;
@@ -88,51 +91,28 @@ Event getri_perm_launch(Queue& ctx,
                 const int tid = static_cast<int>(it.get_local_linear_id());
                 const int lwg = static_cast<int>(it.get_local_range(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
+                const v2::WorkGroupRt<32> ex{it, tid, lwg, 0};
+                const v2::LocalMinSlot info{&slot[0]};
 
-                if (tid == 0) slot[0] = std::numeric_limits<int>::max();
-                sycl::group_barrier(it.get_group());
+                info.reset(ex);
+                ex.group_barrier();
 
-                const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
-                const D* const Ab = ap + static_cast<std::ptrdiff_t>(b) * stride_a;
-                D* const Cb = cp + static_cast<std::ptrdiff_t>(b) * stride_c;
+                const v2::Ipiv1 ipiv{piv + static_cast<std::ptrdiff_t>(b) * piv_stride};
+                const v2::MatZ<const D> a{ap + static_cast<std::ptrdiff_t>(b) * stride_a, n, n, lda};
+                const v2::MatZ<D> c{cp + static_cast<std::ptrdiff_t>(b) * stride_c, n, n, ldc};
 
-                for (int i = tid; i < n; i += lwg) {
-                    // Walk i back through the interchanges from the LAST to the
-                    // first; each is its own inverse, so only the ORDER reverses.
-                    int r = i;
-                    for (int k = n - 1; k >= 0; --k) {
-                        const int p = ip[k] - 1;        // 1-BASED on the wire
-                        if (r == k) {
-                            r = p;
-                        } else if (r == p) {
-                            r = k;
-                        }
-                    }
-                    // F[i, perm[i]] = 1, column-major.
-                    Cb[static_cast<std::ptrdiff_t>(r) * ldc + i] =
-                        sycl_device::dev_one<D>();
-
-                    if (want_info) {
-                        // EXACT zero, no epsilon: ?GETRI reports the first U(i,i)
-                        // that is a true binary zero, not |u| < eps.
-                        const D u = Ab[static_cast<std::ptrdiff_t>(i) * lda + i];
-                        if (sycl_device::dev_is_zero(u)) {
-                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                             sycl::memory_scope::work_group,
-                                             sycl::access::address_space::local_space>(
-                                slot[0])
-                                .fetch_min(i + 1);      // 1-BASED, LAPACK info
-                        }
-                    }
-                }
+                v2::for_each_owned(ex, n, [&](int i) {
+                    // F[i, perm[i]] = 1: i walked back through the interchanges from the LAST to
+                    // the first; each is its own inverse, so only the ORDER reverses.
+                    c(i, v2::perm_index<ApplyOrder::Backward>(ipiv, 0, n, i)) = v2::FusedArith<D>::one();
+                    // EXACT zero, no epsilon: ?GETRI reports the first U(i,i) that is a true
+                    // binary zero, not |u| < eps. 1-BASED, LAPACK info.
+                    if (want_info && v2::FusedArith<D>::is_zero(a(i, i))) info.offer(i + 1);
+                });
 
                 if (want_info) {
-                    sycl::group_barrier(it.get_group());
-                    if (tid == 0) {
-                        const int v = slot[0];
-                        info_ptr[b] =
-                            (v == std::numeric_limits<int>::max()) ? 0 : static_cast<int32_t>(v);
-                    }
+                    ex.group_barrier();
+                    if (tid == 0) info_ptr[b] = static_cast<int32_t>(info.info());
                 }
             });
     });
