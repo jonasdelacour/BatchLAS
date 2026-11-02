@@ -9,6 +9,7 @@
 //                                    of team c mod nteams (publish y before Cyclic reads)
 //   gemv on Thread    alg::Serial
 //   symv/hemv Lower   alg::RowOwnerSplit (the latrd split loop); y in Cyclic layout
+//                     hemv alg::RowOwnerSplitStoredDiag: A(r,r) read as stored (Im assumed 0)
 //   ger/geru/gerc     alg::Cyclic    column loop outside, owned rows inside
 
 #include <type_traits>
@@ -93,26 +94,57 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
 }
 
 namespace detail {
-template <bool Herm, Uplo UL, class Alg, class Ex, class AS, class MA, class X, class BS, class Y>
+template <bool Herm, Uplo UL, class Alg, class Ops, class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
     using Al = pick_t<Alg, alg::RowOwnerSplit>;
     using T = typename MA::value_type;
-    using Ar = Arith<T>;
+    using Ar = arith_t<Ops, T>;
     static_assert(UL == Uplo::Lower, "v2::symv/hemv: only Uplo::Lower is implemented");
-    static_assert(std::is_same_v<Al, alg::RowOwnerSplit>, "v2::symv/hemv: alg::RowOwnerSplit is the only algorithm");
+    static_assert(std::is_same_v<Al, alg::RowOwnerSplit> || (Herm && std::is_same_v<Al, alg::RowOwnerSplitStoredDiag>),
+                  "v2::symv/hemv: alg::RowOwnerSplit (or, hemv only, alg::RowOwnerSplitStoredDiag)");
+    constexpr bool masked_diag = Herm && Ar::is_complex && std::is_same_v<Al, alg::RowOwnerSplit>;
     require_published<Ex, X>();
     const auto& x = unpub(xp);
     const auto alpha = as_tag(alpha_);
     const auto beta = as_tag(beta_);
+    if constexpr (is_trailing_v<MA>) {
+        // Parent coordinates: rows/columns [k, n), the hand kernels' loop shape.
+        static_assert(is_trailing_v<std::remove_cvref_t<decltype(x)>> && is_trailing_v<Y>,
+                      "v2::symv/hemv: a Trailing A takes Trailing x and y");
+        const int k = a.first(), n = a.end();
+        for (int r = k + ex.lid(); r < n; r += Ex::size) {
+            const int c_split = sycl::min(r, n - 1);
+            T acc = Ar::zero();
+            if constexpr (masked_diag) {
+#pragma unroll 4
+                for (int c = k; c < c_split; ++c) Ar::mac(acc, a(r, c), x(c));
+                Ar::mac(acc, Ar::make(Ar::re(a(r, r)), real_t<T>(0)), x(r));
+            } else {
+#pragma unroll 4
+                for (int c = k; c <= c_split; ++c) Ar::mac(acc, a(r, c), x(c));
+            }
+#pragma unroll 4
+            for (int c = c_split + 1; c < n; ++c) {
+                if constexpr (Herm) Ar::mac_conj(acc, a(c, r), x(c));
+                else Ar::mac(acc, a(c, r), x(c));
+            }
+            store(alpha, acc, beta, y(r));
+        }
+    } else {
     const int n = a.rows();
     // Row r of the lower triangle (c <= r) then column r below the diagonal (c > r): ascending
     // c crosses c == r once, so the split keeps the accumulation order and removes the branch.
     for (int r = ex.lid(); r < n; r += Ex::size) {
         T acc = Ar::zero();
-        if constexpr (Herm && Ar::is_complex) {
+        if constexpr (masked_diag) {
 #pragma unroll 4
             for (int c = 0; c < r; ++c) Ar::mac(acc, a(r, c), x(c));
             Ar::mac(acc, Ar::make(Ar::re(a(r, r)), real_t<T>(0)), x(r));  // Im(A(r,r)) is not read
+#pragma unroll 4
+            for (int c = r + 1; c < n; ++c) Ar::mac_conj(acc, a(c, r), x(c));
+        } else if constexpr (Herm) {  // StoredDiag: the diagonal joins the row loop as stored
+#pragma unroll 4
+            for (int c = 0; c <= r; ++c) Ar::mac(acc, a(r, c), x(c));
 #pragma unroll 4
             for (int c = r + 1; c < n; ++c) Ar::mac_conj(acc, a(c, r), x(c));
         } else {
@@ -122,6 +154,7 @@ BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X
             for (int c = r + 1; c < n; ++c) Ar::mac(acc, a(c, r), x(c));
         }
         store(alpha, acc, beta, y(r));
+    }
     }
 }
 
@@ -141,14 +174,14 @@ BATCHLAS_DLA_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& 
 }  // namespace detail
 
 // y := alpha A x + beta y, A symmetric with the UL triangle stored.
-template <Uplo UL, class Alg = void, class Ex, class AS, class MA, class X, class BS, class Y>
+template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DLA_INLINE void symv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
-    detail::symv_impl<false, UL, Alg>(ex, alpha, a, x, beta, y);
+    detail::symv_impl<false, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
 // y := alpha A x + beta y, A Hermitian with the UL triangle stored (Im of the diagonal ignored).
-template <Uplo UL, class Alg = void, class Ex, class AS, class MA, class X, class BS, class Y>
+template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DLA_INLINE void hemv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
-    detail::symv_impl<true, UL, Alg>(ex, alpha, a, x, beta, y);
+    detail::symv_impl<true, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
 
 // A := A + alpha x y^T (ger, geru) or A + alpha x y^H (gerc). y is read by every item.

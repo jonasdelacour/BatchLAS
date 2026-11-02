@@ -17,6 +17,7 @@
 #include <limits>
 #include <vector>
 
+#include <batchlas/blas/device.hh>
 #include <batchlas/blas/device/v2/dla.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
@@ -579,6 +580,137 @@ TYPED_TEST(DeviceBlasV2Test, LatrdStepComposesOnOneLayout) {
         for (int r = 0; r < n; ++r) worst = std::max(worst, rel(got[std::size_t(b) * n + r], ww[r], norm));
     }
     EXPECT_VERIFY(T, Check::blas, n, worst);
+}
+
+// The strict-port ops (latrd P3) give the hand kernel's bits: hemv<RowOwnerSplitStoredDiag,
+// ExplicitInline> on Trailing operands (a v1 KernelMatrixView and a v2 Mat), scratch-less
+// dot_many<Scope::Group, Native>, Native scal / dotc / axpy, offset views (col / tail) and the
+// ranged for_each_owned, each against the legacy latrd expression computed in the same kernel.
+// Im(A(r,r)) != 0 is read as stored, so the default hemv (which masks it) must differ: the
+// control that the bit compare can fail. A WG = 1024 launch covers the ceiling.
+template <int WG, class T> void strict_port_case(Dev& dev) {
+    using R = real_of<T>;
+    using v2::Mem;
+    using v2::Scope;
+    using v2::arith::Native;
+    constexpr int n = 150, ld = n + 3, k0 = 3, P = 3, nout = 6 * n + 4 * P + 2;
+    auto ha = batched<T>(ld * n, 81, [&](T* item) {
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < c; ++r) item[r + std::size_t(c) * ld] = T(R(1e6));  // unread upper triangle
+    }, kPeriod);
+    auto hx = batched<T>(n, 82), hw = batched<T>(ld * P, 83);
+    std::vector<T> ho(std::size_t(kBatch) * nout, T(0));
+    T* a = dev.up(ha);
+    T* x = dev.up(hx);
+    T* w = dev.up(hw);
+    T* o = dev.up(ho);
+    const KernelMatrixView<T, MatrixFormat::Dense> kv(a, n, n, ld, ld * n, kPeriod);
+    const T tau = val<T>(84);
+    dev.template run<WG>(kBatch, sizeof(T) * 2 * n, [=](sycl::nd_item<1> it, unsigned char* lm) {
+        namespace dd = batchlas::device::detail;
+        const int b = static_cast<int>(it.get_group_linear_id());
+        const int lid = static_cast<int>(it.get_local_linear_id());
+        const v2::WorkGroup<WG> ex{it};
+        T* const lv = reinterpret_cast<T*>(lm);
+        T* const lw = lv + n;
+        T* const ob = o + std::ptrdiff_t(b) * nout;
+        const auto Ab = kv.batch_item(b % kPeriod);
+        const auto A = v2::mat(Ab.data(), n, n, ld);
+        const auto W = v2::mat(w + std::ptrdiff_t(b) * ld * P, n, P, ld);
+        const auto vfull = v2::vec<Mem::Local>(lv, n);
+        // Ranged for_each_owned fills v(k0:) with the latrd unit-head form; v2::copy then reads
+        // it back on tail(k0) with no barrier (same owners).
+        v2::for_each_owned(ex, k0, n, [&](int r) { vfull(r) = (r == k0) ? T(1) : x[std::ptrdiff_t(b) * n + r]; });
+        v2::copy(ex, vfull.tail(k0), v2::vec(ob + 5 * n + k0, n - k0));
+        // hemv: hand (legacy latrd loop), v2 on KernelMatrixView, v2 on a v2 Mat, default hemv.
+        ex.barrier(Mem::Local);
+        for (int r = k0 + lid; r < n; r += WG) {
+            const int c_split = sycl::min(r, n - 1);
+            T acc = T(0);
+            for (int c = k0; c <= c_split; ++c) v2::ArithInline<T>::mac(acc, Ab(r, c), lv[c]);
+            for (int c = c_split + 1; c < n; ++c) v2::ArithInline<T>::mac_conj(acc, Ab(c, r), lv[c]);
+            ob[r] = acc;
+        }
+        const auto vp = v2::assume_published(v2::trailing(vfull, k0));
+        v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(
+            ex, v2::One{}, v2::trailing(Ab, k0, n), vp, v2::Zero{}, v2::trailing(v2::vec(ob + n, n), k0));
+        v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(
+            ex, v2::One{}, v2::trailing(A, k0), vp, v2::Zero{}, v2::trailing(v2::vec(ob + 2 * n, n), k0));
+        v2::hemv<Uplo::Lower>(ex, v2::One{}, A.tail(k0), v2::assume_published(vfull.tail(k0)), v2::Zero{}, v2::vec(ob + 3 * n + k0, n - k0));
+        // gamma/delta: hand two-accumulator loop + two group reductions vs dot_many.
+        const auto v = vfull.tail(k0);
+        for (int p = 0; p < P; ++p) {
+            T gp = T(0), dp = T(0);
+            for (int c = k0 + lid; c < n; c += WG) {
+                const T vc = lv[c];
+                gp += dd::conj(W(c, p)) * vc;
+                const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
+                dp += dd::conj(vcp) * vc;
+            }
+            const T g0 = dd::reduce_sum_group(it.get_group(), gp), d0 = dd::reduce_sum_group(it.get_group(), dp);
+            const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, W.col(p).tail(k0), v2::unit_head(A.col(p), p + 1).tail(k0));
+            if (ex.leader()) ob[6 * n + 4 * p] = g0, ob[6 * n + 4 * p + 1] = gd[0], ob[6 * n + 4 * p + 2] = d0, ob[6 * n + 4 * p + 3] = gd[1];
+        }
+        // scal / dotc / axpy (Native) vs the hand std:: expressions, on w = hand hemv result.
+        for (int r = k0 + lid; r < n; r += WG) lw[r] = ob[r];
+        const auto wv = v2::vec<Mem::Local>(lw, n).tail(k0);
+        T hand_dot_p = T(0);
+        for (int r = k0 + lid; r < n; r += WG) hand_dot_p += dd::conj(lv[r]) * (ob[r] * tau);
+        const T hand_dot = dd::reduce_sum_group(it.get_group(), hand_dot_p);
+        v2::scal<Native>(ex, tau, wv);
+        const T dot = v2::dotc<Scope::Group, Native>(ex, v, wv);
+        v2::axpy<Native>(ex, T(-0.5) * tau * dot, v, wv);
+        for (int r = k0 + lid; r < n; r += WG) {
+            T h = ob[r];
+            h *= tau;
+            h += (T(-0.5) * tau * hand_dot) * lv[r];
+            ob[4 * n + r] = h;  // hand
+        }
+        v2::copy(ex, wv, v2::vec(lw, n).tail(k0));
+        if (ex.leader()) ob[6 * n + 4 * P] = hand_dot, ob[6 * n + 4 * P + 1] = dot;
+        // Slot 5: the ranged fill read back through tail(k0) must equal v; then the v2 L1 result.
+        for (int r = k0 + lid; r < n; r += WG) ob[5 * n + r] = (ob[5 * n + r] == lv[r]) ? lw[r] : T(R(NAN));
+    });
+    const auto got = dev.down(o, ho.size());
+    int bitdiff = 0, hemv_v1 = 0, hemv_mat = 0, hemv_masked_same = 0, gd = 0, l1 = 0;
+    for (int b = 0; b < kBatch; ++b) {
+        const T* g = got.data() + std::size_t(b) * nout;
+        const T* g0 = got.data() + std::size_t(b % kPeriod) * nout;
+        for (int i = 0; i < nout; ++i) bitdiff += !same_bits(g[i], g0[i]);
+        for (int r = k0; r < n; ++r) {
+            hemv_v1 += !same_bits(g[n + r], g[r]);
+            hemv_mat += !same_bits(g[2 * n + r], g[r]);
+            hemv_masked_same += same_bits(g[3 * n + r], g[r]);
+            l1 += !same_bits(g[5 * n + r], g[4 * n + r]);
+        }
+        for (int p = 0; p < P; ++p) gd += !same_bits(g[6 * n + 4 * p], g[6 * n + 4 * p + 1]) + !same_bits(g[6 * n + 4 * p + 2], g[6 * n + 4 * p + 3]);
+        gd += !same_bits(g[6 * n + 4 * P], g[6 * n + 4 * P + 1]);
+    }
+    EXPECT_EQ(bitdiff, 0) << "WG=" << WG;
+    EXPECT_EQ(hemv_v1, 0) << "hemv StoredDiag on KernelMatrixView vs hand, WG=" << WG;
+    EXPECT_EQ(hemv_mat, 0) << "hemv StoredDiag on v2 Mat vs hand, WG=" << WG;
+    if constexpr (is_cplx<T>) EXPECT_LT(hemv_masked_same, kBatch * (n - k0)) << "default hemv must mask Im(A(r,r))";
+    EXPECT_EQ(gd, 0) << "dot_many / dotc (Native, Group) vs reduce_sum_group, WG=" << WG;
+    EXPECT_EQ(l1, 0) << "scal / axpy Native vs the hand expressions, WG=" << WG;
+    double worst = 0;
+    for (int b = 0; b < kPeriod; ++b)
+        for (int r = k0; r < n; ++r) {
+            LD<T> acc = 0;
+            long double s = 0;
+            for (int c = k0; c < n; ++c) {
+                const LD<T> e = r >= c ? wide(ha[std::size_t(b) * ld * n + r + std::size_t(c) * ld])
+                                       : conj_h(wide(ha[std::size_t(b) * ld * n + c + std::size_t(r) * ld]));
+                const LD<T> xc = c == k0 ? LD<T>(1) : wide(hx[std::size_t(b) * n + c]);
+                acc += e * xc, s += std::abs(e) * std::abs(xc);
+            }
+            worst = std::max(worst, rel(got[std::size_t(b) * nout + r], acc, s));
+        }
+    EXPECT_VERIFY(T, Check::blas, n, worst) << "hemv StoredDiag (Im(A(r,r)) as stored), WG=" << WG;
+}
+
+TYPED_TEST(DeviceBlasV2Test, StrictPortOpsGiveTheHandKernelBits) {
+    strict_port_case<128, TypeParam>(this->dev);
+    strict_port_case<1024, TypeParam>(this->dev);
 }
 
 // v1 interop: vec(VectorView) / mat(KernelMatrixView) after batch_item(b), non-natural ld,
