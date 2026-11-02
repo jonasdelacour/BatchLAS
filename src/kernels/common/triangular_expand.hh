@@ -72,8 +72,8 @@ Event expand_triangular(Queue& ctx,
         const v2::Grid2D<0, 0, 1> ex{item};
         const int b = ex.batch();
         v2::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
-                       v2::mat(src + static_cast<std::size_t>(b) * stride_a, n, n, lda),
-                       v2::mat(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo));
+                       v2::matw(src + static_cast<std::size_t>(b) * stride_a, n, n, lda),
+                       v2::matw(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo));
     });
 
     return ctx.get_event();
@@ -129,8 +129,8 @@ Event expand_mirrored(Queue& ctx,
             // Row/column origin of the tile inside the referenced triangle.
             const int src_row0 = (lower ? ti : tj) * kMirrorTile;
             const int src_col0 = (lower ? tj : ti) * kMirrorTile;
-            const auto a_b = v2::mat(src + static_cast<std::size_t>(b) * stride_a, n, n, lda);
-            const auto o_b = v2::mat(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo);
+            const auto a_b = v2::matw(src + static_cast<std::size_t>(b) * stride_a, n, n, lda);
+            const auto o_b = v2::matw(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo);
             const auto t = v2::mat<v2::Mem::Local>(::batchlas::util::get_raw_ptr(tile), kMirrorTile, kMirrorTile, kMirrorTile + 1);
 
             v2::tile_load<kMirrorTile>(ex, a_b, src_row0, src_col0, t);

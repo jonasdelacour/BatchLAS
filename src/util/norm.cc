@@ -55,8 +55,14 @@ namespace batchlas
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
             const size_t b = idx[0];
             if (masked && !mk[b]) return;
-            namespace v2 = ::batchlas::device::v2;
-            norms[b] = v2::absrange(v2::Thread{}, v2::vec(eigen_span.data() + b * n, n)).hi;  // max |lambda|
+            // Not v2::absrange: behind any call boundary this loop's blocks are laid out after the
+            // body, PTX gets the opposite latch polarity and ptxas unrolls it 4x more (LDG 14 -> 70).
+            const Real* eig = eigen_span.data() + b * n;
+            Real max_val = Real(0);
+            for (int i = 0; i < n; ++i) {
+                max_val = sycl::fmax(max_val, sycl::fabs(eig[i]));
+            }
+            norms[b] = max_val;
         });
 
         // A_copy, eigenvalues and the workspace lease die with this frame: finish before they do.

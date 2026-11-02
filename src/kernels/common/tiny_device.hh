@@ -48,10 +48,16 @@ inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
     return ::batchlas::device::v2::bcast(part, v, src);
 }
 
-// Component by component (v2::sel). evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
+// Component by component (as v2::sel). evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
+// Kept by hand: forwarding to v2::sel (inline or always_inline, any body) re-types Cx<float> and
+// costs complex<float> potrf/posv/gesv tiny +4..26% SASS, REG 162 -> 110 at N = 32.
 template <typename D>
 inline D tiny_select(bool cond, D a, D b) {
-    return ::batchlas::device::v2::sel(cond, a, b);
+    if constexpr (sycl_device::dev_is_complex_v<D>) {
+        return D{cond ? a.re : b.re, cond ? a.im : b.im};
+    } else {
+        return cond ? a : b;
+    }
 }
 
 // Dead rows carry the identity, so the unrolled bodies need no lane guard. `c <= lane` is

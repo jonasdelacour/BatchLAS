@@ -528,10 +528,10 @@ TYPED_TEST(DeviceBlasV2GlueTest, ScalarLartgLarfgAnd2x2Kernels) {
         std::vector<LD<T>> y = {wide(alpha)}, v = {LD<T>(1)};
         for (const T& xi : hx) y.push_back(wide(xi)), v.push_back(wide(s[2]) * wide(xi));
         LD<T> vy = 0;
-        for (std::size_t i = 0; i < y.size(); ++i) vy += std::conj(v[i]) * y[i];
+        for (std::size_t i = 0; i < y.size(); ++i) vy += conj_h(v[i]) * y[i];
         const long double nrm = std::sqrt(std::norm(wide(alpha)) + xn2);
         for (std::size_t i = 0; i < y.size(); ++i) {
-            const LD<T> hy = y[i] - std::conj(wide(s[0])) * v[i] * vy;
+            const LD<T> hy = y[i] - conj_h(wide(s[0])) * v[i] * vy;
             EXPECT_VERIFY(T, Check::blas, xl + 1, rel(i == 0 ? s[1] : T(0), hy, nrm)) << (c ? "RealBeta" : "Phase") << " row " << i;
         }
         if (c == 1) EXPECT_EQ(std::imag(LD<T>(s[1])), 0.0L) << "RealBeta: beta is real";
@@ -581,9 +581,9 @@ TYPED_TEST(DeviceBlasV2GlueTest, LarfgOnWorkGroupAnnihilatesX) {
             const T* y1 = g.data() + std::size_t(b) * per;
             LD<T> vy = wide(y0[0]);
             long double nrm2 = std::norm(wide(y0[0]));
-            for (int i = 0; i < n; ++i) vy += std::conj(wide(y1[1 + i * inc])) * wide(y0[1 + i * inc]), nrm2 += std::norm(wide(y0[1 + i * inc]));
+            for (int i = 0; i < n; ++i) vy += conj_h(wide(y1[1 + i * inc])) * wide(y0[1 + i * inc]), nrm2 += std::norm(wide(y0[1 + i * inc]));
             const long double nrm = std::sqrt(nrm2);
-            const LD<T> t = std::conj(wide(gt[b]));
+            const LD<T> t = conj_h(wide(gt[b]));
             EXPECT_VERIFY(T, Check::blas, n + 1, rel(y1[0], wide(y0[0]) - t * vy, nrm)) << "beta, conv " << c;
             double worst = 0;
             for (int i = 0; i < n; ++i) worst = std::max(worst, rel(T(0), wide(y0[1 + i * inc]) - t * wide(y1[1 + i * inc]) * vy, nrm));

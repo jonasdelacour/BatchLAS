@@ -177,6 +177,26 @@ template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned2d(const Ex&
     }
 }
 
+// A whole user matrix with 64-bit element offsets (size_t(j) * ld + i), the index math of the
+// hand-written whole-matrix kernels, so a 1:1 port keeps their SASS. Mat's int32 j * ld is the
+// default for a kernel's own tiles and sub-views.
+template <class T, Mem M = Mem::Global> struct MatW {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int m, n;
+    std::size_t ld;
+    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const {
+        return p[static_cast<std::size_t>(j) * ld + static_cast<std::size_t>(i)];
+    }
+    BATCHLAS_DLA_INLINE int rows() const { return m; }
+    BATCHLAS_DLA_INLINE int cols() const { return n; }
+};
+template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE MatW<T, M> matw(T* p, int m, int n, std::size_t ld) {
+    return {p, m, n, ld};
+}
+
 // ---- regions --------------------------------------------------------------------------------
 struct All {};
 // Upper keeps j - i >= k, Lower keeps j - i <= k (k = 0: the triangle with its diagonal;
