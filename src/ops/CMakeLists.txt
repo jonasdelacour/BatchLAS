@@ -168,7 +168,6 @@ set(EXTENSIONS_TRIDIAG_SOURCES
     syev/tridiag/stebz.cc
     syev/tridiag/stein.cc
     syev/steqr/steqr_wg.cc
-    syev/steqr/steqr_legacy.cc
 )
 
 # latrd_lower_panel.cc gets a library to itself: it is ~112 s of the ~170 s
