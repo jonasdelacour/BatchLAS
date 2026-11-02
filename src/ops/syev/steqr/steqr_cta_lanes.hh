@@ -16,8 +16,18 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::tridiag {
+
+// An empty asm use stops LLVM sinking a load past inlined branches; no-op off DPC++ NVPTX.
+template <typename T>
+inline void issue_early([[maybe_unused]] const T& v) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<T, float>) asm volatile("" ::"f"(v));
+    if constexpr (std::is_same_v<T, double>) asm volatile("" ::"d"(v));
+#endif
+}
 
 // The closed index range [first, last] of a block or a window.
 struct Range {
@@ -248,6 +258,10 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
         const T e_below_raw = before.e_at(std::max(lo - 1, 0));
         const T e_below = (lo >= 1) ? e_below_raw : T(0);
 
+        // Pinned here, ptxas issues Z's LDS first after the lartg join instead of 16 slots later.
+        const T z = q.template chase_load<-1>(act);
+        issue_early(z);
+
         // Idle: (1, 0) gives the exact identity rotation.
         const ChaseState<T> in{act ? pair.pivot : T(1), act ? pair.bulge : T(0)};
         const ExpRotation<T> r = exp_rotation(in, d_hi, e_mid, d_lo, e_below);
@@ -259,11 +273,7 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
         t.d = owns_hi ? r.d_hi : t.d;
         t.e = (owns_hi && hi < e_hi_limit) ? r.e_hi : t.e;
 
-        if constexpr (Pad) {
-            q.template chase_step_masked<-1>(r.R.c, -r.R.s, act);
-        } else {
-            q.template chase_step<-1>(r.R.c, -r.R.s);
-        }
+        q.template chase_apply<-1>(r.R.c, -r.R.s, z, act);
 
         d_hi = act ? r.d_lo : d_hi;
         e_mid = act ? r.e_below : e_mid;
