@@ -224,17 +224,33 @@ Event steqr_impl(Queue& ctx,
             auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
             const int ncols = static_cast<int>(Q_.cols());
             bool forward = order_view[gid] == ApplyOrder::Forward;
-            // Row k of Q, virtual column v mapped to its physical column.
-            const auto q_row = [&](int v) -> T& { return Q_(k, forward ? v : (ncols - 1 - v)); };
+            auto col_index = [&](int v) -> int {
+                return (forward)
+                        ? v
+                        : (ncols - 1 - v);
+            };
 
             // Only replay the sweeps that were actually performed for this sub-problem.
             // Slots beyond that are stale/uninitialised and must not be applied.
             // sweep_counts is empty when eigenvectors were not requested; nothing to replay then.
             const int n_sweeps = sweep_counts.size() == 0 ? 0 : static_cast<int>(sweep_counts[gid]);
+            // Not on v2::lasr<alg::SkipIdentity>: its IR matches this loop except the order of the
+            // two column-index computations, and ptxas then keeps the loop rolled (4x fewer
+            // LDG/STG/FFMA in the unrolled body). evidence: inv/steqr gate notes, LegacyRotation.
             for (int i = 0; i < n_sweeps; ++i) {
-                // dlasr (SIDE = R), skipping identity rotations.
-                v2::lasr<v2::alg::SkipIdentity>(
-                    v2::Thread{}, ncols, [&](int j) -> const std::array<T, 2>& { return rotations_view(j, i, gid); }, q_row);
+                for (int j = 0; j < ncols - 1; ++j) {
+                    auto [c, s] = rotations_view(j, i, gid);
+                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+
+                    // Map virtual indices (j, j+1) to physical column indices.
+                    int ix1 = col_index(j);
+                    int ix2 = col_index(j + 1);
+
+                    const T x = Q_(k, ix1);
+                    const T y = Q_(k, ix2);
+                    Q_(k, ix1) = c * x - s * y;
+                    Q_(k, ix2) = s * x + c * y;
+                }
             }
             }
         });
@@ -391,8 +407,10 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
             cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
                 if (!e.active(id[0])) return;  // I3
                 auto ebid = e.batch_item(id[0]);
-                const int32_t unconverged =
-                    v2::reduce(v2::Thread{}, static_cast<int>(n - 1), [&](int j) { return int32_t(ebid(j) != T(0)); });
+                int32_t unconverged = 0;
+                for (int64_t j = 0; j < n - 1; ++j) {
+                    if (ebid(j) != T(0)) ++unconverged;
+                }
                 detail::info_report(info_out, static_cast<int64_t>(id[0]), unconverged);
             });
         });

@@ -221,8 +221,7 @@ namespace batchlas {
                               bool rev) {
         namespace v2 = device::v2;
         const auto ex = steqr_v2_exec(partition);
-        v2::reverse(ex, v2::lane_vec(diag, bb, be + 1), rev);
-        v2::reverse(ex, v2::lane_vec(offdiag, bb, be), rev);
+        v2::reverse(ex, v2::lane_vec(diag, bb, be + 1), v2::lane_vec(offdiag, bb, be), rev);
         qcache.reverse_columns(bb, be, rev);
     }
 

@@ -321,9 +321,10 @@ Event steqr_wg(Queue& ctx,
             cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
                 if (!e.active(id[0])) return;  // I3
                 auto e_item = e.batch_item(id[0]);
-                // ?steqr's info: the off-diagonals that never converged.
-                const int32_t unconverged =
-                    v2::reduce(v2::Thread{}, static_cast<int>(n - 1), [&](int j) { return int32_t(e_item(j) != T(0)); });
+                int32_t unconverged = 0;
+                for (int64_t j = 0; j < n - 1; ++j) {
+                    if (e_item(j) != T(0)) ++unconverged;
+                }
                 detail::info_report(info_out, static_cast<int64_t>(id[0]), unconverged);
             });
         });

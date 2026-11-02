@@ -352,7 +352,7 @@ TYPED_TEST(V2SteqrTridiagTest, TridiagRotMatchesDenseSimilarity) {
 
 // One problem of n = P - 1 per chunk (the last lane is padding): lanst_max on windows that exclude
 // a planted extreme on each side, the split over the whole e, find_first past a leading zero,
-// then reverse of d and (on even problems only) of e.
+// then reverse of d, and the paired reverse of d[2, n-1) with e (e only on even problems).
 template <class T, int P, class Mk> void lane_case(Dev& dev, Mk mk, const char* where) {
     constexpr int WG = 32, chunks = WG / P, n = P - 1, nprob = kBatch;
     const v2::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
@@ -385,7 +385,7 @@ template <class T, int P, class Mk> void lane_case(Dev& dev, Mk mk, const char* 
         v2::tridiag_split(ex, dv, v2::lane_vec(ev, 0, n - 1), tol);
         const int first = v2::find_first(ex, v2::lane_vec(ev, 1, n - 1), n - 1, [](T x) { return x == T(0); });
         v2::reverse(ex, v2::lane_vec(dv, 1, n - 1), true);
-        v2::reverse(ex, v2::lane_vec(ev, 1, n - 2), q % 2 == 0);
+        v2::reverse(ex, v2::lane_vec(dv, 2, n - 1), v2::lane_vec(ev, 1, q % 2 == 0 ? n - 2 : 1), true);
         if (l < n) d[std::ptrdiff_t(q) * n + l] = dv;
         if (l < n - 1) e[std::ptrdiff_t(q) * n + l] = ev;
         if (l == 0) {
@@ -409,7 +409,9 @@ template <class T, int P, class Mk> void lane_case(Dev& dev, Mk mk, const char* 
             if (es[i] == T(0)) ff = i;
         bad += gn[q] != mx;
         bad += gi[q] != ff;
-        for (int i = 0; i < n; ++i) bad += !same_bits(gd[std::size_t(q) * n + i], (i >= 1 && i < n - 1) ? d0[n - 1 - i] : d0[i]);
+        // d reversed on [1, n-1), then [2, n-1) reversed again: a rotation of d[1, n-1).
+        for (int i = 0; i < n; ++i)
+            bad += !same_bits(gd[std::size_t(q) * n + i], i == 1 ? d0[n - 2] : (i >= 2 && i < n - 1) ? d0[i - 1] : d0[i]);
         for (int i = 0; i < n - 1; ++i)
             bad += !same_bits(ge[std::size_t(q) * n + i], (q % 2 == 0 && i >= 1 && i < n - 2) ? es[n - 2 - i] : es[i]);
     }

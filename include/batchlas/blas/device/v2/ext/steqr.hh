@@ -72,8 +72,20 @@ template <int P, bool M, class I> inline constexpr bool is_partition_v<Partition
 
 // fmax where the executor's reduction takes any functor (Thread, the Partition butterfly);
 // the sycl group reductions take sycl::maximum, equal to fmax on NaN-free |x|.
+template <class Ex> inline constexpr bool is_sgp_partition_v = false;
+template <int P, bool M, class I> inline constexpr bool is_sgp_partition_v<Partition<P, M, I>> = !sycl::is_group_v<I>;
+
+// Butterfly over a SubGroupPartition chunk with masks 1, 2, .., P/2 and v = op(v, other): the
+// order of the solvers this extension came from (min and fmax are order-free; the codegen is not).
+template <class Ex, class T, class Op> BATCHLAS_DLA_INLINE T butterfly_up(const Ex& ex, T v, Op op) {
+#pragma unroll
+    for (unsigned m = 1u; m < static_cast<unsigned>(Ex::size); m <<= 1) v = op(v, permute_group_by_xor(ex.part, v, m));
+    return v;
+}
+
 template <Scope S, class Ex, class R> BATCHLAS_DLA_INLINE R reduce_fmax(const Ex& ex, R v) {
-    if constexpr (is_thread_v<Ex> || is_partition_v<Ex>) return scope_reduce<S>(ex, v, FmaxOp{});
+    if constexpr (is_sgp_partition_v<Ex> && S != Scope::Group) return butterfly_up(ex, v, FmaxOp{});
+    else if constexpr (is_thread_v<Ex> || is_partition_v<Ex>) return scope_reduce<S>(ex, v, FmaxOp{});
     else return scope_reduce<S>(ex, v, sycl::maximum<R>());
 }
 
@@ -111,11 +123,11 @@ template <class Ex, class T> BATCHLAS_DLA_INLINE T lane_select(const Ex& ex, T v
 
 // ---- plane rotations -------------------------------------------------------------------------
 
-// (x, y) := (c x - s y, s x + c y) on two scalars the caller owns.
-template <class R, class T> BATCHLAS_DLA_INLINE void rot(Givens<R> g, T& x, T& y) {
+namespace detail {
+// x := c a - s b, then y := s a + c b (in that order).
+template <class R, class T, class X, class Y>
+BATCHLAS_DLA_INLINE void rot_store(Givens<R> g, const T& a, const T& b, X& x, Y& y) {
     using A = Arith<T>;
-    const T a = x;
-    const T b = y;
     if constexpr (A::is_complex) {
         x = A::make(g.c * A::re(a) - g.s * A::re(b), g.c * A::im(a) - g.s * A::im(b));
         y = A::make(g.s * A::re(a) + g.c * A::re(b), g.s * A::im(a) + g.c * A::im(b));
@@ -123,6 +135,14 @@ template <class R, class T> BATCHLAS_DLA_INLINE void rot(Givens<R> g, T& x, T& y
         x = g.c * a - g.s * b;
         y = g.s * a + g.c * b;
     }
+}
+}  // namespace detail
+
+// (x, y) := (c x - s y, s x + c y) on two scalars the caller owns.
+template <class R, class T> BATCHLAS_DLA_INLINE void rot(Givens<R> g, T& x, T& y) {
+    const T a = x;
+    const T b = y;
+    detail::rot_store(g, a, b, x, y);
 }
 
 // (x(i), y(i)) := G (x(i), y(i)) for every owned i; elementwise, no barrier.
@@ -137,12 +157,17 @@ template <class Alg = alg::Dense, class Ex, class Rots, class X>
 BATCHLAS_DLA_INLINE void lasr(const Ex&, int n, const Rots& rots, const X& x) {
     static_assert(Ex::size == 1, "v2::lasr on one vector is serial: pass Thread, or use lasr_rows");
     for (int j = 0; j < n - 1; ++j) {
-        const auto g = givens(rots(j));
+        const auto r = rots(j);  // a copy: the rotation table is not re-read after a store
+        const auto g = givens(r);
         if constexpr (std::is_same_v<Alg, alg::SkipIdentity>) {
             using R = decltype(g.c);
             if (g.c == R(1) && g.s == R(0)) continue;
         }
-        rot(g, x(j), x(j + 1));
+        auto& p = x(j);
+        const auto a = p;
+        auto& q = x(j + 1);
+        const auto b = q;
+        detail::rot_store(g, a, b, p, q);
     }
 }
 
@@ -215,7 +240,9 @@ template <Scope S = Scope::Auto, class Ex, class T, class Pred>
 BATCHLAS_DLA_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, int none, Pred&& pred) {
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
-    return detail::scope_reduce<S>(ex, cand, sycl::minimum<int>());
+    if constexpr (detail::is_sgp_partition_v<Ex> && S != Scope::Group)
+        return detail::butterfly_up(ex, cand, [](int v, int o) { return (o < v) ? o : v; });
+    else return detail::scope_reduce<S>(ex, cand, sycl::minimum<int>());
 }
 
 // x(lo..hi-1) := x(hi-1..lo) when `on` (one shuffle on every item, so `on` may differ per team).
@@ -223,6 +250,17 @@ template <class Ex, class T> BATCHLAS_DLA_INLINE void reverse(const Ex& ex, cons
     const int l = ex.lid();
     const int src = (on && l >= x.lo && l < x.hi) ? (x.lo + x.hi - 1 - l) : l;
     x.v = detail::lane_select(ex, static_cast<std::remove_cv_t<T>>(x.v), src);
+}
+
+// Both windows reversed when `on`: the two sources first, then the two shuffles, so the
+// shuffles share one convergence check (the T := J T J of a tridiagonal block, d and e).
+template <class Ex, class T, class U>
+BATCHLAS_DLA_INLINE void reverse(const Ex& ex, const LaneVec<T>& x, const LaneVec<U>& y, bool on) {
+    const int l = ex.lid();
+    const int src_x = (on && l >= x.lo && l < x.hi) ? (x.lo + x.hi - 1 - l) : l;
+    const int src_y = (on && l >= y.lo && l < y.hi) ? (y.lo + y.hi - 1 - l) : l;
+    x.v = detail::lane_select(ex, static_cast<std::remove_cv_t<T>>(x.v), src_x);
+    y.v = detail::lane_select(ex, static_cast<std::remove_cv_t<U>>(y.v), src_y);
 }
 
 // Memory form, serial: x(lo..hi-1) := x(hi-1..lo).
