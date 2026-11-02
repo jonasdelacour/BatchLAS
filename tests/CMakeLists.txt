@@ -45,6 +45,7 @@ set(TEST_TARGETS
     device_blas_v2_potrf-cta-lpanel_tests
     device_blas_v2_potri_tests
     device_blas_v2_sb2st-sy2sb_tests
+    device_blas_v2_stedc_tests
     mempool_tests
     backend_dispatch_tests
     options_api_tests
@@ -241,6 +242,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests device_blas_v2_tests device_blas_v2_potrf-cta-lpanel_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     device_blas_tests device_blas_v2_tests device_blas_v2_potri_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     device_blas_tests device_blas_v2_tests device_blas_v2_sb2st-sy2sb_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
+    device_blas_tests device_blas_v2_tests device_blas_v2_stedc_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests vendor_ptr_array_tests resident_capacity_tests
     geqrf_candidates_tests

@@ -10,7 +10,7 @@ leaf solver is in @ref algo_steqr; live values are in `include/batchlas/tuning_p
 
 `maybe_rescale_vectors` and `normalize_vectors` (`src/ops/syev/stedc/stedc_merge_cta.cc`) run one
 index per sub-group partition, concurrently, with one `group_barrier(wg)` between phases, instead of a
-whole-work-group reduction and a barrier per index. The WG variant (`WorkgroupAdapter`) keeps the old,
+whole-work-group reduction and a barrier per index. The WG variant (executor `v2::DynWorkGroup`) keeps the old,
 bit-identical code as the A/B reference. Alone this gains about 5.5%; with the multiplier change it
 enabled, 15-20% end to end (batch 256, float, n = 64 0.930 -> 0.782 ms, n = 512 13.144 -> 11.162 ms).
 
