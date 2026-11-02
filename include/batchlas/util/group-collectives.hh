@@ -44,6 +44,10 @@ template <typename T, typename Op>
 inline constexpr bool kSplitComplexSum =
     is_std_complex<T>::value && (std::is_same_v<Op, sycl::plus<T>> || std::is_same_v<Op, sycl::plus<>>);
 
+/// @brief Applies `f` to each 32- or 64-bit word of `v` and reassembles the words into a `T`.
+/// @param[in] v  trivially copyable value to split into words
+/// @param[in] f  word map, called once per word, e.g. a per-word collective
+/// @return       the `T` whose words are `f` of the matching words of @p v
 template <typename T, typename F>
 inline T map_words(const T& v, F&& f) {
     static_assert(std::is_trivially_copyable_v<T>, "group collectives need a trivially copyable T");
@@ -126,6 +130,11 @@ ACPP_UNIVERSAL_TARGET __attribute__((always_inline)) inline local_ptr<T> wg_scra
 // detail/broadcast.hpp:29). Same algorithm with a typed final broadcast; sub-group reduces are exact.
 // TRAP (multipass CUDA/HIP): its reduce (generic/hiplike/group_functions.hpp:36-71) has no barrier
 // after the read of its static scratch, so the next reduce of the same T and op can overwrite it.
+/// @brief Exact work-group reduce of a floating value: sub-group reduces, then a typed scratch pass. Collective.
+/// @param[in] g   work-group; every work-item of it must call
+/// @param[in] x   this work-item's contribution
+/// @param[in] op  binary reduction operator, e.g. `sycl::plus<T>`
+/// @return        the reduction of every work-item's @p x, on every work-item
 template <typename Group, typename T, typename Op>
 inline T wg_reduce_floating(Group g, T x, Op op) {
     // Host-compiled kernels (omp.library-only) have no wg_scratch.
@@ -163,6 +172,11 @@ inline T wg_reduce_floating(Group g, T x, Op op) {
 // overwrite it before a slower warp reads it: that warp silently gets the next value.
 inline constexpr bool kFencedWgBroadcastPass = ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP;
 
+/// @brief `sycl::group_broadcast` followed by a barrier on multipass CUDA/HIP work-groups. Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] w   this work-item's value, 1, 2, 4 or 8 bytes wide; only the source work-item's is used
+/// @param[in] id  local id of the source work-item (omitted: work-item 0)
+/// @return        the source work-item's @p w, on every work-item
 template <typename Group, typename W, typename... Id>
 inline W broadcast_fenced(Group g, W w, Id... id) {
     const W r = sycl::group_broadcast(g, w, id...);
@@ -176,6 +190,10 @@ inline W broadcast_fenced(Group g, W w, Id... id) {
 /// @{
 
 /// @brief `sycl::group_broadcast` for any trivially copyable `T`. Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] x   this work-item's value; only the source work-item's is used
+/// @param[in] id  local id of the source work-item (omitted: work-item 0)
+/// @return        the source work-item's `x`, on every work-item
 template <typename Group, typename T, typename... Id>
     requires sycl::is_group_v<Group>
 inline T group_broadcast(Group g, T x, Id... id) {
@@ -187,6 +205,10 @@ inline T group_broadcast(Group g, T x, Id... id) {
 }
 
 /// @brief `sycl::select_from_group` for any trivially copyable `T`. Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] x   this work-item's value
+/// @param[in] id  local id of the work-item whose `x` this work-item receives
+/// @return        `x` of work-item `id`
 template <typename Group, typename T, typename Id>
     requires sycl::is_group_v<Group>
 inline T select_from_group(Group g, T x, Id id) {
@@ -198,6 +220,10 @@ inline T select_from_group(Group g, T x, Id id) {
 }
 
 /// @brief `sycl::shift_group_left` for any trivially copyable `T`. Collective.
+/// @param[in] g      group or sub-group; every work-item of it must call
+/// @param[in] x      this work-item's value
+/// @param[in] delta  shift \f$\delta\f$ (omitted: 1)
+/// @return           `x` of work-item \f$i + \delta\f$ on work-item \f$i\f$; unspecified past the end
 template <typename Group, typename T, typename... Delta>
     requires sycl::is_group_v<Group>
 inline T shift_group_left(Group g, T x, Delta... delta) {
@@ -209,6 +235,10 @@ inline T shift_group_left(Group g, T x, Delta... delta) {
 }
 
 /// @brief `sycl::shift_group_right` for any trivially copyable `T`. Collective.
+/// @param[in] g      group or sub-group; every work-item of it must call
+/// @param[in] x      this work-item's value
+/// @param[in] delta  shift \f$\delta\f$ (omitted: 1)
+/// @return           `x` of work-item \f$i - \delta\f$ on work-item \f$i\f$; unspecified when \f$i < \delta\f$
 template <typename Group, typename T, typename... Delta>
     requires sycl::is_group_v<Group>
 inline T shift_group_right(Group g, T x, Delta... delta) {
@@ -220,6 +250,10 @@ inline T shift_group_right(Group g, T x, Delta... delta) {
 }
 
 /// @brief `sycl::permute_group_by_xor` for any trivially copyable `T`. Collective.
+/// @param[in] g     group or sub-group; every work-item of it must call
+/// @param[in] x     this work-item's value
+/// @param[in] mask  XOR mask \f$m\f$
+/// @return          `x` of work-item \f$i \oplus m\f$ on work-item \f$i\f$
 template <typename Group, typename T, typename Mask>
     requires sycl::is_group_v<Group>
 inline T permute_group_by_xor(Group g, T x, Mask mask) {
@@ -232,6 +266,10 @@ inline T permute_group_by_xor(Group g, T x, Mask mask) {
 
 /// @brief `sycl::reduce_over_group`, also for a `std::complex` sum; a work-group floating
 /// result is exact (see detail::wg_reduce_floating). Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] x   this work-item's contribution
+/// @param[in] op  binary reduction operator, e.g. `sycl::plus<T>`
+/// @return        the reduction of every work-item's `x`, on every work-item
 template <typename Group, typename T, typename Op>
     requires sycl::is_group_v<Group>
 inline T reduce_over_group(Group g, T x, Op op) {
@@ -255,6 +293,12 @@ inline T reduce_over_group(Group g, T x, Op op) {
 
 /// @brief `sycl::joint_reduce` with an initial value, also for a `std::complex` sum. Collective.
 /// @pre `first` and `last` are raw pointers: AdaptiveCpp has no accessor-iterator overload.
+/// @param[in] g      group or sub-group; every work-item of it must call with the same range
+/// @param[in] first  start of the range \f$[\mathit{first}, \mathit{last})\f$ to reduce
+/// @param[in] last   one past its end
+/// @param[in] init   initial value folded into the result
+/// @param[in] op     binary reduction operator, e.g. `sycl::plus<T>`
+/// @return           `op` applied over `init` and every element of the range, on every work-item
 template <typename Group, typename Ptr, typename T, typename Op>
     requires sycl::is_group_v<Group>
 inline T joint_reduce(Group g, Ptr first, Ptr last, T init, Op op) {
@@ -276,6 +320,11 @@ inline T joint_reduce(Group g, Ptr first, Ptr last, T init, Op op) {
 
 /// @brief `sycl::joint_reduce` without an initial value (an empty range gives `T{}`). Collective.
 /// @pre `first` and `last` are raw pointers.
+/// @param[in] g      group or sub-group; every work-item of it must call with the same range
+/// @param[in] first  start of the range \f$[\mathit{first}, \mathit{last})\f$ to reduce
+/// @param[in] last   one past its end
+/// @param[in] op     binary reduction operator, e.g. `sycl::plus<>`
+/// @return           `op` applied over every element of the range, on every work-item
 template <typename Group, typename Ptr, typename Op>
     requires sycl::is_group_v<Group>
 inline auto joint_reduce(Group g, Ptr first, Ptr last, Op op) {
@@ -294,6 +343,16 @@ inline auto joint_reduce(Group g, Ptr first, Ptr last, Op op) {
 
 /// @brief `sycl::joint_exclusive_scan` with an initial value; `result` may equal `first`. Collective.
 /// @pre `first`, `last` and `result` are raw pointers; `T` is an integral type.
+/// @param[in]  g       group or sub-group; every work-item of it must call with the same range
+/// @param[in]  first   start of the input range \f$[\mathit{first}, \mathit{last})\f$ of
+///                     \f$n\f$ elements
+/// @param[in]  last    one past its end
+/// @param[out] result  start of the \f$n\f$-element output; may equal `first` (in place).
+///                     Element \f$i\f$ is \f$r_i = \mathit{init} \circ x_0 \circ \cdots \circ x_{i-1}\f$,
+///                     where \f$x_j\f$ is `first[j]`
+/// @param[in]  init    initial value \f$r_0\f$
+/// @param[in]  op      binary scan operator, e.g. `sycl::plus<T>`
+/// @return             `result + n`, one past the last element written
 template <typename Group, typename InPtr, typename OutPtr, typename T, typename Op>
     requires sycl::is_group_v<Group>
 inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result, T init, Op op) {

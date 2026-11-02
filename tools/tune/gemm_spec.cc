@@ -124,12 +124,6 @@ std::vector<std::string> strs(const auto& xs) {
     return out;
 }
 
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
-
 class GemmSpec final : public OpSpec {
 public:
     std::string op() const override { return "gemm"; }

@@ -12,8 +12,8 @@
 
 namespace batchlas::ops::getrf {
 
-struct Tiny : select::NoFields<"tiny"> {};        ///< getrf_tiny_dispatch: register-resident, n <= 32 (cdouble 16)
-struct Cta : select::NoFields<"cta"> {};          ///< getrf_cta_dispatch: SLM-resident panel, n <= the SLM ceiling
+struct Tiny : select::NoFields<"tiny"> {};        ///< getrf_tiny_dispatch: register-resident, \f$n \le 32\f$ (cdouble 16)
+struct Cta : select::NoFields<"cta"> {};          ///< getrf_cta_dispatch: SLM-resident panel, \f$n \le\f$ the SLM ceiling
 struct Blocked : select::NoFields<"blocked"> {};  ///< getrf_blocked_dispatch + the public gemm and trsm
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getrf_vendor (cuBLAS / rocSOLVER / LAPACKE)
 
@@ -24,7 +24,7 @@ constexpr auto candidates() { return select::all_of<GetrfChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::getrf, select::Lib::factorization};  ///< §5.5: blocked, then vendor (CPU)
 
-inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work ~ n^3 batch
+inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work \f$\sim n^3 \cdot \mathit{batch}\f$
 
 /// Both sides of every transcribed threshold (4|5, 7|8|9, 16|17, 24|25, 32|33, 255|256, 511|512; batch
 /// 255|256), a coarse log grid elsewhere. The transcriber (tuned/README.md) spells the same grid.

@@ -16,7 +16,7 @@
 
 namespace batchlas::ops::syrk {
 
-struct Gram : select::NoFields<"gram"> {};              ///< syrk_gram_tiles: one tile covers C; n <= 128, tile SLM fits
+struct Gram : select::NoFields<"gram"> {};              ///< syrk_gram_tiles: one tile covers C; \f$n \le 128\f$, tile SLM fits
 struct Triangular : select::NoFields<"triangular"> {};  ///< syrk_triangular_tiles<T>: 128-wide tiles of one half
 struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syrk_vendor (per-item ?syrk loop)
 
@@ -37,7 +37,7 @@ inline constexpr bool vendor_wired = select::has_library<B>(select::Lib::level3)
 inline constexpr std::array<std::string_view, 3> last_resort{"triangular", "gram", "vendor"};  ///< none runs
 inline constexpr select::OpSpec spec{Op::syrk, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: form (transcribed squareish ratio of n, k) and trans N|T|C exact; n weight 2 (work ~ n^2 k batch);
+/// Keys: form (transcribed squareish ratio of n, k) and trans N|T|C exact; n weight 2 (work \f$\sim n^2 k \cdot \mathit{batch}\f$);
 /// k = op(A)'s inner.
 inline constexpr std::array<std::string_view, 5> key_names{"form:exact", "trans:exact", "n:log:2", "k:log",
                                                            "batch:log"};
@@ -60,9 +60,9 @@ inline constexpr std::array<int, 17> grid_batch{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 
 // (T = ceil(n/128)) in another; each is capped at 65535 work-groups, past which the launch throws.
 inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< batch ceiling of both tile kernels
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular's tile-count ceiling
-inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
+inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' \f$16 \times 16\f$ work-group
 template <typename T>
-constexpr std::int64_t triangular_slm_bytes() {  ///< two staged 8 x 128 operand tiles
+constexpr std::int64_t triangular_slm_bytes() {  ///< two staged \f$8 \times 128\f$ operand tiles
     return std::int64_t(2) * 8 * 128 * std::int64_t(sizeof(T));
 }
 inline constexpr std::int64_t triangular_groups(std::int64_t n, std::int64_t tile) {  // T(T+1)/2, T = ceil(n/tile)

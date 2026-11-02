@@ -34,7 +34,7 @@ BATCHLAS_INTERNAL_API int64_t geqrf_cta_max_elems_for_slm(
 template <typename T>
 BATCHLAS_INTERNAL_API bool geqrf_blocked_available();
 
-// TINY tier (square m == n <= 32): the ONE predicate for its ceiling -- the shape builder, the
+// TINY tier (square \f$m = n \le 32\f$): the ONE predicate for its ceiling -- the shape builder, the
 // entry point and the tests all call it. evidence: docs/perf/qr.md#the-tiny-ceiling-predicate
 template <typename T>
 BATCHLAS_INTERNAL_API int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes);

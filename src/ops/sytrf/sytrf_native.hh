@@ -61,7 +61,7 @@ BATCHLAS_INTERNAL_API Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T
                                                   Span<int64_t> pivots, const int32_t* skip_info = nullptr);
 
 // sytrs `cta`: one work-group per item, the factor converted once in local memory, one sub-group
-// per right-hand side (sytrs_device.hh). A capability ceiling: the register tile is R = n / 32 <= 4.
+// per right-hand side (sytrs_device.hh). A capability ceiling: the register tile is \f$R = n / 32 \le 4\f$.
 inline constexpr int kSytrsCtaMaxN = 128;
 inline constexpr int kSytrsCtaMaxSg = 8;  // sub-groups per work-group, at most one per right-hand side
 

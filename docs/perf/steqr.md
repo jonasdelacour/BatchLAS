@@ -2,13 +2,13 @@
 
 > **Status:** current · RTX 4090 (sm_89)
 
-`steqr_cta` solves one tridiagonal problem per chunk of `P` lanes, `P` in {4, 8, 16, 32}, so a
-warp holds `32/P` problems. The device solve `steqr_cta_solve` (`src/ops/syev/steqr/steqr_cta_device.hh`)
+`steqr_cta` solves one tridiagonal problem per chunk of `P` lanes, \f$P \in \{4, 8, 16, 32\}\f$, so a
+warp holds \f$32/P\f$ problems. The device solve `steqr_cta_solve` (`src/ops/syev/steqr/steqr_cta_device.hh`)
 also runs inside the fused small-n SYEV kernel and at the stedc leaves. The algorithm is
 @ref algo_steqr; this page holds the lane-scheduling decisions and their numbers.
 
 **Setup:** RTX 4090 (sm_89), float and double, eigenvectors on (`V`) or off (`N`), random normal `d`
-and `e`, kernel alone, medians of 3 interleaved rounds, batch 65,536 for n <= 8 and 32,768 above.
+and `e`, kernel alone, medians of 3 interleaved rounds, batch 65,536 for \f$n \le 8\f$ and 32,768 above.
 Against `main` at `3df4e99` the whole lockstep series (mirrored QR-as-QL, flat solver, full-warp
 partition, multiplier) gained 1.15-1.67x on float `steqr`, 1.58-1.92x on double n = 8 and 16, and
 1.54-1.59x on fused `syev` float n = 12/16, with every eigenvalue bitwise identical.
@@ -17,7 +17,7 @@ partition, multiplier) gained 1.15-1.67x on float `steqr`, 1.58-1.92x on double 
 
 The nested solver (`steqr_cta_solve_nested`) realigns the chunks of a warp only at loop exits, so
 the warp pays the slowest chunk's sweep count per eigenvalue. `steqr_cta_solve_flat` moves the sweep
-out of the nest: every chunk settles, then all chunks with a sweep `[l, m]` chase in one pass. The
+out of the nest: every chunk settles, then all chunks with a sweep \f$[l, m]\f$ chase in one pass. The
 per-chunk operations equal the nested solver's, so results are bitwise equal (384 dump cases).
 
 ### What ships: `kSteqrCtaFlatPays`
@@ -120,7 +120,7 @@ Jacobi / fused: n = 7 1.15-1.58x, n = 8 1.11-1.55x; n = 6 random V 0.96-0.97x). 
 `jacobi` | `cta_fused` boundary nevertheless stays at 8 | 9: Jacobi's relative off-diagonal
 threshold keeps small eigenvalues of graded SPD input to relative accuracy, and the fused kernel is
 only normwise accurate. Moving it waits on accepting that trade. Complex float keeps the fused kernel
-for n <= 8. The boundary lives in the float n <= 32 rows of `tuned/syev.*.txt`; pin with
+for \f$n \le 8\f$. The boundary lives in the float \f$n \le 32\f$ rows of `tuned/syev.*.txt`; pin with
 `BATCHLAS_SYEV_ROUTE=jacobi|cta_fused`.
 
 ## CTA STEQR: chase micro-structure decisions
@@ -136,10 +136,10 @@ None of these choices has a recorded before/after figure; read them as reasons.
   so identity rotations do not diverge.
 - **Q cache leading dimension.** `LDQ == P` suits the standalone solver. The fused SYEV back-transform
   reads the tile by column and wants `P + 1`.
-- **Padding rows are zeroed, not skipped,** so the chase runs unguarded on all P lanes.
+- **Padding rows are zeroed, not skipped,** so the chase runs unguarded on all \f$P\f$ lanes.
 - **Streaming rotation apply.** Successive rotations share a column, which stays in a register,
   halving shared-memory traffic of the eigenvector update.
-- **Butterfly all-reduce.** Boundary searches use XOR-shuffle butterflies (log2 P shuffles, no local
+- **Butterfly all-reduce.** Boundary searches use XOR-shuffle butterflies (\f$\log_2 P\f$ shuffles, no local
   memory, no barriers).
 - **Registers carried along the chase.** `d(lo)`, `e(lo)` and `e(lo-1)` are carried and written once
   after the chase, as selects. An `if` would diverge on every rotation.

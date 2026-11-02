@@ -53,7 +53,7 @@ struct Device {
     std::int64_t slm_budget = 0;  ///< LOCAL_MEM_SIZE less a 4 KiB reserve, bytes: any work-group size
     int max_wg = 0;  ///< MAX_WORK_GROUP_SIZE
     std::int64_t slm_per_item = 0;  ///< local memory the runtime adds per work-item (Metal: 8)
-    /// Work-groups in SYCL dim 0/1 of a 2-D/3-D launch (CUDA grid z/y); Metal: 2^32 - 1.
+    /// Work-groups in SYCL dim 0/1 of a 2-D/3-D launch (CUDA grid z/y); Metal: \f$2^{32} - 1\f$.
     std::int64_t max_groups_yz = 65535;
     std::int64_t scratch_budget = 0;  ///< one call's scratch lease: min(MAX_MEM_ALLOC_SIZE, GLOBAL_MEM_SIZE / 4)
 
@@ -280,7 +280,7 @@ struct Table {
 
     /// Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
     /// dropped from the right until some row matches, possibly all of them), then min
-    /// sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
+    /// \f$\sum w \lvert \log_2(\mathrm{row}/\mathrm{key}) \rvert\f$, ties lexicographic by the :log keys in declared order.
     /// @throws batchlas::internal_error (invalid_argument for an override table) if @p key lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;

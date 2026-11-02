@@ -14,7 +14,7 @@
 
 namespace batchlas::ops::potrs {
 
-// Correctness only: can the one-launch fused solve take an n x nrhs system here? Never a speed term.
+// Correctness only: can the one-launch fused solve take an \f$n \times nrhs\f$ system here? Never a speed term.
 template <class T>
 bool fused_fits(const select::Device& d, int64_t n, int64_t nrhs) {
     const auto cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(static_cast<std::size_t>(d.slm_budget));

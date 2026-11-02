@@ -3,7 +3,7 @@
 
 namespace batchlas::sycl_gemm {
 
-// beta == 0 is alpha * accum alone and never reads C: 0 * NaN is NaN, and + 0 * 0 turns -0 into +0.
+// \f$\beta = 0\f$ is \f$\alpha \cdot \mathrm{accum}\f$ alone and never reads C: \f$0 \cdot \mathrm{NaN}\f$ is NaN, and \f$-0 + 0 \cdot 0 = +0\f$.
 // evidence: docs/design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero
 template <typename T>
 struct LinearEpilogue {

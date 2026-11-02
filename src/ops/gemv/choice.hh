@@ -31,7 +31,7 @@ inline bool device_allows(const GemvChoice& c, const select::Device& d, bool tra
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};  ///< CPU: vendor, else direct (no GPU gate)
 inline constexpr select::OpSpec spec{Op::gemv, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: trans exact (ConjTrans folds to T); out, red: y and x lengths (swap with trans). Work ~ out red batch.
+/// Keys: trans exact (ConjTrans folds to T); out, red: y and x lengths (swap with trans). Work \f$\sim \mathit{out} \cdot \mathit{red} \cdot \mathit{batch}\f$.
 inline constexpr std::array<std::string_view, 4> key_names{"trans:exact", "out:log", "red:log", "batch:log"};
 
 /// Both sides of every transcribed threshold plus a coarse log grid; the transcriber spells the same.

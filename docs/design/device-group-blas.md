@@ -60,7 +60,7 @@ only forgoes the staged paths.
 
 ## Device group BLAS: the 3-D launch generic fallback
 
-In an `nd_item<3>` launch, work-group id dimensions 1 and 2 index output tiles (128 x 64 for the
+In an `nd_item<3>` launch, work-group id dimensions 1 and 2 index output tiles (\f$128 \times 64\f$ for the
 register-tiled paths). Only the tiled kernels read them.
 
 When no tiled path applies, `gemm`, `syrk`/`herk` and `syr2k`/`her2k` run the generic path in
@@ -81,7 +81,7 @@ with one tile-group.
 - **Local-memory budget:** level-3 workspaces are sized against `device_limits::subgroup_workspace_budget_bytes()`.
   A type that does not fit gets a constantly-false fast-path predicate. See
   [the subgroup workspace budget](../perf/gemm.md#the-subgroup-workspace-budget).
-- **Registers:** the register-tiled paths keep a 4 x 8 accumulator per work-item (complex rank-2k: 4 x 4).
+- **Registers:** the register-tiled paths keep a \f$4 \times 8\f$ accumulator per work-item (complex rank-2k: \f$4 \times 4\f$).
   That is why the fast paths take 32-bit scalars. A `double` tile of that shape at 256 work-items exceeds the
   register file, and NVIDIA rejects the launch. Widening the types means shrinking the thread tile first.
 - **Barriers:** the tiled kernels call `group_barrier`; every work-item must stay live until the call returns,
@@ -109,6 +109,6 @@ never in a table, never pinned by `BATCHLAS_<OP>_ROUTE`.
 
 - No evidence page measures these kernels. The fast-path gates (256 work-items, minimum extents, `float` only) are design constants.
 - The 3-D tile-group race in `gemm`, `symm` and `trmm` ([above](#device-group-blas-the-3-d-launch-generic-fallback)).
-  A test that settles it: per op, an `nd_item<3>` launch of at least 2 x 2 tile-groups, `beta != 0`, no
+  A test that settles it: per op, an `nd_item<3>` launch of at least \f$2 \times 2\f$ tile-groups, `beta != 0`, no
   workspace, compared against the host reference.
 - The tiled `symv` / `hemv` path cannot take an `nd_item`.

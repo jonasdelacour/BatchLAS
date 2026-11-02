@@ -23,7 +23,7 @@ constexpr auto candidates() { return select::all_of<GetriChoice>(); }
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};  ///< generality order (§5.5)
 inline constexpr select::OpSpec spec{Op::getri, select::Lib::factorization, {last_resort}};  ///< op, library, rules
 
-inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work ~ n^3 batch
+inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work \f$\sim n^3 \cdot \mathit{batch}\f$
 
 /// Log grid + both sides of the transcribed edges (float 128, cfloat 256); the transcriber (tuned/README.md) spells it.
 inline constexpr std::array<int, 24> grid_n{1,   2,   3,   4,   6,   8,   12,  16,  24,  32,   48,   64,

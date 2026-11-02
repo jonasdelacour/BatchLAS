@@ -35,10 +35,6 @@ inline void SyevCtaFusedBenchSizes(Benchmark* b) {
     }
 }
 
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
 } // namespace
 
 template <typename T, Backend B>

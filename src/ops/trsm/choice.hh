@@ -12,8 +12,8 @@
 
 namespace batchlas::ops::trsm {
 
-struct Cta : select::NoFields<"cta"> {};          ///< trsm_native_v1_dispatch, order <= 32
-struct SgLeft : select::NoFields<"sg_left"> {};   ///< trsm_native_sg_left_dispatch: Left, order <= 32, sg 32
+struct Cta : select::NoFields<"cta"> {};          ///< trsm_native_v1_dispatch, \f$\mathit{order} \le 32\f$
+struct SgLeft : select::NoFields<"sg_left"> {};   ///< trsm_native_sg_left_dispatch: Left, \f$\mathit{order} \le 32\f$, sg 32
 struct Blocked : select::NoFields<"blocked"> {};  ///< trsm_native_blocked + the public gemm, any order
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::trsm_vendor; needs the level-3 library
 

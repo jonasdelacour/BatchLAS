@@ -57,7 +57,7 @@ Event launch_tiled_general(Queue& ctx,
                 return;
             }
 
-            // Rebased per item in 64 bits (bid * stride passes 2^31); offsets within an item stay int.
+            // Rebased per item in 64 bits (bid * stride passes \f$2^{31}\f$); offsets within an item stay int.
             const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
             const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
             T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;

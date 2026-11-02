@@ -13,9 +13,9 @@
 
 namespace batchlas::ops::geqrf {
 
-struct Tiny : select::NoFields<"tiny"> {};        ///< geqrf_tiny_dispatch: square, registers, n <= the tiny ceiling
+struct Tiny : select::NoFields<"tiny"> {};        ///< geqrf_tiny_dispatch: square, registers, \f$n \le\f$ the tiny ceiling
 struct Cta : select::NoFields<"cta"> {};          ///< geqrf_cta_dispatch: the whole panel in SLM (geqrf_cta_fits)
-struct Blocked : select::NoFields<"blocked"> {};  ///< geqrf_blocked_dispatch + the public gemm, any m x n
+struct Blocked : select::NoFields<"blocked"> {};  ///< geqrf_blocked_dispatch + the public gemm, any \f$m \times n\f$
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::geqrf_vendor; needs the factorization library
 
 using GeqrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;  ///< fieldless: buckets, packing, nb, leaf derived
@@ -26,10 +26,10 @@ constexpr auto candidates() { return select::all_of<GeqrfChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::geqrf, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
 
-/// Keys: form sq | tall (m > n) | wide (m < n), exact; n log weight 3; aspect log. Work ~ n^3 * aspect.
+/// Keys: form sq | tall (\f$m > n\f$) | wide (\f$m < n\f$), exact; n log weight 3; aspect log. Work \f$\sim n^3 \cdot \mathit{aspect}\f$.
 inline constexpr std::array<std::string_view, 3> key_names{"form:exact", "n:log:3", "aspect:log"};
 
-template <typename Int>  /// The aspect key: max(m, n) / min(m, n), 1 for an empty view.
+template <typename Int>  /// The aspect key: \f$\max(m, n) / \min(m, n)\f$, 1 for an empty view.
 constexpr std::int64_t aspect_of(Int m, Int n) {
     const std::int64_t lo = m < n ? m : n, hi = m < n ? n : m;
     return lo < 1 ? 1 : hi / lo;

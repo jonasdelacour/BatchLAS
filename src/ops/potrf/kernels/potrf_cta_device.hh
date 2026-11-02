@@ -37,7 +37,7 @@ inline void potrf_phase_barrier(const sycl::nd_item<1>& it) {
     }
 }
 
-// (P1) -- the ib x ib diagonal block on ONE sub-group; lane r owns row j+r.
+// (P1) -- the \f$ib \times ib\f$ diagonal block on ONE sub-group; lane r owns row j+r.
 template <typename D, typename R, int NB>
 inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
                                       D* __restrict S, int lda,
@@ -113,7 +113,7 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// (P2) -- the panel solve L21 = A21 * L11^-H; rows are independent, no barrier.
+// (P2) -- the panel solve \f$L_{21} = A_{21} L_{11}^{-H}\f$; rows are independent, no barrier.
 template <typename D, typename R, int NB>
 inline void potrf_panel_solve_rows(int tid, int L,
                                    D* __restrict S, int lda,
@@ -156,7 +156,7 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// (P3) -- the trailing update A22 -= L21 L21^H in TS x TS register tiles, the
+// (P3) -- the trailing update \f$A_{22} \mathrel{-}= L_{21} L_{21}^{H}\f$ in \f$TS \times TS\f$ register tiles, the
 // triangle trimmed at TILE granularity by `ra >= cb`. `off` is the Rt0-based
 // prefix table, rescaled here by `dR = Rt0 - Rt`. No barrier.
 template <typename D, typename R, int TS>
@@ -238,8 +238,8 @@ BATCHLAS_UNROLL_FULL
 }
 
 // The whole body for ONE matrix; S, diag, fail, off and Ag are already offset to
-// it. `upper` is a LOAD/STORE TRANSFORM, not a second algorithm: A = U^H U is the
-// same recurrence on S(i,c) = conj(A(c,i)), so Uplo costs no extra instantiation.
+// it. `upper` is a LOAD/STORE TRANSFORM, not a second algorithm: \f$A = U^{H} U\f$ is the
+// same recurrence on \f$S(i,c) = \overline{A(c,i)}\f$, so Uplo costs no extra instantiation.
 template <typename D, typename R, int NB, int TS, PotrfScope SC>
 inline void potrf_cta_body(const sycl::nd_item<1>& it,
                            const sycl::sub_group& sg,
@@ -253,7 +253,7 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
     const int m2_0 = (n > NB) ? (n - NB) : 0;
     const int Rt0 = (m2_0 + TS - 1) / TS;
 
-    // One fused load writes every element of the lda x n tile exactly once, pad
+    // One fused load writes every element of the lda \f$\times\f$ n tile exactly once, pad
     // rows included -- which is why (P3) may read through its `< m2` guards.
     for (int c = 0; c < n; ++c) {
         for (int i = tid; i < lda; i += L) {

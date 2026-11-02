@@ -40,8 +40,8 @@ using trmm_vendor = Event(Queue&,
 /// \f[ C := \alpha \, \mathrm{op}(A) \, B \quad (\texttt{Side::Left}), \qquad
 ///     C := \alpha \, B \, \mathrm{op}(A) \quad (\texttt{Side::Right}) \f]
 /// with `A` triangular (`uplo`), unit or non-unit diagonal (`diag`), and
-/// \f$\mathrm{op}(A)\f$ one of \f$A, A^T, A^H\f$. `B` and `C` are m x n; `A` is
-/// m x m (Left) or n x n (Right). Under `Diag::Unit` the stored diagonal of `A`
+/// \f$\mathrm{op}(A)\f$ one of \f$A, A^T, A^H\f$. `B` and `C` are \f$m \times n\f$; `A` is
+/// \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right). Under `Diag::Unit` the stored diagonal of `A`
 /// is not read.
 ///
 /// Unlike reference BLAS `?trmm`, which overwrites `B`, this writes the product
@@ -51,28 +51,29 @@ using trmm_vendor = Event(Queue&,
 ///
 /// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
 /// `triangular` (`Side::Left` only: row tiles that skip the zero half of `A`), `expand`
-/// (`op(A)` written densely into scratch leased from the queue's arena, then one
+/// (\f$\mathrm{op}(A)\f$ written densely into scratch leased from the queue's arena, then one
 /// strided-batched gemm) or `vendor` (the library's per-item `?trmm` loop). Pin one with
 /// `BATCHLAS_TRMM_ROUTE` = `auto` | `native` | `vendor` | `triangular` | `expand`.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
-/// @param ctx     queue the work is enqueued on
-/// @param A       batch of triangular matrices; only the `uplo` triangle is read
-/// @param B       batch of m x n input matrices; not modified
-/// @param C       batch of m x n output matrices; overwritten with the product
-/// @param alpha   scale of the product
-/// @param side    whether op(A) multiplies from the left or the right
-/// @param uplo    which triangle of `A` holds the data
-/// @param transA  op() applied to `A`
-/// @param diag    whether `A` has an implicit unit diagonal
+/// @param[in] ctx     queue the work is enqueued on
+/// @param[in] A       batch of triangular matrices, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right);
+///                    only the `uplo` triangle is read
+/// @param[in] B       batch of \f$m \times n\f$ input matrices; not modified
+/// @param[out] C      batch of \f$m \times n\f$ output matrices; overwritten with the product
+/// @param[in] alpha   scale \f$\alpha\f$ of the product
+/// @param[in] side    whether \f$\mathrm{op}(A)\f$ multiplies from the left or the right
+/// @param[in] uplo    which triangle of `A` holds the data
+/// @param[in] transA  \f$\mathrm{op}()\f$ applied to `A`
+/// @param[in] diag    whether `A` has an implicit unit diagonal
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_TRMM_ROUTE` names
 ///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
 ///         instead fall back to the tuned choice with a warning)
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
-///         (a heterogeneous batch: every family takes one (n, k) per launch)
+///         (a heterogeneous batch: every family takes one \f$(n, k)\f$ per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is on a GPU (`Backend::CUDA` or `Backend::SYCL`) with homogeneous
 ///         operands and a shape the `triangular` tiles or one item's `expand` scratch admit;
@@ -101,6 +102,18 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of trmm (cuBLAS, rocBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::trmm calls it. Same arguments and semantics.
+/// @tparam Back  backend
+/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @param[in] ctx     queue the vendor call is enqueued on
+/// @param[in] A       batch of triangular matrices; only the `uplo` triangle is read
+/// @param[in] B       batch of \f$m \times n\f$ input matrices; not modified
+/// @param[out] C      batch of \f$m \times n\f$ output matrices; overwritten with the product
+/// @param[in] alpha   scale \f$\alpha\f$ of the product
+/// @param[in] side    whether \f$\mathrm{op}(A)\f$ multiplies from the left or the right
+/// @param[in] uplo    which triangle of `A` holds the data
+/// @param[in] transA  \f$\mathrm{op}()\f$ applied to `A`
+/// @param[in] diag    whether `A` has an implicit unit diagonal
+/// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trmm_vendor(Queue& ctx,

@@ -36,31 +36,33 @@ using herk_vendor = Event(Queue&,
 /// For every batch item computes
 /// \f[ C := \alpha A A^H + \beta C \quad (\texttt{NoTrans},\ A \text{ is } n \times k), \qquad
 ///     C := \alpha A^H A + \beta C \quad (\texttt{ConjTrans},\ A \text{ is } k \times n) \f]
-/// with `C` Hermitian n x n. Only the triangle of `C` named by `uplo` is written;
+/// with `C` Hermitian \f$n \times n\f$. Only the triangle of `C` named by `uplo` is written;
 /// the other triangle is left exactly as it was (use `MatrixView::hermitize` to
 /// mirror it). The diagonal comes out real: an imaginary part on `C`'s diagonal
 /// is neither read nor produced.
 ///
-/// `alpha` and `beta` are real (`float_t<T>`), as in BLAS `?herk`: a complex
-/// alpha would make \f$\alpha A A^H\f$ non-Hermitian. Constrained to complex `T`;
+/// \f$\alpha\f$ and \f$\beta\f$ are real (`float_t<T>`), as in BLAS `?herk`: a complex
+/// \f$\alpha\f$ would make \f$\alpha A A^H\f$ non-Hermitian. Constrained to complex `T`;
 /// the real spelling is syrk. Also callable as
 /// `herk(ctx, A, C, HerkOptions<T>{...})`, with owning `Matrix` arguments, and
 /// without `Ba` (taken from `ctx.backend()`).
 ///
 /// Table-selected (`tuned/herk.<device>.txt`): `fold` runs one strided-batched gemm into scratch
-/// folded into the `uplo` triangle; `gram` (n <= 128) and `triangular` (complex<float>) are tile
+/// folded into the `uplo` triangle; `gram` (\f$n \le 128\f$) and `triangular` (complex<float>) are tile
 /// kernels over that triangle only; `vendor` is the per-item `cublas?herk` / `cblas_?herk` loop.
 /// `BATCHLAS_HERK_ROUTE` = `auto` | `native` | `vendor` | `gram` | `triangular` | `fold` pins it.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
-/// @param ctx     queue the work is enqueued on
-/// @param A       batch of n x k (NoTrans) or k x n (ConjTrans) matrices; not modified
-/// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
-/// @param alpha   real scale of the product
-/// @param beta    real scale of the input `C`
-/// @param uplo    which triangle of `C` is written
-/// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$ (`ConjTrans`)
+///                        matrices; not modified
+/// @param[in,out] C       batch of Hermitian \f$n \times n\f$ matrices; the `uplo` triangle is read
+///                        scaled by \f$\beta\f$ and overwritten with the result, the other is untouched
+/// @param[in]     alpha   real scale \f$\alpha\f$ of the product
+/// @param[in]     beta    real scale \f$\beta\f$ of the input `C`
+/// @param[in]     uplo    which triangle of `C` is read and written
+/// @param[in]     transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A` and `C` have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
@@ -92,6 +94,18 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of herk (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::herk calls it. Same arguments and semantics.
+/// @tparam Back  backend whose vendor library runs the call
+/// @tparam T     `std::complex<float>` or `std::complex<double>`
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$ (`ConjTrans`)
+///                        matrices; not modified
+/// @param[in,out] C       batch of Hermitian \f$n \times n\f$ matrices; the `uplo` triangle is read
+///                        scaled by \f$\beta\f$ and overwritten with the result
+/// @param[in]     alpha   real scale \f$\alpha\f$ of the product
+/// @param[in]     beta    real scale \f$\beta\f$ of the input `C`
+/// @param[in]     uplo    which triangle of `C` is read and written
+/// @param[in]     transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
+/// @return event of the last enqueued vendor call; `C` is valid once it completes
 /// @ingroup api_dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event herk_vendor(Queue& ctx,

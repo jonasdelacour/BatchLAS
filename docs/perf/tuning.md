@@ -2,7 +2,7 @@
 
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda
 
-`include/batchlas/tuning_params.hh` holds the kernel parameters that depend on problem order n.
+`include/batchlas/tuning_params.hh` holds the kernel parameters that depend on problem order \f$n\f$.
 The shipped values come from the 2026-08-07 retune (`924b3a59`). Every constant was measured on
 sm_89, in `float`, through `evaluation/tuning/`: treat them as hypotheses on other GPUs and for
 other scalar types. Per-op sweep numbers live on the op pages linked in
@@ -10,16 +10,16 @@ other scalar types. Per-op sweep numbers live on the op pages linked in
 
 ## tuning: what the constants are
 
-Each tunable quantity has five constants, one per size bucket of n, and a constexpr table function
+Each tunable quantity has five constants, one per size bucket of \f$n\f$, and a constexpr table function
 `<knob>_default_for_n(n)` that picks one:
 
-| bucket | n |
+| bucket | \f$n\f$ |
 | --- | --- |
-| `TINY` | n <= 64 |
-| `SMALL` | 64 < n <= 128 |
-| `MEDIUM` | 128 < n <= 256 |
-| `LARGE` | 256 < n <= 512 |
-| `XLARGE` | n > 512 |
+| `TINY` | \f$n \le 64\f$ |
+| `SMALL` | \f$64 < n \le 128\f$ |
+| `MEDIUM` | \f$128 < n \le 256\f$ |
+| `LARGE` | \f$256 < n \le 512\f$ |
+| `XLARGE` | \f$n > 512\f$ |
 
 | family | consumer | meaning of 0 |
 | --- | --- | --- |
@@ -33,14 +33,14 @@ Each tunable quantity has five constants, one per size bucket of n, and a conste
 | `STEDC_RECURSION_THRESHOLD_*` | stedc leaf size | n/a; 32 is the CTA invariant, not a tuning result |
 | `STEDC_MERGE_VARIANT_*` | `StedcMergeVariant` (1 Fused, 2 FusedCta) | `Auto`, never returned (see below) |
 | `STEDC_THREADS_PER_ROOT_*`, `STEDC_WG_MULTIPLIER_*` | stedc secular-solve geometry | n/a |
-| `BLOCKED_L2_CHUNK_PERCENT`, `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` | batch chunk of the getrf and potrf blocked drivers (`blocked_chunk_items`); one value, not bucketed by n | n/a |
+| `BLOCKED_L2_CHUNK_PERCENT`, `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` | batch chunk of the getrf and potrf blocked drivers (`blocked_chunk_items`); one value, not bucketed by \f$n\f$ | n/a |
 
 Because of the last two, `tools/tune/getrf_spec.cc` and `potrf_spec.cc` list the whole `tuning_params.hh` as a
 `blocked` kernel dependency: editing any constant in it marks the getrf and potrf `blocked` rows stale and moves the
 potrf op hash pinned in `TuneHash.OpLevelHashUnchangedByFamilyPrefixes`.
 
 Production code calls the runtime accessors `<knob>_for_n(n)`. Each consults its `BATCHLAS_TUNE_*`
-override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins n to 256 for the
+override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins \f$n\f$ to 256 for the
 legacy path. `sytrd_fuse_panel_update_for_n` has no override; its control is
 `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE`, which is tri-state (@ref design_environment).
 
@@ -55,7 +55,7 @@ Every group is A/B'd end to end at its consumers before adoption
   through `syev`. stedc's own benchmark measures the merge in isolation and disagrees with its
   consumer.
 - **A constant that the heuristic already matches stays 0.** The sb2st back-transform geometry
-  spans 3.6x across its grid at n = 1024, but the shape-adaptive heuristic picks the winner to
+  spans 3.6x across its grid at \f$n = 1024\f$, but the shape-adaptive heuristic picks the winner to
   within 0.6%.
 - **A grid must contain the shipped value**, or a retune "wins" against a grid without the incumbent.
 
@@ -65,9 +65,9 @@ Tuning was float-only. The constants apply unchanged to `double`, `complex<float
 `complex<double>`. When another type looks bad, sweep that type first. Per-type corrections live at
 the consumer, where a retune cannot overwrite them:
 
-- `sytrd_block_size_default<T>` returns 32 for complex at 256 < n <= 512. The float value 8 costs
+- `sytrd_block_size_default<T>` returns 32 for complex at \f$256 < n \le 512\f$. The float value 8 costs
   complex 1.16x to 1.20x ([evidence](syev.md#syev-complex-panel-width-in-the-256-to-512-bucket)).
-- The sb2st back-transform geometry is selected per type at n = 512
+- The sb2st back-transform geometry is selected per type at \f$n = 512\f$
   ([evidence](syev.md#syev-per-type-sb2st-back-transform-geometry-wp4)).
 
 ## tuning: runtime overrides of the constants
@@ -121,11 +121,11 @@ when its constants are ported into the committed header by hand
 ## tuning: knobs that shadow each other
 
 - `SY2SB_ORMQR_NB_*` shadows `ORMQR_BLOCK_SIZE_*` on `syev`'s hot path. With the sy2sb shape gate
-  active (n >= 1024 and batch >= 32 returns kd), changing the ormqr constant leaves the kernel trace
+  active (\f$n \ge 1024\f$ and \f$\text{batch} \ge 32\f$ returns kd), changing the ormqr constant leaves the kernel trace
   identical. A positive `SY2SB_ORMQR_NB` is clamped to kd at the call site.
 - `GEBRD_BLOCK_SIZE_*` is separate from `ORMQR_BLOCK_SIZE_*` because the gradients are opposite:
   flat for gebrd, 2.16x between 16 and 56 for ormqr.
-- Only the instantiated sb2st back-transform pairs exist: tile in {1, 2, 4, 8} x subs in {4, 8, 16}.
+- Only the instantiated sb2st back-transform pairs exist: (`tile`, `subs`) \f$\in \{1, 2, 4, 8\} \times \{4, 8, 16\}\f$.
   Any other pair silently falls through to the slower tiled kernel, so a grid must stay in that set.
 
 ## tuning: where the per-op sweeps live

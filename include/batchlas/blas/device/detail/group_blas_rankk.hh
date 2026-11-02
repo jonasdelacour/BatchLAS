@@ -8,6 +8,11 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic rank-2k update: each work-item owns a strided set of entries of the stored triangle of \f$C\f$.
+/// @tparam Tag  SymmetricRankTransformTag carrying the triangle, \f$\mathrm{op}(\cdot)\f$ and the Hermitian flag
+/// @param[in]     group    executor; every work-item must call
+/// @param[in]     a        single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand  `B` (read, shaped like \f$A\f$), `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten; Hermitian: diagonal imaginary parts set to 0), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void rank2k(const Group& group,
                              const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -47,6 +52,11 @@ inline constexpr void rank2k(const Group& group,
     }
 }
 
+/// @brief Generic rank-k update: each work-item owns a strided set of entries of the stored triangle of \f$C\f$.
+/// @tparam Tag  SymmetricRankTransformTag carrying the triangle, \f$\mathrm{op}(\cdot)\f$ and the Hermitian flag
+/// @param[in]     group    executor; every work-item must call
+/// @param[in]     a        single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand  `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten; Hermitian: diagonal imaginary parts set to 0), \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void rankk(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -86,6 +96,12 @@ inline constexpr void rankk(const Group& group,
 
 namespace detail::subgroup {
 
+/// @brief Tiled rank-2k update for complex `T`, two staged passes per output tile; tiles outside the stored triangle are skipped.
+/// @param[in]     item       `nd_item` executor of 256 work-items; every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `B` (read, shaped like \f$A\f$), `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  stored triangle, \f$\mathrm{op}(\cdot)\f$ and whether the update is Hermitian
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void rank2k_complex_tiled(const Item& item,
                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -162,6 +178,12 @@ inline constexpr void rank2k_complex_tiled(const Item& item,
     }
 }
 
+/// @brief Tiled rank-k update for complex `T`, one staged pass per output tile; tiles outside the stored triangle are skipped.
+/// @param[in]     item       `nd_item` executor of 256 work-items; every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  stored triangle, \f$\mathrm{op}(\cdot)\f$ and whether the update is Hermitian
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void rankk_complex_tiled(const Item& item,
                                           const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -222,6 +244,12 @@ inline constexpr void rankk_complex_tiled(const Item& item,
     }
 }
 
+/// @brief Register-tiled rank-2k update, two staged passes per output tile; tiles outside the stored triangle are skipped.
+/// @param[in]     item       `nd_item` executor of 256 work-items; every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `B` (read, shaped like \f$A\f$), `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  stored triangle, \f$\mathrm{op}(\cdot)\f$ and whether the update is Hermitian
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void rank2k_register_tiled(const Item& item,
                                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -296,6 +324,12 @@ inline constexpr void rank2k_register_tiled(const Item& item,
     }
 }
 
+/// @brief Register-tiled rank-k update, one staged pass per output tile; tiles outside the stored triangle are skipped.
+/// @param[in]     item       `nd_item` executor of 256 work-items; every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten), \f$\alpha\f$, \f$\beta\f$
+/// @param[in]     transform  stored triangle, \f$\mathrm{op}(\cdot)\f$ and whether the update is Hermitian
+/// @param[out]    workspace  local-memory staging buffers; contents undefined on return
 template <typename Item, typename T>
 inline constexpr void rankk_register_tiled(const Item& item,
                                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -359,6 +393,11 @@ inline constexpr void rankk_register_tiled(const Item& item,
 
 namespace detail {
 
+/// @brief Local-memory elements of `T` that dispatch_rank2k() can use for this launch, shape and policy.
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
+/// @return element count, or 0 when no staged path applies
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t rank2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                        int extent,
@@ -375,6 +414,11 @@ inline constexpr std::size_t rank2k_workspace_elements(const DeviceBlasLaunchInf
     return 0;
 }
 
+/// @brief Local-memory elements of `T` that dispatch_rankk() can use for this launch, shape and policy.
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
+/// @return element count, or 0 when no staged path applies
 template <typename Tag, DeviceBlasPolicy Policy, typename T>
 inline constexpr std::size_t rankk_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                       int extent,
@@ -391,6 +435,11 @@ inline constexpr std::size_t rankk_workspace_elements(const DeviceBlasLaunchInfo
     return 0;
 }
 
+/// @brief Validates the operands and runs the first eligible rank-2k path (complex tiled, register-tiled, generic).
+/// @param[in]     exec       executor (group, sub-group or `nd_item`); every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `B` (read), `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten; Hermitian: diagonal imaginary parts set to 0), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of rank2k_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_rank2k(const Exec& exec,
                                       const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -426,6 +475,11 @@ inline constexpr void dispatch_rank2k(const Exec& exec,
     generic::rank2k<Tag>(exec, a, operand);
 }
 
+/// @brief Validates the operands and runs the first eligible rank-k path (complex tiled, register-tiled, generic).
+/// @param[in]     exec       executor (group, sub-group or `nd_item`); every work-item must call
+/// @param[in]     a          single matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$; read only
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its stored triangle read scaled by \f$\beta\f$ and overwritten; Hermitian: diagonal imaginary parts set to 0), \f$\alpha\f$, \f$\beta\f$
+/// @param[out]    workspace  local-memory scratch of rankk_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <typename Tag, DeviceBlasPolicy Policy, typename Exec, typename T>
 inline constexpr void dispatch_rankk(const Exec& exec,
                                      const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -473,12 +527,12 @@ inline constexpr void dispatch_rankk(const Exec& exec,
 /// both needing an `nd_item` executor and a workspace; with an `nd_item<3>`
 /// and no fast path only tile-group (0, 0) computes.
 /// @tparam UploV   triangle of `C` updated
-/// @tparam TransV  NoTrans: `A` is n x k; otherwise `A` is k x n
+/// @tparam TransV  NoTrans: `A` is \f$n \times k\f$; otherwise `A` is \f$k \times n\f$
 /// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group      executor
-/// @param a          single input matrix
-/// @param operand    `C` (n x n), `alpha`, `beta`
-/// @param workspace  local memory of syrk_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor the call runs on
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of syrk_workspace_elements() elements (contents undefined on return), or `nullptr`
 /// @pre `C` holds finite values even when `beta == 0`; `C` does not alias `A`.
 /// @note Each `C` element has one writer; barrier before other work-items read `C`.
 /// @see herk()
@@ -491,6 +545,10 @@ inline constexpr void syrk(const Group& group,
 }
 
 /// @brief As syrk(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of syrk_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -504,9 +562,9 @@ inline constexpr void syrk(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that syrk() can use for this launch and shape.
-/// @param launch           description of the launch the call runs in
-/// @param extent           n, the order of `C`
-/// @param contract_extent  k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies (then pass `nullptr`)
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
@@ -517,9 +575,9 @@ inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that syrk() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T,
@@ -533,6 +591,12 @@ inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As syrk(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of syrk_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -544,6 +608,12 @@ inline constexpr void syrk(const Group& group,
 }
 
 /// @brief As syrk(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of syrk_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -563,10 +633,10 @@ inline constexpr void syrk(const Group& group,
 /// For real `T` this is exactly syrk(). `alpha` and `beta` are `T`, not real
 /// as in BLAS; the imaginary part of every diagonal element of `C` is set to
 /// zero, but a non-real `alpha` still gives a non-Hermitian off-diagonal.
-/// @param group      executor (see syrk())
-/// @param a          single input matrix
-/// @param operand    `C`, `alpha`, `beta`
-/// @param workspace  local memory of herk_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of herk_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -576,6 +646,10 @@ inline constexpr void herk(const Group& group,
 }
 
 /// @brief As herk(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] operand    `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of herk_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -589,9 +663,9 @@ inline constexpr void herk(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that herk() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
@@ -602,9 +676,9 @@ inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief Local memory, in elements of `T`, that herk() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T,
@@ -618,6 +692,12 @@ inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo&
 }
 
 /// @brief As herk(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of herk_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -629,6 +709,12 @@ inline constexpr void herk(const Group& group,
 }
 
 /// @brief As herk(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          single input matrix \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of herk_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -647,11 +733,11 @@ inline constexpr void herk(const Group& group,
 ///
 /// Paths and executor rules as for syrk().
 /// @tparam UploV   triangle of `C` updated
-/// @tparam TransV  NoTrans: `A` and `B` are n x k; otherwise k x n
-/// @param group      executor (see syrk())
-/// @param a          first single input matrix
-/// @param operand    `B` (same shape as `A`), `C` (n x n), `alpha`, `beta`
-/// @param workspace  local memory of syr2k_workspace_elements() elements, or `nullptr`
+/// @tparam TransV  NoTrans: `A` and `B` are \f$n \times k\f$; otherwise \f$k \times n\f$
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in,out] operand    `B` (read only, same shape as `A`), `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of syr2k_workspace_elements() elements (contents undefined on return), or `nullptr`
 /// @pre `C` holds finite values even when `beta == 0`; `C` does not alias `A` or `B`.
 /// @see her2k()
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
@@ -663,6 +749,10 @@ inline constexpr void syr2k(const Group& group,
 }
 
 /// @brief As syr2k(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in,out] operand    `B` (read only, same shape as `A`), `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of syr2k_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -676,9 +766,9 @@ inline constexpr void syr2k(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that syr2k() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
@@ -689,9 +779,9 @@ inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo
 }
 
 /// @brief Local memory, in elements of `T`, that syr2k() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T,
@@ -705,6 +795,13 @@ inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo
 }
 
 /// @brief As syr2k(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in]     b          second input matrix \f$B\f$, same shape as \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the products
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of syr2k_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -717,6 +814,13 @@ inline constexpr void syr2k(const Group& group,
 }
 
 /// @brief As syr2k(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in]     b          second input matrix \f$B\f$, same shape as \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of the products
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of syr2k_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -732,14 +836,14 @@ inline constexpr void syr2k(const Group& group,
     syr2k<Policy, UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
-/// @brief Hermitian rank-2k update \f$ C := \alpha\,A B^{H} + \bar{\alpha}\,B A^{H} + \beta\,C \f$ (NoTrans) or \f$ \alpha\,A^{H} B + \bar{\alpha}\,B^{H} A + \beta\,C \f$, on the `UploV` triangle.
+/// @brief Hermitian rank-2k update \f$ C := \alpha\,A B^{H} + \bar{\alpha}\,B A^{H} + \beta\,C \f$ (NoTrans) or \f$ C := \alpha\,A^{H} B + \bar{\alpha}\,B^{H} A + \beta\,C \f$, on the `UploV` triangle.
 ///
 /// For real `T` this is exactly syr2k(). The imaginary part of every diagonal
 /// element of `C` is set to zero; `beta` is `T`, not real as in BLAS.
-/// @param group      executor (see syrk())
-/// @param a          first single input matrix
-/// @param operand    `B`, `C`, `alpha`, `beta`
-/// @param workspace  local memory of her2k_workspace_elements() elements, or `nullptr`
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$, \f$n \times k\f$ (NoTrans) or \f$k \times n\f$
+/// @param[in,out] operand    `B` (read only, same shape as `A`), `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of her2k_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -749,6 +853,10 @@ inline constexpr void her2k(const Group& group,
 }
 
 /// @brief As her2k(), with an explicit DeviceBlasPolicy.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in,out] operand    `B` (read only, same shape as `A`), `C` (\f$n \times n\f$; its `UploV` triangle is read and overwritten), `alpha`, `beta`
+/// @param[out]    workspace  scratch local memory of her2k_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -762,9 +870,9 @@ inline constexpr void her2k(const Group& group,
 }
 
 /// @brief Local memory, in elements of `T`, that her2k() can use; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
@@ -775,9 +883,9 @@ inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo
 }
 
 /// @brief Local memory, in elements of `T`, that her2k() can use under `Policy`; 0 means pass `nullptr`.
-/// @param launch description of the launch the call runs in
-/// @param extent order of the matrix
-/// @param contract_extent contraction length k
+/// @param[in] launch           description of the launch the call runs in
+/// @param[in] extent           \f$n \ge 0\f$, the order of `C`
+/// @param[in] contract_extent  \f$k \ge 0\f$, the contraction length
 /// @return element count, or 0 when no staged path applies
 /// @ingroup api_device_blas_lowlevel
 template <typename T,
@@ -791,6 +899,13 @@ inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo
 }
 
 /// @brief As her2k(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in]     b          second input matrix \f$B\f$, same shape as \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A B^{H}\f$ (NoTrans) or \f$A^{H} B\f$; \f$\bar{\alpha}\f$ scales the other product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of her2k_workspace_elements() elements (contents undefined on return), or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -803,6 +918,13 @@ inline constexpr void her2k(const Group& group,
 }
 
 /// @brief As her2k(), with an explicit DeviceBlasPolicy and the operands passed separately.
+/// @param[in]     group      executor the call runs on (see syrk())
+/// @param[in]     a          first single input matrix \f$A\f$
+/// @param[in]     b          second input matrix \f$B\f$, same shape as \f$A\f$
+/// @param[in,out] c          \f$n \times n\f$ matrix \f$C\f$; its `UploV` triangle is read and overwritten
+/// @param[in]     alpha      scale \f$\alpha\f$ of \f$A B^{H}\f$ (NoTrans) or \f$A^{H} B\f$; \f$\bar{\alpha}\f$ scales the other product
+/// @param[in]     beta       scale \f$\beta\f$ of the input \f$C\f$; 0 still reads \f$C\f$
+/// @param[out]    workspace  scratch local memory of her2k_workspace_elements() elements under `Policy` (contents undefined on return), or `nullptr`
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
