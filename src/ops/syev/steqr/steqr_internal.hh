@@ -45,21 +45,17 @@ size_t steqr_wg_buffer_size(Queue& ctx,
                             JobType jobz,
                             SteqrParams<T> params);
 
-// NETLIB stedc's solver until WP5: legacy gave steqr_wg's bits, so it forwards (size kept below).
 template <Backend B, typename T>
-inline Event steqr_legacy(Queue& ctx,
-                          const VectorView<T>& d_in,
-                          const VectorView<T>& e_in,
-                          const VectorView<T>& eigenvalues,
-                          const Span<std::byte>& ws,
-                          JobType jobz,
-                          SteqrParams<T> params,
-                          const MatrixView<T, MatrixFormat::Dense>& eigvects,
-                          Span<int32_t> info = Span<int32_t>()) {
-    return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
-}
+Event steqr_legacy(Queue& ctx,
+                   const VectorView<T>& d_in,
+                   const VectorView<T>& e_in,
+                   const VectorView<T>& eigenvalues,
+                   const Span<std::byte>& ws,
+                   JobType jobz,
+                   SteqrParams<T> params,
+                   const MatrixView<T, MatrixFormat::Dense>& eigvects,
+                   Span<int32_t> info = Span<int32_t>());
 
-// steqr_wg's size plus the two buffers only legacy carved: NETLIB stedc's workspace is unchanged.
 template <typename T>
 size_t steqr_legacy_buffer_size(Queue& ctx,
                                 const VectorView<T>& d,

@@ -27,21 +27,13 @@ template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
 
 // The per-pass scratch steqr_wg_impl carves off the pool it is handed; steqr_wg_layout sizes it
-// through workspace_bytes. `scan` counts each item's unreduced blocks, then holds their offsets;
-// `blocks` lists them. The list is dead once written out, so its storage then holds each block's
-// sweep count: blocks have len >= 2, so an item has at most n/2 of them.
-struct WgPassScratch {
-    Span<int32_t> scan;
-    VectorView<std::array<int32_t, 2>> blocks;
-    Span<int32_t> sweeps;
-};
-
-inline WgPassScratch steqr_wg_pass_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_size) {
+// through workspace_bytes.
+inline std::pair<Span<int32_t>, VectorView<std::array<int32_t, 2>>> steqr_wg_pass_layout(Queue& ctx, BumpAllocator& pool,
+                                                                                          int64_t n, int64_t batch_size) {
     auto scan = pool.allocate<int32_t>(ctx, batch_size);
     auto tdi = pool.allocate<std::array<int32_t, 2>>(
         ctx, VectorView<std::array<int32_t, 2>>::required_span_length(n / 2, 1, n / 2, batch_size));
-    return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2),
-            Span<int32_t>(reinterpret_cast<int32_t*>(tdi.data()), 2 * tdi.size())};
+    return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2)};
 }
 
 // max(|d|, |e|) over the block, in physical order.
@@ -117,7 +109,7 @@ void implicit_qr_sweep(const OrientedBlock<T>& B, T shift, const Store& store) {
 }
 
 // One pass: split every item into unreduced blocks, run up to max_sweeps sweeps on each block
-// until it splits, then replay each block's rotations on its columns of Q.
+// until it splits, then replay each block's stored rotations on its columns of Q.
 template <typename T>
 Event steqr_wg_impl(Queue& ctx,
                     const VectorView<T>& d,
@@ -134,7 +126,7 @@ Event steqr_wg_impl(Queue& ctx,
     auto batch_size = d.batch_size();
     bool store_givens = jobz == JobType::EigenVectors;
     auto ncus = ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS);
-    const auto [scan_view, temp_deflation_indices, sweeps] = steqr_wg_pass_layout(ctx, allocator, n, batch_size);
+    const auto [scan_view, temp_deflation_indices] = steqr_wg_pass_layout(ctx, allocator, n, batch_size);
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_ranges");
@@ -209,7 +201,6 @@ Event steqr_wg_impl(Queue& ctx,
                             const tridiag::Givens<T> Rt = R.transpose();
                             rotations_view(0, 0, gid) = {Rt.c, Rt.s};
                             order_view[gid] = ApplyOrder::Forward;
-                            sweeps[gid] = 1;
                         } else {
                             auto [rt1, rt2] = detail::eigenvalues_2x2(D(0), E(0), D(1));
                             D(0) = rt1;
@@ -236,7 +227,6 @@ Event steqr_wg_impl(Queue& ctx,
                         const bool split = split_negligible(B);
 
                         if (scaled) scale_block(B, unscale_factor(anorm));
-                        if (store_givens) sweeps[gid] = static_cast<int32_t>(k + 1);
                         if (split) break;
                     }
                 }
@@ -259,8 +249,9 @@ Event steqr_wg_impl(Queue& ctx,
                         const bool reversed = order_view[gid] != ApplyOrder::Forward;
                         auto column = [&](int v) -> int { return reversed ? len - 1 - v : v; };
 
-                        // The pass's sweeps in order, each Z <- Z R^T on the oriented columns (j, j+1).
-                        for (int sweep = 0; sweep < sweeps[gid]; ++sweep) {
+                        // Every stored sweep in order (an unperformed one holds the pass's identity
+                        // fill), each Z <- Z R^T on the oriented columns (j, j+1).
+                        for (int sweep = 0; sweep < rotations_view.cols(); ++sweep) {
                             for (int j = 0; j < len - 1; ++j) {
                                 auto [c, s] = rotations_view(j, sweep, gid);
                                 const int lo = column(j);
@@ -359,6 +350,9 @@ Event steqr_wg(Queue& ctx,
 
     // Each pass splits off at least one e_j per block, so n - 1 passes always suffice.
     for (int64_t i = 0; i < n - 1; ++i) {
+        if (jobz == JobType::EigenVectors) {
+            (void)givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
+        }
         (void)steqr_wg_impl(ctx,
                       d,
                       e,
@@ -422,23 +416,6 @@ size_t steqr_wg_buffer_size(Queue& ctx,
     });
 }
 
-template <typename T>
-size_t steqr_legacy_buffer_size(Queue& ctx,
-                                const VectorView<T>& d,
-                                const VectorView<T>& e,
-                                const VectorView<T>& eigenvalues,
-                                JobType jobz,
-                                SteqrParams<T> params) {
-    const int64_t n = d.size();
-    const int64_t batch_size = d.batch_size();
-    const size_t legacy_only = jobz != JobType::EigenVectors ? 0 : workspace_bytes([&](BumpAllocator& pool) {
-        const auto bs = static_cast<int64_t>(params.block_size);
-        (void)pool.allocate<T>(ctx, batch_size * bs * 2 * bs * 2 + batch_size * n * bs * 4);  // apply_Q_ws
-        return pool.allocate<int32_t>(ctx, batch_size * (n / 2 + 1));                       // sweep_counts
-    });
-    return steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params) + legacy_only;
-}
-
 #define STEQR_WG_INSTANTIATE(back, fp) \
 template Event steqr_wg<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);
 
@@ -448,13 +425,6 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEQR_WG_INSTANTIATE)
 template size_t steqr_wg_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 
 BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_WG_BUFFER_SIZE_INSTANTIATE)
-
-#define STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE(fp) \
-template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
-
-BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE)
-
-#undef STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE
 
 #undef STEQR_WG_BUFFER_SIZE_INSTANTIATE
 #undef STEQR_WG_INSTANTIATE
