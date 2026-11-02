@@ -175,8 +175,9 @@ algorithm in its own copy ([`src/ops/syev/steqr/steqr_legacy.cc:L44-L276`](https
 
 ## steqr: routing, eigenvectors and output
 
-- **Route.** `should_use_cta` takes `steqr_cta` when \f$0 < n \le 32\f$ on a GPU with sub-group size
-  32, not on ROCm; otherwise `steqr_wg` ([`src/ops/syev/steqr/steqr.cc:L15-L25`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr.cc#L15-L25)). There is no
+- **Route.** `steqr_cta_can_run` (`src/ops/syev/steqr/steqr_internal.hh`, shared by `steqr.cc`,
+  `steqr_cta.cc` and `syev.cc`) takes `steqr_cta` when \f$0 < n \le 32\f$ on a GPU with sub-group
+  size 32; the routers also exclude ROCm; otherwise `steqr_wg`. There is no
   `choice.hh` or tuned table.
 - **Eigenvectors.** Each rotation \f$G_i\f$ (the \f$G\f$ above embedded at \f$(i, i+1)\f$) does
   \f$Q \leftarrow Q G_i^T\f$, so \f$Q^T T Q = \Lambda\f$. \f$Q\f$ starts as \f$I\f$, or as the caller's matrix

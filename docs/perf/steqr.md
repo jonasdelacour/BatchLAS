@@ -52,7 +52,8 @@ keeps the nested loops: one chunk per warp has nothing to realign.
 The emulated partition shuffles over the whole sub-group, so the nested and flat solvers are legal
 on it only while chunks never diverge around a collective. `steqr_cta_solve_lockstep` runs every
 phase under a sub-group vote with gated updates and the padded chase
-(`implicit_ql_step<..., Pad = true>`). On sm_89 it is bitwise equal to the native form, 1.2-1.25x
+(`implicit_ql_sweep<true>`, which dispatches to `exp_sweep<Pad = true>` in
+`src/ops/syev/steqr/steqr_cta_lanes.hh`). On sm_89 it is bitwise equal to the native form, 1.2-1.25x
 slower in float and equal in double. Non-NVPTX targets use it.
 
 ## Full-warp partition

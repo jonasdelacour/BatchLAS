@@ -728,7 +728,7 @@ inline void SquareBatchSizes(Benchmark* b) {
 
 template <typename Benchmark>
 inline void SteqrBenchSizes(Benchmark* b) {
-    for (int s : {8, 16, 32, 64}) {
+    for (int s : {4, 7, 8, 13, 16, 24, 32, 64}) {
         for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
             b->Args({s, bs});
         }

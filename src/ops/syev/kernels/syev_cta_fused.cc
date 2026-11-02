@@ -153,7 +153,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         impl::parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+            [=](sycl::nd_item<1> it) __attribute__((always_inline)) BATCHLAS_REQD_SG_SIZE(32) {  // outlined: 2-3x the stack
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 

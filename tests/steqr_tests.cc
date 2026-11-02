@@ -9,11 +9,13 @@
 #include <batchlas/verify/tolerance.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
+#include <src/ops/syev/steqr/steqr_internal.hh>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -716,7 +718,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
 // returned, and the caller read eigenvalues that were simply wrong for it.
 //
 // TWO TIERS, ONE SPAN. `steqr` picks steqr_cta when n <= the device sub-group
-// width and steqr_wg otherwise (src/ops/syev/steqr/steqr.cc:44), so at n = 32 these
+// width and steqr_wg otherwise (the steqr_cta_can_run branch in steqr_dispatch, steqr.cc), so at n = 32 these
 // cases exercise the CTA arm on CUDA and the work-group arm on the host -- which
 // is deliberate: the two tiers derive the status by completely different means
 // (a bool out of steqr_cta_solve vs. a post-hoc scan of `e`), and a test that
@@ -799,7 +801,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
     // "nothing wrote it at all", and "nothing wrote it" is the exact failure this
     // mechanism exists to make impossible: a status channel that is never filled
     // reports universal success. steqr clears the span itself
-    // (src/ops/syev/steqr/steqr.cc:67), so a surviving -1 means that clear never ran.
+    // (the detail::info_clear call in steqr(), steqr.cc), so a surviving -1 means that clear never ran.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     auto ws = UnifiedVector<std::byte>(
@@ -830,7 +832,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
 // vacuously. Calling steqr directly avoids the rewrite; 1 escapes it regardless.
 //
 // One sweep per pass gives the CTA arm a budget of max_sweeps*n = 32 sweeps
-// (steqr_cta_device.hh:765) and the work-group arm n-1 = 31 passes of one sweep
+// (sweep_budget = max_sweeps * t.n in steqr_cta_device.hh) and the work-group arm n-1 = 31 passes of one sweep
 // each, against a 32x32 Toeplitz that needs 2-3 sweeps per eigenvalue.
 TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     using T = typename TestFixture::ScalarType;
@@ -1286,7 +1288,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
 
         for (const auto scheme : kSteqrUpdateSchemes) {
             for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
-                // NETLIB's host queue never takes steqr_cta (should_use_cta, src/ops/syev/steqr/steqr.cc:15-24,40-43)
+                // NETLIB's host queue never takes steqr_cta (steqr_cta_can_run, src/ops/syev/steqr/steqr_internal.hh)
                 // and steqr_wg reads no cta_* field: every (scheme, shift) pair there is the same run.
                 if (B == Backend::NETLIB && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack))
                     continue;
@@ -1452,6 +1454,103 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                 }
                 EXPECT_GT(bad_items, 0) << "n=" << n << " mult=" << mult << " batch=" << batch
                                         << ": the batched check failed and no single item did";
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch position changes no bit.
+//
+// The output hashes (w_hash, z_hash in benchmarks/steqr_accuracy.cc) compare base and branch at
+// one batch size; this pins the other axis. Item k of a batch-4099 solve equals, bit for bit, the
+// same item solved alone: eigenvalues and eigenvectors. An item that reads a neighbour's lane,
+// chunk or work-group state goes red. Where steqr_cta_can_run holds and B is not ROCm (the
+// router's rule), n = 4, 13 and 32 call steqr_cta directly (8, 2 and 1 items per warp) under every
+// scheme and shift; elsewhere, and at n = 33 and 48, steqr runs steqr_wg, which reads no cta_*
+// field. Probes sit at chunk, warp and work-group edges and in the ragged tail; d and e are padded
+// per item.
+// ---------------------------------------------------------------------------
+TYPED_TEST(SteqrTest, BatchPositionChangesNoBit) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    constexpr int batch = 4099;
+    constexpr std::array<int, 9> probes = {0, 1, 7, 31, 32, 1023, 1024, 4097, 4098};
+
+    for (const int n : {4, 13, 32, 33, 48}) {
+        const int sd = n + 3, se = n + 1;
+        std::vector<Real> hd(static_cast<size_t>(sd) * batch, Real(0)), he(static_cast<size_t>(se) * batch, Real(0));
+        uint32_t state = 4099u + static_cast<uint32_t>(n);
+        auto next_unit = [&]() {
+            state = state * 1664525u + 1013904223u;
+            return 0.5 + static_cast<double>(state >> 8) / static_cast<double>(1u << 24);
+        };
+        const double g = std::pow(1e-6, 1.0 / (n - 1));
+        for (int b = 0; b < batch; ++b) {
+            const int kind = b % 3;  // 0: small end first (QL), 1: large end first (QR), 2: random
+            for (int i = 0; i < n; ++i) {
+                const double sign = ((b + i) % 3 == 0) ? -1.0 : 1.0;
+                hd[static_cast<size_t>(b) * sd + i] = static_cast<Real>(
+                    kind == 2 ? 2.0 * next_unit() - 2.0 : sign * next_unit() * std::pow(g, kind == 0 ? n - 1 - i : i));
+            }
+            for (int i = 0; i < n - 1; ++i) {
+                const double k = (kind == 0 ? n - 2 - i : i) + 0.5;
+                he[static_cast<size_t>(b) * se + i] = static_cast<Real>(kind == 2 ? next_unit() : next_unit() * std::pow(g, k));
+            }
+        }
+        // Items [first, first + count) of a padded host array, fresh per call: steqr may overwrite d and e.
+        auto slice = [](const std::vector<Real>& h, int size, int stride, int first, int count) {
+            Vector<Real> v(size, Real(0), count, Stride(stride), Inc(1));
+            std::memcpy(v.data_ptr(), h.data() + static_cast<size_t>(stride) * first, sizeof(Real) * Vector<Real>::required_span_length(size, 1, stride, count));
+            return v;
+        };
+        const bool cta = B != Backend::ROCM && steqr_cta_can_run(select::device_of<B>(*this->ctx), n);
+        auto solve = [&](int first, int count, SteqrParams<Real> params, Vector<Real>& w, Matrix<Real>& Z) {
+            auto d = slice(hd, n, sd, first, count);
+            auto e = slice(he, n - 1, se, first, count);
+            params.sort = true;
+            params.sort_order = SortOrder::Ascending;
+            UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params));
+            if (cta) {
+                (void)steqr_cta<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Z);
+            } else {
+                (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Z);
+            }
+            this->ctx->wait();
+        };
+
+        for (const auto scheme : kSteqrUpdateSchemes) {
+            for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
+                if (!cta && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack)) continue;
+                const std::string tag = "n=" + std::to_string(n) + " " + update_scheme_name(scheme) +
+                                        (shift == SteqrShiftStrategy::Lapack ? " Lapack" : " Wilkinson");
+                SteqrParams<Real> params = {};
+                params.cta_update_scheme = scheme;
+                params.cta_shift_strategy = shift;
+                Vector<Real> w(n, Real(0), batch), w1(n, Real(0), 1);
+                auto Z = Matrix<Real>::Zeros(n, n, batch);
+                auto Z1 = Matrix<Real>::Zeros(n, n, 1);
+                try {
+                    solve(0, batch, params, w, Z);
+                } catch (const std::exception& ex) {
+                    if (test_utils::may_skip_missing_kernel(ex.what())) GTEST_SKIP() << ex.what();
+                    throw;
+                }
+                for (const int k : probes) {
+                    solve(k, 1, params, w1, Z1);
+                    EXPECT_EQ(std::memcmp(w.data_ptr() + static_cast<size_t>(k) * w.stride(), w1.data_ptr(), sizeof(Real) * n), 0)
+                        << tag << ": eigenvalues of item " << k << " differ from item " << k << " solved alone";
+                    EXPECT_EQ(std::memcmp(Z.data_ptr() + static_cast<size_t>(k) * Z.stride(), Z1.data_ptr(), sizeof(Real) * n * n), 0)
+                        << tag << ": eigenvectors of item " << k << " differ from item " << k << " solved alone";
+                    // Equal and wrong (nothing written, say) must not pass.
+                    std::vector<long double> d_ld(n), e_ld(n - 1);
+                    for (int i = 0; i < n; ++i) d_ld[i] = hd[static_cast<size_t>(k) * sd + i];
+                    for (int i = 0; i < n - 1; ++i) e_ld[i] = he[static_cast<size_t>(k) * se + i];
+                    std::string why;
+                    EXPECT_TRUE(tridiag_item_ok(*this->ctx, d_ld, e_ld, sturm_eigenvalues(d_ld, e_ld), w1, Z1.data_ptr(), 0, why))
+                        << tag << " item " << k << ": " << why;
+                }
             }
         }
     }

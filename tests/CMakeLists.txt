@@ -16,7 +16,7 @@ endif()
 
 # Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
 # any -j: syev_cta_tests has a concurrency wrong-answer flake (docs/developer/agent-guide.md section 8).
-set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
+set(BATCHLAS_HOST_ONLY_TESTS tune_tests tridiag_math_tests)
 set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
@@ -119,6 +119,7 @@ set(TEST_TARGETS
     bdsqr_tests
     bdsdc_tests
     steqr_tests
+    tridiag_math_tests
     stebz_tests
     stein_tests
     trmm_tests
@@ -226,7 +227,7 @@ set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ortho_mask_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
-    steqr_tests stedc_tests stebz_tests stein_tests
+    steqr_tests stedc_tests stebz_tests stein_tests tridiag_math_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
     sytrd_cta_tests sytrd_blocked_tests)
