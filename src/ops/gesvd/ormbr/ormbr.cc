@@ -26,9 +26,6 @@ inline char upper_ascii(char c) {
     return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 }
 
-template <typename T>
-class OrmbrPKernel;
-
 // Kernel-name tag for this TU's instantiations of the shared wy:: LARFT.
 struct OrmbrPWyTag;
 

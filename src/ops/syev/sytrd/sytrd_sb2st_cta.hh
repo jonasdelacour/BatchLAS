@@ -46,29 +46,6 @@ inline ConstStridedView<T> make_const_strided(T* ptr, int inc) {
     return ConstStridedView<T>{ptr, inc};
 }
 
-template <typename Ops, typename T>
-inline void lartv_impl(int nrot, StridedView<T> x, StridedView<T> y, ConstStridedView<typename Ops::Real> c,
-                       ConstStridedView<T> s) {
-    for (int t = 0; t < nrot; ++t) {
-        Ops::rot_pair(x[t], y[t], c[t], s[t]);
-    }
-}
-
-template <typename Ops, typename T>
-inline void largv_impl(int nrot, StridedView<T> x, StridedView<T> w, StridedView<typename Ops::Real> c) {
-    for (int t = 0; t < nrot; ++t) {
-        const T f = x[t];
-        const T g = w[t];
-        typename Ops::Real ct = typename Ops::Real(0);
-        T st = T(0);
-        T rt = T(0);
-        Ops::lartg(f, g, ct, st, rt);
-        c[t] = ct;
-        w[t] = st;
-        x[t] = rt;
-    }
-}
-
 template <typename T>
 inline T real_as_T(const T& x) {
     if constexpr (detail::is_complex<T>::value) {
@@ -107,18 +84,6 @@ struct btrd_givens_ops<T, false> {
         }
     }
 
-    static inline void lartv(int nrot,
-                             StridedView<T> x,
-                             StridedView<T> y,
-                             ConstStridedView<Real> c,
-                             ConstStridedView<T> s) {
-        lartv_impl<btrd_givens_ops<T, false>, T>(nrot, x, y, c, s);
-    }
-
-    static inline void largv(int nrot, StridedView<T> x, StridedView<T> w, StridedView<Real> c) {
-        largv_impl<btrd_givens_ops<T, false>, T>(nrot, x, w, c);
-    }
-
     static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si_in) {
         const Real xi = static_cast<Real>(x);
         const Real yi = static_cast<Real>(y);
@@ -147,9 +112,6 @@ struct btrd_givens_ops<T, false> {
             lar2v_pair(x[t], y[t], z[t], c[t], s[t]);
         }
     }
-
-    static inline void prepare_work_for_right(int /*nrot*/, T* /*s*/, int /*stride*/) {}
-    static inline void ensure_band_diag_real(T* /*AB*/, int /*ldab*/, int /*n*/) {}
 
     static inline void finalize_tridiag(const KernelMatrixView<T, MatrixFormat::Dense>& AB,
                                         int n,
@@ -193,18 +155,6 @@ struct btrd_givens_ops<T, true> {
         }
     }
 
-    static inline void lartv(int nrot,
-                             StridedView<T> x,
-                             StridedView<T> y,
-                             ConstStridedView<Real> c,
-                             ConstStridedView<T> s) {
-        lartv_impl<btrd_givens_ops<T, true>, T>(nrot, x, y, c, s);
-    }
-
-    static inline void largv(int nrot, StridedView<T> x, StridedView<T> w, StridedView<Real> c) {
-        largv_impl<btrd_givens_ops<T, true>, T>(nrot, x, w, c);
-    }
-
     static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si) {
         // Exact port of Netlib LAPACK CLAR2V logic.
         const Real xi = static_cast<Real>(x.real());
@@ -244,21 +194,6 @@ struct btrd_givens_ops<T, true> {
                              ConstStridedView<T> s) {
         for (int t = 0; t < nrot; ++t) {
             lar2v_pair(x[t], y[t], z[t], c[t], s[t]);
-        }
-    }
-
-    static inline void prepare_work_for_right(int nrot, T* s, int stride) {
-        // ZHBTRD requirement: conjugate WORK(J1) vector before applying from the right.
-        for (int t = 0; t < nrot; ++t) {
-            s[t * stride] = batchlas::device::detail::conj(s[t * stride]);
-        }
-    }
-
-    static inline void ensure_band_diag_real(T* AB, int ldab, int n) {
-        // Ensure diagonal is real (ZHBTRD does this).
-        for (int j = 0; j < n; ++j) {
-            const int idx = 0 + j * ldab;
-            AB[idx] = real_as_T(AB[idx]);
         }
     }
 
