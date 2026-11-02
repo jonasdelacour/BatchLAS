@@ -11,8 +11,8 @@ namespace batchlas::tridiag {
 // The pair R annihilates: (pivot, bulge) -> (r, 0). Seed: (d_m - sigma, e_{m-1}).
 template <typename T> struct ChaseState { T pivot, bulge; };
 
-// EXP: [[d_hi, e_mid], [e_mid, d_lo]] <- R A R^T, e_hi = r, e_below <- c e_below, and the new
-// bulge -s e_below one plane up.
+// EXP: [[d_hi, e_mid], [e_mid, d_lo]] <- R A R^T; e_hi = c pivot + s bulge (= r, recomputed rather
+// than lartg's r: base bits); e_below <- c e_below; new bulge s e_below at (hi, lo-1).
 template <typename T> struct ExpRotation {
     Givens<T> R;
     T d_hi, d_lo, e_mid, e_below, e_hi, bulge;
@@ -30,7 +30,7 @@ __attribute__((always_inline)) inline ExpRotation<T> exp_rotation(ChaseState<T> 
     return {R, A.a, A.c, A.b, ej_new, e_hi_new, bulge_new};
 }
 
-// PG (Pal-Walker-Kahan) carry: the previous rotation and (g, p). Seed {{1, 1}, d_m - sigma, 0}.
+// PG (Parlett-Gray / EISPACK) carry: previous rotation and (g, p). Seed {{1, 1}, d_m - sigma, 0}: c = s = 1 is dsteqr's, so the first f = b = e_{m-1}.
 template <typename T> struct PgCarry { Givens<T> prev; T g, p; };
 
 // PG: R from (g, s_prev e_lo); then the transfer rho = s(d_lo - (d_hi - p)) + 2c(c_prev e_lo),

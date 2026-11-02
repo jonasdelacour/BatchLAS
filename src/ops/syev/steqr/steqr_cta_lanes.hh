@@ -199,8 +199,8 @@ __attribute__((always_inline)) inline void solve_exact_2x2(TridiagLanes<T, P, Pa
 
 // One implicit QL sweep on the unreduced window [l, m], EXP update: the shift sigma comes from
 // the leading 2x2, the seed pair is (d_m - sigma, e_{m-1}), and for each plane (lo, hi) =
-// (k-1, k), k = m down to l+1, R annihilates the pair, [[d_hi, e_lo], [e_lo, d_lo]] <- R A R^T,
-// the bulge moves to e_{lo-1}, and Z <- Z R^T on (hi, lo).
+// (k-1, k), k = m down to l+1, R annihilates the pair, [[d_hi, e_mid], [e_mid, d_lo]] <- R A R^T,
+// e_{lo-1} <- c e_{lo-1}, the bulge s e_{lo-1} moves to T(hi, lo-1), and Z <- Z R^T on (hi, lo).
 // Pad: the chunks of a lockstep domain share one trip count, and a chunk with `active` false
 // or a shorter chase idles through identity rotations. Idle state is only discarded by
 // selects, never multiplied by a mask, so a failed chunk's NaNs reach neither T nor Z.
@@ -224,14 +224,14 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
     const T sigma = wilkinson_shift(strategy, d_l, e_l, d_l1);
 
     const int32_t nrot = Pad ? lockstep_max(t.part, active ? m - l : 0) : m - l;
-    // The rows the next plane rotates: d_hi and e_lo (= e_{hi-1}) come out of the previous
+    // The rows the next plane rotates: d_hi and e_mid (= e_{hi-1}) come out of the previous
     // rotation, so they are carried in registers; shuffles run unconditionally, clamped.
     T d_hi = t.d_at(ms);
     T e_mid = t.e_at(std::max(ms - 1, 0));
     e_mid = (ms >= 1) ? e_mid : T(0);
     T e_l_new = T(0);
 
-    // The chase writes row hi but reads only rows below it, so it may read T as it was before
+    // The chase writes row hi but reads only rows lo, lo-1 (lower index, not yet reached), so it may read T as it was before
     // the sweep; an immutable snapshot lets the compiler hoist those shuffles off the
     // rotation chain. evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
     const TridiagLanes<T, P, Part> before = t;
@@ -241,13 +241,14 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
     const int32_t e_hi_limit = std::min(m, t.n - 1);
 
     q.chase_begin(ms);
+    // Step v, hi = m - v: d_hi, e_mid = rows hi, hi-1 after plane hi+1; pair = (e_hi, bulge at (hi+1, hi-1)).
     for (int32_t v = 0; v < nrot; ++v) {
         const int32_t hi = m - v;
         const int32_t lo = m - v - 1;
         const bool act = !Pad || (active && v < m - l);
 
         const T d_lo = before.d_at(Pad ? std::max(lo, 0) : lo);
-        // e_{lo-1} outside the block is a deflated 0, so the read is safe.
+        // e_{lo-1} outside the window is a deflated 0, so the read is safe.
         const T e_below_raw = before.e_at(std::max(lo - 1, 0));
         const T e_below = (lo >= 1) ? e_below_raw : T(0);
 
@@ -262,7 +263,6 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
         t.d = owns_hi ? r.d_hi : t.d;
         t.e = (owns_hi && hi < e_hi_limit) ? r.e_hi : t.e;
 
-        // Z <- Z R^T on (hi, lo).
         if constexpr (Pad) {
             q.template chase_step_masked<-1>(r.R.c, -r.R.s, act);
         } else {
@@ -286,7 +286,7 @@ __attribute__((always_inline)) inline void exp_sweep(TridiagLanes<T, P, Part>& t
     if (active) q.chase_end(l);
 }
 
-// The same sweep with the PG (Pal-Walker-Kahan) update, DSTEQR's QL inner loop: the carry
+// The same sweep with the PG (Parlett-Gray / EISPACK) update, DSTEQR's QL inner loop: the carry
 // (R_prev, g, p) seeds at ((1, 1), d_m - sigma, 0), and d_l -= p, e_l = g at the end.
 template <typename T, size_t P, typename Part, typename QCache>
 __attribute__((always_inline)) inline void pg_sweep(TridiagLanes<T, P, Part>& t, QCache& q, Range window,

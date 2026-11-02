@@ -103,7 +103,8 @@ void stedc_merge_fused_cta(Queue& ctx,
 // Merge step (secular solve + eigenvector formation), dispatched on params.merge_variant.
 //   eigenvalues  – sorted poles D[0..dd-1] per batch item (dd = n_reduced[bid])
 //   v            – secular vector z (already permuted, squared weights for Legacy path)
-//   rho          – signed rank-1 update coefficient per batch item
+//   rho          – signed cut off-diagonal beta per batch item (tridiag::Tear); the update
+//                  coefficient is Tear<T>{beta}.rho() = 2|beta|
 //   n_reduced    – number of non-deflated poles per batch item
 // Outputs: Qprime (n×n, identity for deflated columns), temp_lambdas (unsorted),
 // info (per-item status or nullptr; divide the node index by info_nodes_per_item).

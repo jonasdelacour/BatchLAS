@@ -281,8 +281,8 @@ void deflate(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& eigvects, con
 
         sycl::group_barrier(cta);
 
-        // Negligible weights (LAPACK LAED8): |beta z_k / ||z||| <= tol, z renormalised first (that
-        // moves bits). The pass above never writes D, so eig_max2 == eig_max; reusing eig_max keeps
+        // Negligible weights (LAPACK LAED8): |beta z_k / ||z||| <= tol, tested on z_k / ||z|| (z itself is
+        // not rescaled here). The pass above never writes D, so eig_max2 == eig_max; reusing eig_max keeps
         // it live across the loop and costs 2 registers (float), hence the second reduction.
         // WP6f: eps here is 2u and the test takes |beta|, not rho = 2|beta|: 4x dlaed2's threshold.
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
@@ -393,7 +393,8 @@ void secular_roots(Queue& ctx, const VectorView<T>& eigenvalues, const MatrixVie
     });
 }
 
-// Löwner: zhat_j = sign(z_j) sqrt|prod_i delta_ji / prod_{i!=j} (d_i - d_j)|, so the computed
+// Löwner: z_j <- sign(z_j) sqrt|prod_i delta_ji / prod_{i!=j} (d_i - d_j)| = sqrt(rho) zhat_j (the
+// 1/rho factor is dropped and cancels when U's columns are normalised), so the computed
 // roots are exact for zhat (ROCm's stedc_mergeValues_Rescale_kernel, group product reduction).
 template <Backend B, typename T>
 void loewner(Queue& ctx, const VectorView<T>& eigenvalues, const MatrixView<T, MatrixFormat::Dense>& Qprime,
@@ -528,7 +529,7 @@ void back_transform(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& eigvec
         return;
     }
 
-    // Deflation-aware: with A = Q P, A U = [A W | A(:, K:)], so only the first K columns need a
+    // Deflation-aware: with A = Q P, A U = [A(:, :K) W | A(:, K:)], so only the first K columns need a
     // GEMM. One batch-wide dd_max keeps a single uniform vendor call and stays exact (columns
     // K..dd_max-1 of U are identity). Reading dd_max costs a host sync, hence the size threshold.
     // evidence: docs/perf/stedc.md#stedc-deflation-aware-back-transform-gemm
@@ -1023,7 +1024,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     return ctx.get_event();
 }
 
-// NETLIB stedc is a sorted host steqr. WP3 moves both calls below from steqr_legacy to steqr_wg.
+// NETLIB stedc is a sorted host steqr on steqr_legacy, which replays only the sweeps each block performed (steqr_wg replays every slot), so its Z bits differ from steqr_wg's.
 template <typename T>
 SteqrParams<T> stedc_netlib_steqr_params(const StedcParams<T>& params) {
     auto steqr_params = params.leaf_steqr_params;

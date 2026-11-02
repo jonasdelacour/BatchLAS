@@ -89,6 +89,8 @@ namespace batchlas {
         // Dir is +1 when the chase walks toward higher column indices and -1 when it
         // walks toward lower ones; the written column is the current one and the read
         // column is the neighbour in that direction.
+        // (z_cur, z_next) <- (c z_cur - s z_next, s z_cur + c z_next): Z R^T on (cur, next) is
+        // chase_step(R.c, -R.s).
         template <int32_t Dir>
         inline void chase_step(T c, T s) {
             const int32_t next = idx + Dir * static_cast<int32_t>(LDQ);
@@ -138,7 +140,6 @@ namespace batchlas {
         template <typename QProb>
         inline void store(QProb&) const {}
 
-        inline void apply(int32_t, int32_t, T, T) {}
         inline void rotate(int32_t, int32_t, tridiag::Givens<T>) {}
         inline void chase_begin(int32_t) {}
         template <int32_t Dir>
@@ -300,6 +301,9 @@ namespace batchlas {
     // The same state machine when the lockstep domain is the whole sub-group: every phase
     // runs under a sub-group vote, and a chunk outside the phase passes `live` false: it
     // feeds in-range sources and discards the results.
+    // Per chunk: need_block -open-> testing; testing -Converged1/Exact2x2-> testing,
+    // -Sweep-> ready, -cap/budget-> failed; testing && (l >= last || failed) -close-> need_block
+    // | done; a chunk outside a vote passes live = false.
     template <typename T, size_t P, typename Part, typename QCache>
     __attribute__((always_inline)) inline bool steqr_cta_solve_lockstep(tridiag::TridiagLanes<T, P, Part>& t,
                                                                         QCache& qcache,

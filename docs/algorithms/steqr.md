@@ -7,7 +7,7 @@
 solve of `stedc` and the solver of the fused small-n `syev`. Measurements are in
 [STEQR: the CTA tridiagonal solver](../perf/steqr.md); the stedc merge is in @ref perf_stedc.
 
-Which path runs (`should_use_cta`, `src/ops/syev/steqr/steqr.cc`): `steqr_cta` when
+Which path runs (`steqr_cta_can_run` in `src/ops/syev/steqr/steqr_internal.hh`, plus the ROCm check in `steqr.cc`): `steqr_cta` when
 \f$0 < n \le 32\f$ and the device supports sub-group size 32, otherwise `steqr_wg`. On ROCm the
 CTA path is disabled: its chunked sub-group operations gave wrong eigenvalues on AMD gfx1200.
 
@@ -90,7 +90,7 @@ For a block \f$[\ell, r]\f$ the solver converges the endpoint of smaller magnitu
 - `steqr_wg` runs the chase in virtual indices oriented so the converged end is the shift end,
   and records the orientation (`ApplyOrder::Forward`/`Backward`) for the eigenvector update.
 - `steqr_cta` has only a QL loop. For QR it mirrors the block, \f$T \leftarrow J T J\f$ and
-  \f$Q \leftarrow Q J\f$ with \f$J\f$ the reversal on \f$[\ell, r]\f$ (`reverse_block`), runs QL,
+  \f$Q \leftarrow Q J\f$ with \f$J\f$ the reversal on \f$[\ell, r]\f$ (`tridiag::mirror`), runs QL,
   and mirrors back, also on failure. All chunks therefore share one loop nest.
 
 ## steqr: the exact 2x2 solve

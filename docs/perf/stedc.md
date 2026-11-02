@@ -30,7 +30,7 @@ enabled, 15-20% end to end (batch 256, float, n = 64 0.930 -> 0.782 ms, n = 512 
 
 ## stedc: the dd == 1 secular-solve fault
 
-When a subproblem deflates to `dd == 1`, `solve_root_ext_generic` dereferenced `d_prob(dd - 2)`, out
+When a subproblem deflates to `dd == 1`, the last-root solver (now `tridiag::solve_last_root`) dereferenced `d_prob(dd - 2)`, out
 of the shared window (`CUDA_ERROR_ILLEGAL_ADDRESS`). Both the CTA solver and `sec_solve_ext_roc`
 (`stedc_secular.cc`) now return the closed form \f$x = d_0 + \rho z_0^2\f$ first.
 `StedcTest.FusedCtaConditionedHeavyDeflation` (log10 condition 1, 3, 5, all four widths) reproduces
@@ -168,7 +168,7 @@ tolerance both passed residual checks with bimodal float orthogonality at n <= 6
 
 ## stedc: literature on the merge
 
-The secular solver (`solve_root_roc_generic`) is the rocSOLVER middle-way / fixed-weight hybrid with
+The secular solver (`tridiag::solve_interior_root` and `tridiag::solve_last_root`) is the rocSOLVER middle-way / fixed-weight hybrid with
 bound-clamped steps; it follows the recommended scheme, leave it alone. Untried leads: relative-accuracy
 Löwner vectors (Jakovčević Stor, Slapničar & Barlow, arXiv:1405.7537; could remove `enable_rescale`),
 HSS-compressed eigenvectors for large n (arXiv:1510.04591), and boundary-row D&C for values-only

@@ -18,15 +18,16 @@ template <typename T> struct SecularRoot { int32_t origin; T pole; T tau; bool c
 // Poles left out of the split sums (today's `skip`): none, the pole k, or k and k+1.
 enum class Exclude : int8_t { None = -1, Pole = 0, PoleAndNext = 1 };
 
-// w = f = 1/rho + psi + phi split at the pole: psi sums the poles below, phi those above;
-// dw = f', and err is the running-sum bound of the evaluation error.
+// w = 1/rho + psi + phi over the poles not excluded (f itself only for Exclude::None;
+// split_at_origin adds pole o back): psi sums the included poles at or below k, phi those above;
+// dw = dpsi + dphi, and err sums each lane's running sums: an ERRETM-like bound that depends on
+// the width, not dlaed4's (WP6d).
 template <typename T> struct SecularSplit { T w, dw, psi, dpsi, phi, dphi, err; };
 
 // lo <= tau* <= hi. f increases on the interval: f(tau) <= 0 raises lo, f(tau) > 0 lowers hi.
 template <typename T> struct Bracket {
     T lo, hi;
 
-    // stedc_merge_cta.cc:147-148
     __attribute__((always_inline)) Bracket tighten(T tau, T w) const {
         Bracket b = *this;
         if (w <= T(0)) b.lo = sycl::fmax(b.lo, tau);
@@ -35,7 +36,6 @@ template <typename T> struct Bracket {
     }
 
     // eta, or half the way to the bound on the root's side when tau + eta leaves the bracket.
-    // stedc_merge_cta.cc:157-160
     __attribute__((always_inline)) T step_inside(T tau, T eta, T w) const {
         T step = eta;
         if (tau + step > hi || tau + step < lo) {
@@ -51,7 +51,7 @@ enum class RationalModel : uint8_t { FixedWeight, MiddleWay };
 
 // The step eta of the two-pole model through f, f' at tau: qc eta^2 - qa eta + qb = 0 with
 // qa = (dk + dk1) w - dk dk1 w', qb = dk dk1 w; Newton when eta goes uphill. The split is by
-// value: callers never read back the derivatives MiddleWay adds to.  stedc_merge_cta.cc:225-277
+// value: callers never read back the derivatives MiddleWay adds to.
 template <typename T>
 __attribute__((always_inline)) inline T rational_step(RationalModel model, SecularSplit<T> eval, T dk, T dk1, T zk2, T zk12,
                                                       T pk, T pk1, bool origin_lower, T ratio_sq) {
@@ -102,7 +102,7 @@ __attribute__((always_inline)) inline T rational_step(RationalModel model, Secul
 }
 
 // f split at the origin pole o with o's own term z_o^2/delta_o added to w and dw (not to psi,
-// phi); err is Li's bound ERRETM, origin_ratio_sq = (z_o/delta_o)^2 the term MiddleWay adds back.
+// phi); err is Li's ERRETM form applied to split's width-dependent err (WP6d), origin_ratio_sq = (z_o/delta_o)^2 the term MiddleWay adds back.
 template <typename T> struct OriginSplit { SecularSplit<T> f; T origin_ratio_sq; };
 
 // Views of the K surviving poles d and weights z (shared memory; never copied). Reduce is
@@ -113,7 +113,7 @@ template <typename T, typename Reduce> struct SecularEquation {
     const VectorView<T>& z;
     int32_t K; T inv_rho;
 
-    // f and f' at origin + tau, split at pole k.  stedc_merge_cta.cc:174-212
+    // f and f' at origin + tau, split at pole k.
     __attribute__((always_inline)) SecularSplit<T> split(int32_t k, Exclude exclude, T origin, T tau) const {
         const int32_t lane = red.lane_id();
         const int32_t width = red.width();
@@ -155,7 +155,7 @@ template <typename T, typename Reduce> struct SecularEquation {
                 sycl::fabs(low_err) + sycl::fabs(up_err)};
     }
 
-    // f, f' at origin + tau around the origin pole o = the root's nearer pole.  stedc_merge_cta.cc:342-358
+    // f, f' at origin + tau around the origin pole o = the root's nearer pole.
     __attribute__((always_inline)) OriginSplit<T> split_at_origin(int32_t o, T origin, T tau) const {
         OriginSplit<T> at{split(o, Exclude::Pole, origin, tau), T(0)};
         const T delta_o = d(o) - origin - tau;
@@ -177,7 +177,7 @@ template <typename T, typename Reduce> struct SecularEquation {
 };
 
 // FixedWeight for the second interior step: f, signed toward the origin, still exceeds a tenth
-// of |f_prev|.  stedc_merge_cta.cc:385
+// of |f_prev|.
 // differs from dlaed4 SWTCH, see WP6c
 template <typename T>
 __attribute__((always_inline)) inline bool fixed_weight_after_first_step(bool origin_lower, T f, T f_prev) {
@@ -188,7 +188,9 @@ __attribute__((always_inline)) inline RationalModel rational_model(bool fixed_we
     return fixed_weight ? RationalModel::FixedWeight : RationalModel::MiddleWay;
 }
 
-// lambda_k in (d_k, d_k+1) for k < K-1 (dlaed4's interior case).
+// lambda_k in (d_k, d_k+1) for k < K-1: dlaed4's interior case with the two-pole model only (base
+// behaviour). It never takes the SWTCH3 three-pole dlaed6 step (dlaed4.f:509-518, 597, 763), and
+// K = 2 comes here, not to dlaed5 (dlaed4.f:136).
 template <typename T, typename Reduce>
 __attribute__((always_inline)) inline SecularRoot<T> solve_interior_root(const SecularEquation<T, Reduce>& eq,
                                                                          int32_t k, int32_t max_iter) {
@@ -258,7 +260,7 @@ __attribute__((always_inline)) inline SecularRoot<T> solve_interior_root(const S
             break;
         }
         f_prev = advance(rational_model(fixed_weight));
-        // f kept its sign and shrank by less than ten: switch models (dlaed4.f:922). Inline on
+        // f kept its sign and shrank by less than ten: switch models (dlaed4.f:823-824). Inline on
         // purpose: as a helper or a named bool it moves registers.
         if (at.f.w * f_prev > T(0) && sycl::fabs(at.f.w) > sycl::fabs(f_prev) / T(10)) {
             fixed_weight = !fixed_weight;
@@ -270,7 +272,6 @@ __attribute__((always_inline)) inline SecularRoot<T> solve_interior_root(const S
 
 // The two-pole step of the last root (poles K-2 and K-1, f' split as psi' and phi'), Newton when
 // it goes uphill. Not rational_step: no fixed weight, and the other root of the quadratic.
-// stedc_merge_cta.cc:533-543
 template <typename T>
 __attribute__((always_inline)) inline T last_root_step(const SecularSplit<T>& s, T delta_prev, T delta_last) {
     const T qc = s.w - delta_prev * s.dpsi - delta_last * s.dphi;
@@ -335,7 +336,7 @@ __attribute__((always_inline)) inline SecularRoot<T> solve_last_root(const Secul
         }
     }
 
-    // f, f' at origin + tau over all poles; err is the last-root form of ERRETM.
+    // f, f' at origin + tau over all poles; err is dlaed4's I == N ERRETM plus |phi| (split's running sum also covers the last pole, and runs per lane; as in base).
     auto split_all = [&](T t) {
         SecularSplit<T> s = eq.split(prev, Exclude::None, origin, t);
         s.err = s.err + sycl::fabs(t) * (s.dphi + s.dpsi) - T(8) * (s.phi + s.psi) - s.phi + eq.inv_rho;

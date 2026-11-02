@@ -559,7 +559,7 @@ namespace batchlas {
         inline constexpr auto laev2(const T& a, const T& b, const T& c) {
             // LAPACK SLAEV2-style stable computation of eigenvalues and eigenvector
             // of a 2x2 symmetric matrix [[A, B], [B, C]]. Returns {rt1, rt2, cs1, sn1},
-            // where rt1 >= rt2 are the eigenvalues and [cs1, sn1]^T is the normalized
+            // where |rt1| >= |rt2| (rt1 has the larger absolute value) and [cs1, sn1]^T is the normalized
             // eigenvector corresponding to rt1.
 
             const T one  = T(1);

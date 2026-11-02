@@ -10,7 +10,8 @@
 namespace batchlas {
 
 // Correctness only: a GPU with 32-wide sub-groups and 1 <= n <= 32. The routers also exclude
-// ROCm (wrong eigenvalues on gfx1200); steqr_cta falls back to steqr_wg when this is false.
+// ROCm (wrong eigenvalues on gfx1200). For 1 <= n <= 32, steqr_cta falls back to steqr_wg when this
+// is false; for n outside [1, 32] it throws invalid_argument (the routers check this first).
 inline bool steqr_cta_can_run(const select::Device& d, int64_t n) {
     return d.is_gpu && d.has_sg32 && n >= 1 && n <= 32;
 }

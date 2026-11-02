@@ -18,7 +18,6 @@ template <typename T> struct ScaledProduct {
     T mant = T(1);
     int exp = 0;
 
-    // stedc_merge_kernels.hh:89-96
     __attribute__((always_inline)) ScaledProduct times(T factor) const {
         ScaledProduct p = *this;
         p.mant *= factor;
@@ -30,7 +29,7 @@ template <typename T> struct ScaledProduct {
         return p;
     }
 
-    // sqrt|value|, with neither argument nor result out of range.  stedc_merge_kernels.hh:117-120
+    // sqrt|value|, with neither argument nor result out of range.
     __attribute__((always_inline)) T sqrt_value() const {
         const int32_t half = exp >> 1;
         const int32_t rem = exp - 2 * half;
@@ -40,9 +39,11 @@ template <typename T> struct ScaledProduct {
     }
 };
 
-// |zhat_i|^2 = |prod_j delta_ij / prod_{j!=i} (d_i - d_j)|, delta_ii alone at j == i (dlaed3.f:262-277,
-// without the uniform 1/rho). Each factor pairs a numerator with a denominator, so it is O(1) by
-// interlacing; the partial products are lane-strided over the reduction group. Every group calls
+// |zhat_i|^2 = |prod_j delta_ij / prod_{j!=i} (d_i - d_j)|, delta_ii alone at j == i (dlaed3.f:206-219,
+// without the uniform 1/rho). Each factor pairs a numerator with a denominator; interlacing
+// fixes only its sign and side of 1 (< 1 for j < i, > 1 and unbounded for j > i), so
+// ScaledProduct renormalises after every factor. The partial products are lane-strided over
+// the reduction group. Every group calls
 // this with the same trip count (`active` masks the work): the reductions are sub-group shuffles.
 // evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
 template <typename T, typename Reduce, typename QBatch>
@@ -155,7 +156,7 @@ inline T nrm2_column(const Reduce& red, QBatch& Q, int32_t K, int32_t col) {
 }
 
 // Eigenvector j of D + rho z z^T: u = zhat ./ delta_j, then u / ||u||_2, in place over the
-// column of Q that holds delta_j (dlaed3.f:281-290). zhat is v(:, bid). Inactive groups still
+// column of Q that holds delta_j (dlaed3.f:223-232). zhat is v(:, bid). Inactive groups still
 // take the norm (of an empty range) so its reduction stays uniform.
 template <typename T, typename Reduce, typename QBatch, typename VView>
 __attribute__((always_inline)) inline void cauchy_column(const Reduce& red, bool active, int32_t K, QBatch& Q,
