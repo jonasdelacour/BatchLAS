@@ -34,10 +34,10 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
     namespace v2 = batchlas::device::v2;
     using Ar = v2::ArithFma<D>;
     const v2::DynItems ex{tid, L};
-    const auto A = v2::mat(Ag, n, n, ldg);
+    const auto A = v2::wide_mat(Ag, n, n, ldg);
     const auto P = v2::slm_mat(sA, n, NB, slda);  // local-space views: generic reads were LD.E
     const auto B = v2::slm_mat<NB, NB>(sB);
-    auto bar = [&] { sycl::group_barrier(it.get_group()); };
+    auto bar = [&]() BATCHLAS_DLA_LAMBDA { sycl::group_barrier(it.get_group()); };
 
     if (ex.leader()) *fail = 0;
     bar();  // B0
@@ -70,7 +70,7 @@ BATCHLAS_UNROLL_FULL
         }
 
         if (live) {  // (3) publish rp - rS; the strictly upper diagonal block is ZEROED
-            v2::frag_store_row_herm_lower<NB, Ar>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
+            v2::frag_store_row_herm_lower<NB, Ar>(P, row, j, ib, [&](int i) BATCHLAS_DLA_LAMBDA { return Ar::sub(rp[i], rS[i]); });
         }
         bar();  // B3
 

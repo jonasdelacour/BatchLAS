@@ -6,7 +6,8 @@
 //
 //   ArithFma<T>          complex mac = four explicit FMAs, mul = two (Arith<T> contracts otherwise)
 //   DynItems             runtime-sized Cyclic owner set (a launch-time stride), no collectives
-//   HermLower / SlmMat   operands: a Hermitian matrix seen through its lower triangle; local tiles
+//   HermLower / WideMat  operands: a Hermitian matrix seen through its lower triangle; 64-bit
+//                        column offsets (SlmMat: a local tile)
 //   lacpy_herm_lower / lacpy_lower / lacpy_conj_pad / fill        elementwise
 //   potf2_sg_slm / potf2_panel_rows                                LAPACK potf2 (Lower)
 //   trsm_rowfrag<Right, Lower, ConjTrans>                          L21 := A21 L11^-H
@@ -15,6 +16,7 @@
 //   gemv_n_slm_bcast                                               row-owner (RowFrag) panels
 
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -33,6 +35,13 @@
 #endif
 #endif
 #define BATCHLAS_DLA_UNROLL_FULL BATCHLAS_UNROLL_FULL
+// A lambda handed to for_each_owned is inlined before its caller is simplified, as the loop body
+// of a hand-written kernel is; otherwise it is simplified alone first (HermLower's two loads fold
+// into one select-address load, LDG 3 -> 2 in potrf_cta).
+#define BATCHLAS_DLA_LAMBDA __attribute__((always_inline))
+// A phase op (trsm_rowfrag, herk_tiles, the real potf2_sg_slm body) is left to the inliner, as the
+// hand-written phase helpers were, so it is simplified alone before it is inlined.
+#define BATCHLAS_DLA_PHASE inline
 
 namespace batchlas::device::v2 {
 
@@ -147,28 +156,48 @@ template <class T> struct HermLower {
     T* p;
     int ld;
     bool upper;
-    BATCHLAS_DLA_INLINE value_type operator()(int i, int c) const { return upper ? Ar::conj(p[c + i * ld]) : p[i + c * ld]; }
+    BATCHLAS_DLA_INLINE value_type operator()(int i, int c) const {
+        return upper ? Ar::conj(p[c + static_cast<std::ptrdiff_t>(i) * ld]) : p[i + static_cast<std::ptrdiff_t>(c) * ld];
+    }
     BATCHLAS_DLA_INLINE void store(int i, int c, value_type v) const {
-        if (upper) p[c + i * ld] = Ar::conj(v);
-        else p[i + c * ld] = v;
+        if (upper) p[c + static_cast<std::ptrdiff_t>(i) * ld] = Ar::conj(v);
+        else p[i + static_cast<std::ptrdiff_t>(c) * ld] = v;
     }
 };
 
-// A column-major tile in work-group local memory, addressed through a local-space multi_ptr so
-// every access stays LDS/STS even in a body that is not inlined (generic T* reads are LD.E).
-template <class T, class R = Dyn, class C = Dyn, class Ld = Dyn> struct SlmMat {
-    using value_type = std::remove_cv_t<T>;
+namespace detail {
+// Column offset j * ld: 64-bit for a runtime ld (as the hand-written kernels index), 32-bit for a
+// static one. The core Mat's int32 offset changes the address code (IMAD vs IMAD.WIDE, selects).
+template <class Ld> BATCHLAS_DLA_INLINE auto col_off(int j, Ld ld) {
+    if constexpr (std::is_same_v<Ld, Dyn>) return static_cast<std::ptrdiff_t>(j) * int(ld);
+    else return j * int(ld);
+}
+}  // namespace detail
+
+// A column-major matrix over pointer P (T* or a local-space multi_ptr) indexed through col_off.
+// Local tiles take the multi_ptr, so every access stays LDS/STS even where a body is not inlined.
+// sub() keeps the base pointer and carries (i0, j0): element (i, j) is p[(i0 + i) + (j0 + j) ld],
+// the one-expression index a hand-written kernel uses (a moved pointer splits it in two).
+template <class P, class R = Dyn, class C = Dyn, class Ld = Dyn, Mem M = Mem::Global> struct WideMat {
+    using value_type = std::remove_cvref_t<decltype(*std::declval<P>())>;
     using layout = Cyclic;
-    static constexpr Mem mem = Mem::Local;
-    using ptr_t = sycl::multi_ptr<T, sycl::access::address_space::local_space, sycl::access::decorated::no>;
-    ptr_t p;
+    static constexpr Mem mem = M;
+    P p;
     R m;
     C n;
     Ld ld;
-    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return p[i + j * int(ld)]; }
+    int i0 = 0;
+    int j0 = 0;
+    BATCHLAS_DLA_INLINE auto& operator()(int i, int j) const { return p[(i0 + i) + detail::col_off(j0 + j, ld)]; }
     BATCHLAS_DLA_INLINE int rows() const { return int(m); }
     BATCHLAS_DLA_INLINE int cols() const { return int(n); }
+    BATCHLAS_DLA_INLINE WideMat<P, Dyn, Dyn, Ld, M> sub(int i, int j, int r, int c) const {
+        return {p, Dyn{r}, Dyn{c}, ld, i0 + i, j0 + j};
+    }
 };
+template <class T> using local_ptr_t = sycl::multi_ptr<T, sycl::access::address_space::local_space, sycl::access::decorated::no>;
+template <class T, class R = Dyn, class C = Dyn, class Ld = Dyn> using SlmMat = WideMat<local_ptr_t<T>, R, C, Ld, Mem::Local>;
+
 template <class T> BATCHLAS_DLA_INLINE auto local_ptr(T* p) {
     return sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(p);
 }
@@ -177,6 +206,9 @@ template <class T> BATCHLAS_DLA_INLINE SlmMat<T> slm_mat(T* p, int m, int n, int
 }
 template <int M, int N, class T> BATCHLAS_DLA_INLINE SlmMat<T, Ext<M>, Ext<N>, Ext<M>> slm_mat(T* p) {
     return {local_ptr(p), {}, {}, {}};
+}
+template <class T> BATCHLAS_DLA_INLINE WideMat<T*> wide_mat(T* p, int m, int n, int ld) {
+    return {p, Dyn{m}, Dyn{n}, Dyn{ld}};
 }
 
 namespace detail {
@@ -188,7 +220,7 @@ template <class V, class T> BATCHLAS_DLA_INLINE void put(const V& v, int i, int 
 
 // ---- elementwise ------------------------------------------------------------------------------
 template <class Ex, class X, class S> BATCHLAS_DLA_INLINE void fill(const Ex& ex, const X& x, S s) {
-    for_each_owned(ex, x.size(), [&](int i) { x(i) = s; });
+    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DLA_LAMBDA { x(i) = s; });
 }
 
 // dst(i, c) := src(i, c) for c <= i < n, diagonal made real (Hermitian input), and 0 in every
@@ -198,7 +230,7 @@ BATCHLAS_DLA_INLINE void lacpy_herm_lower(const Ex& ex, const MS& src, const MD&
     using D = typename MD::value_type;
     using A = detail::fma_arith_t<Ar, D>;
     for (int c = 0; c < n; ++c) {
-        for_each_owned(ex, dst.rows(), [&](int i) {
+        for_each_owned(ex, dst.rows(), [&](int i) BATCHLAS_DLA_LAMBDA {
             D v{};
             if (i < n && i >= c) {
                 v = src(i, c);
@@ -212,7 +244,7 @@ BATCHLAS_DLA_INLINE void lacpy_herm_lower(const Ex& ex, const MS& src, const MD&
 // dst(i, c) := src(i, c) for c <= i < n; the strict upper triangle is neither read nor written.
 template <class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_lower(const Ex& ex, const MS& src, const MD& dst, int n) {
     for (int c = 0; c < n; ++c) {
-        for_each_owned(ex, n, [&](int i) {
+        for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_LAMBDA {
             if (i >= c) detail::put(dst, i, c, src(i, c));
         });
     }
@@ -225,7 +257,7 @@ BATCHLAS_DLA_INLINE void lacpy_conj_pad(const Ex& ex, const MS& src, const MD& d
     using D = typename MD::value_type;
     using A = detail::fma_arith_t<Ar, D>;
     const int r = src.rows(), c = src.cols();
-    for_each_owned(ex, NB * NB, [&](int e) {
+    for_each_owned(ex, NB * NB, [&](int e) BATCHLAS_DLA_LAMBDA {
         const int i = e % NB;
         const int kk = e / NB;
         D v{};
@@ -240,8 +272,9 @@ BATCHLAS_DLA_INLINE void lacpy_conj_pad(const Ex& ex, const MS& src, const MD& d
 // sub-group barrier. diag(k) := L(k,k). At the first pivot that is not > 0 (NaN included):
 // *info := info_base + k + 1 and nothing further changes. The NB barriers are unconditional,
 // so the op may run under a branch uniform over the sub-group.
-template <int NB, class Ar = void, int SG, class MA, class DV>
-BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info, int info_base) {
+namespace detail {
+template <int NB, class Ar, int SG, class MA, class DV>
+BATCHLAS_DLA_PHASE void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV diag, int* info, int info_base) {
     using D = typename MA::value_type;
     using A = detail::fma_arith_t<Ar, D>;
     using R = typename A::real_t;
@@ -276,6 +309,20 @@ BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int i
                 if (c < ib && lane < ib && lane >= c) d[c] = A::sub(d[c], A::mul(d[k], A::conj(a(c, k))));
             }
         }
+    }
+}
+
+}  // namespace detail
+// Real T: the body is a by-value phase op the inliner takes after simplifying it alone, as the
+// hand-written potf2 helper was (its column-0..3 1/sqrt shapes depend on it). Complex T: inlined
+// at the call; the hand-written helper stayed out of line there, reading the tile through generic
+// LD/ST, and out of line the by-value operands spill (STACK 64).
+template <int NB, class Ar = void, int SG, class MA, class DV>
+BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info, int info_base) {
+    if constexpr (detail::fma_arith_t<Ar, typename MA::value_type>::is_complex) {
+        [[clang::always_inline]] detail::potf2_sg_slm_body<NB, Ar>(ex, a, ib, diag, info, info_base);
+    } else {
+        detail::potf2_sg_slm_body<NB, Ar>(ex, a, ib, diag, info, info_base);
     }
 }
 
@@ -321,7 +368,7 @@ BATCHLAS_DLA_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int
 // barrier); L is kb x kb lower (kb <= NB) whose diagonal is read from the real vector `ldiag`.
 // Divides by the diagonal, as reference trsm does (potf2 scales by a reciprocal).
 template <Side S, Uplo UL, Transpose TR, int NB, class Ar = void, class Ex, class ML, class DV, class MX>
-BATCHLAS_DLA_INLINE void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag, const MX& x, int kb) {
+BATCHLAS_DLA_PHASE void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag, const MX& x, int kb) {
     static_assert(S == Side::Right && UL == Uplo::Lower && TR == Transpose::ConjTrans,
                   "v2::trsm_rowfrag: only Right / Lower / ConjTrans is implemented");
     using D = typename MX::value_type;
@@ -379,7 +426,7 @@ template <class Ex> BATCHLAS_DLA_INLINE void tri_tile_prefix_init(const Ex& ex, 
 // Cyclic over ex in map's order; diagonal tiles are trimmed element-wise (r >= c), so the strict
 // upper triangle is never written. Complex: the diagonal is stored real (LAPACK herk). No barrier.
 template <Uplo UL, int TS, class Ar = void, class Ex, class AS, class MA, class BS, class MC, class Map>
-BATCHLAS_DLA_INLINE void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC& c, const Map& map) {
+BATCHLAS_DLA_PHASE void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC& c, const Map& map) {
     static_assert(UL == Uplo::Lower, "v2::herk_tiles: only Uplo::Lower is implemented");
     static_assert(std::is_same_v<AS, NegOne> && std::is_same_v<BS, One>, "v2::herk_tiles: alpha = NegOne, beta = One");
     using D = typename MC::value_type;

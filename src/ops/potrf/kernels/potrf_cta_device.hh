@@ -7,7 +7,7 @@
 // Invariants: phase barriers follow `Scope` (potrf_cta_launch_params derives it; the wrong one races
 // into a plausible wrong factor); each phase barrier is top-level, outside its phase's `if`, and
 // failure is a predicated skip, never a `break`; the ops' Frag and tile arrays stay in registers
-// (always-inline, constant indices only). evidence: docs/perf/potrf.md#register-gate
+// (inlined, constant indices only). evidence: docs/perf/potrf.md#register-gate
 
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -47,7 +47,7 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
     namespace v2 = batchlas::device::v2;
     using Ar = v2::ArithFma<D>;
     const v2::DynItems ex{tid, L};
-    const auto A = v2::mat<v2::Mem::Local>(S, lda, n, lda);  // lda rows: the pad rows too
+    const auto A = v2::slm_mat(S, lda, n, lda);  // lda rows: the pad rows too
     const v2::HermLower<D> Ah{Ag, ldg, upper};
     const v2::Vec<R, v2::Ext<NB>, v2::Unit, v2::Mem::Local> dg{diag, {}};
     const int m2_0 = (n > NB) ? (n - NB) : 0;
