@@ -32,13 +32,13 @@ A = M D M^T, \qquad M = P_1 L_1 P_2 L_2 \cdots P_m L_m,
 columns of step \f$j\f$. In place, the triangle receives \f$D\f$ and the multipliers;
 `ipiv[k] = p+1 > 0` marks a \f$1\times1\f$ step swapping \f$k, p\f$, and
 `ipiv[k] = ipiv[k+1] = -(p+1)` a \f$2\times2\f$ step swapping \f$k+1, p\f$
-(`src/ops/sytrf/sytrf_device.hh:L270-L277`).
+([`src/ops/sytrf/sytrf_device.hh:L270-L277`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L270-L277)).
 
 ## sytrf: Bunch-Kaufman pivot selection
 
 At step \f$k\f$, with \f$|z| = |\mathrm{Re}\,z| + |\mathrm{Im}\,z|\f$ (`cabs1`;
-`src/ops/sytrf/sytrf_device.hh:L28-L33`) and \f$\alpha = (1+\sqrt{17})/8 \approx 0.6404\f$
-(`:L189`):
+[`src/ops/sytrf/sytrf_device.hh:L28-L33`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L28-L33)) and \f$\alpha = (1+\sqrt{17})/8 \approx 0.6404\f$
+([`:L189`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L189)):
 
 \f[
 \omega_1 = \max_{i>k} |a_{ik}| = |a_{rk}|, \qquad
@@ -53,15 +53,15 @@ At step \f$k\f$, with \f$|z| = |\mathrm{Re}\,z| + |\mathrm{Im}\,z|\f$ (`cabs1`;
 | \f$\lvert a_{rr}\rvert \ge \alpha\,\omega_r\f$ | \f$1\times1\f$, \f$a_{rr}\f$ | \f$k \leftrightarrow r\f$ |
 | otherwise | \f$2\times2\f$, \f$E = \left[\begin{smallmatrix} a_{kk} & a_{rk} \\ a_{rk} & a_{rr}\end{smallmatrix}\right]\f$ | \f$k+1 \leftrightarrow r\f$ |
 
-Code: \f$|a_{kk}|\f$ `:L197`; \f$\omega_1, r\f$ `:L200-L208` (first maximum, as `I?AMAX`); the
-first two tests `:L166-L171`; \f$\omega_r\f$ `:L210-L218`; the rest `:L173-L183`; `info`
-`:L222`; the interchange `:L224-L232`. Unlike `I?AMAX`, NaN entries count as \f$+\infty\f$ in
-\f$\omega_1, \omega_r\f$ (`:L155-L158`); a NaN \f$|a_{rr}|\f$ forces a \f$2\times2\f$ (`:L179`).
+Code: \f$|a_{kk}|\f$ [`:L197`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L197); \f$\omega_1, r\f$ [`:L200-L208`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L200-L208) (first maximum, as `I?AMAX`); the
+first two tests [`:L166-L171`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L166-L171); \f$\omega_r\f$ [`:L211-L218`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L211-L218); the rest [`:L176-L179`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L176-L179); `info`
+[`:L222`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L222); the interchange [`:L224-L232`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L224-L232). Unlike `I?AMAX`, NaN entries count as \f$+\infty\f$ in
+\f$\omega_1, \omega_r\f$ ([`:L155-L158`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L155-L158)); a NaN \f$|a_{rr}|\f$ forces a \f$2\times2\f$ ([`:L179`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L179)).
 
 ## sytrf: the 1x1 and 2x2 elimination steps
 
 - **\f$1\times1\f$** (\f$E = a_{kk}\f$, \f$C = c\f$): \f$B \leftarrow B - c\,c^T/a_{kk}\f$ on the
-  lower triangle, then \f$\ell = c/a_{kk}\f$ (`src/ops/sytrf/sytrf_device.hh:L234-L242`).
+  lower triangle, then \f$\ell = c/a_{kk}\f$ ([`src/ops/sytrf/sytrf_device.hh:L234-L242`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L234-L242)).
 - **\f$2\times2\f$** (\f$E = \left[\begin{smallmatrix} d_1 & e \\ e & d_2\end{smallmatrix}\right]\f$):
   the rows \f$[\ell_{jk}\; \ell_{j,k+1}] = [a_{jk}\; a_{j,k+1}]\,E^{-1}\f$ are formed scaled by
   \f$e\f$, as `dsytf2` [3]:
@@ -75,7 +75,7 @@ first two tests `:L166-L171`; \f$\omega_r\f$ `:L210-L218`; the rest `:L173-L183`
 
   then \f$a_{ij} \leftarrow a_{ij} - a_{ik} \ell_{jk} - a_{i,k+1} \ell_{j,k+1}\f$ for
   \f$i \ge j \ge k+2\f$, and \f$\ell\f$ overwrites the two columns
-  (`src/ops/sytrf/sytrf_device.hh:L243-L267`).
+  ([`src/ops/sytrf/sytrf_device.hh:L243-L267`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L243-L267)).
 
 ## sytrf: stability
 
@@ -95,7 +95,7 @@ first two tests `:L166-L171`; \f$\omega_r\f$ `:L210-L218`; the rest `:L173-L183`
 With \f$J\f$ the reversal \f$i \mapsto n-1-i\f$, the lower triangle of \f$JAJ\f$ is the upper
 triangle of \f$A\f$, and \f$JAJ = MDM^T\f$ gives \f$A = (JMJ)(JDJ)(JMJ)^T\f$ with \f$JMJ\f$ unit
 upper (`dsytf2`'s upper loop). `Uplo::Upper` runs the lower code through a reversed index map
-(`src/ops/sytrf/sytrf_device.hh:L68-L79`); `ipiv` and `info` hold physical indices.
+([`src/ops/sytrf/sytrf_device.hh:L68-L79`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L68-L79)); `ipiv` and `info` hold physical indices.
 
 ## sytrf: the blocked panel and uniform-rank update
 
@@ -108,30 +108,30 @@ Column \f$k\f$ of the partially updated matrix is
 w_k = a_{k:n,k} - L_{k:n,\,\sigma:k}\, W_{k,\,\sigma:k}^T
 \f]
 
-(`src/ops/sytrf/sytrf_device.hh:L316-L324`, `:L328`; candidate column \f$r\f$ at `:L343`). The
-pivot tests run on \f$w_k\f$; \f$\ell = w_k / w_{kk}\f$ for \f$1\times1\f$ (`:L372-L374`), the
-scaled \f$E^{-1}\f$ for \f$2\times2\f$ (`:L375-L392`). After the panel,
+([`src/ops/sytrf/sytrf_device.hh:L316-L324`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L316-L324), [`:L328`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L328); candidate column \f$r\f$ at [`:L343`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L343)). The
+pivot tests run on \f$w_k\f$; \f$\ell = w_k / w_{kk}\f$ for \f$1\times1\f$ ([`:L372-L374`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L372-L374)), the
+scaled \f$E^{-1}\f$ for \f$2\times2\f$ ([`:L375-L392`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L375-L392)). After the panel,
 \f$B \leftarrow B - L_{21} W_{21}^T\f$.
 
 - **Uniform rank.** Panels end per item, but the batch shares one `gemm`. The step at
   \f$k_0+n_b-1\f$ is always taken, so a \f$2\times2\f$ may take \f$k_0+n_b\f$ and a panel ends at
   \f$k_0+n_b\f$ or \f$k_0+n_b+1\f$. \f$W\f$ has \f$n_b+1 = 32\f$ columns, uncomputed ones zero
-  (`src/ops/sytrf/sytrf_device.hh:L312-L313`, `:L407-L408`): rank 32 for every item.
+  ([`src/ops/sytrf/sytrf_device.hh:L312-L313`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L312-L313), [`:L407-L408`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L407-L408)): rank 32 for every item.
 - **Trailing update.** A native kernel updates the lower triangles of 128-wide diagonal blocks
   with each item's own rank, plus column \f$k_0+n_b\f$ for an item whose panel ended there
-  (`src/ops/sytrf/kernels/sytrf_kernels.cc:L390-L405`); the public `gemm` (`NoTrans`, `Trans`,
-  \f$-1, 1\f$, rank 32) does the rest (`:L459-L475`).
+  ([`src/ops/sytrf/kernels/sytrf_kernels.cc:L390-L405`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L390-L405)); the public `gemm` (`NoTrans`, `Trans`,
+  \f$-1, 1\f$, rank 32) does the rest ([`:L459-L475`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L459-L475)).
 - **Standard form.** An in-panel interchange moves the un-updated column
-  (`src/ops/sytrf/sytrf_device.hh:L365-L367`) and swaps rows of the finished columns and of
-  \f$W\f$ (`:L368-L369`), so \f$L_{21}\f$ matches the permuted \f$B\f$; after the update
-  `ldl_undo` reverts the row swaps in reverse (`:L415-L428`), as `?lasyf`'s last loop.
+  ([`src/ops/sytrf/sytrf_device.hh:L365-L367`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L365-L367)) and swaps rows of the finished columns and of
+  \f$W\f$ ([`:L368-L369`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L368-L369)), so \f$L_{21}\f$ matches the permuted \f$B\f$; after the update
+  `ldl_undo` reverts the row swaps in reverse ([`:L415-L428`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L415-L428)), as `?lasyf`'s last loop.
 - **Driver.** Panel, trailing kernel, `gemm` per panel; `?sytf2` on the last \f$\le n_b\f$ columns
-  (`src/ops/sytrf/kernels/sytrf_kernels.cc:L453-L479`, tail `:L345-L352`).
+  ([`src/ops/sytrf/kernels/sytrf_kernels.cc:L453-L479`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L453-L479), tail [`:L345-L352`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L345-L352)).
 
 ## sytrs: the solve in product form
 
 \f$x = M^{-T} D^{-1} M^{-1} b\f$, applied factor by factor as `dsytrs` [5] (the `wg` route,
-`src/ops/sytrf/kernels/sytrf_kernels.cc:L271`; `src/ops/sytrf/sytrf_device.hh:L448-L503`).
+[`src/ops/sytrf/kernels/sytrf_kernels.cc:L271`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L271); [`src/ops/sytrf/sytrf_device.hh:L448-L503`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L448-L503)).
 \f$K_j\f$ is the column set of step \f$j\f$, \f$T_j\f$ the rows after it:
 
 ```text
@@ -146,7 +146,7 @@ for j = m..1:                    # M^{-T}
 
 For \f$2\times2\f$, with \f$(v_1, v_2) = b[K_j]\f$, \f$\beta_i = v_i/e\f$ and
 \f$\delta = \delta_{11}\delta_{22} - 1\f$: \f$x_1 = (\delta_{11}\beta_1 - \beta_2)/\delta\f$,
-\f$x_2 = (\delta_{22}\beta_2 - \beta_1)/\delta\f$ (`src/ops/sytrf/sytrf_device.hh:L470-L479`).
+\f$x_2 = (\delta_{22}\beta_2 - \beta_1)/\delta\f$ ([`src/ops/sytrf/sytrf_device.hh:L470-L479`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf_device.hh#L470-L479)).
 
 ## sytrs: one permutation and two triangular sweeps
 
@@ -160,26 +160,26 @@ A = P \tilde L D \tilde L^T P^T, \qquad P = P_1 P_2 \cdots P_m,
 
 column \f$j\f$ of \f$\tilde L\f$ being that of \f$L_j\f$ with rows permuted by
 \f$P_m \cdots P_{j+1}\f$; the off-diagonal of a \f$2\times2\f$ block at column \f$j\f$ moves to a
-separate `e[j]` and is zeroed in \f$\tilde L\f$ (`src/ops/sytrs/sytrs_device.hh:L54-L70`; one
-gather per column, `:L114-L138`). The solve is `?sytrs2` [6]:
+separate `e[j]` and is zeroed in \f$\tilde L\f$ ([`src/ops/sytrs/sytrs_device.hh:L54-L70`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L54-L70); one
+gather per column, [`:L114-L138`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L114-L138)). The solve is `?sytrs2` [6]:
 
 \f[
 y = P^T b,\quad \tilde L v = y,\quad z = D^{-1} v,\quad \tilde L^T u = z,\quad x = P u.
 \f]
 
-- **`cta`**: sub-groups take right-hand sides round-robin (`:L213`), row \f$t\f$ in lane
-  \f$t \bmod 32\f$: \f$\tilde L\f$ sweeps `:L168-L176`, `:L196-L203`; \f$D^{-1}\f$ `:L142-L152`,
-  `:L177-L195`; \f$P\f$ `:L73-L86`, `:L219-L230`.
-- **`blocked`** (`src/ops/sytrs/kernels/sytrs_kernels.cc`): gather `:L209-L216`, `trsm`
-  (`NoTrans`, `Unit`) `:L357`, \f$D^{-1}\f$ `:L242-L252`, `trsm` (`Trans`) `:L361`, scatter
-  `:L279-L281`.
+- **`cta`**: sub-groups take right-hand sides round-robin ([`:L213`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L213)), row \f$t\f$ in lane
+  \f$t \bmod 32\f$: \f$\tilde L\f$ sweeps [`:L169-L176`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L169-L176), [`:L196-L203`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L196-L203); \f$D^{-1}\f$ [`:L142-L152`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L142-L152),
+  [`:L177-L195`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L177-L195); \f$P\f$ [`:L73-L86`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L73-L86), [`:L219-L230`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs_device.hh#L219-L230).
+- **`blocked`** ([`src/ops/sytrs/kernels/sytrs_kernels.cc`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc)): gather [`:L209-L216`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc#L209-L216), `trsm`
+  (`NoTrans`, `Unit`) [`:L357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc#L357), \f$D^{-1}\f$ [`:L242-L252`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc#L242-L252), `trsm` (`Trans`) [`:L361`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc#L361), scatter
+  [`:L279-L281`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/kernels/sytrs_kernels.cc#L279-L281).
 
 ## sysv: factor then solve
 
 `compose` runs the routed `sytrf`, then the routed `sytrs` with `info` as a skip list, so an item
-with `info > 0` keeps its \f$B\f$, as `?sysv` (`src/ops/sysv/sysv.cc:L73-L80`). `cta` fuses both
-in one launch: sub-group 0 factors, then, if `info` \f$= 0\f$ (`src/ops/sytrf/kernels/sytrf_kernels.cc:L146-L148`),
-all sub-groups solve (`:L131-L154`).
+with `info > 0` keeps its \f$B\f$, as `?sysv` ([`src/ops/sysv/sysv.cc:L73-L80`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sysv/sysv.cc#L73-L80)). `cta` fuses both
+in one launch: sub-group 0 factors, then, if `info` \f$= 0\f$ ([`src/ops/sytrf/kernels/sytrf_kernels.cc:L148`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L148)),
+all sub-groups solve ([`:L149-L154`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/kernels/sytrf_kernels.cc#L149-L154)).
 
 ## sytrf: routes and kernels
 
@@ -199,8 +199,8 @@ Native routes need a non-NETLIB backend, a GPU with sub-group size 32 and work-g
 | sysv | `cta` | fused | \f$n \le 32\f$ |
 | sysv | `compose` | `sytrf` then `sytrs` | |
 
-Predicates: `src/ops/sytrf/sytrf.cc:L44-L57`, `src/ops/sytrs/sytrs.hh:L41-L56`,
-`src/ops/sysv/sysv.cc:L41-L50`.
+Predicates: [`src/ops/sytrf/sytrf.cc:L44-L57`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrf/sytrf.cc#L44-L57), [`src/ops/sytrs/sytrs.hh:L41-L56`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sytrs/sytrs.hh#L41-L56),
+[`src/ops/sysv/sysv.cc:L41-L50`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/sysv/sysv.cc#L41-L50).
 
 ## sytrf: references
 
