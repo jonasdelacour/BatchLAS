@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/device/detail/group_blas_common.hh>
+#include <batchlas/blas/device/v2/ext/gesvd-ormbr.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
@@ -31,6 +32,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device::v2;
 
 enum class GesvdNativeMode {
     Blocked,
@@ -215,13 +218,7 @@ Event solve_tridiagonal(Queue& ctx,
             const int32_t batch = static_cast<int32_t>(diag.batch_size());
             h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
-                S(0, b) = T(1);
-                for (int32_t i = 0; i < n - 1; ++i) {
-                    const T ei = E(i, b);
-                    const T sgn = (ei >= T(0)) ? T(1) : T(-1);
-                    S(i + 1, b) = S(i, b) * sgn;
-                    E(i, b) = sycl::fabs(ei);
-                }
+                v2::tridiag_abs_offdiag(v2::Thread{}, v2::item(E, b, n - 1), v2::item(S, b, n));
             });
         });
     }
@@ -259,7 +256,7 @@ Event solve_tridiagonal(Queue& ctx,
                 const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
                 const int32_t row = static_cast<int32_t>(rem % n);
                 const int32_t col = static_cast<int32_t>(rem / n);
-                Z(row, col, b) *= S(row, b);
+                v2::dgmm<Side::Left>(v2::Elem2{row, col}, v2::item(S, b, n), v2::item(Z, b, n, n));
             });
         });
     }
@@ -286,18 +283,8 @@ void form_right_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
-
-            const T di = D(i, b);
-            T diag = di * di;
-            if (i > 0) {
-                const T e_prev = E(i - 1, b);
-                diag += e_prev * e_prev;
-            }
-            TD(i, b) = diag;
-
-            if (i < n - 1) {
-                TE(i, b) = di * E(i, b);
-            }
+            v2::bdgram<Side::Right>(v2::Elem{i}, v2::item(D, b, n), v2::item(E, b, n - 1), v2::item(TD, b, n),
+                                    v2::item(TE, b, n - 1));
         });
     });
 }
@@ -322,22 +309,8 @@ void form_left_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / left_order;
             const int32_t i = linear - b * left_order;
-
-            T diag = T(0);
-            if (i < k) {
-                const T di = D(i, b);
-                diag += di * di;
-                if (i < k - 1) {
-                    const T ei = E(i, b);
-                    diag += ei * ei;
-                    TE(i, b) = ei * D(i + 1, b);
-                } else if (i < left_order - 1) {
-                    TE(i, b) = T(0);
-                }
-            } else if (i < left_order - 1) {
-                TE(i, b) = T(0);
-            }
-            TD(i, b) = diag;
+            v2::bdgram<Side::Left>(v2::Elem{i}, v2::item(D, b, k), v2::item(E, b, k - 1), v2::item(TD, b, left_order),
+                                   v2::item(TE, b, left_order - 1));
         });
     });
 }
@@ -359,9 +332,8 @@ void finalize_values_only(Queue& ctx,
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
             if (mask != nullptr && mask[b] == 0) return;  // I3: s of an inactive item is untouched
-            const int32_t src = (n - 1) - tgt;
-            const T lambda = sycl::fmax(Evals(src, b), T(0));
-            s_out[static_cast<size_t>(b) * static_cast<size_t>(n) + static_cast<size_t>(tgt)] = sycl::sqrt(lambda);
+            v2::map(v2::Elem{tgt}, v2::strided(s_out, static_cast<size_t>(b) * static_cast<size_t>(n), n),
+                    [](T lambda) { return sycl::sqrt(sycl::fmax(lambda, T(0))); }, v2::reversed(v2::item(Evals, b, n)));
         });
     });
 }
@@ -432,8 +404,9 @@ void finalize_hermitian_values(Queue& ctx,
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            const int32_t src = Perm(i, b);
-            s_out[static_cast<size_t>(b) * static_cast<size_t>(n) + static_cast<size_t>(i)] = sycl::fabs(Evals(src, b));
+            v2::map(v2::Elem{i}, v2::strided(s_out, static_cast<size_t>(b) * static_cast<size_t>(n), n),
+                    [](Real lambda) { return sycl::fabs(lambda); },
+                    v2::gathered(v2::item(Evals, b, n), v2::item(Perm, b, n)));
         });
     });
 }
@@ -469,17 +442,10 @@ void build_hermitian_vectors(Queue& ctx,
             const int32_t src = Perm(tgt, b);
             const Real lambda = Evals(src, b);
             const T sign = (lambda < Real(0)) ? T(-1) : T(1);
-
-            if (want_u) {
-                for (int32_t row = 0; row < n; ++row) {
-                    U(row, tgt, b) = Q(row, src, b);
-                }
-            }
-
+            const auto q = v2::item(Q, b, n, n).col(src);
+            if (want_u) v2::copy(v2::Thread{}, q, v2::item(U, b, n, n).col(tgt));
             if (want_vh) {
-                for (int32_t col = 0; col < n; ++col) {
-                    Vh(tgt, col, b) = sign * batchlas::device::detail::conj(Q(col, src, b));
-                }
+                v2::map(v2::Thread{}, v2::item(Vh, b, n, n).row(tgt), [=](T x) { return sign * v2::Arith<T>::conj(x); }, q);
             }
         });
     });
@@ -505,7 +471,7 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            M(r, c, b) = (r == c) ? T(1) : T(0);
+            v2::laset(v2::Elem2{r, c}, v2::Zero{}, v2::One{}, v2::item(M, b, rows, cols));
         });
     });
 }
@@ -528,7 +494,7 @@ void expand_real_block(Queue& ctx, const MatrixView<typename base_type<T>::type,
             const int32_t lin = static_cast<int32_t>(id[1]);
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
-            D(r, c, b) = T(S(r, c, b));
+            v2::lacpy(v2::Elem2{r, c}, v2::item(S, b, rows, cols), v2::item(D, b, rows, cols));
         });
     });
 }
@@ -549,7 +515,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
             const int32_t c = lin / n;
             const int32_t r = lin - c * n;
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            if (r > c) A(c, r, b) = batchlas::device::detail::conj(A(r, c, b));
+            v2::mirror<Uplo::Lower>(v2::Elem2{r, c}, v2::item(A, b, n, n));
         });
     });
 }
@@ -574,7 +540,8 @@ void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, con
                 const int32_t c = lin / rows;
                 const int32_t r = lin - c * rows;
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                D(c, r, b) = batchlas::device::detail::conj(S(r, c, b));
+                v2::omatcopy<Transpose::ConjTrans>(v2::Elem2{r, c}, v2::One{}, v2::item(S, b, rows, cols),
+                                                   v2::item(D, b, cols, rows));
             });
         });
     }
@@ -607,9 +574,7 @@ void build_bidiag_vectors(Queue& ctx,
                 const int32_t tgt = linear - b * k;
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int32_t src = (k - 1) - tgt;
-                for (int32_t i = 0; i < k; ++i) {
-                    Vh(tgt, i, b) = V(i, src, b);
-                }
+                v2::copy(v2::Thread{}, v2::item(V, b, k, k).col(src), v2::item(Vh, b, k, k).row(tgt));
             });
         });
     }
@@ -632,27 +597,16 @@ void build_bidiag_vectors(Queue& ctx,
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const T sigma_max = sycl::sqrt(sycl::fmax(Evals(k - 1, b), T(0)));
                 const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
-
+                const auto u = v2::item(U, b, m, u_cols).col(tgt);
                 if (tgt >= k) {
-                    for (int32_t i = 0; i < m; ++i) {
-                        U(i, tgt, b) = T(0);
-                    }
+                    v2::fill(v2::Thread{}, v2::Zero{}, u);
                     return;
                 }
-
+                // u_tgt = B v_src / sigma (zero rows past k), or 0 for a sigma at or below tol_zero.
                 const int32_t src = (k - 1) - tgt;
                 const T sigma = sycl::sqrt(sycl::fmax(Evals(src, b), T(0)));
-                for (int32_t i = 0; i < m; ++i) {
-                    T value = T(0);
-                    if (sigma > tol_zero && i < k) {
-                        value = D(i, b) * V(i, src, b);
-                        if (i < k - 1) {
-                            value += E(i, b) * V(i + 1, src, b);
-                        }
-                        value /= sigma;
-                    }
-                    U(i, tgt, b) = value;
-                }
+                v2::bdmv_div(v2::Thread{}, v2::item(D, b, k), v2::item(E, b, k - 1), v2::item(V, b, k, k).col(src), sigma,
+                             tol_zero, u);
             });
         });
     }
@@ -675,9 +629,9 @@ bool has_tiny_singular_values(Queue& ctx,
             const int32_t b = static_cast<int32_t>(tid[0]);
             int32_t tiny = 0;
             if (mask == nullptr || mask[b] != 0) {
-                const T* sb = s_in + static_cast<size_t>(b) * static_cast<size_t>(k);
-                const T tol_zero = gesvd_zero_sigma_tol(sb[0]);
-                for (int32_t i = 0; i < k; ++i) tiny |= (sb[i] <= tol_zero) ? 1 : 0;
+                const auto s = v2::vec(s_in + static_cast<size_t>(b) * static_cast<size_t>(k), k);
+                const T tol_zero = gesvd_zero_sigma_tol(s(0));
+                tiny = v2::any_of(v2::Thread{}, s.size(), [&](int i) { return s(i) <= tol_zero; });
             }
             f[b] = tiny;
         });
@@ -716,10 +670,7 @@ void patch_zero_left_vectors(Queue& ctx,
             if (tgt < sigma_count && sb[tgt] > tol_zero) {
                 return;
             }
-
-            for (int32_t i = 0; i < m; ++i) {
-                U(i, tgt, b) = UZero(i, src, b);
-            }
+            v2::copy(v2::Thread{}, v2::item(UZero, b, m, m).col(src), v2::item(U, b, m, m).col(tgt));
         });
     });
 }
