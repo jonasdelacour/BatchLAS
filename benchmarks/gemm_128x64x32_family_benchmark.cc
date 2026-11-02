@@ -45,7 +45,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name) {
                         ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", kernel_name);  // a gemm choice spelling
                         (void)gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
+    state.SetMetric("GFLOPS", gemm_gflop(m, n, k, batch), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
