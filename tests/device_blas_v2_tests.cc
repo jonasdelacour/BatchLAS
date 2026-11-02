@@ -20,6 +20,7 @@
 #include <batchlas/blas/device/v2/dla.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
+#include <src/kernels/common/dla_v2_potf2.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/queue.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -654,6 +655,113 @@ TYPED_TEST(DeviceBlasV2Test, TeamsAreIndependentExecutors) {
         worst = std::max(worst, rel(got[b], d, s));
     }
     EXPECT_VERIFY(T, Check::blas, n, worst);
+}
+
+// ---- register fragments on a Partition ----------------------------------------------------
+
+// bcast from a partition-uniform lane that differs per partition, then select: the built-in
+// sub_group form must add the chunk base itself, the SubGroupPartition form must not.
+template <class T, class MakeEx> void bcast_case(Dev& dev, MakeEx make_ex, const char* where) {
+    constexpr int P = 8, WG = 32, per = WG / P;
+    const auto hx = batched<T>(P, 71);
+    T* x = dev.up(hx);
+    std::vector<T> ho(std::size_t(kBatch) * P * P, T(std::numeric_limits<real_of<T>>::quiet_NaN()));
+    T* o = dev.up(ho);
+    dev.template run<WG>(kBatch / per, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const auto ex = make_ex(it);
+        const int b = static_cast<int>(it.get_global_linear_id()) / P, l = ex.lid();
+        const T mine = x[std::ptrdiff_t(b) * P + l];
+        for (int k = 0; k < P; ++k) {
+            const T v = ex.bcast(mine, static_cast<std::uint32_t>((b * 3 + k) % P));
+            o[(std::ptrdiff_t(b) * P + k) * P + l] = v2::select(l % 2 == 0, v, mine);
+        }
+    });
+    const auto got = dev.down(o, ho.size());
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b)
+        for (int k = 0; k < P; ++k)
+            for (int l = 0; l < P; ++l) {
+                const T want = hx[std::size_t(b) * P + (l % 2 == 0 ? (b * 3 + k) % P : l)];
+                bad += !same_bits(got[(std::size_t(b) * P + k) * P + l], want);
+            }
+    EXPECT_EQ(bad, 0) << where;
+}
+
+TYPED_TEST(DeviceBlasV2Test, PartitionBcastAndSelectAreExact) {
+    using T = TypeParam;
+    bcast_case<T>(this->dev, [](sycl::nd_item<1> it) { return v2::Partition<8>{it.get_sub_group()}; }, "Partition<8>");
+    bcast_case<T>(this->dev, [](sycl::nd_item<1> it) { return v2::wrap(make_partition<8, true>(it.get_sub_group())); },
+                  "SgpPartition<8, Masked>");
+}
+
+// potf2_lower on a padded RowFrag: n = 13 in a 16-lane partition, ld = 19, batch 1024,
+// representative 1 indefinite at column 5 (info 5, the rows above it still factored).
+template <class T, bool UseSlm> void potf2_case(Dev& dev) {
+    using D = typename sycl_device::DevMap<T>::type;
+    using R = real_of<T>;
+    using R4 = tiny_native::tiny_r4<R>;
+    constexpr int N = 16, n = 13, ld = 19, WG = 32, kMpw = WG / N, kInfoCol = 5;
+    constexpr int kNV = (N + tiny_native::tiny_r4_width<D>() - 1) / tiny_native::tiny_r4_width<D>();
+    auto ha = batched<T>(n * ld, 91, [](T* a) {
+        std::vector<T> m(a, a + n * ld);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                T s = T(i == j ? 2 * n : 0);
+                for (int k = 0; k < n; ++k) s += m[i + k * ld] * conj_h(m[j + k * ld]);
+                a[i + j * ld] = s;
+            }
+    });
+    for (int b = 1; b < kBatch; b += kPeriod) ha[std::size_t(b) * n * ld + (kInfoCol - 1) * (ld + 1)] = T(-1000);
+    T* a = dev.up(ha);
+    std::vector<std::int32_t> hinfo(kBatch, -7);
+    std::int32_t* info = dev.up(hinfo);
+    dev.template run<WG>(kBatch / kMpw, sizeof(R4) * 2 * kMpw * kNV, [=](sycl::nd_item<1> it, unsigned char* lm) {
+        const auto ex = v2::wrap(make_partition<N>(it.get_sub_group()));
+        const int pidx = tiny_native::tiny_partition_id(it.get_sub_group(), ex.part);
+        const int b = static_cast<int>(it.get_group_linear_id()) * kMpw + pidx, lane = ex.lid();
+        D* Ab = reinterpret_cast<D*>(a) + std::ptrdiff_t(b) * n * ld;
+        v2::Frag<D, N> rA;
+        tiny_native::tiny_load_lower<D, N>(rA.v, Ab, ld, lane, lane < n, is_cplx<T>);
+        std::int32_t r;
+        if constexpr (UseSlm) {
+            r = v2::potf2_lower<D, N, N, v2::OrderGuard::Skip>(ex, rA, n, true,
+                                                                v2::Slm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
+        } else {
+            r = v2::potf2_lower<D, N, N>(ex, rA, n, true, v2::Shuffle{});
+        }
+        tiny_native::tiny_store_lower<D, N>(rA.v, Ab, ld, lane, lane < n);
+        if (ex.leader()) info[b] = r;
+    });
+    const auto got = dev.down(a, ha.size());
+    const auto ginfo = dev.down(info, hinfo.size());
+    int bitdiff = 0, infobad = 0;
+    for (int b = 0; b < kBatch; ++b) {
+        infobad += ginfo[b] != (b % kPeriod == 1 ? kInfoCol : 0);
+        for (int i = 0; i < n * ld; ++i) bitdiff += !same_bits(got[std::size_t(b) * n * ld + i], got[std::size_t(b % kPeriod) * n * ld + i]);
+    }
+    EXPECT_EQ(infobad, 0);
+    EXPECT_EQ(bitdiff, 0);
+    double worst = 0;
+    for (int b = 0; b < kPeriod; ++b) {
+        const int cols = b == 1 ? kInfoCol - 1 : n;  // a failed factorization: the leading minor
+        auto L = [&](int i, int j) { return j > i ? LD<T>(0) : wide(got[std::size_t(b) * n * ld + i + j * ld]); };
+        for (int i = 0; i < cols; ++i)
+            for (int j = 0; j <= i; ++j) {
+                LD<T> s = 0;
+                long double sc = 0;
+                for (int k = 0; k <= j; ++k) s += L(i, k) * conj_h(L(j, k)), sc += std::abs(L(i, k)) * std::abs(L(j, k));
+                worst = std::max(worst, rel(T(s), wide(ha[std::size_t(b) * n * ld + i + j * ld]), sc));
+            }
+        for (int i = 0; i < n; ++i)  // the strict upper triangle is neither read nor written
+            for (int j = i + 1; j < n; ++j) worst = std::max(worst, same_bits(got[std::size_t(b) * n * ld + i + j * ld], ha[std::size_t(b) * n * ld + i + j * ld]) ? 0.0 : 1e300);
+    }
+    EXPECT_VERIFY(T, Check::factorization, n, worst) << (UseSlm ? "Slm" : "Shuffle");
+}
+
+TYPED_TEST(DeviceBlasV2Test, Potf2LowerShuffleAndSlmBroadcasts) {
+    using T = TypeParam;
+    potf2_case<T, false>(this->dev);
+    if constexpr (sizeof(real_of<T>) == 4) potf2_case<T, true>(this->dev);
 }
 
 // Compile-time facts: scratch sizes are constexpr; executors carry their sizes as types.

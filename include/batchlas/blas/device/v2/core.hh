@@ -119,6 +119,19 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> abs1(T a) {
     else return sycl::fabs(a);
 }
 
+// cond ? a : b component by component: LLVM builds no `select` of a complex aggregate, and
+// a register array read through one stops being promotable. The components are read before
+// the ternaries: a call inside a `?:` arm leaves a branchier CFG (complex<float> SASS moves).
+template <class T> BATCHLAS_DLA_INLINE T select(bool cond, T a, T b) {
+    using A = Arith<T>;
+    if constexpr (A::is_complex) {
+        const auto ar = A::re(a), ai = A::im(a), br = A::re(b), bi = A::im(b);
+        return A::make(cond ? ar : br, cond ? ai : bi);
+    } else {
+        return cond ? a : b;
+    }
+}
+
 // s * x for a tag s; Zero never reads x.
 template <class T, class S> BATCHLAS_DLA_INLINE T tag_mul(S s, T x) {
     if constexpr (std::is_same_v<S, One>) return x;
