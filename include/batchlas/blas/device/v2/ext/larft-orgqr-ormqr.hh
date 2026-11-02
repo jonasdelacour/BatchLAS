@@ -51,8 +51,9 @@ template <class X, class F> BATCHLAS_DLA_INLINE void for_each_elem(const X& x, F
         constexpr int n = frag_n_v<X>;
         BATCHLAS_DLA_UNROLL_FULL
         for (int i = 0; i < n; ++i) f(i);
-    } else {
+    } else {  // unroll 1 emits PTX nounroll: else ptxas unrolls 4x on top of clang (len <= P is short)
         const int n = x.size();
+#pragma unroll 1
         for (int i = 0; i < n; ++i) f(i);
     }
 }
@@ -96,13 +97,13 @@ BATCHLAS_DLA_INLINE void trmv(const Ex& ex, const MA& a, const X& xp, const Y& y
     for (int r = ex.lid(); r < n; r += Ex::size) {
         T acc = Ar::zero();
         if constexpr (!upper) {
-#pragma unroll 4
+#pragma unroll 2
             for (int c = 0; c < r; ++c) Ar::mac(acc, e(r, c), x(c));
         }
         if constexpr (DG == Diag::Unit) acc = Ar::add(acc, static_cast<T>(x(r)));
         else Ar::mac(acc, e(r, r), x(r));
         if constexpr (upper) {
-#pragma unroll 4
+#pragma unroll 2  // 4 costs FP64 an occupancy step (REG 40 -> 48 in larft)
             for (int c = r + 1; c < n; ++c) Ar::mac(acc, e(r, c), x(c));
         }
         y(r) = acc;
