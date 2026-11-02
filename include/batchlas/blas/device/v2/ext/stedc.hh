@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include <utility>
 
 #include <sycl/sycl.hpp>
 
@@ -124,11 +125,18 @@ template <class Ex> BATCHLAS_DLA_INLINE void sync_group(const Ex& ex) {
 // ---- reductions ------------------------------------------------------------------------------
 
 // K independent scope-S reductions in index order, each its own collective.
+// A pack expansion (a braced list runs left to right), not a `#pragma unroll` loop: the pragma
+// also turned each inlined work-group reduction's scratch loop from 8x to 32x unrolled.
+namespace detail {
+template <Scope S, class Ex, class T, std::size_t K, std::size_t... I>
+BATCHLAS_DLA_INLINE std::array<T, K> allreduce_each(const Ex& ex, const std::array<T, K>& v, std::index_sequence<I...>) {
+    return std::array<T, K>{detail::scope_reduce<S>(ex, v[I])...};
+}
+}  // namespace detail
+
 template <Scope S = Scope::Auto, class Ex, class T, std::size_t K>
 BATCHLAS_DLA_INLINE std::array<T, K> allreduce(const Ex& ex, std::array<T, K> v) {
-#pragma unroll
-    for (std::size_t k = 0; k < K; ++k) v[k] = detail::scope_reduce<S>(ex, v[k]);
-    return v;
+    return detail::allreduce_each<S>(ex, v, std::make_index_sequence<K>{});
 }
 
 // acc = op(acc, f(i)) from init over the owned i < n, then a scope-S reduction with op. The

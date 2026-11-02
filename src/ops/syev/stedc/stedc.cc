@@ -206,7 +206,7 @@ void stedc_merge_step(Queue& ctx,
         const int nn = static_cast<int>(n);
         const auto d = v2::vec(eigenvalues.batch_item(bid));
         const auto z = v2::vec(v.batch_item(bid));
-        const auto Qb = v2::mat(Q.batch_item(bid));
+        const auto Qb = v2::mat(Q.data() + static_cast<int64_t>(bid) * Q.stride(), nn, nn, Q.ld());
         const auto absx = v2::vec<v2::Mem::Local>(util::get_raw_ptr(norm_mem), nn);
         const auto abs_of = [](T x) { return std::abs(x); };
 
@@ -229,7 +229,7 @@ void stedc_merge_step(Queue& ctx,
         const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
 
         for (int j = 0; j < n - 1; j++) {
-            if(std::abs(d(j + 1) - d(j)) <= abs_tol) {
+            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
                 const T f = z(j + 1), g = z(j);
                 auto [c, s, r] = detail::lartg(f, g);
                 ex.barrier();
