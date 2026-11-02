@@ -330,18 +330,30 @@ Event spmm_scatter(Queue& ctx,
 
                 const int64_t ro = b * a_os;
                 const int64_t vb = b * a_ms;
-                // Row i of the stored A; each column index is an OUTPUT ROW of C.
-                const auto arow = v2::sp_row(v2::BasedVec<const D, int64_t>{a_val, vb},
-                                             v2::BasedVec<const int, int64_t>{a_ci, vb},
-                                             a_ro[ro + i], a_ro[ro + i + 1]);
                 const v2::RtOpMat<const D> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
                 D* Cb = c_ptr + b * sc;
+                const int rs = a_ro[ro + i];
+                const int re = a_ro[ro + i + 1];
 
                 // C(A_ci, c0:c0+NCS) += conj?(A(i, :))^T (alpha op(B)(i, c0:c0+NCS)); ConjTrans
-                // conjugates the SPARSE operand.
+                // conjugates the SPARSE operand. The row loop reads A in the body, not through
+                // v2::usger_atomic's SpRow (sass_parity strict): the operand's int64-based reads
+                // lose GEP inbounds under LICM and cost +4..5% instructions.
                 for (int c0 = 0; c0 < width; c0 += NCS) {
                     const auto ab = v2::load_cols_scaled<Ar, NCS>(v2::Thread{}, alpha_d, opB, i, c0, width);
-                    v2::usger_atomic<Ar>(v2::Thread{}, arow, conj_a, ab, Cb, ldc, rows_out, c0, width);
+                    for (int p = rs; p < re; ++p) {
+                        D av = a_val[vb + p];
+                        if constexpr (dev_is_complex_v<D>) {
+                            if (conj_a) av = v2::Arith<D>::conj(av);
+                        }
+                        const int j = a_ci[vb + p];  // an OUTPUT ROW of C
+                        if (static_cast<unsigned>(j) >= static_cast<unsigned>(rows_out)) continue;
+BATCHLAS_UNROLL_FULL
+                        for (int t = 0; t < NCS; ++t) {
+                            const int c = c0 + t;
+                            if (c < width) v2::atomic_accumulate(Cb + static_cast<int64_t>(c) * ldc + j, Ar::mul(av, ab[t]));
+                        }
+                    }
                 }
             });
     });

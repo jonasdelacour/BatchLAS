@@ -138,12 +138,13 @@ template <class T, bool Pair = false> struct LoadVec {
 };
 
 // Batch-interleaved (slot-major) storage: slot s of item `off` at p[s * stride + off], in
-// size_t arithmetic (slots * batch passes 2^31).
+// size_t arithmetic (slots * batch passes 2^31). stride and off stay int and widen at each use,
+// as the hand-written index did: held as size_t they cost the ILU eliminate kernel +3..5 REG.
 template <class T> struct InterleavedVec {
     using value_type = std::remove_cv_t<T>;
     T* p;
-    std::size_t stride;
-    std::size_t off;
+    int stride;
+    int off;
     BATCHLAS_DLA_INLINE T& operator()(int s) const { return p[static_cast<std::size_t>(s) * stride + off]; }
 };
 

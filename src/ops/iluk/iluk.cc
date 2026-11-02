@@ -943,24 +943,29 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             const int i = level_rows[begin + t];
 
             // Item b's slots of the slot-major working values.
-            const v2::InterleavedVec<T> at{work, static_cast<size_t>(batch), static_cast<size_t>(b)};
+            const v2::InterleavedVec<T> at{work, batch, b};
 
             // IKJ elimination: l_ij = a_ij / u_jj, then row i -= l_ij * (row j's update slots).
+            // The update and the two max-modulus scans stay hand loops over absolute positions
+            // (sass_parity strict): v2::axpy_sub / norm_max iterate from 0, which moves LLVM's
+            // runtime-unroll remainder to an epilogue (LDG 38->66), and NativeArith::msub as an
+            // always_inline call costs complex<float> +4 REG.
             for (int e = step_ptr[i]; e < step_ptr[i + 1]; ++e) {
                 const T lij = at(step_target[e]) / at(step_pivot[e]);
                 at(step_target[e]) = lij;
-                const int u0 = step_upd_ptr[e];
-                const int nu = step_upd_ptr[e + 1] - u0;
-                v2::axpy_sub<v2::NativeArith<T>>(v2::Thread{}, lij, v2::us_gather(at, upd_src + u0, nu),
-                                                 v2::us_gather(at, upd_dst + u0, nu));
+                for (int u = step_upd_ptr[e]; u < step_upd_ptr[e + 1]; ++u) {
+                    at(upd_dst[u]) -= lij * at(upd_src[u]);
+                }
             }
 
             const int rs = sym_ro[i];
             const int re = sym_ro[i + 1];
             const int dg = diag_abs[i];
-            const auto row = v2::sp_range(at, rs, re - rs);
-
-            const RealT<T> scale = v2::norm_max(v2::Thread{}, row);
+            RealT<T> scale = RealT<T>(0);
+            for (int p = rs; p < re; ++p) {
+                const auto m = v2::abs_modulus(at(p));
+                if (m > scale) scale = m;
+            }
             const auto one = RealT<T>(1);
             const auto threshold = drop_tolerance * (scale > one ? scale : one);
 
@@ -1001,7 +1006,11 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
                 --kept;
             }
 
-            const RealT<T> final_scale = v2::norm_max(v2::Thread{}, row);
+            RealT<T> final_scale = RealT<T>(0);
+            for (int p = rs; p < re; ++p) {
+                const auto m = v2::abs_modulus(at(p));
+                if (m > final_scale) final_scale = m;
+            }
             at(dg) = stabilize_pivot_no_throw(at(dg), final_scale, diagonal_shift, diag_pivot_threshold, st);
         });
     }
@@ -1479,10 +1488,13 @@ Event iluk_apply(Queue& ctx,
             ex.barrier(v2::Mem::Global);
         }
 
-        // y := U^{-1} y, level by level.
+        // y := U^{-1} y, level by level. The level loop and the row residual stay in this body
+        // (sass_parity strict): inside an inlined op or a for_each_owned lambda the residual loop's
+        // exit block is laid out after the loop body, the latch branch flips, and ptxas then unrolls
+        // the residual 4x (float: LDG 26->68, total +40%).
         for (int lv = 0; lv < u_levels; ++lv) {
             const int begin = u_level_ptr[lv];
-            v2::for_each_owned(ex, u_level_ptr[lv + 1] - begin, [&](int k) {
+            for (int k = ex.lid(), nk = u_level_ptr[lv + 1] - begin; k < nk; k += ex.size) {
                 const int i = u_rows[begin + k];
                 const T sum = y(i);
                 const int diag_abs = diag_pos[b * n + i];
@@ -1492,8 +1504,10 @@ Event iluk_apply(Queue& ctx,
                 const T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
                 // Columns are sorted ascending: the strict upper part starts one past the diagonal.
                 const auto row = v2::sp_row(lu_val, lu_col, diag_abs - lu_base + 1, re);
-                y(i) = Ar::div(v2::usdot_sub<Ar>(v2::Thread{}, sum, row, y), diag);
-            });
+                T acc = sum;
+                for (int p = row.begin; p < row.end; ++p) Ar::msub(acc, row.val(p), y(row.idx(p)));
+                y(i) = Ar::div(acc, diag);
+            }
             ex.barrier(v2::Mem::Global);
         }
     });

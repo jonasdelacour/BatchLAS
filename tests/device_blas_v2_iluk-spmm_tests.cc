@@ -373,7 +373,7 @@ TYPED_TEST(DeviceBlasV2SparseTest, InterleavedGatherAxpyAndModulusMax) {
     R* mx = this->dev.up(hm);
     this->dev.template run<64>(kBatch / 64, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_global_linear_id());
-        const v2::InterleavedVec<T> at{w, std::size_t(kBatch), std::size_t(b)};
+        const v2::InterleavedVec<T> at{w, kBatch, b};
         v2::axpy_sub<v2::NativeArith<T>>(v2::Thread{}, a[b], v2::us_gather(at, ds, nupd), v2::us_gather(at, dd, nupd));
         mx[b] = v2::norm_max(v2::Thread{}, v2::sp_range(at, first, len));
     });
