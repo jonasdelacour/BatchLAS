@@ -96,6 +96,11 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
         ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_0.cc
         ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_1.cc
         PROPERTIES COMPILE_OPTIONS "-fno-sycl-force-inline-kernel-lambda")
+    # potri_cta's kernel lambda calls no lambda directly since its device LA v2 port, so DPC++ would
+    # force-inline it into the entry at stage 1; the hand-written kernel stayed a function of its own
+    # until device link (SemaSYCL takes its first lambda callee as the body). Keep that schedule:
+    # force-inlined, trti2's write-back moves (STS +8, total -5%) and fails the strict SASS gate.
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/potri/kernels/potri_cta.cc
 endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})

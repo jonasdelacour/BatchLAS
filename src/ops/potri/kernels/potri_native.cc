@@ -1,9 +1,12 @@
-// potri's triangle finish (potri_native.hh): element-wise, grid-strided.
+// potri's triangle finish (potri_native.hh): element-wise, grid-strided; each element is one
+// v2 hermitian_fill_at (include/batchlas/blas/device/v2/ext/potri.hh).
 
 #include <src/ops/potri/potri_native.hh>
 #include <batchlas/error.hh>
 
 #include <src/sycl/device_scalar.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/blas/device/v2/ext/potri.hh>
 #include <src/queue.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <src/util/template-instantiations.hh>
@@ -18,6 +21,8 @@
 namespace batchlas::sycl_potri {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T> class PotriFinishKernel;
 
@@ -46,13 +51,9 @@ Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
                 const int r = full ? static_cast<int>(e % static_cast<std::size_t>(n)) : static_cast<int>(e);
                 const int c = full ? static_cast<int>(e / static_cast<std::size_t>(n)) : r;
                 D* const Ab = ap + b * sa;
-                if (r == c) {
-                    D& d = Ab[static_cast<std::ptrdiff_t>(c) * lda + r];
-                    d = sycl_device::dev_from_real<D>(sycl_device::dev_real(d));
-                } else if (lower ? r < c : r > c) {
-                    Ab[static_cast<std::ptrdiff_t>(c) * lda + r] =
-                        sycl_device::dev_conj(Ab[static_cast<std::ptrdiff_t>(r) * lda + c]);
-                }
+                const auto Am =
+                    v2::mat_fn(n, n, [&](int i, int j) -> D& { return Ab[static_cast<std::ptrdiff_t>(j) * lda + i]; });
+                v2::hermitian_fill_at(lower, Am, r, c);
             }
         });
     });
