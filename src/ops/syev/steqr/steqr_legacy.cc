@@ -3,6 +3,8 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/steqr.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
@@ -17,6 +19,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 // Distinct from steqr_wg.cc's tags: both TUs link into one device image.
 template <typename T> struct SteqrLegacyFrancisKernel {};
@@ -154,24 +158,19 @@ Event steqr_impl(Queue& ctx,
             // from (virtual index n - 1), so orient that end at the SMALLER |d|, as dsteqr does.
             bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
+            const v2::Thread th{};
+            const v2::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
+            // dlascl on (d, e): scale down to avoid overflow, up to avoid underflow.
+            const auto lascl = [&](T alpha) {
+                v2::scal(th, alpha, d_);
+                v2::scal(th, alpha, e_);
+            };
             for (size_t k = 0; k < max_sweeps; ++k) {
-                auto anorm = std::abs(d_(n - 1));
-                for (size_t idx = 0; idx < n - 1; ++idx)
-                    anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
+                const T anorm = v2::lanst_max(th, d_, e_);
+                if (anorm > detail::ssfmax<T>()) lascl(detail::ssfmax<T>() / anorm);
+                else if (anorm < detail::ssfmin<T>() && anorm != T(0)) lascl(detail::ssfmin<T>() / anorm);
 
-                if (anorm > detail::ssfmax<T>()) {
-                    auto alpha = detail::ssfmax<T>() / anorm;
-                    // Scale down to avoid overflow
-                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
-                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                    // Scale up to avoid underflow
-                    auto alpha = detail::ssfmin<T>() / anorm;
-                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
-                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                }
-
-                // Virtual accessors (see apply_givens_rotation for the same mapping)
+                // Virtual accessors (see v2::tridiag_rot for the same mapping)
                 auto d_get = [&](size_t idx) -> T {
                     return QR ? d_(idx) : d_(n - 1 - idx);
                 };
@@ -190,7 +189,7 @@ Event steqr_impl(Queue& ctx,
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
-                auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+                auto bulge = v2::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, v2::Givens<T>{c0, s0}, QR);
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
@@ -198,30 +197,13 @@ Event steqr_impl(Queue& ctx,
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
-                    bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                    bulge = v2::tridiag_rot(th, d_, e_, bulge, j, j + 1, v2::Givens<T>{cj, sj}, QR);
                 }
 
-                bool deflatable = false;
-                for (size_t j = 0; j < n - 1; ++j) {
-                    // Check for deflation
-                    if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j))*std::abs(d_(j + 1)) +
-                        detail::safmin<T>()) {
-                        e_(j) = T(0);
-                        deflatable = true;
-                    }
-                }
+                const bool deflatable = v2::tridiag_split(th, d_, e_, tol);
 
-                if (anorm > detail::ssfmax<T>()) {
-                    auto alpha = anorm / detail::ssfmax<T>();
-                    // Scale back up
-                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
-                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                    auto alpha = anorm / detail::ssfmin<T>();
-                    // Scale back down
-                    for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
-                    for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                }
+                if (anorm > detail::ssfmax<T>()) lascl(anorm / detail::ssfmax<T>());
+                else if (anorm < detail::ssfmin<T>() && anorm != T(0)) lascl(anorm / detail::ssfmin<T>());
 
                 if (store_givens) sweep_counts[gid] = static_cast<int32_t>(k + 1);
                 if (deflatable) break;
@@ -252,6 +234,9 @@ Event steqr_impl(Queue& ctx,
             // Slots beyond that are stale/uninitialised and must not be applied.
             // sweep_counts is empty when eigenvectors were not requested; nothing to replay then.
             const int n_sweeps = sweep_counts.size() == 0 ? 0 : static_cast<int>(sweep_counts[gid]);
+            // Not on v2::lasr<alg::SkipIdentity>: its IR matches this loop except the order of the
+            // two column-index computations, and ptxas then keeps the loop rolled (4x fewer
+            // LDG/STG/FFMA in the unrolled body). evidence: inv/steqr gate notes, LegacyRotation.
             for (int i = 0; i < n_sweeps; ++i) {
                 for (int j = 0; j < ncols - 1; ++j) {
                     auto [c, s] = rotations_view(j, i, gid);
