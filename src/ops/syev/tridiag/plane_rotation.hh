@@ -83,7 +83,7 @@ template <typename T> struct Sym2x2 {
         return {R.s * rho, R.c * rho - b};
     }
 
-    // rt1 >= rt2 and R A R^T = diag(rt1, rt2): LAPACK laev2.  math-helpers.hh:559
+    // rt1 >= rt2 and R A R^T = diag(rt1, rt2): LAPACK laev2, as detail::laev2 (math-helpers.hh).
     struct Eig { T rt1, rt2; Givens<T> R; };
     __attribute__((always_inline)) inline Eig eig() const {
         const auto [rt1, rt2, cs, sn] = detail::laev2(a, b, c);

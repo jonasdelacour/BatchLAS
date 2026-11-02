@@ -8,7 +8,7 @@
 
 namespace batchlas::tridiag {
 
-// e_i is negligible: e^2 <= eps^2 |d_i| |d_{i+1}| + safmin.  steqr_cta_device.hh:220-221
+// e_i is negligible: e^2 <= eps^2 |d_i| |d_{i+1}| + safmin. Used by mark_negligible (steqr_cta_lanes.hh).
 template <typename T>
 __attribute__((always_inline)) inline bool negligible(T e, T d0, T d1) {
     const T rhs = detail::eps2<T>() * sycl::fabs(d0) * sycl::fabs(d1) + detail::safmin<T>();
@@ -16,7 +16,7 @@ __attribute__((always_inline)) inline bool negligible(T e, T d0, T d1) {
 }
 
 // The eigenvalue of [[d_l, e_l], [e_l, d_l1]] nearest d_l. Lapack: d_l - e_l / (g + sign(g) hypot(g, 1)),
-// g = (d_l1 - d_l) / (2 e_l); Wilkinson: the lae2 eigenvalue nearer d_l.  steqr_cta_device.hh:335-343
+// g = (d_l1 - d_l) / (2 e_l); Wilkinson: the lae2 eigenvalue nearer d_l. Used by exp_sweep and pg_sweep.
 template <typename T>
 __attribute__((always_inline)) inline T wilkinson_shift(SteqrShiftStrategy strategy, T d_l, T e_l, T d_l1) {
     T mu = T(0);
@@ -34,7 +34,7 @@ __attribute__((always_inline)) inline T wilkinson_shift(SteqrShiftStrategy strat
 template <typename T> struct BlockScale {
     T factor = T(1), inverse = T(1);
 
-    // steqr_cta_device.hh:599-605
+    // Used by open_block (steqr_cta_lanes.hh).
     __attribute__((always_inline)) static BlockScale for_norm(T anorm) {
         T scale = T(1);
         if (anorm > detail::ssfmax<T>()) {

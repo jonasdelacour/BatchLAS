@@ -36,6 +36,70 @@ auto bits(T x) {
 template <typename T>
 constexpr T eps() { return std::numeric_limits<T>::epsilon(); }
 
+// An unevaluated sum hi + lo (|lo| <= ulp(hi)/2), about 106 bits: the reference where long double
+// is double (arm64 macOS). Error-free transforms: Knuth's two-sum and an fma two-product.
+struct DoubleDouble {
+    double hi = 0, lo = 0;
+    DoubleDouble() = default;
+    DoubleDouble(double x) : hi(x) {}
+    static DoubleDouble fast_sum(double a, double b) {
+        const double s = a + b;
+        return {s, b - (s - a), 0};
+    }
+    friend DoubleDouble operator+(DoubleDouble a, DoubleDouble b) {
+        const double s = a.hi + b.hi, v = s - a.hi;
+        const double err = (a.hi - (s - v)) + (b.hi - v);
+        return fast_sum(s, err + a.lo + b.lo);
+    }
+    friend DoubleDouble operator-(DoubleDouble a) { return {-a.hi, -a.lo, 0}; }
+    friend DoubleDouble operator-(DoubleDouble a, DoubleDouble b) { return a + -b; }
+    friend DoubleDouble operator*(DoubleDouble a, DoubleDouble b) {
+        const double p = a.hi * b.hi;
+        return fast_sum(p, std::fma(a.hi, b.hi, -p) + (a.hi * b.lo + a.lo * b.hi));
+    }
+    friend DoubleDouble operator/(DoubleDouble a, DoubleDouble b) {
+        const double q1 = a.hi / b.hi;
+        const DoubleDouble r = a - b * q1;
+        const double q2 = r.hi / b.hi;
+        const double q3 = (r - b * q2).hi / b.hi;
+        return fast_sum(q1, q2) + q3;
+    }
+    DoubleDouble& operator+=(DoubleDouble b) { return *this = *this + b; }
+    DoubleDouble& operator-=(DoubleDouble b) { return *this = *this - b; }
+    DoubleDouble& operator*=(DoubleDouble b) { return *this = *this * b; }
+    friend bool operator<(DoubleDouble a, DoubleDouble b) { return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }
+    friend bool operator>(DoubleDouble a, DoubleDouble b) { return b < a; }
+    friend bool operator<=(DoubleDouble a, DoubleDouble b) { return !(b < a); }
+    explicit operator double() const { return hi + lo; }
+    DoubleDouble(double h, double l, int) : hi(h), lo(l) {}
+};
+
+// The extended operations the references use, for long double and DoubleDouble alike.
+namespace ext {
+inline long double fabs(long double x) { return std::fabs(x); }
+inline long double sqrt(long double x) { return std::sqrt(x); }
+inline long double hypot(long double a, long double b) { return std::hypot(a, b); }
+inline long double ldexp(long double x, int e) { return std::ldexp(x, e); }
+inline DoubleDouble fabs(DoubleDouble x) { return x.hi < 0 ? -x : x; }
+inline DoubleDouble sqrt(DoubleDouble x) {
+    if (x.hi <= 0) return DoubleDouble(0.0);
+    const double s = std::sqrt(x.hi);
+    return DoubleDouble(s) + (x - DoubleDouble(s) * DoubleDouble(s)) / DoubleDouble(2 * s);
+}
+inline DoubleDouble hypot(DoubleDouble a, DoubleDouble b) { return sqrt(a * a + b * b); }
+inline DoubleDouble ldexp(DoubleDouble x, int e) { return {std::ldexp(x.hi, e), std::ldexp(x.lo, e), 0}; }
+} // namespace ext
+
+// Every reference type a host offers that is wider than double: x87 long double where it exists,
+// and DoubleDouble always, so the arm64-macOS path is exercised on every host.
+template <typename F>
+void for_each_extended(F&& f) {
+    if constexpr (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
+        f(static_cast<long double*>(nullptr));
+    }
+    f(static_cast<DoubleDouble*>(nullptr));
+}
+
 // Uniform in [-1, 1], or sign * 10^U(-g, g) when graded.
 template <typename T>
 struct Sampler {
@@ -172,30 +236,31 @@ void pg_sweep(std::vector<T>& d, std::vector<T>& e, T mu) {
     e[l] = Helper ? carry.g : g;
 }
 
-// T' = Q^T T Q from the explicit QL factorisation T - mu I = Q L, dense, in long double.
-void explicit_ql(std::vector<long double>& d, std::vector<long double>& e, long double mu) {
+// T' = Q^T T Q from the explicit QL factorisation T - mu I = Q L, dense, in the extended type W.
+template <typename W>
+void explicit_ql(std::vector<W>& d, std::vector<W>& e, W mu) {
     const int n = int(d.size());
-    std::vector<long double> A(n * n, 0.0L), M(n * n, 0.0L);
+    std::vector<W> A(n * n, W(0.0)), M(n * n, W(0.0));
     for (int i = 0; i < n; ++i) {
         M[i * n + i] = d[i];
         if (i + 1 < n) M[i * n + i + 1] = M[(i + 1) * n + i] = e[i];
     }
     for (int i = 0; i < n * n; ++i) A[i] = M[i];
     for (int i = 0; i < n; ++i) A[i * n + i] -= mu;
-    const auto rot_rows = [n](std::vector<long double>& X, int j, int k, long double c, long double s) {
+    const auto rot_rows = [n](std::vector<W>& X, int j, int k, W c, W s) {
         for (int col = 0; col < n; ++col) {
-            const long double xk = X[k * n + col], xj = X[j * n + col];
+            const W xk = X[k * n + col], xj = X[j * n + col];
             X[k * n + col] = c * xk + s * xj;
             X[j * n + col] = -s * xk + c * xj;
         }
     };
     for (int k = n - 1; k >= 1; --k) {
-        const long double f = A[k * n + k], g = A[(k - 1) * n + k], r = std::hypot(f, g);
-        const long double c = f / r, s = g / r;
+        const W f = A[k * n + k], g = A[(k - 1) * n + k], r = ext::hypot(f, g);
+        const W c = f / r, s = g / r;
         rot_rows(A, k - 1, k, c, s);
         rot_rows(M, k - 1, k, c, s);
         for (int row = 0; row < n; ++row) {
-            const long double xk = M[row * n + k], xj = M[row * n + k - 1];
+            const W xk = M[row * n + k], xj = M[row * n + k - 1];
             M[row * n + k] = c * xk + s * xj;
             M[row * n + k - 1] = -s * xk + c * xj;
         }
@@ -206,30 +271,31 @@ void explicit_ql(std::vector<long double>& d, std::vector<long double>& e, long 
     }
 }
 
-// ||(T - mu I)^{-1}||_F by Gauss-Jordan in long double: the forward condition of the QL step.
-long double shifted_inverse_norm(const std::vector<long double>& d, const std::vector<long double>& e, long double mu) {
+// ||(T - mu I)^{-1}||_F by Gauss-Jordan in W: the forward condition of the QL step.
+template <typename W>
+W shifted_inverse_norm(const std::vector<W>& d, const std::vector<W>& e, W mu) {
     const int n = int(d.size());
-    std::vector<long double> A(n * n, 0.0L), X(n * n, 0.0L);
+    std::vector<W> A(n * n, W(0.0)), X(n * n, W(0.0));
     for (int i = 0; i < n; ++i) {
         A[i * n + i] = d[i] - mu;
-        X[i * n + i] = 1.0L;
+        X[i * n + i] = W(1.0);
         if (i + 1 < n) A[i * n + i + 1] = A[(i + 1) * n + i] = e[i];
     }
     for (int k = 0; k < n; ++k) {
         int piv = k;
-        for (int i = k + 1; i < n; ++i) if (std::fabs(A[i * n + k]) > std::fabs(A[piv * n + k])) piv = i;
+        for (int i = k + 1; i < n; ++i) if (ext::fabs(A[i * n + k]) > ext::fabs(A[piv * n + k])) piv = i;
         for (int j = 0; j < n; ++j) std::swap(A[k * n + j], A[piv * n + j]), std::swap(X[k * n + j], X[piv * n + j]);
-        const long double inv = 1.0L / A[k * n + k];
+        const W inv = W(1.0) / A[k * n + k];
         for (int j = 0; j < n; ++j) A[k * n + j] *= inv, X[k * n + j] *= inv;
         for (int i = 0; i < n; ++i) {
             if (i == k) continue;
-            const long double f = A[i * n + k];
+            const W f = A[i * n + k];
             for (int j = 0; j < n; ++j) A[i * n + j] -= f * A[k * n + j], X[i * n + j] -= f * X[k * n + j];
         }
     }
-    long double s = 0;
-    for (long double x : X) s += x * x;
-    return std::sqrt(s);
+    W s = W(0.0);
+    for (W x : X) s += x * x;
+    return ext::sqrt(s);
 }
 
 template <typename T>
@@ -308,46 +374,55 @@ TYPED_TEST(TridiagMath, WholeSweepsAreBitwiseTheInlineSweeps) {
 // Both chases are the implicit form of T - mu I = QL, T' = LQ + mu I (the sign of e' is free).
 // The step's forward condition is kappa = ||T|| ||(T - mu I)^{-1}||_F: a shift near an eigenvalue
 // (the point of the shift) makes Q ill-determined. Measured max err / (eps kappa): 5.8 (FP64).
-TYPED_TEST(TridiagMath, SweepsMatchTheExplicitQlStepInLongDouble) {
-    using T = TypeParam;
-    const long double tol = std::is_same_v<T, double> ? 1e-14L : 5e-6L;  // for kappa <= 10
+template <typename T, typename W>
+void sweeps_match_explicit_ql() {
+    // For kappa <= 10. FMA contraction (arm64) gives one FP64 case at 1.16e-14; without it, 4.8e-15.
+    const double tol = std::is_same_v<T, double> ? 2e-14 : 5e-6;
     Sampler<T> rng;
     int well_conditioned = 0;
     for (int n : {3, 5, 8, 16}) {
         for (int trial = 0; trial < 500; ++trial) {
             std::vector<T> d(n), e(n - 1);
-            long double norm = 0;
+            W norm(0.0);
             for (int i = 0; i < n; ++i) d[i] = (trial % 2) ? rng.graded(3) : rng.uniform();
             for (int i = 0; i + 1 < n; ++i) e[i] = (trial % 2) ? rng.graded(3) : rng.uniform();
-            for (T x : d) norm = std::max(norm, std::fabs((long double)x));
-            for (T x : e) norm = std::max(norm, std::fabs((long double)x));
+            for (T x : d) norm = std::max(norm, ext::fabs(W(x)));
+            for (T x : e) norm = std::max(norm, ext::fabs(W(x)));
             const T mu = wilkinson_shift(SteqrShiftStrategy::Lapack, d[0], e[0], d[1]);
-            std::vector<long double> dl(d.begin(), d.end()), el(e.begin(), e.end());
-            const long double kappa = norm * shifted_inverse_norm(dl, el, mu);
-            explicit_ql(dl, el, mu);
+            std::vector<W> dl(d.begin(), d.end()), el(e.begin(), e.end());
+            const double kappa = double(norm * shifted_inverse_norm(dl, el, W(mu)));
+            explicit_ql(dl, el, W(mu));
             auto de = d, ee = e, dp = d, ep = e;
             exp_sweep<T, true>(de, ee, mu);
             pg_sweep<T, true>(dp, ep, mu);
-            long double err_exp = 0, err_pg = 0;
+            W err_exp(0.0), err_pg(0.0);
             for (int i = 0; i < n; ++i) {
-                err_exp = std::max(err_exp, std::fabs(de[i] - dl[i]) / norm);
-                err_pg = std::max(err_pg, std::fabs(dp[i] - dl[i]) / norm);
+                err_exp = std::max(err_exp, ext::fabs(W(de[i]) - dl[i]) / norm);
+                err_pg = std::max(err_pg, ext::fabs(W(dp[i]) - dl[i]) / norm);
             }
             for (int i = 0; i + 1 < n; ++i) {
-                err_exp = std::max(err_exp, std::fabs(std::fabs((long double)ee[i]) - std::fabs(el[i])) / norm);
-                err_pg = std::max(err_pg, std::fabs(std::fabs((long double)ep[i]) - std::fabs(el[i])) / norm);
+                err_exp = std::max(err_exp, ext::fabs(ext::fabs(W(ee[i])) - ext::fabs(el[i])) / norm);
+                err_pg = std::max(err_pg, ext::fabs(ext::fabs(W(ep[i])) - ext::fabs(el[i])) / norm);
             }
-            EXPECT_LE(err_exp, 16 * eps<T>() * kappa) << "n = " << n << ", trial " << trial;
-            EXPECT_LE(err_pg, 16 * eps<T>() * kappa) << "n = " << n << ", trial " << trial;
+            EXPECT_LE(double(err_exp), 16 * eps<T>() * kappa) << "n = " << n << ", trial " << trial;
+            EXPECT_LE(double(err_pg), 16 * eps<T>() * kappa) << "n = " << n << ", trial " << trial;
             if (kappa <= 10) {
                 ++well_conditioned;
-                EXPECT_LE(err_exp, tol) << "n = " << n << ", trial " << trial;
-                EXPECT_LE(err_pg, tol) << "n = " << n << ", trial " << trial;
+                EXPECT_LE(double(err_exp), tol) << "n = " << n << ", trial " << trial;
+                EXPECT_LE(double(err_pg), tol) << "n = " << n << ", trial " << trial;
             }
             ASSERT_FALSE(::testing::Test::HasFailure());
         }
     }
     EXPECT_GE(well_conditioned, 200);
+}
+
+TYPED_TEST(TridiagMath, SweepsMatchTheExplicitQlStepInExtendedPrecision) {
+    for_each_extended([](auto* w) {
+        using W = std::remove_pointer_t<decltype(w)>;
+        SCOPED_TRACE((std::is_same_v<W, DoubleDouble> ? "double-double" : "long double"));
+        sweeps_match_explicit_ql<TypeParam, W>();
+    });
 }
 
 TYPED_TEST(TridiagMath, TransferIsTheTransposedCongruence) {
@@ -593,23 +668,27 @@ TYPED_TEST(TridiagMath, RationalStepAndBracketConvergeToTheLongDoubleRoot) {
 }
 
 // 300 factors whose running product leaves double range: mant * 2^exp tracks it, and an
-// in-range product is bitwise the naive one.
-TYPED_TEST(TridiagMath, ScaledProductMatchesLongDouble) {
-    using T = TypeParam;
+// in-range product is bitwise the naive one. The reference keeps its power of two apart, since
+// a double-double has only double's exponent range.
+template <typename T, typename W>
+void scaled_product_matches() {
     Sampler<T> rng;
     for (int trial = 0; trial < 200; ++trial) {
         ScaledProduct<T> p;
-        long double ref = 1.0L;
+        W ref_mant(1.0);
+        int ref_exp = 0;
         const int n = 300;
         for (int i = 0; i < n; ++i) {
             const T u = T(1) + T(0.5) * rng.uniform();
-            const T f = std::ldexp(u, (i < n / 2) ? -60 : 60);  // the running product leaves range
-            p = p.times(f);
-            ref *= f;
+            const int k = (i < n / 2) ? -60 : 60;  // the running product leaves range
+            p = p.times(std::ldexp(u, k));
+            ref_mant *= W(u);
+            ref_exp += k;
         }
-        const long double value = std::ldexp((long double)p.mant, p.exp);
-        EXPECT_NEAR(value / ref, 1.0L, n * eps<T>());
-        EXPECT_NEAR(p.sqrt_value() / std::sqrt(std::fabs(ref)), 1.0L, n * eps<T>());
+        const W ratio = ext::ldexp(W(p.mant) / ref_mant, p.exp - ref_exp);
+        EXPECT_NEAR(double(ratio), 1.0, n * eps<T>());
+        const W root = ext::sqrt(ext::fabs(ext::ldexp(ref_mant, ref_exp)));
+        EXPECT_NEAR(double(W(p.sqrt_value()) / root), 1.0, n * eps<T>());
 
         ScaledProduct<T> q;
         T naive = T(1);
@@ -620,6 +699,14 @@ TYPED_TEST(TridiagMath, ScaledProductMatchesLongDouble) {
         }
         EXPECT_BITEQ(std::ldexp(q.mant, q.exp), naive);
     }
+}
+
+TYPED_TEST(TridiagMath, ScaledProductMatchesExtendedPrecision) {
+    for_each_extended([](auto* w) {
+        using W = std::remove_pointer_t<decltype(w)>;
+        SCOPED_TRACE((std::is_same_v<W, DoubleDouble> ? "double-double" : "long double"));
+        scaled_product_matches<TypeParam, W>();
+    });
 }
 
 TYPED_TEST(TridiagMath, RankOneTearAndDeflationTests) {
