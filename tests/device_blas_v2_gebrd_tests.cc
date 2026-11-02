@@ -71,11 +71,18 @@ struct Dev {
         q().memcpy(h.data(), p, n * sizeof(T)).wait();
         return h;
     }
-    template <int WG, class F> void run(int groups, std::size_t local_bytes, F f) {
+    // Sg32 = false for kernels whose collectives are all work-group scope: the Intel OpenCL CPU
+    // runtime under reqd_sub_group_size(32) returns the caller's own value from a work-group
+    // broadcast on lanes 16-31 of every sub-group (seen on threadripper02, 2026-11-02).
+    template <int WG, bool Sg32 = true, class F> void run(int groups, std::size_t local_bytes, F f) {
         q().submit([&](sycl::handler& h) {
              sycl::local_accessor<unsigned char, 1> lm(sycl::range<1>(std::max<std::size_t>(local_bytes, 16)), h);
-             h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG),
-                            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) { f(it, batchlas::util::get_raw_ptr(lm)); });
+             const sycl::nd_range<1> r(std::size_t(groups) * WG, WG);
+             if constexpr (Sg32) {
+                 h.parallel_for(r, [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) { f(it, batchlas::util::get_raw_ptr(lm)); });
+             } else {
+                 h.parallel_for(r, [=](sycl::nd_item<1> it) { f(it, batchlas::util::get_raw_ptr(lm)); });
+             }
          }).wait_and_throw();
     }
     ~Dev() {
@@ -290,7 +297,7 @@ TYPED_TEST(DeviceBlasV2GebrdTest, LarfgBcastUniformAndReflects) {
     std::vector<T> ho(std::size_t(kBatch) * WG * 3, nan_of<T>());
     T* d = this->dev.up(hd);
     T* o = this->dev.up(ho);
-    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+    this->dev.template run<WG, false>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<WG> ex{it};
         T* p = d + std::ptrdiff_t(b) * sz;
@@ -499,7 +506,7 @@ TYPED_TEST(DeviceBlasV2GebrdTest, ElementwiseAndBroadcasts) {
     std::vector<T> ho(std::size_t(kBatch) * 4, nan_of<T>());
     T* x = this->dev.up(hx);
     T* o = this->dev.up(ho);
-    this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+    this->dev.template run<WG, false>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {  // SgpPartition<8>: any sub-group of 8k
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<WG> ex{it};
         const v2::SgpPartition<8> pt{it.get_sub_group()};
