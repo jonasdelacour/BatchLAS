@@ -178,9 +178,9 @@ Event getrf_panel_resident_launch(Queue& ctx,
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before B0
                 }
 
-                const auto At = v2::mat<v2::Mem::Local>(
+                const auto At = v2::abs_mat<v2::Mem::Local>(
                     &tile[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(ldt) * n, m, n, ldt);
-                const auto Ag = v2::mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
+                const auto Ag = v2::abs_mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
                 v2::lacpy<v2::alg::Flat, std::size_t>(ex, Ag, At);   // stage m x n into the padded ld
                 ex.barrier();                                 // B0
                 gn::getf2_panel_device<SC>(
@@ -226,7 +226,7 @@ Event getrf_panel_global_launch(Queue& ctx,
                 // Always WorkGroup: a full column block is far too tall for one sub-group.
                 gn::getf2_panel_device<gn::LuScope::WorkGroup>(
                     gn::LuExec<gn::LuScope::WorkGroup>{it},
-                    v2::mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
+                    v2::abs_mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);
             });

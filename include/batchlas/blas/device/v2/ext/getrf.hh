@@ -21,32 +21,62 @@
 namespace batchlas::device::v2 {
 
 // ---- scalar arithmetic (complex: explicit fma forms, Smith's division) ----------------------
+// Plain inline, as src/sycl/device_scalar.hh's dev_* are, and a POD complex with .re/.im
+// (sycl_device::Cx) is spelled through its fields: Arith's by-value re()/im()/make() pass the
+// pair through an i64, instcombine then folds the zero tests into an integer mask, and the
+// CTA panel's SASS drifts (SHFL class +-1, sm_89).
 namespace fp {
-template <class T> BATCHLAS_DLA_INLINE bool is_zero(T x) {
-    using A = Arith<T>;
-    if constexpr (A::is_complex) return A::re(x) == real_t<T>(0) && A::im(x) == real_t<T>(0);
+template <class T> concept pod_complex = requires(T t) {
+    t.re;
+    t.im;
+};
+template <class T> inline bool is_zero(T x) {
+    using R = real_t<T>;
+    if constexpr (pod_complex<T>) return x.re == R(0) && x.im == R(0);
+    else if constexpr (Arith<T>::is_complex) return Arith<T>::re(x) == R(0) && Arith<T>::im(x) == R(0);
     else return x == T(0);
 }
-template <class T> BATCHLAS_DLA_INLINE bool isfinite(T x) {
-    using A = Arith<T>;
-    if constexpr (A::is_complex) return sycl::isfinite(A::re(x)) && sycl::isfinite(A::im(x));
+template <class T> inline bool isfinite(T x) {
+    if constexpr (pod_complex<T>) return sycl::isfinite(x.re) && sycl::isfinite(x.im);
+    else if constexpr (Arith<T>::is_complex) return sycl::isfinite(Arith<T>::re(x)) && sycl::isfinite(Arith<T>::im(x));
     else return sycl::isfinite(x);
 }
-template <class T> BATCHLAS_DLA_INLINE T mul(T a, T b) {
+template <class T> inline real_t<T> abs1(T a) {
+    if constexpr (pod_complex<T>) return sycl::fabs(a.re) + sycl::fabs(a.im);
+    else return v2::abs1(a);
+}
+template <class T> inline T mul(T a, T b) {
     using A = Arith<T>;
-    if constexpr (A::is_complex) {
+    if constexpr (pod_complex<T>) {
+        return T{sycl::fma(a.re, b.re, -a.im * b.im), sycl::fma(a.re, b.im, a.im * b.re)};
+    } else if constexpr (A::is_complex) {
         return A::make(sycl::fma(A::re(a), A::re(b), -A::im(a) * A::im(b)),
                        sycl::fma(A::re(a), A::im(b), A::im(a) * A::re(b)));
     } else {
         return a * b;
     }
 }
-template <class T> BATCHLAS_DLA_INLINE T add(T a, T b) { return Arith<T>::add(a, b); }
-template <class T> BATCHLAS_DLA_INLINE T sub(T a, T b) { return Arith<T>::sub(a, b); }
-template <class T> BATCHLAS_DLA_INLINE T recip(T d) {
+template <class T> inline T add(T a, T b) {
+    if constexpr (pod_complex<T>) return T{a.re + b.re, a.im + b.im};
+    else return Arith<T>::add(a, b);
+}
+template <class T> inline T sub(T a, T b) {
+    if constexpr (pod_complex<T>) return T{a.re - b.re, a.im - b.im};
+    else return Arith<T>::sub(a, b);
+}
+template <class T> inline T recip(T d) {
     using A = Arith<T>;
     using R = real_t<T>;
-    if constexpr (A::is_complex) {
+    if constexpr (pod_complex<T>) {
+        if (sycl::fabs(d.re) >= sycl::fabs(d.im)) {
+            const R r = d.im / d.re;
+            const R den = sycl::fma(d.im, r, d.re);
+            return T{R(1) / den, -r / den};
+        }
+        const R r = d.re / d.im;
+        const R den = sycl::fma(d.re, r, d.im);
+        return T{r / den, R(-1) / den};
+    } else if constexpr (A::is_complex) {
         const R dr = A::re(d), di = A::im(d);
         if (sycl::fabs(dr) >= sycl::fabs(di)) {
             const R r = di / dr;
@@ -60,10 +90,19 @@ template <class T> BATCHLAS_DLA_INLINE T recip(T d) {
         return T(1) / d;
     }
 }
-template <class T> BATCHLAS_DLA_INLINE T div(T a, T b) {
+template <class T> inline T div(T a, T b) {
     using A = Arith<T>;
     using R = real_t<T>;
-    if constexpr (A::is_complex) {
+    if constexpr (pod_complex<T>) {
+        if (sycl::fabs(b.re) >= sycl::fabs(b.im)) {
+            const R r = b.im / b.re;
+            const R den = sycl::fma(b.im, r, b.re);
+            return T{sycl::fma(a.im, r, a.re) / den, sycl::fma(-a.re, r, a.im) / den};
+        }
+        const R r = b.re / b.im;
+        const R den = sycl::fma(b.re, r, b.im);
+        return T{sycl::fma(a.re, r, a.im) / den, sycl::fma(a.im, r, -a.re) / den};
+    } else if constexpr (A::is_complex) {
         const R ar = A::re(a), ai = A::im(a), br = A::re(b), bi = A::im(b);
         if (sycl::fabs(br) >= sycl::fabs(bi)) {
             const R r = bi / br;
@@ -84,27 +123,41 @@ template <class T> BATCHLAS_DLA_INLINE T div(T a, T b) {
 // sub-group is the executor (several per work-group, each its own problem); S = Group: the work-
 // group. No static `size`, so core ops that need one (gemv, ger) do not compile on it; Cyclic
 // level-1 ops and reductions work through the for_each_owned overload below. Its barrier is
-// sycl::group_barrier at its scope (all memory), whatever Mem is asked for.
+// sycl::group_barrier at its scope (all memory), whatever Mem is asked for. Ids and ranges are
+// read once, at construction, as the hand-written kernels read them at the top: read at each use,
+// the sub-group range is rematerialised per op (+4 REG on sm_89).
 template <Scope S> struct DynGroup {
     static_assert(S == Scope::Sub || S == Scope::Group, "v2::DynGroup: Scope::Sub or Scope::Group");
     static constexpr bool sub_whole = (S == Scope::Sub);
     static constexpr Scope natural_scope = S;
     sycl::nd_item<1> it;
+    int lane_;
+    int lanes_;
+    int team_;
+    int nteams_;
+    int width_;
+    int lid_;
+
+    BATCHLAS_DLA_INLINE DynGroup(sycl::nd_item<1> i)
+        : it(i),
+          lane_(static_cast<int>(i.get_sub_group().get_local_linear_id())),
+          lanes_(static_cast<int>(i.get_sub_group().get_local_linear_range())),
+          team_(static_cast<int>(i.get_sub_group().get_group_linear_id())),
+          nteams_(static_cast<int>(i.get_sub_group().get_group_linear_range())),
+          width_(S == Scope::Sub ? lanes_ : static_cast<int>(i.get_local_range(0))),
+          lid_(S == Scope::Sub ? lane_ : static_cast<int>(i.get_local_linear_id())) {}
+    // The width as the host launched it (a kernel argument, equal to the local range): a stride
+    // the compiler cannot range-bound, as in kernels written against a captured `wg`.
+    BATCHLAS_DLA_INLINE DynGroup(sycl::nd_item<1> i, int width) : DynGroup(i) { width_ = width; }
 
     BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
-    BATCHLAS_DLA_INLINE int lane() const { return static_cast<int>(it.get_sub_group().get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int team_width() const { return static_cast<int>(it.get_sub_group().get_local_linear_range()); }
-    BATCHLAS_DLA_INLINE int team() const { return static_cast<int>(it.get_sub_group().get_group_linear_id()); }
-    BATCHLAS_DLA_INLINE int nteams() const { return static_cast<int>(it.get_sub_group().get_group_linear_range()); }
-    BATCHLAS_DLA_INLINE int lid() const {
-        if constexpr (S == Scope::Sub) return lane();
-        else return static_cast<int>(it.get_local_linear_id());
-    }
-    BATCHLAS_DLA_INLINE int width() const {
-        if constexpr (S == Scope::Sub) return team_width();
-        else return static_cast<int>(it.get_local_range(0));
-    }
-    BATCHLAS_DLA_INLINE bool leader() const { return lid() == 0; }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
+    BATCHLAS_DLA_INLINE int team_width() const { return lanes_; }
+    BATCHLAS_DLA_INLINE int team() const { return team_; }
+    BATCHLAS_DLA_INLINE int nteams() const { return nteams_; }
+    BATCHLAS_DLA_INLINE int lid() const { return lid_; }
+    BATCHLAS_DLA_INLINE int width() const { return width_; }
+    BATCHLAS_DLA_INLINE bool leader() const { return lid_ == 0; }
     BATCHLAS_DLA_INLINE void barrier(Mem = Mem::Local) const {
         if constexpr (S == Scope::Sub) sycl::group_barrier(it.get_sub_group());
         else sycl::group_barrier(it.get_group());
@@ -153,6 +206,63 @@ template <class Ex, class V> constexpr void require_pub() {
 }
 }  // namespace detail
 
+// ---- views with absolute offsets and 64-bit addressing ---------------------------------------
+// A view keeps the base pointer and absolute int row/column offsets; an element is
+// p[sext(r) + sext(c) * ld], the legacy addressing (int32 Mat indexing moves ~8% of the CTA
+// panel's instructions on sm_89). On a DynGroup, iamax_loc and rscl walk a column's absolute
+// rows (r = r0 + lid; r < r0 + n), the legacy loop form.
+template <class T, Mem M> BATCHLAS_DLA_INLINE T& abs_at(T* p, int ld, int r, int c) {
+    return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
+}
+template <class T, Mem M = Mem::Global> struct AbsCol {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int r0;
+    int c;
+    int ld;
+    int n;
+    BATCHLAS_DLA_INLINE T& at(int r) const { return abs_at<T, M>(p, ld, r, c); }
+    BATCHLAS_DLA_INLINE T& operator()(int i) const { return at(r0 + i); }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DLA_INLINE AbsCol tail(int k) const { return {p, r0 + k, c, ld, n - k}; }
+};
+template <class T, Mem M = Mem::Global> struct AbsRow {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int r;
+    int c0;
+    int ld;
+    int n;
+    BATCHLAS_DLA_INLINE T& operator()(int j) const { return abs_at<T, M>(p, ld, r, c0 + j); }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DLA_INLINE AbsRow tail(int k) const { return {p, r, c0 + k, ld, n - k}; }
+};
+template <class T, Mem M = Mem::Global> struct AbsMat {
+    using value_type = std::remove_cv_t<T>;
+    static constexpr Mem mem = M;
+    T* p;
+    int m;
+    int n;
+    int ld;
+    int i0 = 0;
+    int j0 = 0;
+    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return abs_at<T, M>(p, ld, i0 + i, j0 + j); }
+    BATCHLAS_DLA_INLINE int rows() const { return m; }
+    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DLA_INLINE AbsCol<T, M> col(int j) const { return {p, i0, j0 + j, ld, m}; }
+    BATCHLAS_DLA_INLINE AbsRow<T, M> row(int i) const { return {p, i0 + i, j0, ld, n}; }
+    BATCHLAS_DLA_INLINE AbsMat sub(int i, int j, int r, int c) const { return {p, r, c, ld, i0 + i, j0 + j}; }
+};
+template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE AbsMat<T, M> abs_mat(T* p, int m, int n, int ld) {
+    return {p, m, n, ld};
+}
+template <class X> inline constexpr bool is_abs_col_v = false;
+template <class T, Mem M> inline constexpr bool is_abs_col_v<AbsCol<T, M>> = true;
+
 // ---- 2-D owned traversal, ?LACPY --------------------------------------------------------------
 namespace alg {
 struct Flat {};     // flat e over m*n, row fastest: (e mod m, e / m); fills the executor on any shape
@@ -167,7 +277,8 @@ BATCHLAS_DLA_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
         const Idx total = static_cast<Idx>(m) * static_cast<Idx>(n);
         const Idx w = static_cast<Idx>(detail::width_of(ex));
         for (Idx e = static_cast<Idx>(ex.lid()); e < total; e += w) {
-            f(static_cast<int>(e % static_cast<Idx>(m)), static_cast<int>(e / static_cast<Idx>(m)));
+            const Idx q = e / static_cast<Idx>(m);  // the remainder by subtraction keeps nsw
+            f(static_cast<int>(e - q * static_cast<Idx>(m)), static_cast<int>(q));
         }
     } else {
         static_assert(std::is_same_v<Alg, alg::Stepped>, "v2::for_each_owned_2d: alg::Flat or alg::Stepped");
@@ -185,10 +296,22 @@ BATCHLAS_DLA_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
     }
 }
 
-// B := A over B's m x n extent (LAPACK ?LACPY, uplo = 'A').
+// B := A over B's m x n extent (LAPACK ?LACPY, uplo = 'A'). alg::Flat is written out, not a
+// lambda through for_each_owned_2d: the lambda's later inlining moves the 64-bit staging address
+// math of getrf's resident panel (-5% instructions, sm_89).
 template <class Alg = alg::Flat, class Idx = int, class Ex, class MA, class MB>
 BATCHLAS_DLA_INLINE void lacpy(const Ex& ex, const MA& a, const MB& b) {
-    for_each_owned_2d<Alg, Idx>(ex, b.rows(), b.cols(), [&](int r, int c) { b(r, c) = a(r, c); });
+    if constexpr (std::is_same_v<Alg, alg::Flat>) {
+        const int m = b.rows();
+        const Idx total = static_cast<Idx>(m) * static_cast<Idx>(b.cols());
+        for (Idx e = static_cast<Idx>(ex.lid()); e < total; e += static_cast<Idx>(detail::width_of(ex))) {
+            const int r = static_cast<int>(e % static_cast<Idx>(m));
+            const int c = static_cast<int>(e / static_cast<Idx>(m));
+            b(r, c) = a(r, c);
+        }
+    } else {
+        for_each_owned_2d<Alg, Idx>(ex, b.rows(), b.cols(), [&](int r, int c) { b(r, c) = a(r, c); });
+    }
 }
 
 // ---- level 1/2 pieces of ?GETF2 -----------------------------------------------------------------
@@ -197,8 +320,17 @@ BATCHLAS_DLA_INLINE void lacpy(const Ex& ex, const MA& a, const MB& b) {
 template <class Ex, class T, class X> BATCHLAS_DLA_INLINE void rscl(const Ex& ex, T d, const X& x) {
     const T r = fp::recip(d);
     const bool use_mul = fp::isfinite(r) && !fp::is_zero(r);
-    if (use_mul) for_each_owned(ex, x.size(), [&](int i) { x(i) = fp::mul(static_cast<T>(x(i)), r); });
-    else for_each_owned(ex, x.size(), [&](int i) { x(i) = fp::div(static_cast<T>(x(i)), d); });
+    if constexpr (is_abs_col_v<X> && is_dyn_group_v<Ex>) {
+        const int w = ex.width(), hi = x.r0 + x.n;
+        if (use_mul) {
+            for (int i = x.r0 + ex.lid(); i < hi; i += w) x.at(i) = fp::mul(static_cast<T>(x.at(i)), r);
+        } else {
+            for (int i = x.r0 + ex.lid(); i < hi; i += w) x.at(i) = fp::div(static_cast<T>(x.at(i)), d);
+        }
+    } else {
+        if (use_mul) for_each_owned(ex, x.size(), [&](int i) { x(i) = fp::mul(static_cast<T>(x(i)), r); });
+        else for_each_owned(ex, x.size(), [&](int i) { x(i) = fp::div(static_cast<T>(x(i)), d); });
+    }
 }
 
 // A := A - x y^T (NegOne) or A + x y^T (One), flattened over A's m*n elements (alg::Flat) so a
@@ -213,11 +345,19 @@ BATCHLAS_DLA_INLINE void ger_flat(const Ex& ex, AS, const X& xp, const Y& yp, co
     const auto& y = detail::unpub(yp);
     const int m = a.rows(), n = a.cols();
     if (m > 0 && n > 0) {
-        for_each_owned_2d<alg::Flat>(ex, m, n, [&](int r, int c) {
-            const T p = fp::mul(static_cast<T>(x(r)), static_cast<T>(y(c)));
-            if constexpr (std::is_same_v<AS, NegOne>) a(r, c) = fp::sub(static_cast<T>(a(r, c)), p);
-            else a(r, c) = fp::add(static_cast<T>(a(r, c)), p);
-        });
+        // Written out (e mod m, e / m), as ?GETF2's hand loop was; through for_each_owned_2d's
+        // lambda the panel kernels drift by a VOTE and +4 REG (sm_89).
+        const int total = m * n;
+        const int w = detail::width_of(ex);
+        for (int e = ex.lid(); e < total; e += w) {
+            const int r = e % m;
+            const int c = e / m;
+            if constexpr (std::is_same_v<AS, NegOne>) {
+                a(r, c) = fp::sub(static_cast<T>(a(r, c)), fp::mul(static_cast<T>(x(r)), static_cast<T>(y(c))));
+            } else {
+                a(r, c) = fp::add(static_cast<T>(a(r, c)), fp::mul(static_cast<T>(x(r)), static_cast<T>(y(c))));
+            }
+        }
     }
 }
 
@@ -296,17 +436,32 @@ BATCHLAS_DLA_INLINE MaxLoc<R> maxloc_group(const Ex& ex, MaxLoc<R> a, const VS& 
 template <class Ex, class X, class VS, class IS>
 BATCHLAS_DLA_INLINE int iamax_loc(const Ex& ex, const X& x, const VS& vs, const IS& is) {
     using R = real_t<elem_t<X>>;
-    const int n = x.size();
-    MaxLoc<R> a{R(-1), n};
-    for_each_owned(ex, n, [&](int i) {
-        const R v = abs1(x(i));
-        if (v > a.v) {
-            a.v = v;
-            a.i = i;
+    if constexpr (is_abs_col_v<X> && is_dyn_group_v<Ex>) {
+        // Absolute rows, absolute candidates, sentinel r0 + n; relative on return.
+        const int w = ex.width(), hi = x.r0 + x.n;
+        MaxLoc<R> a{R(-1), hi};
+        for (int i = x.r0 + ex.lid(); i < hi; i += w) {
+            const R v = fp::abs1(x.at(i));
+            if (v > a.v) {
+                a.v = v;
+                a.i = i;
+            }
         }
-    });
-    maxloc_team(ex, a);
-    return maxloc_group(ex, a, vs, is, n).i;
+        maxloc_team(ex, a);
+        return maxloc_group(ex, a, vs, is, hi).i - x.r0;
+    } else {
+        const int n = x.size();
+        MaxLoc<R> a{R(-1), n};
+        for_each_owned(ex, n, [&](int i) {
+            const R v = fp::abs1(x(i));
+            if (v > a.v) {
+                a.v = v;
+                a.i = i;
+            }
+        });
+        maxloc_team(ex, a);
+        return maxloc_group(ex, a, vs, is, n).i;
+    }
 }
 
 // LAPACK ipiv sink: the row chosen at step k (0-based in the panel) is stored 1-based plus
@@ -371,7 +526,7 @@ BATCHLAS_DLA_INLINE void getf2_relabel(Frag<T, NC>& rA, int& rowid, int kmax, in
     BATCHLAS_DLA_UNROLL_FULL
     for (int j = 0; j < NC; ++j) {
         if (j >= kmax) continue;
-        const PivotWinner w = piv.argmax(j, abs1(rA[j]), rowid);  // ?IAMAX
+        const PivotWinner w = piv.argmax(j, fp::abs1(rA[j]), rowid);  // ?IAMAX
         piv.record(j, w);
         if (rowid == w.row) rowid = j;  // ?SWAP as two labels
         else if (rowid == j) rowid = w.row;

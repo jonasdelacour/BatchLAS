@@ -155,7 +155,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const v2::DynGroup<v2::Scope::Group> ex{it};
+                const v2::DynGroup<v2::Scope::Group> ex{it, wg};
                 const int gid = static_cast<int>(it.get_group(0));
                 const int r = gid / batch;
                 const int b = gid - r * batch;
@@ -256,7 +256,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const v2::DynGroup<v2::Scope::Group> ex{it};
+                const v2::DynGroup<v2::Scope::Group> ex{it, wg};
                 const int gid = static_cast<int>(it.get_group(0));
                 const int t = gid / batch;
                 const int b = gid - t * batch;
