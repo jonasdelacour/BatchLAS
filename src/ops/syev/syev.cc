@@ -10,6 +10,7 @@
 #include <batchlas/settings.hh>
 
 #include <src/ops/syev/choice.hh>
+#include <src/ops/syev/steqr/steqr_internal.hh>
 #include <src/ops/syev/vendor.hh>
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
@@ -57,7 +58,7 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const bool homogeneous = !A.is_heterogeneous();
     const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
-    const bool cta_steqr = small && B != Backend::ROCM;
+    const bool cta_steqr = native && B != Backend::ROCM && steqr_cta_can_run(d, n);
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Cta) { return cta_steqr; },
