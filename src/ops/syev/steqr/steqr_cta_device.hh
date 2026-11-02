@@ -100,16 +100,19 @@ namespace batchlas {
             idx = next;
         }
 
-        // Padded form for a chunk that idles through a lockstep chase: an idle
-        // step reads its own current word and writes nothing, so the index never
+        // chase_step split so the read can be issued ahead of the rotation math. An idle
+        // step (act false) reads its own current word and writes nothing, so the index never
         // leaves the lane's own row, even in a tile shared with other chunks.
         template <int32_t Dir>
-        inline void chase_step_masked(T c, T s, bool act) {
-            const int32_t next = act ? idx + Dir * static_cast<int32_t>(LDQ) : idx;
-            const T q1 = Q_local[next];
+        inline T chase_load(bool act) const {
+            return Q_local[act ? idx + Dir * static_cast<int32_t>(LDQ) : idx];
+        }
+
+        template <int32_t Dir>
+        inline void chase_apply(T c, T s, T q1, bool act) {
             if (act) Q_local[idx] = c * carry - s * q1;
             carry = act ? s * carry + c * q1 : carry;
-            idx = next;
+            idx = act ? idx + Dir * static_cast<int32_t>(LDQ) : idx;
         }
 
         inline void chase_end(int32_t) {
@@ -145,7 +148,9 @@ namespace batchlas {
         template <int32_t Dir>
         inline void chase_step(T, T) {}
         template <int32_t Dir>
-        inline void chase_step_masked(T, T, bool) {}
+        inline T chase_load(bool) const { return T(0); }
+        template <int32_t Dir>
+        inline void chase_apply(T, T, T, bool) {}
         inline void chase_end(int32_t) {}
         inline void reverse_columns(int32_t, int32_t, bool) {}
     };
