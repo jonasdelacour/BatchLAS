@@ -62,6 +62,19 @@ template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
+// Each launch declares its WG so ptxas caps registers (complex<double> geqr2 at 1024 needs <= 64).
+// NVPTX only, as BATCHLAS_LAUNCH_BOUNDS (whose min_work_groups_per_cu a lambda rejects): .maxntid,
+// plus .reqntid where the configure probe says it is lowered (src/ops/gemm/kernels/register_128x128.hh).
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+#if BATCHLAS_NVPTX_REQD_WG_OK
+#define TEST_WG_BOUND(n) [[intel::max_work_group_size(1, 1, n), sycl::reqd_work_group_size(n)]]
+#else
+#define TEST_WG_BOUND(n) [[intel::max_work_group_size(1, 1, n)]]
+#endif
+#else
+#define TEST_WG_BOUND(n)
+#endif
+
 template <class T> int period_bitdiff(const std::vector<T>& got, int per_item) {
     int d = 0;
     for (int b = kPeriod; b < kBatch; ++b)
@@ -97,7 +110,8 @@ struct Dev {
     template <int WG, class F> void run(int groups, std::size_t local_bytes, F f) {
         q().submit([&](sycl::handler& h) {
              sycl::local_accessor<unsigned char, 1> lm(sycl::range<1>(std::max<std::size_t>(local_bytes, 16)), h);
-             h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+             h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32)
+                                                                                 TEST_WG_BOUND(WG) {
                  f(it, batchlas::util::get_raw_ptr(lm));
              });
          }).wait_and_throw();
@@ -291,7 +305,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
     using T = TypeParam;
     using R = real_of<T>;
     auto h = batched<T>(32, 31, [](int, T*) {});
-    for (std::size_t i = 0; i < h.size(); ++i) h[i] = h[i] * T(R(1 + (i % 7) * 1000));  // mixed magnitudes
+    for (std::size_t i = 0; i < h.size(); ++i) h[i] = h[i] * T(R(1 + (i % 32 % 7) * 1000));  // by lane: keeps period 4
     T* in = this->dev.up(h);
     std::vector<T> ho(std::size_t(kBatch) * 32 * 3, nan_of<T>());
     T* o = this->dev.up(ho);
