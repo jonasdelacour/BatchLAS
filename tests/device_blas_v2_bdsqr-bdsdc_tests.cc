@@ -374,9 +374,10 @@ TYPED_TEST(V2BidiagRealTest, SelectSortCarriesColumns) {
     constexpr int n = 4, rows = 2, ld = 5;
     // values {1, 3, 3, 2}; descending: swaps (0,1), (1,2), (2,3) -> ids {1, 2, 3, 0}.
     // ascending: swaps (1,3) -> {1, 2, 3, 3}, ids {0, 3, 2, 1} (tie at 2,3 keeps order).
-    std::vector<R> h(std::size_t(kBatch) * 2 * (n + rows * ld));
+    // Item = x[n] then a rows x n column-major C with ld: n * ld elements, not rows * ld.
+    const int per = n + n * ld;
+    std::vector<R> h(std::size_t(kBatch) * 2 * per);
     const R vals[n] = {1, 3, 3, 2};
-    const int per = n + rows * ld;
     for (int b = 0; b < 2 * kBatch; ++b)
         for (int j = 0; j < n; ++j) {
             h[std::size_t(b) * per + j] = vals[j];
