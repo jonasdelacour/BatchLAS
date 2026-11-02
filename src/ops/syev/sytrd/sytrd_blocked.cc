@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/device.hh>
+#include <batchlas/blas/device/v2/ext/sytrd-cta-blocked-band.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/extensions.hh>
@@ -145,25 +146,20 @@ Event update_vw_lower_small_legacy(Queue& q,
                 const int c = lin / n2;
                 if (r < c || (mask != nullptr && mask[b] == 0)) return;  // I3
 
-                T* A = a_ptr + b * stride_a;
-                const T* V = v_ptr + b * stride_v;
-                const T* W = w_ptr + b * stride_w;
+                namespace dla = batchlas::device::v2;
+                // Offset views: element (i, j) is p[i + j * ld], the legacy kernel's index form.
+                const auto A = dla::off_mat(a_ptr + b * stride_a, n2, n2, lda);
+                const auto V = dla::off_mat(v_ptr + b * stride_v, n2, ib, ldv);
+                const auto W = dla::off_mat(w_ptr + b * stride_w, n2, ib, ldw);
 
-                T acc = T(0);
-                for (int k = 0; k < ib; ++k) {
-                    const T vrk = V[r + k * ldv];
-                    const T vck = V[c + k * ldv];
-                    const T wrk = W[r + k * ldw];
-                    const T wck = W[c + k * ldw];
-                    acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
-                }
-
-                A[r + c * lda] -= acc;
+                // One lower her2k entry: A(r, c) -= V(r, :) W(c, :)^H + W(r, :) V(c, :)^H.
+                const T acc = dla::dot2c(dla::Thread{}, V.row(r), W.row(c), W.row(r), V.row(c));
+                A(r, c) = dla::Arith<T>::sub(A(r, c), acc);
 
                 if constexpr (detail::is_complex<T>::value) {
                     if (r == c) {
-                        const T x = A[r + c * lda];
-                        A[r + c * lda] = T(x.real(), typename T::value_type(0));
+                        const T x = A(r, c);
+                        A(r, c) = T(x.real(), typename T::value_type(0));
                     }
                 }
             });
@@ -252,138 +248,58 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
-                const int lane = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
+                namespace dla = batchlas::device::v2;
+                using Ar = dla::Arith<T>;
+                using Real = typename base_type<T>::type;
+                const auto ex = dla::fit(dla::WorkGroup<WG>{it});  // n <= WG: item r owns row r
+                const int lane = ex.lid();
 
-                T* A = a_ptr + b * stride_a;
                 T* Eb = e_ptr + b * stride_e;
                 T* Taub = tau_ptr + b * stride_tau;
+                // Offset views over the accessors: the legacy kernel's A_local[r + c * n] indexing.
+                const auto Ag = dla::off_mat(a_ptr + b * stride_a, n, n, lda);
+                const auto Al = dla::off_mat<dla::Mem::Local>(A_local, n, n, n);
+                const auto Wl = dla::OffVec<sycl::local_accessor<T, 1>>{W_local, 0, dla::Dyn{n}};
 
-                const int ld_loc = n;
-                auto Al = [&](int r, int c) -> T& { return A_local[r + c * ld_loc]; };
-
-                if (lane < n) {
-                    for (int c = 0; c < n; ++c) {
-                        Al(lane, c) = A[lane + c * lda];
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                dla::lacpy(ex, Ag, Al);
+                dla::team_barrier(ex);
 
                 for (int k = 0; k < n - 1; ++k) {
-                    using Real = typename base_type<T>::type;
-
                     const int alpha_row = k + 1;
                     const int x0 = k + 2;
+                    const int tail = n - alpha_row;
+                    const auto fk = ex.at(alpha_row);  // the trailing block keeps item r on row r
+                    const auto A22 = Al.sub(alpha_row, alpha_row, tail, tail);
+                    const auto vk = dla::implied_unit(Al.col(k).tail(alpha_row), 0);  // v = [1; x]
+                    const auto wk = Wl.tail(alpha_row);
 
-                    Real sumsq = Real(0);
-                    if (lane >= x0 && lane < n) {
-                        sumsq = detail::abs2_if_complex(Al(lane, k));
-                    }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
-
-                    T alpha = T(0);
+                    // larfg of [alpha; x] = A(alpha_row:, k): ||x|| and alpha reach every item, the
+                    // alpha item forms the scalars (and stores e, tau and the unit), then broadcasts.
+                    const Real sumsq = ex.group_reduce((lane >= x0 && lane < n) ? dla::abs2(Al(lane, k)) : Real(0));
+                    const T alpha = dla::broadcast(ex, lane == alpha_row ? Al(alpha_row, k) : Ar::zero(), alpha_row);
+                    dla::LarfgScalars<T> refl{Ar::zero(), alpha, Ar::zero()};
                     if (lane == alpha_row) {
-                        alpha = Al(alpha_row, k);
+                        refl = dla::larfg_scalars(alpha, sycl::sqrt(sumsq));
+                        Eb[k] = refl.beta;
+                        Taub[k] = refl.tau;
+                        Al(alpha_row, k) = Ar::one();
                     }
-                    alpha = batchlas::portable::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
+                    const T tau_k = dla::broadcast(ex, refl.tau, alpha_row);
+                    const T scale = dla::broadcast(ex, refl.scale, alpha_row);
+                    if (tau_k != Ar::zero() && lane >= x0 && lane < n) Al(lane, k) = Ar::mul(Al(lane, k), scale);
+                    dla::team_barrier(ex);
 
-                    T tau_k = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lane == alpha_row) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_k = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_k = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_k = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_k = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        Eb[k] = beta;
-                        Taub[k] = tau_k;
-                        Al(alpha_row, k) = T(1);
-                    }
-
-                    tau_k = batchlas::portable::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
-                    scale = batchlas::portable::group_broadcast(g, scale, sycl::id<1>(alpha_row));
-
-                    if (tau_k != T(0)) {
-                        if (lane >= x0 && lane < n) {
-                            Al(lane, k) *= scale;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lane < n) {
-                        T w = T(0);
-                        if (lane >= alpha_row) {
-                            for (int c = alpha_row; c < n; ++c) {
-                                const T vc = (c == alpha_row) ? T(1) : Al(c, k);
-                                w += Al(lane, c) * vc;
-                            }
-                            w *= tau_k;
-                        }
-                        W_local[lane] = w;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    T dot_partial = T(0);
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        dot_partial = batchlas::device::detail::conj(vr) * W_local[lane];
-                    }
-                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
-
-                    const T alpha2 = T(-0.5) * tau_k * dot;
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        W_local[lane] += alpha2 * vr;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lane >= alpha_row && lane < n) {
-                        const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        const T wr = W_local[lane];
-                        for (int c = alpha_row; c <= lane; ++c) {
-                            const T vc = (c == alpha_row) ? T(1) : Al(c, k);
-                            const T wc = W_local[c];
-                            T a_rc = Al(lane, c);
-                            a_rc -= vr * batchlas::device::detail::conj(wc) + wr * batchlas::device::detail::conj(vc);
-                            Al(lane, c) = a_rc;
-                            if (lane != c) {
-                                Al(c, lane) = batchlas::device::detail::conj(a_rc);
-                            } else if constexpr (detail::is_complex<T>::value) {
-                                Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
-                            }
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    // w := tau A22 v;  w += (-tau/2)(v^H w) v;  A22 -= v w^H + w v^H (lower, mirrored)
+                    dla::gemv<Transpose::NoTrans>(fk, dla::Scalar<T>{tau_k}, A22, dla::assume_published(vk), dla::Zero{}, wk);
+                    dla::team_barrier(ex);
+                    const T alpha2 = T(-0.5) * tau_k * dla::dotc(fk, vk, wk);
+                    dla::axpy(fk, dla::Scalar<T>{alpha2}, vk, wk);
+                    dla::team_barrier(ex);
+                    dla::her2_mirror<Uplo::Lower>(fk, dla::NegOne{}, dla::assume_published(vk), dla::assume_published(wk), A22);
+                    dla::team_barrier(ex);
                 }
 
-                if (lane < n) {
-                    for (int c = 0; c < n; ++c) {
-                        A[lane + c * lda] = Al(lane, c);
-                    }
-                }
+                dla::lacpy(ex, Al, Ag);
             });
     });
 

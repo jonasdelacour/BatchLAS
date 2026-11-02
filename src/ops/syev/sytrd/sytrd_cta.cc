@@ -121,6 +121,8 @@ namespace batchlas {
                         else return true;
                     }();
 
+                    namespace v2 = batchlas::device::v2;
+                    const auto ex = v2::adopt_partition(part);
                     auto A_prob = A_view.batch_item(prob_id);
                     auto D_prob = D_view.batch_item(prob_id);
                     auto E_prob = E_view.batch_item(prob_id);
@@ -129,176 +131,50 @@ namespace batchlas {
                     const int32_t base_a = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
+                    constexpr int kP = static_cast<int>(P);
+                    // Offset views over the accessor base: the uniform base keeps [R.X4+UR] addressing.
+                    using Local = sycl::local_accessor<T, 1>;
+                    using Tile = v2::OffMat<Local, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<kP>>;
+                    const Tile tile{A_local, base_a, {}, {}, {}};
+                    // Extents from the kernel's n, so every guard below tests the same value.
+                    const auto A = v2::mat(A_prob.data(), n, n, A_prob.ld());
 
-                    // Build the Hermitian tile from the named triangle only (defect 14): each lane
-                    // loads its row of that triangle, coalesced, and writes the conjugate mirror.
-                    // The diagonal's imaginary part is dropped, as {c,z}hetrd does.
-                    if (live && lane < n) {
-                        for (int32_t c = 0; c < n; ++c) {
-                            if (Upper ? lane > c : lane < c) continue;
-                            T v = A_prob(lane, c);
-                            if (lane == c) {
-                                if constexpr (detail::is_complex<T>::value) v = T(v.real(), typename base_type<T>::type(0));
-                            } else {
-                                A_local[base_a + c + lane * static_cast<int32_t>(P)] = batchlas::device::detail::conj(v);
-                            }
-                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = v;
-                        }
-                        // Pad remaining columns to keep reads defined.
-                        for (int32_t c = n; c < static_cast<int32_t>(P); ++c) {
-                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = T(0);
-                        }
-                    } else {
-                        // Pad remaining rows.
-                        for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = T(0);
-                        }
-                    }
-                    group_barrier(part);
+                    // The Hermitian tile from the named triangle only (defect 14), each lane loading its
+                    // row coalesced; Im(diag) dropped as {c,z}hetrd does; zero past n. An inactive item
+                    // reduces a zero tile.
+                    v2::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower>(v2::fit(ex), A, tile, live);
+                    v2::team_barrier(ex);
 
                     if constexpr (Upper) {
-                        // Reduce the upper triangle of A (shared with the fused
-                        // SYEV kernel; see sytrd_cta_device.hh).
+                        // Shared with the fused SYEV kernel (sytrd_cta_device.hh).
                         const T tau_lane = sytd2_cta_upper_partition<T, static_cast<int32_t>(P)>(
-                            part,
-                            &A_local[base_a],
-                            &V_local[base_v],
-                            &W_local[base_w],
-                            n,
-                            lane);
-
+                            part, &A_local[base_a], &V_local[base_v], &W_local[base_w], n, lane);
                         // Read the tridiagonal straight off the reduced tile.
                         if (live && lane < n) {
-                            D_prob(lane) = A_local[base_a + lane + lane * static_cast<int32_t>(P)];
+                            D_prob(lane) = tile(lane, lane);
                         }
                         if (live && lane < (n - 1)) {
-                            E_prob(lane) = A_local[base_a + lane + (lane + 1) * static_cast<int32_t>(P)];
+                            E_prob(lane) = tile(lane, lane + 1);
                             TAU_prob(lane) = tau_lane;
                         }
                     } else {
-                        // Reduce the lower triangle of A.
-                        // For i = 0 .. n-2, annihilate A(i+2:n-1, i).
-                        for (int32_t i = 0; i <= n - 2; ++i) {
-                            const int32_t s = i + 1;             // start row/col of trailing block
-                            const int32_t m = n - s;             // size of trailing principal block
-                            const int32_t col = i;
-
-                            // Vector [alpha; x] lives in column 'col' rows [s..n-1], alpha at row s.
-                            const bool in_vec = (lane < m);
-                            const bool is_alpha = (lane == 0);
-                            const bool x_active = (lane >= 1 && lane < m);
-
-                            T alpha = T(0);
-                            T x = T(0);
-                            if (in_vec) {
-                                const int32_t row = s + lane;
-                                const T a_val = A_local[base_a + row + col * static_cast<int32_t>(P)];
-                                if (is_alpha) {
-                                    alpha = a_val;
-                                } else {
-                                    x = a_val;
-                                }
-                            }
-
-                            // Form reflector of length m.
-                            const T taui = larfg_small<T>(part, m, lane, /*alpha_lane=*/0, alpha, x, x_active);
-
-                            // Write back scaled vector and beta.
-                            if (x_active) {
-                                const int32_t row = s + lane;
-                                A_local[base_a + row + col * static_cast<int32_t>(P)] = x;
-                                // Keep symmetry (optional but helpful for later stages).
-                                A_local[base_a + col + row * static_cast<int32_t>(P)] = batchlas::device::detail::conj(x);
-                            }
-                            if (is_alpha) {
-                                A_local[base_a + s + col * static_cast<int32_t>(P)] = alpha;
-                                A_local[base_a + col + s * static_cast<int32_t>(P)] = batchlas::device::detail::conj(alpha);
-                            }
-
-                            if (live && lane == 0) {
-                                E_prob(i) = alpha;
-                                TAU_prob(i) = taui;
-                                D_prob(i) = A_local[base_a + i + i * static_cast<int32_t>(P)];
-                            }
-
-                            if (taui != T(0)) {
-                                // Build v (length m) with v(0)=1.
-                                const T v_lane = (lane < m) ? ((lane == 0) ? T(1)
-                                                                            : A_local[base_a + (s + lane) + col * static_cast<int32_t>(P)])
-                                                            : T(0);
-                                V_local[base_v + lane] = v_lane;
-                                group_barrier(part);
-
-                                // Temporarily set A(s, col) = 1 (LAPACK convention).
-                                if (lane == 0) {
-                                    A_local[base_a + s + col * static_cast<int32_t>(P)] = T(1);
-                                    A_local[base_a + col + s * static_cast<int32_t>(P)] = T(1);
-                                }
-                                group_barrier(part);
-
-                                // Compute x := tau * A(s:s+m-1, s:s+m-1) * v, store in W_local.
-                                T y = T(0);
-                                if (lane < m) {
-                                    const int32_t row = s + lane;
-                                    for (int32_t c = 0; c < m; ++c) {
-                                        const int32_t col2 = s + c;
-                                        const T a_rc = A_local[base_a + row + col2 * static_cast<int32_t>(P)];
-                                        const T v_c = V_local[base_v + c];
-                                        y += a_rc * v_c;
-                                    }
-                                    y *= taui;
-                                }
-                                W_local[base_w + lane] = y;
-                                group_barrier(part);
-
-                                // dot = v^H x
-                                const T dot_lane = (lane < m) ? (batchlas::device::detail::conj(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
-                                const T dot = group_reduce_sum_select_from_group(part, dot_lane);
-                                const T alpha2 = T(-0.5) * taui * dot;
-
-                                // w := x + alpha2 * v
-                                if (lane < m) {
-                                    W_local[base_w + lane] = W_local[base_w + lane] + alpha2 * V_local[base_v + lane];
-                                }
-                                group_barrier(part);
-
-                                // Rank-2 update on trailing m x m block (Hermitian-safe):
-                                // A := A - v*w^H - w*v^H
-                                if (lane < m) {
-                                    const int32_t row = s + lane;
-                                    const T v_r = V_local[base_v + lane];
-                                    const T w_r = W_local[base_w + lane];
-                                    for (int32_t c = 0; c < m; ++c) {
-                                        const int32_t col2 = s + c;
-                                        const T v_c = V_local[base_v + c];
-                                        const T w_c = W_local[base_w + c];
-                                        const int32_t idx = base_a + row + col2 * static_cast<int32_t>(P);
-                                        A_local[idx] = A_local[idx] - (v_r * batchlas::device::detail::conj(w_c) + w_r * batchlas::device::detail::conj(v_c));
-                                    }
-                                }
-                                group_barrier(part);
-
-                                // Restore subdiagonal element.
-                                if (lane == 0) {
-                                    A_local[base_a + s + col * static_cast<int32_t>(P)] = alpha;
-                                    A_local[base_a + col + s * static_cast<int32_t>(P)] = batchlas::device::detail::conj(alpha);
-                                }
-                                group_barrier(part);
-                            }
-                        }
+                        // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then).
+                        v2::sytd2<Uplo::Lower>(ex, tile, v2::OffVec<Local>{V_local, base_v, v2::Dyn{n}},
+                                               v2::OffVec<Local>{W_local, base_w, v2::Dyn{n}}, n,
+                                               [&](int32_t i, const T& beta, const T& taui) {
+                                                   if (live) {
+                                                       E_prob(i) = beta;
+                                                       TAU_prob(i) = taui;
+                                                       D_prob(i) = tile(i, i);
+                                                   }
+                                               });
                         if (live && lane == 0) {
-                            D_prob(n - 1) = A_local[base_a + (n - 1) + (n - 1) * static_cast<int32_t>(P)];
+                            D_prob(n - 1) = tile(n - 1, n - 1);
                         }
                     }
 
-                    group_barrier(part);
-
-                    // Write back A.
-                    if (live && lane < n) {
-                        for (int32_t c = 0; c < n; ++c) {
-                            A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
-                        }
-                    }
+                    v2::team_barrier(ex);
+                    if (live) v2::lacpy(v2::fit(ex), tile.sub(0, 0, n, n), A);
                 });
         });
     }
