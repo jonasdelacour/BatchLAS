@@ -25,8 +25,12 @@
 #include <stdexcept>
 #include <type_traits>
 #include <batchlas/settings.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/syev-drivers-fused.hh>
 
 namespace batchlas {
+
+namespace v2 = device::v2;
 
 namespace {
 
@@ -201,31 +205,10 @@ Event syev_blocked_part(Queue& ctx,
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-
-                // S(0) = 1
-                if (want_phase) {
-                    S(0, b) = T(1, Real(0));
-                }
-
-                for (int32_t i = 0; i < nn; ++i) {
-                    Dr(i, b) = D(i, b).real();
-                }
-
-                for (int32_t i = 0; i < nn - 1; ++i) {
-                    const T e = E(i, b);
-                    const Real abs_e = sycl::hypot(e.real(), e.imag());
-                    Er(i, b) = abs_e;
-
-                    if (!want_phase) {
-                        continue;
-                    }
-                    if (abs_e == Real(0)) {
-                        S(i + 1, b) = S(i, b);
-                    } else {
-                        // Lower: subdiagonal is E(i)
-                        S(i + 1, b) = S(i, b) * (e / abs_e);
-                    }
-                }
+                // Lower: E is the subdiagonal.
+                v2::phase_similarity<v2::NativeArith<T>>(v2::Thread{}, nn, v2::item_vec(D, b), v2::item_vec(E, b),
+                                                         v2::item_vec(Dr, b), v2::item_vec(Er, b), v2::item_vec(S, b),
+                                                         Uplo::Lower, want_phase);
             });
         });
 
@@ -295,12 +278,10 @@ Event syev_blocked_part(Queue& ctx,
 
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    const int32_t b = v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                    const int32_t row = static_cast<int32_t>(rem % nn);
-                    const int32_t col = static_cast<int32_t>(rem / nn);
-                    ZC(row, col, b) = S(row, b) * T(Z(row, col, b), Real(0));
+                    const auto [row, col] = v2::batched_rc(idx, b, nn);
+                    v2::dgmm_left_at<v2::NativeArith<T>>(v2::item_vec(S, b), v2::item_mat(Z, b), v2::item_mat(ZC, b), row, col);
                 });
             });
 
@@ -381,13 +362,7 @@ Event syev_blocked_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                     const int32_t b = static_cast<int32_t>(tid[0]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    S(0, b) = T(1);
-                    for (int32_t i = 0; i < nn - 1; ++i) {
-                        const T ei = E(i, b);
-                        const T sgn = (ei >= T(0)) ? T(1) : T(-1);
-                        S(i + 1, b) = S(i, b) * sgn;
-                        E(i, b) = sycl::fabs(ei);
-                    }
+                    v2::sign_similarity(v2::Thread{}, nn, v2::item_vec(E, b), v2::item_vec(S, b));
                 });
             });
         }
@@ -442,12 +417,11 @@ Event syev_blocked_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * nn * nn;
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    const int32_t b = v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                    const int32_t row = static_cast<int32_t>(rem % nn);
-                    const int32_t col = static_cast<int32_t>(rem / nn);
-                    Z(row, col, b) *= S(row, b);
+                    const auto [row, col] = v2::batched_rc(idx, b, nn);
+                    const auto Zb = v2::item_mat(Z, b);
+                    v2::dgmm_left_at(v2::item_vec(S, b), Zb, Zb, row, col);  // in place
                 });
             });
 
