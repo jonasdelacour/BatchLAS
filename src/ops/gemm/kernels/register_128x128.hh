@@ -326,7 +326,7 @@ BATCHLAS_UNROLL_FULL
         // The register-prefetched double buffer (one barrier per slab; unrolled by two so the
         // buffer index is a constant: a runtime one costs a spill at the 128 cap).
         const int slabs = (k + TileK - 1) / TileK;
-        auto mainloop = [&](auto edge) __attribute__((always_inline)) {
+        auto mainloop = [&](auto edge) BATCHLAS_DLA_BODY {
             gc::kloop_prefetch2<TileK>(
                 ex, slabs, [&](int k0) __attribute__((always_inline)) { gload(k0, edge); }, sstore, compute);
         };
