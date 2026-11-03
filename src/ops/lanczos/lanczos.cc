@@ -136,17 +136,14 @@ namespace batchlas {
                         const auto w = dla::vec(v_next_ptr + bid*2*n, n);  // A v_it on entry
                         T* const alpha_b = alphas.data() + bid*n;
                         T* const beta_b = betas.data() + bid*n;
-                        // x^T y with every product rounded before the sum: the SLM-staged legacy reduction.
-                        auto dot_unfused = [&](const auto& x, const auto& y) {
-                            return dla::reduce(ex, n, [&](int i) { return dla::Arith<T>::mul(x(i), y(i)); });
-                        };
-
-                        const T alpha = dot_unfused(v_cur, w);
+                        // x^T y with every product rounded before the sum (the SLM-staged legacy reduction),
+                        // spelled at each call site: a local lambda called here would become the SYCL kernel body.
+                        const T alpha = dla::reduce(ex, n, [&](int i) { return dla::Arith<T>::mul(v_cur(i), w(i)); });
                         alpha_b[it] = alpha;
                         if (it > 0) {
                             // beta_{it-1} takes the sign of v_{it-1}^T A v_it, which reorthogonalization may flip.
                             const T beta_prev = beta_b[it - 1];
-                            const T coupling = dot_unfused(v_prev, w);
+                            const T coupling = dla::reduce(ex, n, [&](int i) { return dla::Arith<T>::mul(v_prev(i), w(i)); });
                             const T signed_beta = sycl::copysign(beta_prev, coupling);
                             if (ex.leader()) beta_b[it - 1] = signed_beta;
                             dla::map(ex, w, [=](T wi, T p, T c) { return wi - (signed_beta * p + alpha * c); }, w, v_prev, v_cur);

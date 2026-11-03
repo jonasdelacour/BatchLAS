@@ -73,18 +73,16 @@ namespace batchlas {
                 sycl::nd_range<1>(global_size, local_size),
                 [=](sycl::nd_item<1> item) {
                     const dla::RtGroup<> ex{item};
-                    // Column j of item b of a dense kernel view.
-                    auto col = [&](const auto& a, int j, int b) {
-                        return dla::vec(a.data() + static_cast<int64_t>(b) * a.stride() + j * a.ld(), n);
-                    };
                     // Grid-stride loop over (item, column) pairs.
                     for (size_t group_id = item.get_group(0); group_id < batch_size * k; group_id += item.get_group_range(0)) {
                         const int b = group_id / k;
                         const int j = group_id % k;
                         // Uniform per work-group (one (b, j) pair each), so the reductions stay matched.
                         if (masked && !mk[b]) continue;
-                        const auto v = col(V_view, j, b);
-                        const T num = dla::dotc(ex, v, col(AV_view, j, b));
+                        // Column j of item b (no local lambda: SemaSYCL would take it as the kernel body).
+                        const auto v = dla::vec(V_view.data() + static_cast<int64_t>(b) * V_view.stride() + j * V_view.ld(), n);
+                        const auto av = dla::vec(AV_view.data() + static_cast<int64_t>(b) * AV_view.stride() + j * AV_view.ld(), n);
+                        const T num = dla::dotc(ex, v, av);
                         const real_t den = dla::sumsq<dla::alg::Fused>(ex, v);
                         if (ex.leader()) ritz_vals(j, b) = dla::Arith<T>::re(num) / den;
                     }
