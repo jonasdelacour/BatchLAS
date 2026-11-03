@@ -469,11 +469,11 @@ Event potrs_fused_launch(Queue& ctx,
                 const std::size_t nz = static_cast<std::size_t>(n);
                 const std::size_t bz = static_cast<std::size_t>(bld);
 
-                auto ld_a = [&](int i, int c) {
+                auto ld_a = [&](int i, int c) BATCHLAS_DLA_BODY {
                     return Ab[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) * ldz];
                 };
                 // The adjoint's element, op(A)[i, c] = conj(A[c, i]), read at A[i, c].
-                auto ld_h = [&](int i, int c) { return dev_conj(ld_a(i, c)); };
+                auto ld_h = [&](int i, int c) BATCHLAS_DLA_BODY { return dev_conj(ld_a(i, c)); };
 
                 for (int e = tid; e < n * nrhs; e += wg) {
                     const int i = e % n, c = e / n;
