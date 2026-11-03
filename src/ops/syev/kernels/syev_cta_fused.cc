@@ -18,6 +18,9 @@
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <src/ops/syev/kernels/syev_drivers_v2.hh>
 
 #include <complex>
 #include <cstdint>
@@ -28,6 +31,9 @@
 
 
 namespace batchlas {
+
+namespace v2 = device::v2;
+namespace sv = syev_v2;
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.
@@ -102,6 +108,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         constexpr bool kSeparateQTile = ComputeVectors && !kFusedOrgql;
         constexpr std::size_t kATileElems = static_cast<std::size_t>(LDA) * P;
         constexpr std::size_t kQTileElems = static_cast<std::size_t>(LDQ) * P;
+        constexpr int kP = static_cast<int>(P);
 
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), sg_size);
         // 0 asks for the tuned value; any explicit value is taken as given.
@@ -180,28 +187,28 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                // ---- Stage 0: load and symmetrize into the resident tile. ----
-                // The reduction reads the full matrix, so the requested triangle is
-                // mirrored on the way in.
+                // arith::Native keeps the std::complex operators (strict port).
+                using Ops = v2::arith::Native;
+                const auto pex = v2::wrap(part);
+                // Views with the accessor as base (never &A_local[base]: a generic pointer).
+                using ATile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDA>, v2::Mem::Local, v2::Cyclic,
+                                      sycl::local_accessor<T, 1>>;
+
+                // ---- Stage 0: load the Hermitian completion of the stored triangle. ----
+                // The kernel lambda indexes accessors itself and calls named functions only: a direct
+                // operator() call (a view's or a lambda's) would become the SemaSYCL kernel body.
                 for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                     T v = T(0);
-                    if (live && lane < nn && c < nn) {
-                        if (lane == c) {
-                            // Hermitian diagonals are real: drop the caller's imaginary round-off.
-                            v = T(real_part_f(A_prob(lane, c)));
-                        } else if (is_upper) {
-                            v = (lane < c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        } else {
-                            v = (lane > c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        }
-                    }
+                    if (live && lane < nn && c < nn) sv::herm_load<Ops>(v, A_prob, is_upper, lane, c);
                     A_local[base_a + lane + c * LDA] = v;
                 }
                 group_barrier(part);
+                const ATile tile{A_local, {}, {}, {}, base_a};
+                [[maybe_unused]] const auto vs = v2::vec(V_local, kP, base_v);
 
                 // ---- Stage 1: tridiagonal reduction (SYTD2, upper path). ----
-                const T tau_lane = sytd2_cta_upper_partition<T, LDA>(
-                    part, &A_local[base_a], &V_local[base_v], &W_local[base_w], nn, lane);
+                const T tau_lane = sytd2_cta_upper_partition<T, LDA>(part, A_local, base_a, V_local, base_v, W_local,
+                                                                     base_w, nn);
 
                 // Read the tridiagonal off the tile; above the superdiagonal is the packed
                 // reflector store that stage 3 consumes.
@@ -213,16 +220,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 T phase = T(1);
 
                 if constexpr (kComplex) {
-                    // Hermitian -> real tridiagonal via T' = S^H T S; every lane replays
-                    // S(0) = 1, S(i+1) = S(i) * conj(e(i)) / |e(i)| itself (no scratch).
+                    // Hermitian -> real tridiagonal (T' = S^H T S); each lane replays S itself.
                     offdiag = (lane < (nn - 1)) ? sycl::hypot(e_c.real(), e_c.imag()) : Real(0);
-                    for (int32_t i = 0; i < nn - 1; ++i) {
-                        const T e_i = select_from_group(part, e_c, static_cast<uint32_t>(i));
-                        const Real abs_i = select_from_group(part, offdiag, static_cast<uint32_t>(i));
-                        if (lane > i && abs_i != Real(0)) {
-                            phase = phase * (batchlas::device::detail::conj(e_i) / abs_i);
-                        }
-                    }
+                    phase = sv::phase_replay<Ops>(pex, e_c, offdiag, nn);
                 } else {
                     offdiag = real_part_f(e_c);
                 }
@@ -259,82 +259,19 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
                     }
                 } else if constexpr (kFusedOrgql) {
-                    // ---- Stage 2a: form Q_house explicitly, in place. ----
-                    //
-                    // DSYEV's structure: DORGTR builds Q, DSTEQR is seeded with it, and
-                    // the sweeps accumulate straight onto Q (no back-transform pass).
-                    // Q = H(n-2)...H(0); column k is GENERATED at step k and no step
-                    // touches a column above its own index, so reflector k' > k (tile
-                    // column k'+1) is still intact when its turn comes (DORG2L without
-                    // its column shift). Lane c owns column c in registers; every
-                    // subscript into Qc must stay a compile-time constant.
+                    // ---- Stage 2a: Q_house in place (DSYEV: DORGTR seeds DSTEQR, no back-transform).
+                    // org2l generates column k at step k, so the reflectors it has not reached stay intact.
                     // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
-                    Real Qc[P];
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        Qc[r] = Real(0);
-                    }
+                    v2::Frag<Real, kP, v2::ColPerLane> Qc;
+                    sv::org2l<Ops>(pex, Qc, vs, tile, tau_lane, nn);
 
-                    for (int32_t k = 0; k < nn - 1; ++k) {
-                        const Real tau_k = select_from_group(part, tau_lane, static_cast<uint32_t>(k));
-
-                        // Stage v_k indexed by absolute row, explicitly zeroed
-                        // outside its support.
-                        Real vv = Real(0);
-                        if (lane < k) {
-                            vv = A_local[base_a + lane + (k + 1) * LDA];
-                        } else if (lane == k) {
-                            vv = Real(1);
-                        }
-                        V_local[base_v + lane] = vv;
-                        group_barrier(part);
-
-                        if (lane < k) {
-                            // Existing column: apply H(k).
-                            Real dot = Real(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += V_local[base_v + r] * Qc[r];
-                            }
-                            const Real gamma = tau_k * dot;
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                Qc[r] -= V_local[base_v + r] * gamma;
-                            }
-                        } else if (lane == k) {
-                            // New column: H(k) e_k = e_k - tau_k v_k.
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                Qc[r] = (r < k) ? (-tau_k * V_local[base_v + r])
-                                                : ((r == k) ? (Real(1) - tau_k) : Real(0));
-                            }
-                        }
-
-                        // All lanes must be done reading v before it is rebuilt.
-                        group_barrier(part);
-                    }
-
-                    // Q is the identity outside its leading (n-1)x(n-1) block, and
-                    // the pad columns must hold defined values because the sweeps
-                    // run unguarded on all P lanes.
-                    if (lane >= nn) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            Qc[r] = Real(0);
-                        }
-                    } else if (lane == nn - 1) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            Qc[r] = (r == nn - 1) ? Real(1) : Real(0);
-                        }
-                    }
+                    // Identity outside the leading (n-1)^2 block; pad columns defined (sweeps run on all P lanes).
+                    if (lane >= nn) v2::fill(Qc, Real(0));
+                    else if (lane == nn - 1) sv::laset_col(Qc, nn - 1, Real(0), Real(1));
 
                     // Hand the tile over: from here it is the accumulator.
                     group_barrier(part);
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        A_local[base_a + r + lane * LDA] = Qc[r];
-                    }
+                    v2::store(Qc, tile.col(lane));
                     group_barrier(part);
 
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
@@ -350,17 +287,20 @@ BATCHLAS_UNROLL_FULL
                     const int32_t dst = slot_of(diag);
                     if (live && lane < nn) {
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                        for (int32_t r = 0; r < nn; ++r) {
-                            A_prob(r, dst) = A_local[base_a + r + lane * LDA];
-                        }
+                        v2::copy(v2::Thread{}, tile.col(lane), v2::mat(A_prob.data(), nn, nn, A_prob.ld()).col(dst));
                     }
                 } else {
                     // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
                     // reflectors are applied afterwards, in stage 3). ----
                     QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
+                    const v2::Mat<Real, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDQ>, v2::Mem::Local, v2::Cyclic,
+                                  sycl::local_accessor<Real, 1>>
+                        qtile{Q_local, {}, {}, {}, base_q};
 
+                    // The identity on the leading n x n block, zero elsewhere; this lane's row.
+                    const Real q_diag = lane < nn ? Real(1) : Real(0);
                     for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                        Q_local[base_q + lane + c * LDQ] = (lane == c && lane < nn) ? Real(1) : Real(0);
+                        v2::laset(sv::ElemAt{lane, c}, v2::Zero{}, q_diag, qtile);
                     }
                     group_barrier(part);
 
@@ -374,70 +314,20 @@ BATCHLAS_UNROLL_FULL
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
                     }
 
-                    // ---- Stage 3: back-transform, Z := Q_house * Z. ----
-                    // Lane j owns column j of Z in registers (as ormqx_cta LEFT). Indices
-                    // into C_col must stay compile-time constants, or the array spills
-                    // to local memory.
-                    T C_col[P];
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        C_col[r] = T(0);
-                    }
+                    // ---- Stage 3: back-transform, Z := Q_house * S * Z. ----
+                    v2::Frag<T, kP, v2::ColPerLane> C_col;
+                    v2::fill(C_col, T(0));
 
-                    // Lift through the phase: Zc(r, :) = S(r) * Z(r, :). Stage S before
-                    // V_local is reused for reflectors.
+                    // Zc = diag(S) Z (dgmm Left), staged before vs is reused for the reflectors.
                     V_local[base_v + lane] = phase;
                     group_barrier(part);
-
-                    if (lane < nn) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            if (r < nn) {
-                                const Real z = Q_local[base_q + r + lane * LDQ];
-                                C_col[r] = V_local[base_v + r] * T(z, Real(0));
-                            }
-                        }
-                    }
+                    if (lane < nn) sv::dgmm_lift<Ops>(C_col, vs, qtile.col(lane), nn);
                     group_barrier(part);
 
-                    // Upper-path SYTD2 reflectors form a QL factorization (ormqx_cta QL,
-                    // Left, NoTrans). Reflector ii: rows 0..ii-1 of tile column ii+1,
-                    // implicit 1 at row ii, tau in lane ii.
-                    for (int32_t ii = 0; ii < nn - 1; ++ii) {
-                        const T tau_ii = select_from_group(part, tau_lane, static_cast<uint32_t>(ii));
+                    // Upper-path SYTD2 reflectors form a QL factorization: xORM2L, Left, NoTrans.
+                    sv::orm2l<Ops>(pex, C_col, vs, tile, tau_lane, nn);
 
-                        // v zeroed outside its support: the update runs unpredicated over all P rows.
-                        T vv = T(0);
-                        if (lane < ii) {
-                            vv = A_local[base_a + lane + (ii + 1) * LDA];
-                        } else if (lane == ii) {
-                            vv = T(1);
-                        }
-                        V_local[base_v + lane] = vv;
-                        group_barrier(part);
-
-                        if (lane < nn && tau_ii != T(0)) {
-                            T dot = T(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
-                            }
-                            const T gamma = tau_ii * dot;
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                C_col[r] -= V_local[base_v + r] * gamma;
-                            }
-                        }
-
-                        // All lanes must be done reading v before it is rebuilt.
-                        group_barrier(part);
-                    }
-
-                    if (live && lane < nn) {
-                        for (int32_t r = 0; r < nn; ++r) {
-                            A_prob(r, dst) = C_col[r];
-                        }
-                    }
+                    if (live && lane < nn) v2::store(C_col, v2::mat(A_prob.data(), nn, nn, A_prob.ld()).col(dst), nn);
                 }
             });
     });

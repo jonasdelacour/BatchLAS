@@ -9,9 +9,15 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <batchlas/blas/device/v2/dla.hh>
+#include <src/ops/syev/kernels/syev_drivers_v2.hh>
+
 #include <complex>
 
 namespace batchlas {
+
+namespace v2 = device::v2;
+namespace sv = syev_v2;
 
 namespace {
 template <Backend B, typename T> class UploMirrorUpperToLowerKernel;
@@ -36,15 +42,9 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const int r = static_cast<int>(idx[1]);
                 const int c = static_cast<int>(idx[2]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                // Only strictly-upper source entries do work; each writes its mirror.
+                // Only strictly-upper source entries do work; each writes its mirror (c, r).
                 if (c <= r) return;
-                T* A = ptr + b * stride;
-                const T v = A[r + c * ld];          // (r, c) with r < c: upper triangle
-                if constexpr (detail::is_complex<T>::value) {
-                    A[c + r * ld] = T(v.real(), -v.imag());
-                } else {
-                    A[c + r * ld] = v;
-                }
+                v2::mirror<Uplo::Upper, true>(sv::ElemAt{c, r}, v2::mat(ptr + b * stride, n, n, ld));
             });
     });
     return ctx.get_event();
