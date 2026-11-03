@@ -10,7 +10,7 @@
 #include <batchlas/util/group-invoke.hh>
 #include <src/kernels/common/sg_partition/sg_partition.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
-#include <batchlas/blas/device/v2/ext/stedc.hh>
+#include <src/ops/syev/stedc/stedc_v2.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include <src/math-helpers.hh>
@@ -78,7 +78,7 @@ inline void load_local_problem_vectors(const Ex& ex,
                                        const VectorView<T>& z_prob) {
     v2::copy(ex, d_prob_global, d_prob);
     v2::copy(ex, z_prob_global, z_prob);
-    ex.barrier();
+    stedc_v2::group_sync(ex);
 }
 
 template <typename T, typename Ex>
@@ -113,7 +113,7 @@ inline T apply_step_with_bounds(T step,
 // The secular function at x = origin + tau without the terms i in [lower_end, upper_start):
 // per item the sums of z_i^2 / (d_i - x), of (z_i / (d_i - x))^2 and of the running sums (the
 // laed4 error term) below and above that window, then six reductions over the executor
-// (shuffles on a partition, work-group reductions on a DynWorkGroup).
+// (shuffles on a partition, work-group reductions on a RtGroup).
 template <typename T, typename Ex>
 inline ShiftedEvalResult<T, Ex> evaluate_shifted_generic(
     const Ex& ex,
@@ -140,7 +140,7 @@ inline ShiftedEvalResult<T, Ex> evaluate_shifted_generic(
         err += s;
     };
     v2::for_each_owned(ex, lower_end, [&](int32_t i) { accumulate(i, low_s, low_d, low_err); });
-    v2::for_each_owned_in(ex, upper_start, dd, [&](int32_t i) { accumulate(i, up_s, up_d, up_err); });
+    v2::for_each_owned(ex, v2::Range{upper_start, dd}, [&](int32_t i) { accumulate(i, up_s, up_d, up_err); });
 
     const auto r = v2::allreduce(ex, std::array<T, 6>{low_s, low_d, low_err, up_s, up_d, up_err});
     low_s = r[0], low_d = r[1], low_err = r[2], up_s = r[3], up_d = r[4], up_err = r[5];
@@ -298,7 +298,7 @@ inline RocRoot<T> solve_root_roc_generic(const Ex& ex,
     T err = state.err;
     T ratio_sq = state.ratio_sq;
 
-    if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+    if (stedc_v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
         return {origin, tau, true};   // converged before the first iteration
     }
 
@@ -326,7 +326,7 @@ inline RocRoot<T> solve_root_roc_generic(const Ex& ex,
     // converged was indistinguishable from one that did.
     bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (stedc_v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -456,7 +456,7 @@ inline RocRoot<T> solve_root_ext_generic(const Ex& ex,
 
     bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (stedc_v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -505,10 +505,10 @@ inline void write_denominator_column(const Ex& ex, const QCol& q, const VectorVi
     }, d_prob);
 }
 
-// Reciprocate-and-normalize: Q(:, eig) = z ./ Q(:, eig), then divided by its 2-norm (Blue's,
-// three reductions). Same `first`/`stride` convention as maybe_rescale_vectors: columns are
-// independent (column `eig` reads z and only touches Q(:, eig)), so one column per partition
-// needs no work-group barrier.
+// Reciprocate-and-normalize: Q(:, eig) = z ./ Q(:, eig), then divided by its Blue 2-norm (three
+// butterflies on a partition, one vec<R, 3> reduction on a work-group). Same `first`/`stride`
+// convention as maybe_rescale_vectors: columns are independent (column `eig` reads z and only
+// touches Q(:, eig)), so one column per partition needs no work-group barrier.
 template <typename T, typename Ex, typename QMat, typename VView>
 inline void normalize_vectors(const Ex& ex,
                               int32_t first,
@@ -517,7 +517,7 @@ inline void normalize_vectors(const Ex& ex,
                               const QMat& Q,
                               const VView& v,
                               int32_t bid) {
-    // Uniform trip count across reduction groups -- see maybe_rescale_vectors. nrm2_blue
+    // Uniform trip count across reduction groups -- see maybe_rescale_vectors. nrm2
     // reduces with sub-group shuffles, so a partition must not fall out of the loop while
     // others are inside it: an inactive group runs every op on an empty column.
     const int32_t iters = (dd + stride - 1) / stride;
@@ -528,10 +528,11 @@ inline void normalize_vectors(const Ex& ex,
         const bool active = (eig < dd);
         const auto q = Q.col(active ? eig : 0).head(active ? dd : 0);
         v2::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
-        // No barrier: nrm2_blue walks q with map's owner stride, so every item reads back
+        // No barrier: nrm2 walks q with map's owner stride, so every item reads back
         // only what it just wrote.
-        v2::scal_inv(ex, v2::nrm2_blue<v2::alg::Blue>(ex, q), q);
-        v2::sync_group(ex);
+        const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
+        v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
+        stedc_v2::group_sync(ex);
     }
 }
 
@@ -571,7 +572,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const v2::DynWorkGroup<sg_size> wex{item};
+                const v2::RtGroup<v2::Scope::Group, sg_size> wex{item};
                 // One root per partition of P lanes; the solver's reductions are shuffles.
                 const v2::SgpPartition<P> pex{item.get_sub_group()};
                 const int32_t sg_id = static_cast<int32_t>(item.get_sub_group().get_group_linear_id());
@@ -616,7 +617,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                     write_denominator_column(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                wex.barrier();
+                stedc_v2::group_sync(wex);
 
                 // Rescale and normalize are parallel over their outer index, so
                 // hand one index to each partition instead of walking them
@@ -626,7 +627,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 // Rescale reads all of Q and writes all of v; normalize
                 // overwrites Q and reads all of v. One barrier separates the two
                 // phases -- the loops themselves no longer need any.
-                wex.barrier();
+                stedc_v2::group_sync(wex);
                 normalize_vectors<T>(pex, part_id, parts_per_wg, dd, Q, v, bid);
             });
     });
@@ -665,7 +666,7 @@ void stedc_merge_fused_wg(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const v2::DynWorkGroup<> ex{item};
+                const v2::RtGroup<> ex{item};
 
                 const int32_t dd = n_reduced[bid];
                 if (dd <= 0) {
@@ -702,7 +703,7 @@ void stedc_merge_fused_wg(Queue& ctx,
                     write_denominator_column(ex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                ex.barrier();
+                stedc_v2::group_sync(ex);
 
                 // Sequential over the index with work-group-wide reductions: (first, stride) = (0, 1).
                 maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, d_prob, v, bid);

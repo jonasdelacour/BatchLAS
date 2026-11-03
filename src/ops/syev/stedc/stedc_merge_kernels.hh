@@ -4,15 +4,15 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-collectives.hh>
-#include <batchlas/blas/device/v2/ext/stedc.hh>
+#include <src/ops/syev/stedc/stedc_v2.hh>
 #include <sycl/sycl.hpp>
 
 namespace batchlas {
 
-// Löwner rescale on executor `ex` (v2::DynWorkGroup or v2::SgpPartition<P>): `first`/`stride`
+// Löwner rescale on executor `ex` (v2::RtGroup or v2::SgpPartition<P>): `first`/`stride`
 // select the eigen-indices it owns, (0, 1) every index (WG reference variant), (part_id,
 // parts_per_wg) one per partition with no work-group barrier. Iteration `eid` reads row `eid`
-// of Q (never written here) and writes only v(eid). The product MUST be v2::prod_scaled:
+// of Q (never written here) and writes only v(eid). The product MUST be stedc_v2::prod_scaled:
 // narrow partitions lengthen each serial product and the naive one leaves float range at n=64.
 // evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
 template <typename T, typename Ex, typename QBatch, typename VView>
@@ -38,7 +38,7 @@ inline void maybe_rescale_vectors(bool do_rescale,
         const bool active = (eid < dd);
         const T Di = active ? d_prob(eid) : T(0);
         // |z_eid|^2 = prod_j Q(eid, j) / (D_eid - D_j), the j == eid factor Q(eid, eid) itself
-        const auto prod = device::v2::prod_scaled(ex, active ? dd : 0, [&](int32_t j) {
+        const auto prod = stedc_v2::prod_scaled(ex, active ? dd : 0, [&](int32_t j) {
             const T q_elem = Q_bid(eid, j);
             T ratio;
             if (j == eid) {
@@ -51,9 +51,9 @@ inline void maybe_rescale_vectors(bool do_rescale,
         });
         if (active && ex.leader()) {
             const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-            v(eid, bid) = sgn * device::v2::sqrt_scaled(prod);
+            v(eid, bid) = sgn * stedc_v2::sqrt_scaled(prod);
         }
-        device::v2::sync_group(ex);
+        stedc_v2::group_sync(ex);
     }
 }
 

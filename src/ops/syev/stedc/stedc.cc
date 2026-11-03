@@ -168,7 +168,7 @@ void stedc_merge_step(Queue& ctx,
         batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             if (!v.active(bid)) return;  // I1, no barrier
-            const v2::DynWorkGroup<> ex{item};
+            const v2::RtGroup<> ex{item};
             // z = [last row of Q1, sign(rho) first row of Q2] / sqrt(2). The rank-1 term is
             // |rho| u u^T with u = e_{m-1} + sign(rho) e_m (the diagonal corrections are -|rho|),
             // so the Q2 half carries sign(rho); without it the eigenvectors mix Q1 and Q2 with
@@ -197,7 +197,7 @@ void stedc_merge_step(Queue& ctx,
         batchlas::impl::parallel_for<StedcDeflation<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         auto cta = item.get_group();
-        const v2::DynWorkGroup<> ex{item};
+        const v2::RtGroup<> ex{item};
         // I1, before any barrier. n_reduced = 0 is neutral: later kernels stop at it, dd_max ignores it.
         if (!v.active(bid)) {
             if (ex.leader()) n_reduced[bid] = 0;
@@ -217,22 +217,22 @@ void stedc_merge_step(Queue& ctx,
             perm_local[k] = perm_map(k, bid);
         });
 
-        ex.barrier();
+        stedc_v2::group_sync(ex);
 
         // LAPACK-style ABSOLUTE tolerance 8 eps max(|D|_inf, |z|_inf), before the Givens loop so proximity
         // deflation uses it too; a relative one under-deflates clustered small eigenvalues.
         // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
         v2::map(ex, absx, abs_of, d);
-        const T eig_max = v2::fold(ex, absx, sycl::maximum<T>());
+        const T eig_max = stedc_v2::fold(ex, absx, sycl::maximum<T>());
         v2::map(ex, absx, abs_of, z);
-        const T v_max_pre = v2::fold(ex, absx, sycl::maximum<T>());
+        const T v_max_pre = stedc_v2::fold(ex, absx, sycl::maximum<T>());
         const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
 
         for (int j = 0; j < n - 1; j++) {
             if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
                 const T f = z(j + 1), g = z(j);
                 auto [c, s, r] = detail::lartg(f, g);
-                ex.barrier();
+                stedc_v2::group_sync(ex);
                 if (ex.leader()) {
                     z(j) = T(0.0);
                     z(j + 1) = r;
@@ -240,22 +240,22 @@ void stedc_merge_step(Queue& ctx,
                 const int32_t pj = perm_local[j];
                 const int32_t pj1 = perm_local[j + 1];
                 if (pj >= 0 && pj < n && pj1 >= 0 && pj1 < n) {
-                    v2::rot(ex, Qb.col(pj1), Qb.col(pj), c, s);
+                    v2::rot(ex, v2::Givens<T>{c, s}, Qb.col(pj1), Qb.col(pj));
                 }
                 // The leader's z(j), z(j+1) must be visible before the next Givens pair reads z(j+1).
-                ex.barrier();
+                stedc_v2::group_sync(ex);
             }
         }
 
-        ex.barrier();
+        stedc_v2::group_sync(ex);
         //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
 
         v2::map(ex, absx, abs_of, d);
-        const T eig_max2 = v2::fold(ex, absx, sycl::maximum<T>());
+        const T eig_max2 = stedc_v2::fold(ex, absx, sycl::maximum<T>());
 
-        const T v_norm = v2::nrm2_blue(ex, z);
+        const T v_norm = v2::nrm2<v2::alg::Blue>(ex, z);
         v2::map(ex, absx, [=](T x) { return std::abs(x / v_norm); }, z);
-        const T v_max = v2::fold(ex, absx, sycl::maximum<T>());
+        const T v_max = stedc_v2::fold(ex, absx, sycl::maximum<T>());
         auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max2, v_max);
 
         v2::for_each_owned(ex, nn, [&](int k) {
@@ -266,7 +266,7 @@ void stedc_merge_step(Queue& ctx,
             }
         });
 
-        ex.barrier();
+        stedc_v2::group_sync(ex);
 
         //Exclusive scan to determine the indices to keep
         batchlas::portable::joint_exclusive_scan(cta,
@@ -324,11 +324,13 @@ void stedc_merge_step(Queue& ctx,
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
-                const v2::DynWorkGroup<> ex{item};
+                const v2::RtGroup<> ex{item};
                 auto Q_bid = Qview.batch_item(bid);
                 auto n = n_reduced[bid];
-                v2::fill_cols<v2::alg::Flat>(ex, v2::vec(eigenvalues.batch_item(bid)), v2::mat(Q_bid).sub(0, 0, n, n));
-                ex.barrier();
+                const auto poles = v2::vec(eigenvalues.batch_item(bid));
+                const auto Qn = v2::mat(Q_bid);
+                v2::for_each_owned_2d<v2::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
+                stedc_v2::group_sync(ex);
                 v2::for_each_owned(ex, n, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // info_report is an atomic fetch_max: exactly the "did ANY root
@@ -345,7 +347,7 @@ void stedc_merge_step(Queue& ctx,
                                             1);
                     }
                 });
-                ex.barrier();
+                stedc_v2::group_sync(ex);
             });
         });
 
@@ -358,7 +360,7 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
-                    const v2::DynWorkGroup<> ex{item};
+                    const v2::RtGroup<> ex{item};
                     auto Qbid = Qview.batch_item(bid);
                     auto dd = n_reduced[bid];
 
@@ -368,7 +370,8 @@ void stedc_merge_step(Queue& ctx,
                     for (int eid = 0; eid < dd; ++eid)
                     {
                         const T Di = eigenvalues(eid, bid);
-                        T valf = v2::reduce_op(ex, dd, sycl::multiplies<T>(), T(1), [&](int j) {
+                        T partial = T(1);
+                        v2::for_each_owned(ex, dd, [&](int j) {
                             const T q_elem = Qbid(eid, j);
                             T ratio;
                             if (j == eid) {
@@ -377,8 +380,9 @@ void stedc_merge_step(Queue& ctx,
                                 const T denom = Di - eigenvalues(j, bid);
                                 ratio = q_elem / denom;
                             }
-                            return ratio;
+                            partial *= ratio;
                         });
+                        const T valf = v2::allreduce(ex, partial, sycl::multiplies<T>());
                         if(ex.leader())
                         {
                             T mag  = std::sqrt(std::fabs(valf));
@@ -395,7 +399,7 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();
-                    const v2::DynWorkGroup<> ex{item};
+                    const v2::RtGroup<> ex{item};
 
                     const int dd = n_reduced[bid];
                     const auto Q = v2::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
@@ -404,7 +408,8 @@ void stedc_merge_step(Queue& ctx,
                     {
                         const auto q = Q.col(eig);
                         v2::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
-                        v2::scal_inv(ex, v2::nrm2_blue(ex, q), q);
+                        const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
+                        v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
                     }
                 });
         });
@@ -413,7 +418,7 @@ void stedc_merge_step(Queue& ctx,
     ctx -> submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<StedcAssignEigenvalues<B, T>>(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        const v2::DynWorkGroup<> ex{item};
+        const v2::RtGroup<> ex{item};
         const int dd = n_reduced[bid];
         v2::copy(ex, v2::vec(temp_lambdas.batch_item(bid)).head(dd), v2::vec(eigenvalues.batch_item(bid)).head(dd));
         });

@@ -5,7 +5,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <batchlas/blas/device/v2/ext/stedc.hh>
+#include <src/ops/syev/stedc/stedc_v2.hh>
 #include <src/sort.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
@@ -25,13 +25,13 @@ template <typename T, typename Ex, typename V, typename P>
 auto sec_eval(const Ex& ex, const V& v, const V& d, const T& x, const int32_t i, const int32_t n, const P& psi) {
     const auto terms = psi.head(n);
     v2::map(ex, terms, [=](T vk, T dk) { return vk / (dk - x); }, v, d);
-    ex.barrier();
-    auto psi1 = v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
-    auto psi2 = (i + 1) < n ? v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
+    stedc_v2::group_sync(ex);
+    auto psi1 = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
+    auto psi2 = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     v2::map(ex, terms, [=](T vk, T dk) { return vk / ( (dk - x) * (dk - x)); }, v, d);
-    ex.barrier();
-    auto psi1_prime = v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
-    auto psi2_prime = (i + 1) < n ? v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
+    stedc_v2::group_sync(ex);
+    auto psi1_prime = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
+    auto psi2_prime = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
 }
 
@@ -56,7 +56,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
         auto log_denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(d.batch_size()*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
-            const v2::DynWorkGroup<> ex{item};
+            const v2::RtGroup<> ex{item};
             auto n = n_reduced[bid];
             const auto vb = v2::vec(v.batch_item(bid)).head(n);
             const auto db = v2::vec(d.batch_item(bid)).head(n);
@@ -72,11 +72,11 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 lnum(k) = T(0);
                 lden(k) = T(0);
             });
-            ex.barrier();
+            stedc_v2::group_sync(ex);
             v2::map(ex, sgn, [](T vk) { return (vk >= T(0)) ? T(1) : T(-1); }, vb);
             v2::map(ex, vb, [](T vk) { return vk * vk; }, vb);  // z = v .* v, in place
 
-            auto v_norm2 = v2::fold(ex, v2::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
+            auto v_norm2 = stedc_v2::fold(ex, v2::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
 
             for (int i = 0; i < n; i++) {
                 auto di = d(i, bid);
@@ -153,21 +153,21 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db);
-                ex.barrier();
-                auto log_den2 = i > 0 ? v2::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
+                stedc_v2::group_sync(ex);
+                auto log_den2 = i > 0 ? stedc_v2::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
 
                 v2::map(ex, scratch.head(n - i - 1), [&](T dk) {
                     auto diff = sycl::fabs(dk - db(i));
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db.tail(i + 1));
-                ex.barrier();
-                auto log_den1 = (i + 1) < n ? v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
+                stedc_v2::group_sync(ex);
+                auto log_den1 = (i + 1) < n ? stedc_v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
 
                 if (ex.leader()) lden(i) = log_den1 + log_den2;
             }
 
-            ex.barrier();
+            stedc_v2::group_sync(ex);
             // zhat_k = sign(v_k) sqrt(numerator_k / denominator_k), from the logs, range-clamped.
             v2::map(ex, zhat, [=](T ln, T ld, T s) {
                 auto exponent = T(0.5) * (ln - ld);
@@ -181,7 +181,8 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 v2::map(ex, Q.col(i), [](T zk, T qk) { return zk / qk; }, zhat, Q.col(i));
             }
             for (int i = 0; i < n; i++) {
-                v2::scal_inv(ex, v2::nrm2_blue(ex, Q.col(i)), Q.col(i));
+                const T nrm = v2::nrm2<v2::alg::Blue>(ex, Q.col(i));
+                v2::map(ex, Q.col(i), [=](T qk) { return qk / nrm; }, Q.col(i));
             }
 
             // Roots were solved relative to their nearer pole: add it back.

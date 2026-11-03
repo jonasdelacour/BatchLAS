@@ -46,7 +46,7 @@ void stedc_merge_fused(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const auto bid = item.get_group_linear_id();
-                const v2::DynWorkGroup<> ex{item};
+                const v2::RtGroup<> ex{item};
                 auto Q_bid = Qview.batch_item(bid);
                 const int dd = n_reduced[bid];
 
@@ -60,8 +60,9 @@ void stedc_merge_fused(Queue& ctx,
                 // apply_shift_to_poles updates Q_bid(:, k) directly. Keep it in place: a
                 // private-array copy of the poles broke orthogonality.
                 // evidence: docs/perf/stedc.md#stedc-the-rejected-private-pole-fast-path
-                v2::fill_cols<v2::alg::Flat>(ex, v2::vec(eigenvalues.batch_item(bid)), Q);
-                ex.barrier();
+                const auto poles = v2::vec(eigenvalues.batch_item(bid));
+                v2::for_each_owned_2d<v2::alg::DivMod>(ex, dd, dd, [&](int i, int j) { Q(i, j) = poles(i); });
+                stedc_v2::group_sync(ex);
 
                 v2::for_each_owned(ex, dd, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
@@ -80,16 +81,17 @@ void stedc_merge_fused(Queue& ctx,
                                             1);
                     }
                 });
-                ex.barrier();
+                stedc_v2::group_sync(ex);
 
                 maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
-                ex.barrier();
+                stedc_v2::group_sync(ex);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.
                 for (int eig = 0; eig < dd; ++eig) {
                     const auto q = Q.col(eig);
                     v2::map(ex, q, [](T zi, T den) { return zi / den; }, vb, q);
-                    v2::scal_inv(ex, v2::nrm2_blue(ex, q), q);
+                    const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
+                    v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
                 }
             });
     });
