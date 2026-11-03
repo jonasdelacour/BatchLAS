@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/trsm/kernels/trsm_sg_left.cc trsm_native_sg_left: sycl::range<1>(kSgPerWg * kSg) == kTrsmSgLeftWgSize
+128 ::TrsmSgLeftKernel<
