@@ -188,9 +188,10 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                                         i0 + ib, i0 + 1 + m, ld_a);
                                                 const auto v = v2::mat(v_out + static_cast<std::ptrdiff_t>(b) * stride_v_out,
                                                                        m, ib, ld_v_out);
-                                                v2::laset<v2::Part::Upper>(ex, v2::Zero{}, v2::One{}, v);
-                                                v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(
-                                                    ex, ap.sub(i0, i0 + 1, ib, m), v);
+                                                // One tag per laset call: see set_identity in gesvd_blocked.cc (complex<double> stack).
+                                                if (r > c) v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(ex, ap.sub(i0, i0 + 1, ib, m), v);
+                                                else if (r == c) v2::laset(ex, v2::One{}, v2::One{}, v);
+                                                else v2::laset(ex, v2::Zero{}, v2::Zero{}, v);
                                             });
     });
 }

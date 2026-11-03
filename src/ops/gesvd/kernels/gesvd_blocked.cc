@@ -474,7 +474,11 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            v2::laset(glue::Elem2{r, c}, v2::Zero{}, v2::One{}, v2::item(M, b, rows, cols));
+            // One tag per call: laset(Zero, One) selects between two complex<double> lvalues,
+            // which NVPTX copies through the stack (STACK 32).
+            const glue::Elem2 ex{r, c};
+            if (r == c) v2::laset(ex, v2::One{}, v2::One{}, v2::item(M, b, rows, cols));
+            else v2::laset(ex, v2::Zero{}, v2::Zero{}, v2::item(M, b, rows, cols));
         });
     });
 }
