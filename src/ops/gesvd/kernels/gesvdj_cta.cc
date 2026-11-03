@@ -44,10 +44,9 @@ namespace {
 
 namespace v2 = ::batchlas::device::v2;
 
-// 1 / sqrt(a). A plain `1 / sqrt(a)` lets NVPTX fold the float case into a bare rsqrt.approx
-// (depending on inlining); the float NVPTX path is ONE fixed sequence: rsqrt.approx from asm,
-// then one Newton step in FMA form, r = y + (y/2)(1 - a y^2). a = +inf (non-finite input) keeps
-// the old 1/sqrt(inf) = 0. The rotation cosine runs the same step in v2::sym_schur2.
+// 1 / sqrt(a): NVPTX folds a plain float `1 / sqrt(a)` into a bare rsqrt.approx, so float runs
+// rsqrt.approx from asm plus one Newton step, r = y + (y/2)(1 - a y^2); a = +inf keeps 1/inf = 0.
+// The rotation cosine runs the same step in v2::sym_schur2.
 template <typename R>
 inline R gesvdj_inv_sqrt(R a) {
 #if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
