@@ -51,6 +51,7 @@ set(TEST_TARGETS
     device_blas_v2_sytrf-sytrs_tests
     device_blas_v2_tests
     device_blas_v2_tridiag-stebz-stein_tests
+    device_blas_v2_trsm_tests
     error_model_tests
     gemm_candidates_tests
     gemm_mask_tests
@@ -262,6 +263,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_v2_sytrf-sytrs_tests
     device_blas_v2_tests
     device_blas_v2_tridiag-stebz-stein_tests
+    device_blas_v2_trsm_tests
     gemm_candidates_tests
     gemm_mask_tests
     gemm_tests
