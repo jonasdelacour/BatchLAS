@@ -23,6 +23,13 @@ struct Fmax {
     template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
 };
 
+// A complex copied as two scalars, not as a struct: larfg_scalars takes alpha by const&, and
+// a struct-copied Cx<float> alpha is re-read from A after the reductions (+2 loads a column).
+template <class T> BATCHLAS_DLA_INLINE T by_parts(const T& a) {
+    using A = v2::Arith<T>;
+    if constexpr (A::is_complex) return A::make(A::re(a), A::im(a));
+    else return a;
+}
 // max(|re|, |im|), not |a|: squaring overflows.
 template <class T> BATCHLAS_DLA_INLINE v2::real_t<T> absmax_ri(T a) {
     using A = v2::Arith<T>;

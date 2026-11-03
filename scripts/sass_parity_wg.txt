@@ -9,5 +9,7 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/geqrf/kernels/geqrf_tiny.cc geqrf_tiny_launch: WG = M * N == kGeqrfTinyWg (static_assert)
 64  ^batchlas::GeqrfTinyKernel<
+# src/ops/geqrf/kernels/geqrf_cta.cc geqrf_panel_wg(n, max_wg): 32 * min(8, pow2 >= n), 256 for n >= 5
+256  ::GeqrfPanelGlobalKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$

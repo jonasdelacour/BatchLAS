@@ -75,7 +75,7 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
 
     for (int j = 0; j < kmax; ++j) {
         ex.barrier(v2::Mem::Global);  // B1 -- the previous reflector's column writes are visible.
-        const D alpha = a(j, j);
+        const D alpha = q2::by_parts(a(j, j));
         R smax = q2::absmax_ri(alpha);
         v2::for_each_owned(ex, v2::Range{j + 1, m}, [&](int r) BATCHLAS_DLA_BODY { smax = sycl::fmax(smax, q2::absmax_ri(a(r, j))); });
         // Scope::Sub: the run-time xor butterfly; Scope::Group: portable::reduce_over_group.

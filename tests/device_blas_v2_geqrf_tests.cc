@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include <batchlas/blas/device/v2/dla.hh>
@@ -101,9 +102,12 @@ template <class T> LD<T> conj_h(LD<T> v) {
     else return v;
 }
 
+// No queue when no SYCL device is visible (the fixture skips).
 struct Dev {
-    Queue ctx{Device::default_device()};
-    sycl::queue& q() { return sycl_queue(ctx); }
+    std::optional<Queue> ctx = test_utils::sycl_device_visible()
+                                   ? std::optional<Queue>(std::in_place, Device::default_device())
+                                   : std::nullopt;
+    sycl::queue& q() { return sycl_queue(*ctx); }
     template <class T> T* up(const std::vector<T>& h) {
         T* p = sycl::malloc_device<T>(h.size(), q());
         q().memcpy(p, h.data(), h.size() * sizeof(T)).wait();
@@ -133,7 +137,8 @@ struct Dev {
 template <class T> class DeviceBlasV2GeqrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
     }
     Dev dev;
 };
