@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::potrf_native {
 
@@ -35,6 +36,21 @@ inline void potrf_phase_barrier(const sycl::nd_item<1>& it) {
     } else {
         sycl::group_barrier(it.get_group());
     }
+}
+
+// 1 / d correctly rounded. A plain `1 / sqrt(a)` is folded by NVPTX into rsqrt.approx
+// wherever the sqrt reaches the division unselected (the first float columns, depending on
+// inlining); the empty asm hides the sqrt from that pattern and emits no instruction.
+template <typename R>
+inline R potrf_exact_recip(R d) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<R, float>) {
+        asm("" : "+f"(d));
+    } else {
+        asm("" : "+d"(d));
+    }
+#endif
+    return R(1) / d;
 }
 
 // (P1) -- the \f$ib \times ib\f$ diagonal block on ONE sub-group; lane r owns row j+r.
@@ -75,7 +91,7 @@ BATCHLAS_UNROLL_FULL
         }
 
         const R dkk = active ? sycl::sqrt(akk) : R(1);
-        const R r = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
+        const R r = potrf_exact_recip(dkk);
 
         if (active) {
             if (lane == k) {
