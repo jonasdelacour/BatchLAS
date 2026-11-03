@@ -9,12 +9,13 @@
 
 #include <batchlas/util/group-invoke.hh>
 #include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/blas/device/v2/ext/stedc.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include <src/math-helpers.hh>
 #include <src/ops/syev/stedc/stedc_secular.hh>
 #include <src/ops/syev/stedc/stedc_merge_kernels.hh>
-#include <src/kernels/common/info_span.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/sycl/kernel_attrs.hh>
 
@@ -25,6 +26,8 @@
 #include <numeric>
 
 namespace batchlas {
+
+namespace v2 = batchlas::device::v2;
 
 template <Backend B, typename T, int32_t P>
 class StedcFusedCtaMerge;
@@ -66,23 +69,19 @@ inline int32_t kernel_max_work_group_size(Queue& ctx, const sycl::device& dev) {
     }
 }
 
-template <typename T>
-inline void load_local_problem_vectors(const VectorView<T>& d_prob_global,
+// Poles and weights into local memory, then a barrier: every root solve reads all of them.
+template <typename T, typename Ex>
+inline void load_local_problem_vectors(const Ex& ex,
+                                       const VectorView<T>& d_prob_global,
                                        const VectorView<T>& z_prob_global,
-                                       const sycl::local_accessor<T, 1>& d_local,
-                                       const sycl::local_accessor<T, 1>& z_local,
-                                       int32_t tid,
-                                       int32_t bdim,
-                                       int32_t dd,
-                                       const sycl::group<1>& wg) {
-    for (int32_t i = tid; i < dd; i += bdim) {
-        d_local[i] = d_prob_global(i);
-        z_local[i] = z_prob_global(i);
-    }
-    sycl::group_barrier(wg);
+                                       const VectorView<T>& d_prob,
+                                       const VectorView<T>& z_prob) {
+    v2::copy(ex, d_prob_global, d_prob);
+    v2::copy(ex, z_prob_global, z_prob);
+    ex.barrier();
 }
 
-template <typename T, typename Partition>
+template <typename T, typename Ex>
 struct ShiftedEvalResult {
     T secular_value;
     T secular_derivative;
@@ -92,56 +91,6 @@ struct ShiftedEvalResult {
     T upper_derivative;
     T error_estimate;
 };
-
-template <typename Partition>
-struct PartitionAdapter {
-    Partition partition;
-
-    inline int32_t lane_id() const {
-        return static_cast<int32_t>(partition.get_local_linear_id());
-    }
-
-    inline int32_t width() const {
-        return static_cast<int32_t>(partition.get_local_linear_range());
-    }
-
-    template <typename T>
-    inline T reduce_sum(T value) const {
-        const uint32_t w = static_cast<uint32_t>(partition.get_local_linear_range());
-        for (uint32_t offset = w / 2; offset > 0; offset >>= 1) {
-            value += permute_group_by_xor(partition, value, offset);
-        }
-        return value;
-    }
-
-    template <typename T>
-    inline T reduce_product(T value) const {
-        const uint32_t w = static_cast<uint32_t>(partition.get_local_linear_range());
-        for (uint32_t offset = w / 2; offset > 0; offset >>= 1) {
-            value *= permute_group_by_xor(partition, value, offset);
-        }
-        return value;
-    }
-
-    // Force a value to be identical in every lane of the partition.
-    //
-    // Needed on every loop-exit test in the root solvers. Those tests read
-    // reduced quantities, which are *mathematically* the same in every lane --
-    // but the compiler cannot see that, so it treats the branch as divergent.
-    // If the hardware then actually diverges, the lanes that left the loop stop
-    // participating in the butterfly shuffles that the lanes still iterating are
-    // waiting on, and the partition deadlocks. Broadcasting from lane 0 makes
-    // the condition provably uniform and the branch convergent.
-    template <typename T>
-    inline T broadcast(T value) const {
-        return select_from_group(partition, value, 0u);
-    }
-
-    // Partition-local reductions never need a work-group barrier: every lane of
-    // a partition executes the same trip count, so the shuffles are convergent.
-    inline void sync() const {}
-};
-
 
 template <typename T>
 inline void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
@@ -161,9 +110,13 @@ inline T apply_step_with_bounds(T step,
     return step;
 }
 
-template <typename T, typename Adapter>
-inline ShiftedEvalResult<T, Adapter> evaluate_shifted_generic(
-    const Adapter& adapter,
+// The secular function at x = origin + tau without the terms i in [lower_end, upper_start):
+// per item the sums of z_i^2 / (d_i - x), of (z_i / (d_i - x))^2 and of the running sums (the
+// laed4 error term) below and above that window, then six reductions over the executor
+// (shuffles on a partition, work-group reductions on a DynWorkGroup).
+template <typename T, typename Ex>
+inline ShiftedEvalResult<T, Ex> evaluate_shifted_generic(
+    const Ex& ex,
     const VectorView<T>& d_prob,
     const VectorView<T>& z_prob,
     int32_t dd,
@@ -172,40 +125,25 @@ inline ShiftedEvalResult<T, Adapter> evaluate_shifted_generic(
     T origin,
     T tau,
     T rho_inv) {
-    const int32_t lane = adapter.lane_id();
-    const int32_t width = adapter.width();
-
     const int32_t lower_end = pole_index + (skip < 0 ? 1 : 0);
     const int32_t upper_start = pole_index + 1 + (skip < 0 ? 0 : skip);
 
     T low_s = T(0), low_d = T(0), low_err = T(0);
     T up_s = T(0), up_d = T(0), up_err = T(0);
-
-    for (int32_t i = lane; i < lower_end; i += width) {
+    auto accumulate = [&](int32_t i, T& s, T& d, T& err) {
         const T shifted = d_prob(i) - origin - tau;
         const T w = z_prob(i);
         const T ratio = w / shifted;
         const T wr = w * ratio;
-        low_s += wr;
-        low_d += ratio * ratio;
-        low_err += low_s;
-    }
-    for (int32_t i = upper_start + lane; i < dd; i += width) {
-        const T shifted = d_prob(i) - origin - tau;
-        const T w = z_prob(i);
-        const T ratio = w / shifted;
-        const T wr = w * ratio;
-        up_s += wr;
-        up_d += ratio * ratio;
-        up_err += up_s;
-    }
+        s += wr;
+        d += ratio * ratio;
+        err += s;
+    };
+    v2::for_each_owned(ex, lower_end, [&](int32_t i) { accumulate(i, low_s, low_d, low_err); });
+    v2::for_each_owned_in(ex, upper_start, dd, [&](int32_t i) { accumulate(i, up_s, up_d, up_err); });
 
-    low_s = adapter.template reduce_sum<T>(low_s);
-    low_d = adapter.template reduce_sum<T>(low_d);
-    low_err = adapter.template reduce_sum<T>(low_err);
-    up_s = adapter.template reduce_sum<T>(up_s);
-    up_d = adapter.template reduce_sum<T>(up_d);
-    up_err = adapter.template reduce_sum<T>(up_err);
+    const auto r = v2::allreduce(ex, std::array<T, 6>{low_s, low_d, low_err, up_s, up_d, up_err});
+    low_s = r[0], low_d = r[1], low_err = r[2], up_s = r[3], up_d = r[4], up_err = r[5];
 
     return {rho_inv + low_s + up_s,
             low_d + up_d,
@@ -214,15 +152,15 @@ inline ShiftedEvalResult<T, Adapter> evaluate_shifted_generic(
             sycl::fabs(low_err) + sycl::fabs(up_err)};
 }
 
-template <typename T, typename Adapter>
+template <typename T, typename Ex>
 struct RocEvalState {
-    ShiftedEvalResult<T, Adapter> eval;
+    ShiftedEvalResult<T, Ex> eval;
     T err;
     T ratio_sq;
 };
 
-template <typename T, typename Adapter>
-inline T compute_roc_step(ShiftedEvalResult<T, Adapter>& eval,
+template <typename T, typename Ex>
+inline T compute_roc_step(ShiftedEvalResult<T, Ex>& eval,
                           T sk,
                           T sk1,
                           T zk2,
@@ -288,14 +226,12 @@ struct RocRoot {
     T origin;
     T tau;
     // Whether the bisection/interpolation loop below broke on its convergence
-    // test rather than running out of max_iter. Carried in the struct rather than
-    // added as an out-parameter so the six thin wrappers around the two generic
-    // solvers (partition/wg x roc/ext) need no signature change at all.
+    // test rather than running out of max_iter.
     bool converged;
 };
 
-template <typename T, typename Adapter>
-inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
+template <typename T, typename Ex>
+inline RocRoot<T> solve_root_roc_generic(const Ex& ex,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
@@ -308,7 +244,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     const T gap = pole_k1 - pole_k;
 
     const T midpoint = (pole_k + pole_k1) / T(2);
-    auto eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, k, 1,
+    auto eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, k, 1,
                                             T(0), midpoint, rho_inv);
     const T sec_no_poles = eval.secular_value;
     const T zk2 = z_prob(k) * z_prob(k);
@@ -340,8 +276,8 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     }
 
     auto update_eval = [&](T current_tau) {
-        RocEvalState<T, Adapter> state;
-        state.eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, wi, 0,
+        RocEvalState<T, Ex> state;
+        state.eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, wi, 0,
                                                  origin, current_tau, rho_inv);
         const T shifted_wi = d_prob(wi) - origin - current_tau;
         const T z_wi = z_prob(wi);
@@ -362,7 +298,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     T err = state.err;
     T ratio_sq = state.ratio_sq;
 
-    if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+    if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
         return {origin, tau, true};   // converged before the first iteration
     }
 
@@ -390,7 +326,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     // converged was indistinguishable from one that did.
     bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -421,8 +357,8 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     return {origin, tau, converged};
 }
 
-template <typename T, typename Adapter>
-inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
+template <typename T, typename Ex>
+inline RocRoot<T> solve_root_ext_generic(const Ex& ex,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
@@ -448,7 +384,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
     const T origin = d_last;
 
     const T mid_tau = rho / T(2);
-    auto eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, prev, 1,
+    auto eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, prev, 1,
                                             origin, mid_tau, rho_inv);
     const T sec_no_poles = eval.secular_value;
     const T zk2 = z_prob(prev) * z_prob(prev);
@@ -479,7 +415,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
         }
     }
 
-    eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, prev, -1,
+    eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, prev, -1,
                                        origin, tau, rho_inv);
 
     T err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative)
@@ -513,14 +449,14 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
     step = apply_step_with_bounds(step, tau, lower_bound, upper_bound, eval.secular_value);
     tau += step;
 
-    eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, prev, -1,
+    eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, prev, -1,
                                        origin, tau, rho_inv);
     err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative)
           - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
     bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
-        if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (v2::uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -545,7 +481,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
         step = apply_step_with_bounds(step, tau, lower_bound, upper_bound, eval.secular_value);
         tau += step;
 
-        eval = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, prev, -1,
+        eval = evaluate_shifted_generic<T>(ex, d_prob, z_prob, dd, prev, -1,
                                            origin, tau, rho_inv);
         err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative)
               - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
@@ -554,201 +490,48 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
     return {origin, tau, converged};
 }
 
-template <typename T, typename Partition>
-inline RocRoot<T> solve_root_roc_partition(const Partition& partition,
-                                  const VectorView<T>& d_prob,
-                                  const VectorView<T>& z_prob,
-                                  int32_t dd,
-                                  int32_t k,
-                                  T rho,
-                                  int32_t max_iter) {
-    const PartitionAdapter<Partition> adapter{partition};
-    return solve_root_roc_generic(adapter, d_prob, z_prob, dd, k, rho, max_iter);
-}
-
-template <typename T, typename Partition>
-inline RocRoot<T> solve_root_ext_partition(const Partition& partition,
-                                  const VectorView<T>& d_prob,
-                                  const VectorView<T>& z_prob,
-                                  int32_t dd,
-                                  T rho,
-                                  int32_t max_iter) {
-    const PartitionAdapter<Partition> adapter{partition};
-    return solve_root_ext_generic(adapter, d_prob, z_prob, dd, rho, max_iter);
-}
-
-template <typename T>
-inline RocRoot<T> solve_root_roc_wg(const sycl::group<1>& wg,
-                           int32_t tid,
-                           int32_t bdim,
-                           const VectorView<T>& d_prob,
-                           const VectorView<T>& z_prob,
-                           int32_t dd,
-                           int32_t k,
-                           T rho,
-                           int32_t max_iter) {
-    const WorkgroupAdapter adapter{wg, tid, bdim};
-    return solve_root_roc_generic(adapter, d_prob, z_prob, dd, k, rho, max_iter);
-}
-
-template <typename T>
-inline RocRoot<T> solve_root_ext_wg(const sycl::group<1>& wg,
-                           int32_t tid,
-                           int32_t bdim,
-                           const VectorView<T>& d_prob,
-                           const VectorView<T>& z_prob,
-                           int32_t dd,
-                           T rho,
-                           int32_t max_iter) {
-    const WorkgroupAdapter adapter{wg, tid, bdim};
-    return solve_root_ext_generic(adapter, d_prob, z_prob, dd, rho, max_iter);
-}
-
-template <typename T, typename QBatch>
-inline void write_denominator_column(QBatch& Q_bid,
-                                     const VectorView<T>& d_prob,
-                                     int32_t dd,
-                                     int32_t root_ix,
-                                     T origin,
-                                     T tau,
-                                     int32_t lane,
-                                     int32_t width) {
-    // Compute denom as (d_prob[i] - origin) - tau separately rather than
-    // d_prob[i] - (origin + tau). For i equal to the origin pole this
-    // yields -tau exactly, preserving precision that is otherwise lost
-    // when tau is much smaller than origin. With precise denom the
-    // secular solver guarantees tau != 0 for non-deflated roots, so we
-    // only clamp exact zeros (from extreme cancellation) to epsilon to
-    // avoid NaN in the Löwner reciprocal division.
-    for (int32_t i = lane; i < dd; i += width) {
-        T denom = (d_prob(i) - origin) - tau;
+// q(i) = (d(i) - origin) - tau, the root's denominators. Not d(i) - (origin + tau): at the
+// origin pole this form is -tau exactly, where the other cancels catastrophically. The solver
+// keeps tau != 0 for a non-deflated root, so only an exact zero (extreme cancellation) is
+// clamped, to eps (|d(i)| + 1), to keep the Löwner reciprocal finite.
+template <typename T, typename Ex, typename QCol>
+inline void write_denominator_column(const Ex& ex, const QCol& q, const VectorView<T>& d_prob, T origin, T tau) {
+    v2::map(ex, q, [=](T di) {
+        T denom = (di - origin) - tau;
         if (denom == T(0)) {
-            denom = std::numeric_limits<T>::epsilon() * (sycl::fabs(d_prob(i)) + T(1));
+            denom = std::numeric_limits<T>::epsilon() * (sycl::fabs(di) + T(1));
         }
-        Q_bid(i, root_ix) = denom;
-    }}
-
-// Blue's-scaled 2-norm of a contiguous column, reduced through `adapter` so the
-// same code serves both the work-group-wide and the sub-group-partition variant.
-// Mirrors detail::nrm2 (src/math-helpers.hh) exactly; the only difference is
-// that the three accumulators are reduced as scalars instead of a sycl::vec<R,3>,
-// which is componentwise-identical.
-template <typename T, typename Adapter, typename QBatch>
-inline T nrm2_column(const Adapter& adapter,
-                     QBatch& Q_bid,
-                     int32_t dd,
-                     int32_t col) {
-    using R = detail::base_float_t<T>;
-
-    const int radix = std::numeric_limits<R>::radix;
-    const int p     = std::numeric_limits<R>::digits;
-    const int emin  = std::numeric_limits<R>::min_exponent;
-    const int emax  = std::numeric_limits<R>::max_exponent;
-
-    auto floor_div = [](int a, int b) {
-        int q = a / b;
-        if (((a ^ b) < 0) && (a % b)) --q;
-        return q;
-    };
-    auto ceil_div = [](int a, int b) {
-        int q = a / b;
-        if (((a ^ b) >= 0) && (a % b)) ++q;
-        return q;
-    };
-
-    const R tsml = sycl::pown(static_cast<R>(radix), ceil_div(emin - 1, 2));
-    const R tbig = sycl::pown(static_cast<R>(radix), floor_div(emax - p + 1, 2));
-    const R ssml = sycl::pown(static_cast<R>(radix), -floor_div(emin - p, 2));
-    const R sbig = sycl::pown(static_cast<R>(radix), -ceil_div(emax + p - 1, 2));
-
-    R abig = R(0), amed = R(0), asml = R(0);
-    for (int32_t i = adapter.lane_id(); i < dd; i += adapter.width()) {
-        const R ax = sycl::fabs(static_cast<R>(detail::abs(Q_bid(i, col))));
-        if (ax > tbig) {
-            const R t = ax * sbig;
-            abig += t * t;
-        } else if (ax < tsml) {
-            const R t = ax * ssml;
-            asml += t * t;
-        } else {
-            amed += ax * ax;
-        }
-    }
-
-    abig = adapter.reduce_sum(abig);
-    amed = adapter.reduce_sum(amed);
-    asml = adapter.reduce_sum(asml);
-
-    const R zero = R(0);
-    const R one  = R(1);
-    const R maxN = std::numeric_limits<R>::max();
-
-    R scl = one;
-    R sumsq = zero;
-
-    if (abig > zero) {
-        if ((amed > zero) || (amed > maxN) || (amed != amed)) {
-            abig += (amed * sbig) * sbig;
-        }
-        scl = one / sbig;
-        sumsq = abig;
-    } else if (asml > zero) {
-        if ((amed > zero) || (amed > maxN) || (amed != amed)) {
-            const R am = sycl::sqrt(amed);
-            const R as = sycl::sqrt(asml) / ssml;
-            const R ymin = sycl::fmin(am, as);
-            const R ymax = sycl::fmax(am, as);
-            scl   = one;
-            sumsq = ymax * ymax * (one + (ymin / ymax) * (ymin / ymax));
-        } else {
-            scl   = one / ssml;
-            sumsq = asml;
-        }
-    } else {
-        scl   = one;
-        sumsq = amed;
-    }
-
-    return scl * sycl::sqrt(sumsq);
+        return denom;
+    }, d_prob);
 }
 
-// Reciprocate-and-normalize. Same `first`/`stride` convention as
-// maybe_rescale_vectors: columns are independent (column `eig` reads v and only
-// touches Q(:, eig)), so one column per partition removes the per-column
-// work-group barrier entirely.
-template <typename T, typename Adapter, typename QBatch, typename VView>
-inline void normalize_vectors(const Adapter& adapter,
+// Reciprocate-and-normalize: Q(:, eig) = z ./ Q(:, eig), then divided by its 2-norm (Blue's,
+// three reductions). Same `first`/`stride` convention as maybe_rescale_vectors: columns are
+// independent (column `eig` reads z and only touches Q(:, eig)), so one column per partition
+// needs no work-group barrier.
+template <typename T, typename Ex, typename QMat, typename VView>
+inline void normalize_vectors(const Ex& ex,
                               int32_t first,
                               int32_t stride,
                               int32_t dd,
-                              QBatch& Q_bid,
+                              const QMat& Q,
                               const VView& v,
                               int32_t bid) {
-    const int32_t lane = adapter.lane_id();
-    const int32_t width = adapter.width();
-
-    // Uniform trip count across reduction groups -- see the note in
-    // maybe_rescale_vectors. nrm2_column reduces with sub-group shuffles, so a
-    // partition must not fall out of the loop while others are still inside it.
+    // Uniform trip count across reduction groups -- see maybe_rescale_vectors. nrm2_blue
+    // reduces with sub-group shuffles, so a partition must not fall out of the loop while
+    // others are inside it: an inactive group runs every op on an empty column.
     const int32_t iters = (dd + stride - 1) / stride;
-
+    const auto z = v2::vec(v.batch_item(bid));
 
     for (int32_t it = 0; it < iters; ++it) {
         const int32_t eig = first + it * stride;
         const bool active = (eig < dd);
-
-        for (int32_t i = lane; active && i < dd; i += width) {
-            Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
-        }
-        // No sync needed here: nrm2_column walks the column with the same
-        // lane/width stride, so every lane only reads back what it just wrote.
-        // Inactive groups still call it (with an empty range) so the reduction
-        // stays warp-uniform.
-        const T nrm2 = nrm2_column<T>(adapter, Q_bid, active ? dd : 0, active ? eig : 0);
-        for (int32_t i = lane; active && i < dd; i += width) {
-            Q_bid(i, eig) /= nrm2;
-        }
-        adapter.sync();
+        const auto q = Q.col(active ? eig : 0).head(active ? dd : 0);
+        v2::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
+        // No barrier: nrm2_blue walks q with map's owner stride, so every item reads back
+        // only what it just wrote.
+        v2::scal_inv(ex, v2::nrm2_blue<v2::alg::Blue>(ex, q), q);
+        v2::sync_group(ex);
     }
 }
 
@@ -788,16 +571,12 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const int32_t tid = static_cast<int32_t>(item.get_local_linear_id());
-                const int32_t bdim = static_cast<int32_t>(item.get_local_range(0));
-                const auto wg = item.get_group();
-
-                const auto sg = item.get_sub_group();
-                const auto partition = make_partition<P>(sg);
-                const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
-                const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
-                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
+                const v2::DynWorkGroup<sg_size> wex{item};
+                // One root per partition of P lanes; the solver's reductions are shuffles.
+                const v2::SgpPartition<P> pex{item.get_sub_group()};
+                const int32_t sg_id = static_cast<int32_t>(item.get_sub_group().get_group_linear_id());
+                const int32_t parts_per_sg = static_cast<int32_t>(pex.part.get_group_linear_range());
+                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(pex.part.get_group_linear_id());
                 const int32_t parts_per_wg = wg_size / P;
 
                 const int32_t dd = n_reduced[bid];
@@ -806,31 +585,24 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 }
 
                 auto Q_bid = Qview.batch_item(bid);
-                auto z_prob_global = v.batch_item(bid);
-                auto d_prob_global = eigenvalues.batch_item(bid);
-                load_local_problem_vectors(d_prob_global, z_prob_global,
-                                           d_local, z_local,
-                                           tid, bdim, dd, wg);
+                const auto Q = v2::mat(Q_bid);
+                const auto d_prob = VectorView<T>(util::get_raw_ptr(d_local), dd);
+                const auto z_prob = VectorView<T>(util::get_raw_ptr(z_local), dd);
+                load_local_problem_vectors(wex, eigenvalues.batch_item(bid), v.batch_item(bid), d_prob, z_prob);
 
-                const auto d_ptr = util::get_raw_ptr(d_local);
-                const auto z_ptr = util::get_raw_ptr(z_local);
-                const auto d_prob = VectorView<T>(d_ptr, dd);
-                const auto z_prob = VectorView<T>(z_ptr, dd);
-
-                const T sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
                 for (int32_t root_ix = part_id; root_ix < dd; root_ix += parts_per_wg) {
                     RocRoot<T> root;
                     if (root_ix == dd - 1) {
-                        root = solve_root_ext_partition(partition, d_prob, z_prob, dd,
-                                                          abs_2rho, static_cast<int32_t>(params.max_sec_iter));
+                        root = solve_root_ext_generic(pex, d_prob, z_prob, dd,
+                                                      abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     } else {
-                        root = solve_root_roc_partition(partition, d_prob, z_prob, dd, root_ix,
-                                                          abs_2rho, static_cast<int32_t>(params.max_sec_iter));
+                        root = solve_root_roc_generic(pex, d_prob, z_prob, dd, root_ix,
+                                                      abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     }
 
-                    if (lane == 0) {
+                    if (pex.leader()) {
                         temp_lambdas(root_ix, bid) = root.origin + root.tau;
                         // This is the one merge arm that honours params.max_sec_iter,
                         // so it is also the one a forced-non-convergence test can
@@ -841,22 +613,21 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                                                 1);
                         }
                     }
-                    write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, lane, P);
+                    write_denominator_column(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                sycl::group_barrier(wg);
+                wex.barrier();
 
                 // Rescale and normalize are parallel over their outer index, so
                 // hand one index to each partition instead of walking them
                 // sequentially behind a work-group reduction per index.
-                const PartitionAdapter<decltype(partition)> padapter{partition};
-                maybe_rescale_vectors(do_rescale, padapter, part_id, parts_per_wg, dd,
+                maybe_rescale_vectors(do_rescale, pex, part_id, parts_per_wg, dd,
                                       Q_bid, d_prob, v, bid);
                 // Rescale reads all of Q and writes all of v; normalize
                 // overwrites Q and reads all of v. One barrier separates the two
                 // phases -- the loops themselves no longer need any.
-                sycl::group_barrier(wg);
-                normalize_vectors<T>(padapter, part_id, parts_per_wg, dd, Q_bid, v, bid);
+                wex.barrier();
+                normalize_vectors<T>(pex, part_id, parts_per_wg, dd, Q, v, bid);
             });
     });
 }
@@ -894,9 +665,7 @@ void stedc_merge_fused_wg(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const int32_t tid = static_cast<int32_t>(item.get_local_linear_id());
-                const int32_t bdim = static_cast<int32_t>(item.get_local_range(0));
-                const auto wg = item.get_group();
+                const v2::DynWorkGroup<> ex{item};
 
                 const int32_t dd = n_reduced[bid];
                 if (dd <= 0) {
@@ -904,31 +673,25 @@ void stedc_merge_fused_wg(Queue& ctx,
                 }
 
                 auto Q_bid = Qview.batch_item(bid);
-                auto z_prob_global = v.batch_item(bid);
-                auto d_prob_global = eigenvalues.batch_item(bid);
-                load_local_problem_vectors(d_prob_global, z_prob_global,
-                                           d_local, z_local,
-                                           tid, bdim, dd, wg);
+                const auto Q = v2::mat(Q_bid);
+                const auto d_prob = VectorView<T>(util::get_raw_ptr(d_local), dd);
+                const auto z_prob = VectorView<T>(util::get_raw_ptr(z_local), dd);
+                load_local_problem_vectors(ex, eigenvalues.batch_item(bid), v.batch_item(bid), d_prob, z_prob);
 
-                const auto d_ptr = util::get_raw_ptr(d_local);
-                const auto z_ptr = util::get_raw_ptr(z_local);
-                const auto d_prob = VectorView<T>(d_ptr, dd);
-                const auto z_prob = VectorView<T>(z_ptr, dd);
-
-                const T sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
+                // WG variant: the reference path, one root at a time over the whole group.
                 for (int32_t root_ix = 0; root_ix < dd; ++root_ix) {
                     RocRoot<T> root;
                     if (root_ix == dd - 1) {
-                        root = solve_root_ext_wg(wg, tid, bdim, d_prob, z_prob, dd,
-                                                   abs_2rho, static_cast<int32_t>(params.max_sec_iter));
+                        root = solve_root_ext_generic(ex, d_prob, z_prob, dd,
+                                                      abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     } else {
-                        root = solve_root_roc_wg(wg, tid, bdim, d_prob, z_prob, dd, root_ix,
-                                                   abs_2rho, static_cast<int32_t>(params.max_sec_iter));
+                        root = solve_root_roc_generic(ex, d_prob, z_prob, dd, root_ix,
+                                                      abs_2rho, static_cast<int32_t>(params.max_sec_iter));
                     }
 
-                    if (tid == 0) {
+                    if (ex.leader()) {
                         temp_lambdas(root_ix, bid) = root.origin + root.tau;
                         if (!root.converged) {
                             detail::info_report(info_dev,
@@ -936,17 +699,14 @@ void stedc_merge_fused_wg(Queue& ctx,
                                                 1);
                         }
                     }
-                    write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, tid, bdim);
-                    // (WG variant: kept sequential as the reference path.)
+                    write_denominator_column(ex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                sycl::group_barrier(wg);
+                ex.barrier();
 
-                // WG variant keeps the original sequential-over-index walk with
-                // work-group-wide reductions: (first, stride) = (0, 1).
-                const WorkgroupAdapter wadapter{wg, tid, bdim};
-                maybe_rescale_vectors(do_rescale, wadapter, 0, 1, dd, Q_bid, d_prob, v, bid);
-                normalize_vectors<T>(wadapter, 0, 1, dd, Q_bid, v, bid);
+                // Sequential over the index with work-group-wide reductions: (first, stride) = (0, 1).
+                maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, d_prob, v, bid);
+                normalize_vectors<T>(ex, 0, 1, dd, Q, v, bid);
             });
     });
 }

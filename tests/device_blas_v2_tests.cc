@@ -878,7 +878,8 @@ template <class Ex> struct Region {
 
 TEST(DeviceBlasV21, ForEachOwnedRangesUnrollPoliciesAnd2dFormsVisitOnceByTheOwner) {
     Dev dev;
-    if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP();
+    if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
+    if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP();
     struct WgM { int width = 64; auto operator()(sycl::nd_item<1> it) const { return Region<v2::WorkGroup<64>>{{it}, 0}; } };
     struct RtM { int width = 96; auto operator()(sycl::nd_item<1> it) const { return Region<v2::RtGroup<>>{v2::RtGroup<>(it), 0}; } };
     struct RtSubM {

@@ -21,6 +21,7 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/blas/device/v2/ext/tridiag-stebz-stein.hh>
 
 namespace batchlas {
 
@@ -97,6 +98,8 @@ inline uint32_t lcg(uint32_t& state) {
 
 } // namespace stein_detail
 
+namespace v2 = device::v2;
+
 template <Backend B, typename T>
 Event stein(Queue& ctx,
             const VectorView<T>& d,
@@ -167,18 +170,14 @@ Event stein(Queue& ctx,
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
                 const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
-                auto cta = item.get_group();
 
-                // ||T||_inf, used for the pivot floor and the perturbation scale.
-                T norm_partial = T(0);
-                for (int64_t i = tid; i < n; i += local_size) {
-                    const T left = (i > 0) ? sycl::fabs(e(i - 1, bid)) : T(0);
-                    const T right = (i < n - 1) ? sycl::fabs(e(i, bid)) : T(0);
-                    norm_partial = sycl::max(norm_partial, sycl::fabs(d(i, bid)) + left + right);
-                }
-                const T tnorm_g = batchlas::portable::reduce_over_group(cta, norm_partial, sycl::maximum<T>());
-                if (tid == 0) norm_local[0] = tnorm_g;
-                sycl::group_barrier(cta);
+                // ||T||_inf, used for the pivot floor and the perturbation scale. The broadcast
+                // through local memory is the legacy one (the reduction is already uniform).
+                const v2::DynWorkGroup ex{item};
+                const T tnorm_g = v2::lanst_inf(ex, v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc()),
+                                                v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc()));
+                if (ex.leader()) norm_local[0] = tnorm_g;
+                ex.barrier();
                 const T tnorm = sycl::max(norm_local[0], std::numeric_limits<T>::min());
 
                 const T eps = std::numeric_limits<T>::epsilon();
@@ -277,63 +276,41 @@ Event stein(Queue& ctx,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_ortho},
                               sycl::range{wg_ortho}),
             [=](sycl::nd_item<1> item) {
-                const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
-                auto cta = item.get_group();
+                const v2::DynWorkGroup ex{item};
+                const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
+                const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
+                const auto Zb = v2::mat(Zv.data() + bid * Zv.stride(), int(n), int(k), int(Zv.ld()));
 
-                T norm_partial = T(0);
-                for (int64_t i = tid; i < n; i += local_size) {
-                    const T left = (i > 0) ? sycl::fabs(e(i - 1, bid)) : T(0);
-                    const T right = (i < n - 1) ? sycl::fabs(e(i, bid)) : T(0);
-                    norm_partial = sycl::max(norm_partial, sycl::fabs(d(i, bid)) + left + right);
-                }
-                const T tnorm = sycl::max(
-                    batchlas::portable::reduce_over_group(cta, norm_partial, sycl::maximum<T>()),
-                    std::numeric_limits<T>::min());
+                const T tnorm = sycl::max(v2::lanst_inf(ex, dv, ev), std::numeric_limits<T>::min());
                 const T gap_tol = ortho_threshold * tnorm;
 
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
-                const int64_t kb = (raw < 0) ? int64_t(0) : ((raw > k) ? k : raw);
+                const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
 
                 // Walk the (ascending) eigenvalues; a gap wider than gap_tol
                 // starts a new cluster. Stopping at kb, not k, is a COST bound (a
                 // stale tail forms one bogus cluster); phase 1's kb bound is the
                 // one that protects correctness.
                 // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
-                int64_t cluster_start = 0;
-                for (int64_t j = 0; j < kb; ++j) {
-                    if (j > 0 && (w(j, bid) - w(j - 1, bid)) > gap_tol) {
-                        cluster_start = j;
+                int cluster_start = 0;
+                for (int j = 0; j < kb; ++j) {
+                    if (j > 0 && (w(j, bid) - w(j - 1, bid)) > gap_tol) cluster_start = j;
+                    const auto zj = Zb.col(j);
+                    // Modified Gram-Schmidt against the cluster's earlier vectors.
+                    for (int i = cluster_start; i < j; ++i) {
+                        const T dot = v2::dot(ex, Zb.col(i), zj);
+                        v2::axpy(ex, -dot, Zb.col(i), zj);
+                        ex.barrier();
                     }
-                    for (int64_t i = cluster_start; i < j; ++i) {
-                        T dot_partial = T(0);
-                        for (int64_t r = tid; r < n; r += local_size) {
-                            dot_partial += Zv(r, i, bid) * Zv(r, j, bid);
-                        }
-                        const T dot = batchlas::portable::reduce_over_group(cta, dot_partial, sycl::plus<T>());
-                        for (int64_t r = tid; r < n; r += local_size) {
-                            Zv(r, j, bid) -= dot * Zv(r, i, bid);
-                        }
-                        sycl::group_barrier(cta);
-                    }
-
                     if (j > cluster_start) {
-                        T nrm_partial = T(0);
-                        for (int64_t r = tid; r < n; r += local_size) {
-                            const T v = Zv(r, j, bid);
-                            nrm_partial += v * v;
-                        }
-                        const T nrm2 = batchlas::portable::reduce_over_group(cta, nrm_partial, sycl::plus<T>());
-                        if (tid == 0) scratch[0] = sycl::sqrt(nrm2);
-                        sycl::group_barrier(cta);
+                        const T ss = v2::dot(ex, zj, zj);
+                        if (ex.leader()) scratch[0] = sycl::sqrt(ss);
+                        ex.barrier();
                         const T nrm = scratch[0];
-                        if (nrm > T(0)) {
-                            const T inv = T(1) / nrm;
-                            for (int64_t r = tid; r < n; r += local_size) Zv(r, j, bid) *= inv;
-                        }
-                        sycl::group_barrier(cta);
+                        if (nrm > T(0)) v2::scal(ex, T(1) / nrm, zj);
+                        ex.barrier();
                     }
                 }
             });
