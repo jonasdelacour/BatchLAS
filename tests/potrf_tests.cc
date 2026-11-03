@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <random>
 #include <string>
 #include <vector>
@@ -286,13 +287,21 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     }
 }
 
-// Column 0 of the diagonal block is exactly a(i,0) * RN(1 / l00). A residual check accepts
-// the rsqrt.approx fold NVPTX applied to the first float columns (1-2 ulp); this bit-exact
-// check does not. Rows 1..7 only: below the NB = 8 block the panel solve divides instead.
-TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsCorrectlyRounded) {
+// Column 0 of the diagonal block is a(i,0) / sqrt(a00) to within kMaxEps eps, measured against
+// a long double reference. A residual check accepts the bare rsqrt.approx fold NVPTX applied to
+// some float columns; this bound does not. Rows 1..7 only: below the NB = 8 block the panel
+// solve divides instead.
+TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
+    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15.
+    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.0 : 1.2;
 
+    // Relative error in units of eps(R): unlike ulp-of-result it does not double across a binade.
+    const auto rel_err = [](R got, long double want) {
+        constexpr long double eps = std::numeric_limits<R>::epsilon();
+        return want == 0.0L ? 0.0 : static_cast<double>(std::fabs((got - want) / want) / eps);
+    };
     for (int n : {8, 32}) {
         if (n > this->ceiling()) continue;
         const int batch = 512;
@@ -304,22 +313,21 @@ TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsCorrectlyRounded) {
                 this->load_triangle(A, b, n, ref[b], uplo, MV<T>::make(R(-999), R(777)));
             }
             const auto info = this->run_cta(A, uplo);
-            int mismatches = 0;
+            double worst = 0.0;
             for (int b = 0; b < batch; ++b) {
                 ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
-                // The device's own diagonal: float sycl::sqrt is sqrt.approx on NVPTX.
-                const R r = R(1) / std::real(A(0, 0, b));
+                const long double r = 1.0L / std::sqrt(static_cast<long double>(std::real(ref[b][0])));
                 for (int i = 1; i < std::min(n, 8); ++i) {
                     const bool lo = (uplo == Uplo::Lower);
                     const T a = lo ? ref[b][i] : ref[b][static_cast<size_t>(i) * n];
                     const T got = lo ? A(i, 0, b) : A(0, i, b);
-                    if (std::real(got) != std::real(a) * r || std::imag(got) != std::imag(a) * r) {
-                        ++mismatches;
-                    }
+                    worst = std::max(worst, rel_err(std::real(got), std::real(a) * r));
+                    worst = std::max(worst, rel_err(std::imag(got), std::imag(a) * r));
                 }
             }
-            EXPECT_EQ(mismatches, 0) << "n=" << n << " uplo=" << static_cast<int>(uplo)
-                                     << ": column 0 is not 1/sqrt correctly rounded";
+            EXPECT_LE(worst, kMaxEps) << "n=" << n << " uplo=" << static_cast<int>(uplo)
+                                      << ": column 0 is not a(i,0) / sqrt(a00) to " << kMaxEps
+                                      << " eps";
         }
     }
 }

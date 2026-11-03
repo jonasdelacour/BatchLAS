@@ -38,18 +38,23 @@ inline void potrf_phase_barrier(const sycl::nd_item<1>& it) {
     }
 }
 
-// 1 / d correctly rounded. A plain `1 / sqrt(a)` is folded by NVPTX into rsqrt.approx
-// wherever the sqrt reaches the division unselected (the first float columns, depending on
-// inlining); the empty asm hides the sqrt from that pattern and emits no instruction.
+// 1 / sqrt(a), with d = sqrt(a). A plain `1 / d` lets NVPTX fold some float columns (those
+// where the sqrt reaches the division unselected, depending on inlining) into a bare
+// rsqrt.approx. The float NVPTX path is instead ONE fixed sequence for every column: rsqrt.approx
+// from asm, then one Newton step in FMA form, r = y + (y/2)(1 - (a y) y). `(a y) y`, not
+// `a (y y)`: y*y overflows for denormal a. a = inf keeps LAPACK's 1/inf = 0, not NaN.
 template <typename R>
-inline R potrf_exact_recip(R d) {
+inline R potrf_inv_sqrt(R a, R d) {
 #if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
     if constexpr (std::is_same_v<R, float>) {
-        asm("" : "+f"(d));
-    } else {
-        asm("" : "+d"(d));
+        float y;
+        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
+        const float e = sycl::fma(-(a * y), y, 1.0f);
+        const float r = sycl::fma(0.5f * y, e, y);
+        return sycl::isinf(a) ? 0.0f : r;
     }
 #endif
+    (void)a;
     return R(1) / d;
 }
 
@@ -91,7 +96,7 @@ BATCHLAS_UNROLL_FULL
         }
 
         const R dkk = active ? sycl::sqrt(akk) : R(1);
-        const R r = potrf_exact_recip(dkk);
+        const R r = potrf_inv_sqrt(active ? akk : R(1), dkk);
 
         if (active) {
             if (lane == k) {
