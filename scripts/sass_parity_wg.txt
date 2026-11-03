@@ -9,3 +9,10 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/sygst/kernels/sygst_diag.cc launch_diag: wg = (ipw * KB + 31) / 32 * 32,
+# ipw = diag_items_per_group<T>(KB) (sygst_native.hh: kDiagWg 128, kDiagSlmCap 32768 bytes).
+# KB = 0 (run-time order) has no row.
+96  ::SygstDiagKernel<float, (?:true|false), 32>$
+32  ::SygstDiagKernel<.+, (?:true|false), 32>$
+64  ::SygstDiagKernel<[^,]*Cx<double>, (?:true|false), 16>$
+128 ::SygstDiagKernel<.+, (?:true|false), (?:16|8)>$
