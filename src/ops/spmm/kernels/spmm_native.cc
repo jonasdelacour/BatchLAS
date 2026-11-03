@@ -5,6 +5,9 @@
 
 #include <src/ops/spmm/spmm_native.hh>
 
+#include <batchlas/blas/device/v2/dla.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
+#include <src/kernels/common/dla_v2_sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -21,12 +24,11 @@ namespace batchlas::sycl_spmm {
 
 using sycl_device::Cx;
 using sycl_device::DevMap;
-using sycl_device::dev_conj;
 using sycl_device::dev_is_complex_v;
-using sycl_device::dev_mul;
-using sycl_device::fma_acc;
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 // Body-for-body copy of gemv_wg_ladder (gemv_native.cc), kept diffable -- hence
 // the `units_per_wg_shift` parameter that every caller here passes 0 for.
@@ -55,47 +57,14 @@ inline constexpr int kNCmax = 64 / static_cast<int>(sizeof(D));
 static_assert(kNCmax<float> == 16 && kNCmax<double> == 8, "64-byte register block");
 static_assert(kNCmax<Cx<float>> == 8 && kNCmax<Cx<double>> == 4, "64-byte register block");
 
-// The complex overload below is two independent scalar atomics, NOT an atomic
-// complex add: safe only because nothing reads C between the scatter's first
-// atomic and its last.
-template <typename R>
-inline void spmm_atomic_add(R* p, R v) {
-    sycl::atomic_ref<R, sycl::memory_order::relaxed, sycl::memory_scope::device,
-                     sycl::access::address_space::global_space>
-        ref(*p);
-    ref.fetch_add(v);
-}
+// The scatter's complex atomic (v2::atomic_accumulate) is two independent scalar
+// atomics, NOT an atomic complex add: safe only because nothing reads C between
+// the scatter's first atomic and its last.
 
-template <typename R>
-inline void spmm_atomic_add(Cx<R>* p, Cx<R> v) {
-    spmm_atomic_add(&p->re, v.re);
-    spmm_atomic_add(&p->im, v.im);
-}
-
-// One two-component load per complex element. As two scalar loads, both halves of
-// a missing sector go to L2 separately, and the gather is L2-bound: 24% more L2
-// sectors and 18% slower for cfloat under -ffp-model=precise, whose schedule
-// issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
-template <bool Pair, typename D>
-inline D spmm_ld(const D* p) {
-    if constexpr (Pair && dev_is_complex_v<D>) {
-        using R = decltype(D{}.re);
-        const sycl::vec<R, 2> v = *reinterpret_cast<const sycl::vec<R, 2>*>(p);
-        return D{v[0], v[1]};
-    } else {
-        return *p;
-    }
-}
-
-template <bool Pair, typename D>
-inline void spmm_st(D* p, D x) {
-    if constexpr (Pair && dev_is_complex_v<D>) {
-        using R = decltype(D{}.re);
-        *reinterpret_cast<sycl::vec<R, 2>*>(p) = sycl::vec<R, 2>(x.re, x.im);
-    } else {
-        *p = x;
-    }
-}
+// Pair = one two-component load per complex element (v2::PairAccess). As two scalar
+// loads, both halves of a missing sector go to L2 separately, and the gather is
+// L2-bound: 24% more L2 sectors and 18% slower for cfloat under -ffp-model=precise,
+// whose schedule issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
 
 // The pair load needs 2*sizeof(R) alignment, which std::complex<R> does not
 // promise: a view built on a raw pointer may be offset by one R.
@@ -123,6 +92,7 @@ Event spmm_gather(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& C,
                   T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
+    using Ar = v2::arith_t<v2::arith::Fma, D>;  // sycl_device::fma_acc's chain, bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     const int m = A.rows();
@@ -194,51 +164,21 @@ Event spmm_gather(Queue& ctx,
                 // in plain int and wraps, so no body here calls get().
                 const int64_t ro = b * a_os;   // indexes a_ro ONLY
                 const int64_t vb = b * a_ms;   // indexes a_val AND a_ci
-                const D* Bb = b_ptr + b * sb;
-                D* Cb = c_ptr + b * sc;
 
-                // The only legal bound. Never A.nnz(): that is the per-item
-                // capacity, and slots above each item's own count are garbage.
-                const int rs = a_ro[ro + i];
-                const int re = a_ro[ro + i + 1];
+                // Row i of A; its bound is the row offsets, never A.nnz() (the per-item
+                // capacity: slots above each item's own count are garbage). A column of A
+                // is a row of op(B) = B, B^T or B^H (transB is a kernel argument).
+                const auto arow = v2::sp_row(v2::LoadVec<const D, Pair>{a_val + vb},
+                                             v2::BasedVec<const int, int64_t>{a_ci, vb},
+                                             a_ro[ro + i], a_ro[ro + i + 1]);
+                const v2::RtOpMat<const D, Pair> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
+                const v2::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
 
-                D acc[NC];
-BATCHLAS_UNROLL_FULL
-                for (int t = 0; t < NC; ++t) acc[t] = D{};
-
-                if (!alpha_zero) {
-                    for (int p = rs; p < re; ++p) {
-                        const D av = spmm_ld<Pair>(a_val + vb + p);
-                        const int j = a_ci[vb + p];  // a COLUMN of A: a row of B
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < NC; ++t) {
-                            const int c = c0 + t;
-                            if (c < width) {
-                                // op(B)[j,c]: NoTrans -> Bb[c*ldb+j], else
-                                // Bb[j*ldb+c] (conjugated for ConjTrans).
-                                D bv = spmm_ld<Pair>(
-                                    b_notrans ? Bb + static_cast<int64_t>(c) * ldb + j
-                                              : Bb + static_cast<int64_t>(j) * ldb + c);
-                                if constexpr (dev_is_complex_v<D>) {
-                                    if (conj_b) bv = dev_conj(bv);
-                                }
-                                fma_acc(acc[t], av, bv);
-                            }
-                        }
-                    }
-                }
-
-BATCHLAS_UNROLL_FULL
-                for (int t = 0; t < NC; ++t) {
-                    const int c = c0 + t;
-                    if (c < width) {
-                        const int64_t ci = static_cast<int64_t>(c) * ldc + i;
-                        D out{};
-                        fma_acc(out, alpha_d, acc[t]);
-                        if (!beta_zero) fma_acc(out, beta_d, spmm_ld<Pair>(Cb + ci));
-                        spmm_st<Pair>(Cb + ci, out);
-                    }
-                }
+                // acc = A(i, :) op(B)(:, c0:c0+NC); C(i, c0:c0+NC) = alpha acc + beta C.
+                v2::Frag<D, NC> acc;
+                v2::fill(acc, D{});
+                if (!alpha_zero) v2::usmm_row<Ar>(v2::Thread{}, arow, opB, c0, width, acc);
+                v2::store_cols<Ar>(v2::Thread{}, alpha_d, acc, beta_d, beta_zero, Cb, i, c0, width);
             });
     });
 
@@ -308,7 +248,7 @@ Event spmm_scale(Queue& ctx,
                 const int j = static_cast<int>(r - static_cast<int64_t>(c) * rows_out);
 
                 D* p = c_ptr + b * sc + static_cast<int64_t>(c) * ldc + j;
-                *p = beta_zero ? D{} : dev_mul(beta_d, *p);
+                *p = beta_zero ? D{} : v2::arith_t<v2::arith::Fma, D>::mul(beta_d, *p);  // C := beta C
             });
     });
 
@@ -328,6 +268,7 @@ Event spmm_scatter(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& C,
                    T alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
+    using Ar = v2::arith_t<v2::arith::Fma, D>;  // sycl_device::dev_mul, bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     // Rows of the STORED A, which under Trans/ConjTrans is the REDUCTION extent.
@@ -390,44 +331,29 @@ Event spmm_scatter(Queue& ctx,
 
                 const int64_t ro = b * a_os;
                 const int64_t vb = b * a_ms;
-                const D* Bb = b_ptr + b * sb;
+                const v2::RtOpMat<const D> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
                 D* Cb = c_ptr + b * sc;
-
                 const int rs = a_ro[ro + i];
                 const int re = a_ro[ro + i + 1];
 
+                // C(A_ci, c0:c0+NCS) += conj?(A(i, :))^T (alpha op(B)(i, c0:c0+NCS)); ConjTrans
+                // conjugates the SPARSE operand. The row loop reads A in the body, not through a
+                // v2::SpRow (sass_parity strict): the operand's int64-based reads lose GEP
+                // inbounds under LICM and cost +4..5% instructions.
                 for (int c0 = 0; c0 < width; c0 += NCS) {
-                    D ab[NCS];
-BATCHLAS_UNROLL_FULL
-                    for (int t = 0; t < NCS; ++t) {
-                        const int c = c0 + t;
-                        ab[t] = D{};
-                        if (c < width) {
-                            // op(B)[i,c]: NoTrans -> Bb[c*ldb+i], else Bb[i*ldb+c].
-                            D bv = b_notrans ? Bb[static_cast<int64_t>(c) * ldb + i]
-                                             : Bb[static_cast<int64_t>(i) * ldb + c];
-                            if constexpr (dev_is_complex_v<D>) {
-                                if (conj_b) bv = dev_conj(bv);
-                            }
-                            ab[t] = dev_mul(alpha_d, bv);
-                        }
-                    }
-
+                    v2::Frag<D, NCS> ab;
+                    v2::load_cols_scaled<Ar>(v2::Thread{}, alpha_d, opB, i, c0, width, ab);
                     for (int p = rs; p < re; ++p) {
                         D av = a_val[vb + p];
-                        // ConjTrans conjugates the SPARSE operand.
                         if constexpr (dev_is_complex_v<D>) {
-                            if (conj_a) av = dev_conj(av);
+                            if (conj_a) av = v2::Arith<D>::conj(av);
                         }
                         const int j = a_ci[vb + p];  // an OUTPUT ROW of C
                         if (static_cast<unsigned>(j) >= static_cast<unsigned>(rows_out)) continue;
 BATCHLAS_UNROLL_FULL
                         for (int t = 0; t < NCS; ++t) {
                             const int c = c0 + t;
-                            if (c < width) {
-                                spmm_atomic_add(Cb + static_cast<int64_t>(c) * ldc + j,
-                                                dev_mul(av, ab[t]));
-                            }
+                            if (c < width) v2::atomic_accumulate(Cb + static_cast<int64_t>(c) * ldc + j, Ar::mul(av, ab[t]));
                         }
                     }
                 }
