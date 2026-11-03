@@ -150,6 +150,12 @@ template <class X> BATCHLAS_DLA_INLINE void reverse(const v2::Thread&, int lo, i
     }
 }
 
+// v(idx) in a sweep's virtual indexing: v(n - Off - idx) when !forward (QL). Plain inline: an
+// always_inline form moved the Steqr*Francis SASS; kernels call this, not a local lambda.
+template <class T, int Off, class V, class N> T virt_get(const V& v, bool forward, N n, size_t idx) {
+    return forward ? v(idx) : v(n - Off - idx);
+}
+
 // One bulge-chase step on (d, e): T := G^T T G on rows/cols (i, i+1), prev_bulge the fill at
 // (i-1, i+1); returns the fill at (i, i+2). forward == false indexes bottom-up (QL). I is the
 // caller's index type (its address arithmetic).

@@ -151,25 +151,18 @@ Event steqr_wg_impl(Queue& ctx,
                         if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, detail::ssfmax<T>() / anorm, d_, e_);
                         else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, detail::ssfmin<T>() / anorm, d_, e_);
 
-                        auto d_get = [&](size_t idx) -> T {
-                            return QR ? d_(idx) : d_(n_local - 1 - idx);
-                        };
-                        auto e_get = [&](size_t idx) -> T {
-                            return QR ? e_(idx) : e_(n_local - 2 - idx);
-                        };
-
-                        const auto shift = detail::wilkinson_shift(d_get(n_local - 2),
-                                                           e_get(n_local - 2),
-                                                           d_get(n_local - 1));
+                        const auto shift = detail::wilkinson_shift(sv::virt_get<T, 1>(d_, QR, n_local, n_local - 2),
+                                                           sv::virt_get<T, 2>(e_, QR, n_local, n_local - 2),
+                                                           sv::virt_get<T, 1>(d_, QR, n_local, n_local - 1));
 
                         // Implicit QR (QL when !QR) sweep: chase the bulge with lartg rotations.
-                        auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
+                        auto [c0, s0] = detail::givens_rotation(sv::virt_get<T, 1>(d_, QR, n_local, 0) - shift, sv::virt_get<T, 2>(e_, QR, n_local, 0));
                         if (store_givens) {
                             rotations_view(0, k, gid) = {c0, s0};
                         }
                         auto bulge = sv::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, v2::Givens<T>{c0, s0}, QR);
                         for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
+                            auto [cj, sj] = detail::givens_rotation(sv::virt_get<T, 2>(e_, QR, n_local, j - 1), bulge);
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {cj, sj};
                             }

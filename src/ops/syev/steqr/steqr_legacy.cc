@@ -166,22 +166,13 @@ Event steqr_impl(Queue& ctx,
                 if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, detail::ssfmax<T>() / anorm, d_, e_);
                 else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, detail::ssfmin<T>() / anorm, d_, e_);
 
-                // Virtual accessors (see sv::tridiag_rot for the same mapping)
-                auto d_get = [&](size_t idx) -> T {
-                    return QR ? d_(idx) : d_(n - 1 - idx);
-                };
-                auto e_get = [&](size_t idx) -> T {
-                    // idx is in [0, n-2] in virtual indexing
-                    return QR ? e_(idx) : e_(n - 2 - idx);
-                };
-
                 // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = detail::wilkinson_shift(d_get(n - 2),
-                                                   e_get(n - 2),
-                                                   d_get(n - 1));
+                const auto shift = detail::wilkinson_shift(sv::virt_get<T, 1>(d_, QR, n, n - 2),
+                                                   sv::virt_get<T, 2>(e_, QR, n, n - 2),
+                                                   sv::virt_get<T, 1>(d_, QR, n, n - 1));
 
                 // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
+                auto [c0, s0] = detail::givens_rotation(sv::virt_get<T, 1>(d_, QR, n, 0) - shift, sv::virt_get<T, 2>(e_, QR, n, 0));
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
@@ -189,7 +180,7 @@ Event steqr_impl(Queue& ctx,
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
+                    auto [cj, sj] = detail::givens_rotation(sv::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
@@ -220,7 +211,7 @@ Event steqr_impl(Queue& ctx,
             auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
             const int ncols = static_cast<int>(Q_.cols());
             bool forward = order_view[gid] == ApplyOrder::Forward;
-            auto col_index = [&](int v) -> int {
+            auto col_index = [&](int v) BATCHLAS_DLA_BODY -> int {
                 return (forward)
                         ? v
                         : (ncols - 1 - v);

@@ -228,7 +228,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 }
 
                 // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
-                const auto slot_of = [&](Real wj) {
+                const auto slot_of = [&](Real wj) BATCHLAS_DLA_BODY {
                     if (!do_sort) return lane;
                     int32_t rank = 0;
                     for (int32_t k = 0; k < nn; ++k) {
