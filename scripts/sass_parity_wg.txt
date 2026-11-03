@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/gesvd/gebrd/gebrd_blocked.cc labrd_panel_complex: sycl::range<1>(kPanelWG), kPanelWG = 128
+128  labrd_panel_complex<
