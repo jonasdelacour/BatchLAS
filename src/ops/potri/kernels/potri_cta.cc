@@ -56,7 +56,15 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     const int nblk = (n + bn - 1) / bn;
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    // The kernel's own launch limit (its registers), not only the device's: at 181 registers
+    // (complex<float>, sm_89) a block holds 352 work-items, so the ceiling's 384 would not launch.
+    // Each item holds up to kCtaTiles tiles, so the smaller block still covers the ceiling.
+    int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    try {
+        const int kmax = static_cast<int>(impl::kernel_max_wg_size<PotriCtaKernel<T>>(ctx->get_context(), ctx->get_device()));
+        if (kmax >= 32) max_wg = std::min(max_wg, kmax / 32 * 32);
+    } catch (const sycl::exception&) {
+    }
     if (!cta_fits(bn, TS, sizeof(D), sizeof(R), budget, max_wg))
         throw batchlas::internal_error("potri_cta: order " + std::to_string(bn) + " needs " +
                                        std::to_string(cta_slm_bytes(bn, TS, sizeof(D), sizeof(R))) +
