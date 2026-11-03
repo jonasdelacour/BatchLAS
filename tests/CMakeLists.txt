@@ -46,6 +46,7 @@ set(TEST_TARGETS
     device_blas_v2_sb2st-sy2sb_tests
     device_blas_v2_stedc_tests
     device_blas_v2_syev-cta-trio_tests
+    device_blas_v2_syevx_tests
     device_blas_v2_tests
     error_model_tests
     gemm_candidates_tests
@@ -253,6 +254,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_v2_sb2st-sy2sb_tests
     device_blas_v2_stedc_tests
     device_blas_v2_syev-cta-trio_tests
+    device_blas_v2_syevx_tests
     device_blas_v2_tests
     gemm_candidates_tests
     gemm_mask_tests
