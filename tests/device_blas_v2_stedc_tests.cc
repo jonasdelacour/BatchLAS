@@ -321,7 +321,8 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
                 gsyn[std::ptrdiff_t(b) * L + lid] = gbuf[std::ptrdiff_t(b) * L + src];
             }
         });
-        const auto gu = dev.down(uni, std::size_t(items) * L), gf = dev.down(flag, std::size_t(items) * L);
+        const auto gu = dev.down(uni, std::size_t(items) * L);
+        const auto gf = dev.down(flag, std::size_t(items) * L);
         const auto gs = dev.down(syn, std::size_t(items) * L), gg = dev.down(gsyn, std::size_t(items) * L);
         int bad_u = 0, bad_f = 0, bad_s = 0, bad_g = 0;
         for (int b = 0; b < items; ++b)
