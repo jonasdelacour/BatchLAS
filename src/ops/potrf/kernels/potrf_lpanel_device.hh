@@ -20,8 +20,27 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::potrf_native {
+
+// 1 / sqrt(a), a > 0. A plain `1 / sqrt(a)` lets NVPTX fold the float case into a bare
+// rsqrt.approx; the float NVPTX path is ONE fixed sequence: rsqrt.approx from asm, then one
+// Newton step in FMA form, r = y + (y/2)(1 - (a y) y). (a y) first: y * y overflows for denormal
+// a. `ok` admits a = +inf, where the step is 0 * inf; it keeps the folded 1 / sqrt(inf) = 0.
+template <typename R>
+inline R potrf_lpanel_inv_sqrt(R a) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<R, float>) {
+        float y;
+        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
+        const float e = sycl::fma(-(a * y), y, 1.0f);
+        const float r = sycl::fma(0.5f * y, e, y);
+        return sycl::isinf(a) ? 0.0f : r;
+    }
+#endif
+    return R(1) / sycl::sqrt(a);
+}
 
 // The whole body for ONE matrix, Uplo::Lower; sA, sB, fail and Ag are already offset to it.
 // `L >= n` lanes: lane `r` owns row `r` for the whole call, because rp/rS/rA must survive the
@@ -152,7 +171,7 @@ BATCHLAS_UNROLL_FULL
 
             if (ok) {
                 const R dkk = sycl::sqrt(d);
-                const R rs = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
+                const R rs = potrf_lpanel_inv_sqrt(d);  // `ok`: d > 0, not NaN
                 if (row == j + i) {
                     sAl[row + static_cast<std::ptrdiff_t>(i) * slda] =
                         sycl_device::dev_from_real<D>(dkk);

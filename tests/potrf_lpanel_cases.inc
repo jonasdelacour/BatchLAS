@@ -534,3 +534,60 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
         EXPECT_GE(g.G, 1);
     }
 }
+
+// Column 0 is a(i,0) * (1 / sqrt(a00)) to within kMaxEps eps of a long double reference, for
+// every row below the diagonal. The residual sweep accepts the bare rsqrt.approx NVPTX folded
+// `1 / sqrt(d)` into for float; this bound does not. One SPD matrix (strictly diagonally
+// dominant) is copied to every item with a00 stepped across [2n, 8n), so the 1024 pivots sample
+// two binades of rsqrt input with no RNG draw per item.
+TYPED_TEST(PotrfLpanelTest, FirstColumnReciprocalIsAccurate) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    // Measured worst (eps), RTX 4090: float and cfloat 1.053 with rsqrt + Newton (origin/main's
+    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148.
+    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.1 : 1.2;
+
+    const auto rel_err = [](R got, long double want) {
+        constexpr long double eps = std::numeric_limits<R>::epsilon();
+        return want == 0.0L ? 0.0 : static_cast<double>(std::fabs((got - want) / want) / eps);
+    };
+    const int n = 32;
+    const int batch = 1024;
+    std::vector<T> base(static_cast<size_t>(n) * n, T{});
+    std::mt19937 rng(4242u);
+    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    for (int j = 0; j < n; ++j) {
+        base[j + static_cast<size_t>(j) * n] = MV<T>::make(R(2 * n), R(0));
+        for (int i = j + 1; i < n; ++i) {
+            const T v = MV<T>::make(R(u(rng)), R(u(rng)) * R(0.5));
+            base[i + static_cast<size_t>(j) * n] = v;
+            base[j + static_cast<size_t>(i) * n] = MV<T>::conj(v);
+        }
+    }
+    for (int nb : {8, 16}) {
+        if (this->lp_ceiling(nb) < n) continue;  // NB = 16 is instantiated for float only
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        std::vector<R> a00(batch);
+        for (int b = 0; b < batch; ++b) {
+            a00[b] = R(2 * n) * (R(1) + R(3) * R(b) / R(batch)) + R(0.6180339887) * R(b % 7);
+            base[0] = MV<T>::make(a00[b], R(0));
+            this->load_triangle(A, b, n, base, Uplo::Lower, MV<T>::make(R(-999), R(777)));
+        }
+        ASSERT_EQ(this->geom(n, batch, nb).nb, nb);
+        const auto info = this->run_lpanel(A.view(), Uplo::Lower, nb);
+        double worst = 0.0;
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "nb=" << nb << " b=" << b;
+            const long double r = 1.0L / std::sqrt(static_cast<long double>(a00[b]));
+            for (int i = 1; i < n; ++i) {
+                const T a = base[i];
+                const T got = A(i, 0, b);
+                worst = std::max(worst, rel_err(std::real(got), std::real(a) * r));
+                worst = std::max(worst, rel_err(std::imag(got), std::imag(a) * r));
+            }
+        }
+        ::testing::Test::RecordProperty("worst_eps_nb" + std::to_string(nb), std::to_string(worst));
+        EXPECT_LE(worst, kMaxEps) << "nb=" << nb << ": column 0 is not a(i,0) / sqrt(a00) to "
+                                  << kMaxEps << " eps";
+    }
+}
