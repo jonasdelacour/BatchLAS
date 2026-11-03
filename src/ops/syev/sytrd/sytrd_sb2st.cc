@@ -224,7 +224,7 @@ Event btrd_lower_inplace(Queue& q,
             const int incx = ldab - 1;
             const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
-            auto idx = [&](int r, int c) -> int { return r + c * ldab; };
+            auto idx = [&](int r, int c) BATCHLAS_DLA_BODY -> int { return r + c * ldab; };
 
             int nr = 0;
             int j1 = kdn + 1;
@@ -232,7 +232,7 @@ Event btrd_lower_inplace(Queue& q,
 
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
-            auto rseq = [&](int cnt, auto at) {
+            auto rseq = [&](int cnt, auto at) BATCHLAS_DLA_BODY {
                 return sbv::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
@@ -241,10 +241,10 @@ Event btrd_lower_inplace(Queue& q,
             auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
             auto Cpj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return Cp[j]; };
             auto Wpj = [&](int j) BATCHLAS_DLA_BODY -> T& { return Wp[j]; };
-            auto band = [&](int r, int dc) {
+            auto band = [&](int r, int dc) BATCHLAS_DLA_BODY {
                 return [&ABv, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return ABv(r, j + dc); };
             };
-            auto band_p = [&](int r, int dc) {
+            auto band_p = [&](int r, int dc) BATCHLAS_DLA_BODY {
                 return [&idx, AB, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB[idx(r, j + dc)]; };
             };
 

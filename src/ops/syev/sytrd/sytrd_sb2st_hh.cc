@@ -256,30 +256,35 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 // build_sb2st_hh_schedule() exactly, since the back-transform
                 // indexes V by the host-side schedule.
                 int32_t slot = 0;
-                if (kd_i > 1) {
-                    for (int32_t st = 0; st + 2 < n; ++st) {
-                        int32_t r0 = st + 1;
-                        int32_t r1 = (st + kd_i < n - 1) ? (st + kd_i) : (n - 1);
-                        if (r1 <= r0) continue;
+                // An always_inline IIFE keeps the chase lambdas off the kernel's direct calls and their
+                // inlining as it was: real SASS-identical, complex +2-3 instructions (a marked kernel
+                // lambda is the reverse; no form was neutral for both).
+                [&]() BATCHLAS_DLA_BODY {
+                    if (kd_i > 1) {
+                        for (int32_t st = 0; st + 2 < n; ++st) {
+                            int32_t r0 = st + 1;
+                            int32_t r1 = (st + kd_i < n - 1) ? (st + kd_i) : (n - 1);
+                            if (r1 <= r0) continue;
 
-                        T tau = make_reflector(st, r0, r1, slot++);
-                        two_sided(r0, r1, tau);
+                            T tau = make_reflector(st, r0, r1, slot++);
+                            two_sided(r0, r1, tau);
 
-                        while (true) {
-                            const int32_t p0 = r1 + 1;
-                            const int32_t p1 = (r1 + kd_i < n - 1) ? (r1 + kd_i) : (n - 1);
-                            if (p0 > p1) break;
+                            while (true) {
+                                const int32_t p0 = r1 + 1;
+                                const int32_t p1 = (r1 + kd_i < n - 1) ? (r1 + kd_i) : (n - 1);
+                                if (p0 > p1) break;
 
-                            right_apply(p0, p1, r0, r1, tau);
-                            tau = make_reflector(r0, p0, p1, slot++);
-                            left_apply(p0, p1, r0 + 1, r1, tau);
-                            two_sided(p0, p1, tau);
+                                right_apply(p0, p1, r0, r1, tau);
+                                tau = make_reflector(r0, p0, p1, slot++);
+                                left_apply(p0, p1, r0 + 1, r1, tau);
+                                two_sided(p0, p1, tau);
 
-                            r0 = p0;
-                            r1 = p1;
+                                r0 = p0;
+                                r1 = p1;
+                            }
                         }
                     }
-                }
+                }();
                 (void)nrefl;
                 (void)ldv;
 

@@ -141,20 +141,20 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
                 // C/WORK live in local memory when the per-work-group footprint fits, otherwise in the
                 // caller-provided global scratch (built with inc=1, so the batch base is contiguous).
-                auto local_cw = [&]() {
+                auto local_cw = [&]() BATCHLAS_DLA_BODY {
                     return std::pair<Real*, T*>{
                         c_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * cw_len,
                         work_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * cw_len};
                 };
-                auto global_cw = [&]() {
+                auto global_cw = [&]() BATCHLAS_DLA_BODY {
                     return std::pair<Real*, T*>{c.batch_item(prob_id).data().data(),
                                                 work.batch_item(prob_id).data().data()};
                 };
-                auto local_ab = [&]() -> T* {
+                auto local_ab = [&]() BATCHLAS_DLA_BODY -> T* {
                     return ab_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (ldab_l * n);
                 };
 
-                auto zero_cw = [&](Real* C, T* WORK) __attribute__((always_inline)) {
+                auto zero_cw = [&](Real* C, T* WORK) BATCHLAS_DLA_BODY {
                     v2::for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
                         C[i] = Real(0);
                         WORK[i] = T(0);
@@ -162,7 +162,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     group_barrier(partition);
                 };
                 // Copy (r,c) between global (ld = ABv.ld()) and tight-packed local (ld = kd+1) storage.
-                auto stage_ab = [&](T* ABl, bool to_local) __attribute__((always_inline)) {
+                auto stage_ab = [&](T* ABl, bool to_local) BATCHLAS_DLA_BODY {
                     if (!to_local) group_barrier(partition);
                     const int ab_elems_l = ldab_l * n;
                     v2::for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
@@ -175,7 +175,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 };
 
                 // The bulge chase proper, on whichever storage AB/C/WORK point at; indexing is identical.
-                auto chase = [&](T* AB, const int ldab, Real* C, T* WORK) __attribute__((always_inline)) {
+                auto chase = [&](T* AB, const int ldab, Real* C, T* WORK) BATCHLAS_DLA_BODY {
                     const int kd1 = kd + 1;
                     const int kdm1 = kd - 1;
                     const int incx = ldab - 1;
@@ -353,7 +353,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 // There the chase is instantiated once per storage combination; elsewhere the pointers are
                 // selected once and the chase is emitted once, as before.
                 if (sycl_impl::on_metal()) {
-                    auto run = [&](std::pair<Real*, T*> cw) __attribute__((always_inline)) {
+                    auto run = [&](std::pair<Real*, T*> cw) BATCHLAS_DLA_BODY {
                         zero_cw(cw.first, cw.second);
                         if (use_local_ab) {
                             T* const ABl = local_ab();
