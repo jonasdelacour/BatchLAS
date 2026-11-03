@@ -9,3 +9,15 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/gemm/kernels/register_tiled_common.hh launch_register_tiled: local (1, TileM / TR,
+# TileN / TC); the reg_configs rows of src/ops/gemm/choice.hh (args: T, TileM, TileN, TileK, TR, TC)
+512 ::GemmRegisterTiledKernel<[^,]+, 128, 64, \d+, 4, 4,
+256 ::GemmRegisterTiledKernel<[^,]+, (?:32, 32, \d+, 2, 2|64, 64, \d+, 4, 4|128, 32, \d+, 4, 4|32, 128, \d+, 4, 4|128, 64, \d+, 8, 4),
+# src/ops/gemm/kernels/register_128x128.hh Gemm128x128Body::Threads
+256 ::GemmRegister128x128Kernel<
+# src/ops/gemm/kernels/tiled_general.hh: local (1, Tile, Tile), Tile = 16 (gemm_kernels.cc launch_tiled<T, 16>)
+256 ::GemmTiledGeneralKernel<[^,]+, 16,
+# src/ops/gemm/kernels/small_batched.hh: kSmallWg; launch_small_tiled: (NB / 4)^2 for NB 48, 56
+128 ::GemmSmallBatchedKernel<
+144 ::GemmSmallTiledKernel<[^,]+, 48,
+196 ::GemmSmallTiledKernel<[^,]+, 56,
