@@ -12,10 +12,10 @@
 
 namespace batchlas::ops::orgqr {
 
-struct Blocked : select::NoFields<"blocked"> {};  ///< orgqr_blocked_dispatch: identity + the public ormqr; GPU, n <= m
+struct Blocked : select::NoFields<"blocked"> {};  ///< orgqr_blocked_dispatch: identity + the public ormqr; GPU, \f$n \le m\f$
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::orgqr_vendor; any shape (n > m, CPU, heterogeneous)
 
-using OrgqrChoice = std::variant<Blocked, Vendor>;  ///< fieldless: orgqr_nb is derived from type and min(m, n)
+using OrgqrChoice = std::variant<Blocked, Vendor>;  ///< fieldless: orgqr_nb is derived from type and \f$\min(m, n)\f$
 
 template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<OrgqrChoice>(); }
@@ -23,9 +23,9 @@ constexpr auto candidates() { return select::all_of<OrgqrChoice>(); }
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};  ///< §5.5: vendor is the general one
 inline constexpr select::OpSpec spec{Op::orgqr, select::Lib::factorization, {last_resort}};  ///< op, library, rules
 
-inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};  ///< work ~ m n^2; no batch key
+inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};  ///< work \f$\sim m n^2\f$; no batch key
 
-/// Both sides of the transcribed 512 ceiling, a coarse log grid elsewhere, n <= m (transcriber: tuned/README.md).
+/// Both sides of the transcribed 512 ceiling, a coarse log grid elsewhere, \f$n \le m\f$ (transcriber: tuned/README.md).
 inline constexpr std::array<int, 17> grid{1, 2, 4, 8, 16, 32, 64, 128, 256, 384, 512, 513, 768, 1024, 2048, 4096,
                                           8192};
 

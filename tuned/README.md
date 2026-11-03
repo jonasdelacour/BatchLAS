@@ -47,13 +47,13 @@ script in `git log -- scripts/migrate_tuning_data.py`.
 | `7e71a6e0`, `8b9adeb3` | posv, trsm | old router windows |
 | `424a45bc` | gemm, gemv, getri, gesv, spmm, syev, geqrf, orgqr, ormqr, getrf, getrs, gesvd | old router windows |
 | `ff340fc6` | symm, syrk, syr2k, trmm | old router windows |
-| `141d31db`, `167a4eaf` | gesvd | complex general > 32 gains `blocked`; sm_89 cfloat 33..64 `blocked` first (@ref perf_gesvd) |
+| `141d31db`, `167a4eaf` | gesvd | complex general \f$> 32\f$ gains `blocked`; sm_89 cfloat 33..64 `blocked` first (@ref perf_gesvd) |
 | `26168c21` | complex symm/syrk/syr2k, all hemm/herk/her2k | the deleted `cublas.cc` rules (@ref perf_level3) |
 | `c6aa0c2b`, `f517330f`, `f517330f-gap` | potri | sm_89 double/cdouble and all sm_120 from the measured float/cfloat ranking (`potri_transcribe.py`, @ref perf_potri) |
 | `136b6464` | potrs | same copy rule (`potrs_transcribe.py`, @ref perf_potrs) |
 | `ab235065` | sygvd | `compose` first everywhere (@ref perf_sygvd) |
 | `fd79f23c`, `7d0b0f84` | sygst | nearest sm_89 `deep` row with the same itype, uplo (`sygst_transcribe.py`; earlier cells keyed `itype=1,uplo=L` by `ledger_add_key.py`) |
-| `30cc8e06`, `transcribed-sytrf-blocked` | sytrf, sysv | `blocked` first from n = 256, second 33..128, third n <= 32 (@ref perf_sytrf) |
+| `30cc8e06`, `transcribed-sytrf-blocked` | sytrf, sysv | `blocked` first from \f$n = 256\f$, second 33..128, third \f$n \le 32\f$ (@ref perf_sytrf) |
 | `transcribed-sytrs-d67ad754` | sytrs | measured sm_89 float/cfloat order (`sytrs_transcribe.py`) |
 
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
@@ -77,7 +77,7 @@ user had damaged (`--remeasure-keys`). Details are in
 - **Refinement coverage is uneven.** Every starting lattice is complete. geqrf, ormqr, getri, posv,
   gesv, orgqr, syev, gesvd and complex getrs are only lightly refined, so their crossovers sit on
   lattice spacing.
-- **Accuracy is not timed.** LOBPCG pins its projected syev solves to the CTA solver at n <= 32 for
+- **Accuracy is not timed.** LOBPCG pins its projected syev solves to the CTA solver at \f$n \le 32\f$ for
   that reason (`docs/perf/syevx.md`, "LOBPCG: the accuracy pin on the projected syev").
 
 ## Staleness

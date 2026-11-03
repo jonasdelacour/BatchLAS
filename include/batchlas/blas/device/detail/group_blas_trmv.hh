@@ -7,6 +7,11 @@ namespace batchlas::device {
 
 namespace detail::generic {
 
+/// @brief Generic triangular matrix-vector product \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$; no operand checks.
+/// @param[in]     group    executor whose work-items share each row reduction; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `Tag::uplo` triangle is read (not its diagonal when `Tag::diag` is `Unit`)
+/// @param[in,out] operand  \f$x\f$ (read) and \f$y\f$ (read scaled by \f$\beta\f$, overwritten with the
+///                         result by the group leader), and the scalars \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void trmv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -33,6 +38,11 @@ inline constexpr void trmv(const Group& group,
 
 namespace detail {
 
+/// @brief Validates the operands of a triangular matrix-vector product, then runs generic::trmv().
+/// @param[in]     group    executor whose work-items share each row reduction; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `Tag::uplo` triangle is read (not its diagonal when `Tag::diag` is `Unit`)
+/// @param[in,out] operand  \f$x\f$ (read) and \f$y\f$ (read scaled by \f$\beta\f$, overwritten with the
+///                         result), and the scalars \f$\alpha\f$, \f$\beta\f$
 template <typename Tag, typename Group, typename T>
 inline constexpr void dispatch_trmv(const Group& group,
                                     const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -55,12 +65,13 @@ inline constexpr void dispatch_trmv(const Group& group,
 /// vector: rows are visited in the order that never overwrites an entry a later
 /// row still reads.
 /// @tparam UploV   stored triangle of `A`
-/// @tparam TransV  op() applied to `A`
+/// @tparam TransV  \f$\mathrm{op}()\f$ applied to `A`
 /// @tparam DiagV   `Unit`: the diagonal is taken as 1
 /// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
-/// @param group    executor
-/// @param a        single n x n matrix
-/// @param operand  `x`, `y` (each of length at least n), `alpha`, `beta`
+/// @param[in]     group    executor whose work-items share the rows of \f$A\f$; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `UploV` triangle is read (not its diagonal when `DiagV` is `Unit`)
+/// @param[in,out] operand  \f$x\f$ (read) and \f$y\f$ (read scaled by \f$\beta\f$, overwritten with the
+///                         result), each of length at least \f$n\f$, and the scalars \f$\alpha\f$, \f$\beta\f$
 /// @pre `y` holds finite values even when `beta == 0`.
 /// @note Each `y` element is written by the group leader; barrier before other work-items read it.
 template <Uplo UploV = Uplo::Upper,
@@ -75,6 +86,10 @@ inline constexpr void trmv(const Group& group,
 }
 
 /// @brief As trmv(), with an explicit DeviceBlasPolicy (ignored: one implementation).
+/// @param[in]     group    executor whose work-items share the rows of \f$A\f$; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `UploV` triangle is read (not its diagonal when `DiagV` is `Unit`)
+/// @param[in,out] operand  \f$x\f$ (read) and \f$y\f$ (read scaled by \f$\beta\f$, overwritten with the
+///                         result), each of length at least \f$n\f$, and the scalars \f$\alpha\f$, \f$\beta\f$
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -89,6 +104,13 @@ inline constexpr void trmv(const Group& group,
 }
 
 /// @brief As trmv(), with the operands passed separately instead of in an operand struct.
+/// @param[in]     group    executor whose work-items share the rows of \f$A\f$; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `UploV` triangle is read (not its diagonal when `DiagV` is `Unit`)
+/// @param[in]     x        vector \f$x\f$ of length at least \f$n\f$; may alias `y`
+/// @param[in,out] y        vector \f$y\f$ of length at least \f$n\f$; read scaled by \f$\beta\f$, overwritten
+///                         with the result
+/// @param[in]     alpha    scalar \f$\alpha\f$ multiplying \f$\mathrm{op}(A)\,x\f$ (default 1)
+/// @param[in]     beta     scalar \f$\beta\f$ multiplying the input \f$y\f$ (default 0)
 template <Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
           Diag DiagV = Diag::NonUnit,
@@ -104,6 +126,13 @@ inline constexpr void trmv(const Group& group,
 }
 
 /// @brief As trmv(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
+/// @param[in]     group    executor whose work-items share the rows of \f$A\f$; every work-item must call
+/// @param[in]     a        single \f$n \times n\f$ triangular matrix \f$A\f$; only the `UploV` triangle is read (not its diagonal when `DiagV` is `Unit`)
+/// @param[in]     x        vector \f$x\f$ of length at least \f$n\f$; may alias `y`
+/// @param[in,out] y        vector \f$y\f$ of length at least \f$n\f$; read scaled by \f$\beta\f$, overwritten
+///                         with the result
+/// @param[in]     alpha    scalar \f$\alpha\f$ multiplying \f$\mathrm{op}(A)\,x\f$ (default 1)
+/// @param[in]     beta     scalar \f$\beta\f$ multiplying the input \f$y\f$ (default 0)
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,

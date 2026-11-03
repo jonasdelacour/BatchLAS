@@ -23,7 +23,7 @@ constexpr auto candidates() { return select::all_of<GetrsChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
 
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< ~ n^2 nrhs batch
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< \f$\sim n^2 \cdot \mathit{nrhs} \cdot \mathit{batch}\f$
 
 /// A log grid plus both sides of every transcribed threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
 /// batch 127/128); the transcriber (tuned/README.md) spells the same grid.

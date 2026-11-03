@@ -64,6 +64,8 @@ enum class Vendor
 
 // to_string() must share the enums' namespace or ADL will not find it.
 /// @brief Name of a Policy value.
+/// @param[in] v  the value to name
+/// @return the enumerator's name, or `"Policy(?)"` for a value that names none
 /// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(Policy v) {
     switch (v) {
@@ -74,6 +76,8 @@ inline constexpr std::string_view to_string(Policy v) {
 }
 
 /// @brief Name of a DeviceType value.
+/// @param[in] v  the value to name
+/// @return the enumerator's name, or `"DeviceType(?)"` for a value that names none
 /// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(DeviceType v) {
     switch (v) {
@@ -87,6 +91,8 @@ inline constexpr std::string_view to_string(DeviceType v) {
 }
 
 /// @brief Name of a Vendor value.
+/// @param[in] v  the value to name
+/// @return the enumerator's name, or `"Vendor(?)"` for a value that names none
 /// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(Vendor v) {
     switch (v) {
@@ -103,6 +109,9 @@ inline constexpr std::string_view to_string(Vendor v) {
 // One overload per enum, NOT a constrained template: the concrete parameter is what wins partial
 // ordering against the enum-streaming template in blas/enums.hh; a template here would tie.
 /// @brief Stream a Policy by name.
+/// @param[in,out] os     the stream written to
+/// @param[in]     value  the value whose to_string() name is written
+/// @return @p os
 /// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
@@ -110,6 +119,9 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 }
 
 /// @brief Stream a DeviceType by name.
+/// @param[in,out] os     the stream written to
+/// @param[in]     value  the value whose to_string() name is written
+/// @return @p os
 /// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, DeviceType value) {
@@ -117,6 +129,9 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 }
 
 /// @brief Stream a Vendor by name.
+/// @param[in,out] os     the stream written to
+/// @param[in]     value  the value whose to_string() name is written
+/// @return @p os
 /// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Vendor value) {
@@ -124,7 +139,7 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 }
 
 /// @brief Classify a SYCL vendor string (case-insensitive substring match).
-/// @param v the vendor string, e.g. from `sycl::info::device::vendor`
+/// @param[in,out] v  the vendor string, e.g. from `sycl::info::device::vendor`; consumed (lowercased in place)
 /// @return the matching Vendor, or Vendor::OTHER
 /// @ingroup api_core_lowlevel
 inline Vendor str_to_vendor(std::string&& v) {
@@ -164,7 +179,8 @@ enum class DeviceProperty
 };
 
 /// @brief True for consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121).
-/// @param cuda_cc a value of Device::cuda_compute_capability()
+/// @param[in] cuda_cc  a value of Device::cuda_compute_capability()
+/// @return true when \f$120 \le \mathrm{cuda\_cc} < 130\f$
 /// @ingroup api_core_lowlevel
 // evidence: docs/perf/blackwell.md
 constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
@@ -179,16 +195,20 @@ constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc <
 /// @ingroup api_core
 struct BATCHLAS_API Device{
     /// @brief Every device of `type`, in the SYCL runtime's order.
+    /// @param[in] type  the kind of device to list
+    /// @return the devices, possibly empty; element `i` has `idx == i`
     static std::vector<Device> get_devices(DeviceType type);
 
     /// @brief The host device (index 0).
     Device() = default;
 
     /// @brief The `idx`-th device of `type`, as numbered by get_devices().
+    /// @param[in] idx   0-based index among the devices of @p type
+    /// @param[in] type  the kind of device
     Device(size_t idx, DeviceType type) : idx(idx), type(type) {}
 
     /// @brief The first device of the named type.
-    /// @param type `"cpu"`, `"gpu"` or `"accelerator"` (case-insensitive)
+    /// @param[in] type  `"cpu"`, `"gpu"` or `"accelerator"` (case-insensitive)
     /// @throws batchlas::device_error if no device of that type exists
     /// @throws batchlas::invalid_argument for any other string
     Device(std::string type) {
@@ -209,9 +229,11 @@ struct BATCHLAS_API Device{
     }
 
     /// @brief As Device(std::string).
+    /// @param[in] type  `"cpu"`, `"gpu"` or `"accelerator"` (case-insensitive); not null
     Device(const char* type) : Device(std::string(type)) {}
 
     /// @brief The first GPU, else the first CPU, else the host device.
+    /// @return the chosen device
     inline static Device default_device() {
         if(!get_devices(DeviceType::GPU).empty()) {
             return get_devices(DeviceType::GPU).at(0);
@@ -224,6 +246,8 @@ struct BATCHLAS_API Device{
 
     /// @brief default_device(), except the first CPU device for a double or complex<double> @p T
     /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p T kernels.
+    /// @tparam T  the scalar type the caller will run
+    /// @return the chosen device
     template <typename T>
     static Device default_device_for() {
         Device dev = default_device();
@@ -235,22 +259,30 @@ struct BATCHLAS_API Device{
     }
 
     /// @brief The device's name as reported by SYCL.
+    /// @return the `sycl::info::device::name` string
     std::string get_name() const;
     /// @brief The device's vendor.
+    /// @return the vendor, classified by str_to_vendor()
     Vendor get_vendor() const;
     /// @brief The value of one device property (units as documented on DeviceProperty).
+    /// @param[in] property  the property to query
+    /// @return the property's value
     /// @throws batchlas::invalid_argument for a value that names no DeviceProperty.
     size_t get_property(DeviceProperty property) const;
 
     /// @brief True when `size` is one of the device's supported sub-group sizes.
+    /// @param[in] size  sub-group size to test, in work-items
+    /// @return whether `sycl::info::device::sub_group_sizes` lists @p size; on AdaptiveCpp, whether
+    ///         @p size is the only size it lists
     // ENUMERATED from sycl::info::device::sub_group_sizes, not
     // get_property(MAX_SUB_GROUP_SIZE): a false accept aborts a
     // [[sycl::reqd_sub_group_size]] launch. evidence: docs/perf/gemv.md#the-sub-route-gates
     bool supports_sub_group_size(size_t size) const;
 
-    /// @brief CUDA compute capability as major*10+minor (89 = sm_89, 120 = sm_120), or 0 for a
-    /// non-CUDA device. Memoized per device. Kernel selection derives its device key from it
-    /// (`sm_89`), which picks the per-device table in `tuned/`.
+    /// @brief CUDA compute capability as \f$10 \cdot \mathrm{major} + \mathrm{minor}\f$ (89 = sm_89,
+    /// 120 = sm_120), or 0 for a non-CUDA device. Memoized per device. Kernel selection derives its
+    /// device key from it (`sm_89`), which picks the per-device table in `tuned/`.
+    /// @return the compute capability, or 0
     // Parsed from info::device::version, because ext_oneapi_architecture reports
     // "unknown" for sm_100/sm_120 on current DPC++.
     int cuda_compute_capability() const;
@@ -258,6 +290,7 @@ struct BATCHLAS_API Device{
     /// @brief True when the device runs double-precision kernels (`sycl::aspect::fp64`).
     /// Memoized per device. False on Apple GPUs, where a Backend::SYCL build without
     /// `BATCHLAS_HAS_DEVICE_FP64` has no double or complex<double> kernels.
+    /// @return whether the device has `sycl::aspect::fp64`
     bool supports_fp64() const;
 
 
@@ -284,18 +317,34 @@ struct [[nodiscard]] Event {
     /// @brief An empty Event, already complete.
     BATCHLAS_API Event();
     BATCHLAS_API ~Event();
+    /// @brief Replace the tracked work with @p impl.
+    /// @param[in,out] impl  implementation moved into this Event
+    /// @return `*this`
     BATCHLAS_API Event& operator=(EventImpl&& impl);
+    /// @brief An Event tracking @p impl.
+    /// @param[in,out] impl  implementation moved into the new Event
     BATCHLAS_API Event(EventImpl&& impl);
+    /// @brief Take over @p other's tracked work.
+    /// @param[in,out] other  the Event moved from; left moved-from (null `impl_`)
     BATCHLAS_API Event(Event&& other);
+    /// @brief Take over @p other's tracked work, dropping this Event's.
+    /// @param[in,out] other  the Event moved from; left moved-from (null `impl_`)
+    /// @return `*this`
     BATCHLAS_API Event& operator=(Event&& other);
     /// @brief Block until the work this Event tracks has completed.
     /// @pre The Event is not moved-from.
     BATCHLAS_API void wait() const;
+    /// @brief Access the implementation.
+    /// @return `impl_.get()`
     BATCHLAS_API EventImpl* operator->() const;
+    /// @brief Access the implementation.
+    /// @return `*impl_`
+    /// @pre The Event is not moved-from.
     BATCHLAS_API EventImpl& operator*() const;
 
     /// @brief `{command_start, command_end}` in nanoseconds, or `std::nullopt` when profiling is
     /// not enabled on the underlying SYCL queue (see DiagnosticsSettings::profiling).
+    /// @return the pair \f$(t_{\mathrm{start}}, t_{\mathrm{end}})\f$, or `std::nullopt`
     BATCHLAS_API std::optional<std::pair<std::uint64_t, std::uint64_t>> profiling_command_start_end_ns() const;
 };
 
@@ -328,37 +377,62 @@ struct BATCHLAS_API Queue{
     ~Queue();
 
     /// @brief A Queue on `device` with backend Auto.
-    /// @param device   the device
-    /// @param in_order true (default) for an in-order queue; out-of-order queues make arena-backed
-    ///                 workspace releases drain the queue
+    /// @param[in] device    the device
+    /// @param[in] in_order  true (default) for an in-order queue; out-of-order queues make
+    ///                      arena-backed workspace releases drain the queue
     Queue(Device device, bool in_order = true);
     /// @brief A Queue on `device` pinned to `backend`.
+    /// @param[in] device    the device
+    /// @param[in] backend   the backend calls on this Queue dispatch to (see set_backend())
+    /// @param[in] in_order  true (default) for an in-order queue
     /// @throws batchlas::unsupported if `backend` is not compiled in (see set_backend())
     Queue(Device device, batchlas::Backend backend, bool in_order = true);
     /// @brief A Queue sharing `base`'s SYCL context and device, so USM pointers and workspaces
     /// allocated for `base` stay usable. It has its own arena and event chain.
+    /// @param[in] base      the Queue whose context and device are shared
+    /// @param[in] in_order  true for an in-order queue
     Queue(const Queue& base, bool in_order);
+    /// @brief Take over @p other's device, SYCL queue and arena.
+    /// @param[in,out] other  the Queue moved from; left moved-from
     Queue(Queue&& other); //= default;
+    /// @brief Take over @p other's device, SYCL queue and arena, releasing this Queue's.
+    /// @param[in,out] other  the Queue moved from; left moved-from
+    /// @return `*this`
     Queue& operator=(Queue&& other);// = default;
+    /// @brief Not copyable: a Queue owns its arena and event chain.
+    /// @param[in] other  the Queue that cannot be copied
     Queue(const Queue& other) = delete;
+    /// @brief Not copy-assignable: a Queue owns its arena and event chain.
+    /// @param[in] other  the Queue that cannot be copied
+    /// @return nothing: the function is deleted
     Queue& operator=(const Queue& other) = delete;
 
 
+    /// @brief Access the implementation.
+    /// @return `impl_.get()`
     QueueImpl* operator->() const;
+    /// @brief Access the implementation.
+    /// @return `*impl_`
+    /// @pre The Queue is not moved-from.
     QueueImpl& operator*() const;
 
     /// @brief Order all later work on this Queue after `event`, without a host wait.
     /// A moved-from Event is ignored; a default-constructed one is already complete.
     /// AdaptiveCpp has no queue-wide barrier: on an out-of-order queue, later work submitted
     /// through this Queue depends on the event instead, and work on sycl_queue() is not ordered.
+    /// @param[in] event  the Event later work waits for; not modified
     void enqueue(Event& event);
     /// @brief An Event that completes after everything enqueued on this Queue so far.
+    /// @return the Event
     Event get_event() const;
     /// @brief Like get_event(), but also ordered after work submitted directly to the native
     /// stream (cuBLAS, rocBLAS, your own kernels) that bypassed SYCL submission.
+    /// @return the Event
     Event create_event_after_external_work();
 
     /// @brief enqueue() each Event in `events`.
+    /// @tparam EventContainer  a range of Event, iterated by non-const reference
+    /// @param[in] events  the Events later work waits for; not modified
     template <typename EventContainer>
     void enqueue(EventContainer& events){
         for(auto& event : events){
@@ -382,9 +456,12 @@ struct BATCHLAS_API Queue{
     ///
     /// The Queue owns the memory: it stays valid until the lease is released, not until the
     /// caller returns. Keep the lease in a named variable (`auto ws = ctx.workspace(n);`).
+    /// @param[in] bytes  size of the scratch, in bytes
+    /// @return the lease; the memory returns to the arena when it is released
     [[nodiscard]] batchlas::WorkspaceLease workspace(size_t bytes);
 
     /// @brief Bytes the arena currently holds. It grows to the peak requested and keeps it.
+    /// @return the arena's capacity in bytes
     size_t workspace_capacity() const;
 
     /// @brief Return the arena's memory to the runtime (otherwise it is freed only in ~Queue).
@@ -395,33 +472,42 @@ struct BATCHLAS_API Queue{
     std::unique_ptr<QueueImpl> impl_;  ///< Implementation (SYCL queue, arena, event chain).
 
     /// @brief The device this Queue runs on.
+    /// @return the device
     Device device() const { return device_; }
     /// @brief True for an in-order Queue.
+    /// @return whether the Queue is in-order
     bool in_order() const { return in_order_; }
 
     /// @brief The backend calls dispatch to; never Backend::Auto (an Auto Queue resolves once, on
     /// first query, from the device vendor and the compiled-in backends).
+    /// @return the resolved backend
     /// @throws batchlas::unsupported if Auto finds no compiled-in backend that serves the device
     batchlas::Backend backend() const;
     /// @brief The backend as requested, possibly Backend::Auto.
+    /// @return the requested backend
     batchlas::Backend requested_backend() const { return backend_; }
 
     /// @brief Pin this Queue to `backend`, or pass Backend::Auto to hand it back to automatic
     /// selection.
+    /// @param[in] backend  the backend to pin, or Backend::Auto
     /// @throws batchlas::unsupported if `backend` is not compiled into this build
     void set_backend(batchlas::Backend backend);
 
     /// @brief True when `backend` is compiled into this build.
+    /// @param[in] backend  the backend to test
+    /// @return whether @p backend is compiled in
     static bool backend_available(batchlas::Backend backend);
 
     /// @brief True for any USM allocation in this Queue's context, and for any non-null pointer on
     /// a host/CPU device.
+    /// @param[in] ptr  the pointer to check
+    /// @return whether kernels on this Queue's device can dereference @p ptr
     // docs/cpp-api.md#where-the-memory-has-to-live-the-usm-contract
     bool is_device_accessible(const void* ptr) const;
 
     /// @brief As is_device_accessible(), but throws.
-    /// @param ptr  the pointer to check
-    /// @param what names the call-site parameter in the message, e.g. `"gemm: A"`
+    /// @param[in] ptr   the pointer to check
+    /// @param[in] what  names the call-site parameter in the message, e.g. `"gemm: A"`
     /// @throws batchlas::invalid_argument if `ptr` is null or not reachable from the device
     void require_device_accessible(const void* ptr, const char* what) const;
 
@@ -431,12 +517,16 @@ struct BATCHLAS_API Queue{
     /// Keyed off the device, not backend(). Owned by the Queue: do not destroy it or use it past
     /// the Queue's lifetime. Work pushed to it runs after BatchLAS's; to make BatchLAS wait for
     /// that work, call create_event_after_external_work().
+    /// @return the native stream, or `nullptr`
     BATCHLAS_API void* native_handle() const;
 
     private:
         friend struct detail::SyclInteropAccess;
-        /// Root Queue over a caller's SYCL context and device (queue_from_sycl). SyclQueueSource
+        /// @brief Root Queue over a caller's SYCL context and device (queue_from_sycl). SyclQueueSource
         /// is complete only in queue-impl.cc, so no SYCL type reaches this header.
+        /// @param[in] logical   the batchlas Device the Queue reports
+        /// @param[in] in_order  true for an in-order queue
+        /// @param[in] src       the caller's SYCL context and device, wrapped opaquely
         Queue(Device logical, bool in_order, const detail::SyclQueueSource& src);
 
         Device device_;
@@ -448,7 +538,11 @@ struct BATCHLAS_API Queue{
 namespace detail {
 /// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
 /// pending work (a multi-launch sequence needs one). q is then ordered after that queue's work,
-/// so q.wait() and q.get_event() cover it. @return whatever @p f returns.
+/// so q.wait() and q.get_event() cover it.
+/// @tparam F  callable taking a `Queue&`
+/// @param[in,out] q  the Queue the work belongs to; ordered after @p f's work on return
+/// @param[in]     f  the work to run, called once with an in-order Queue
+/// @return whatever @p f returns.
 template <typename F>
 auto on_in_order_queue(Queue& q, F&& f) {
     if (q.in_order()) return f(q);

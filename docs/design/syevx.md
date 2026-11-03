@@ -193,7 +193,7 @@ so every GEMM shape stays uniform.
 Behind `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1`, off by default
 ([measured](../perf/syevx.md#syevx-automatic-chebyshev-filter-degree)). Each item's
 \f$d_{need} = \log(\text{worst residual} / \text{target}) / \mathrm{acosh}\,y_{edge}\f$ is clamped to
-[`kAutoDegreeMin`, `kAutoDegreeMax`] = [10, 40], reduced by **max** across the batch, then trimmed by the
+[`kAutoDegreeMin`, `kAutoDegreeMax`] = \f$[10, 40]\f$, reduced by **max** across the batch, then trimmed by the
 batch-minimum cap. The lower bound equals `kDefaultFilterDegree` (10), so the derivation never makes a
 step less selective. Precedence: `BATCHLAS_SYEVX_FILTER_DEGREE` > `params.filter_degree` > derived >
 `kDefaultFilterDegree`; an explicit value turns the derivation off. **Trap:** the switch is parsed with
@@ -295,8 +295,8 @@ columns, pre-poisoned, must come back exactly zero. Keep both.
 
 ### syevx range: stein workspace scaling
 
-`stein` allocates five length-\f$n\f$ arrays and pivot flags per (item, vector): \f$21\,nk \cdot
-\mathrm{batch}\f$ bytes in float, about 2.8 GB at \f$n = 1024\f$, batch 128, `neigs = n`. Callers must pass
+`stein` allocates five length-\f$n\f$ arrays and pivot flags per (item, vector):
+\f$21\,nk \cdot \mathrm{batch}\f$ bytes in float, about 2.8 GB at \f$n = 1024\f$, batch 128, `neigs = n`. Callers must pass
 a realistic capacity (documented in the C++ declarations and `bl.syevx_range`). Open: index scratch by
 resident work-item, \f$O(n \cdot \mathrm{resident})\f$ for every `stein` caller.
 

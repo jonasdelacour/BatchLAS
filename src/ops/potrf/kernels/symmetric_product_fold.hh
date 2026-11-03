@@ -2,8 +2,8 @@
 #pragma once
 
 // Fold a full GEMM product into the uplo triangle of C only:
-//     C(i, j) := product(i, j) + beta * C(i, j)   for (i, j) in the uplo triangle
-// The other half is the caller's and must come out unchanged; beta == 0 means C
+//     \f$C(i, j) := \mathrm{product}(i, j) + \beta \cdot C(i, j)\f$   for (i, j) in the uplo triangle
+// The other half is the caller's and must come out unchanged; \f$\beta = 0\f$ means C
 // is not read, so a poisoned C cannot produce NaN. C's batch mask skips its inactive items (I3).
 // evidence: docs/perf/level3.md#level-3-generic-syrk-and-syr2k-fallbacks-fold-one-triangle
 

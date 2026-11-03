@@ -40,7 +40,7 @@ constexpr std::int64_t triangular_slm_bytes() {  ///< four staged 8 x 128 operan
 inline constexpr std::array<std::string_view, 2> last_resort{"triangular", "vendor"};  ///< triangular: any GPU shape
 inline constexpr select::OpSpec spec{Op::syr2k, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: n = C's order, weight 2 (work ~ n^2 k batch); k = op(A)'s inner extent; batch.
+/// Keys: n = C's order, weight 2 (work \f$\sim n^2 k \cdot \mathit{batch}\f$); k = op(A)'s inner extent; batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};
 
 // The transcribed grid; the transcribed rule turned on batch 1|2 alone (tuned/README.md).

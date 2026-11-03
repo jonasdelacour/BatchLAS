@@ -179,7 +179,7 @@ A view can carry a per-item batch mask; see @ref design_masked_batches.
 
 ### Row-major source data {#row-major-source-data}
 
-For `gemm`, swap the operands (`Cᵀ = Bᵀ Aᵀ`): no copy.
+For `gemm`, swap the operands (\f$C^T = B^T A^T\f$): no copy.
 
 ```cpp
 // Row-major A (m x k), B (k x n), C (m x n), packed, in USM at pa/pb/pc.
@@ -369,7 +369,7 @@ ctx.wait();                           // before reading any of them
 
 - Factorisation, solve, eigen and SVD results carry a per-item `info`; check it.
 - `multiply` is elementwise; `matmul` is the matrix product, and its options have no `beta`.
-- `qr` is the reduced QR of a tall or square A (`f.q` m x n, `f.r` n x n upper triangular); like
+- `qr` is the reduced QR of a tall or square \f$A\f$ (`f.q` \f$m \times n\f$, `f.r` \f$n \times n\f$ upper triangular); like
   `svd` it blocks before returning.
 
 Adding an entry point rather than calling one? See [extending.md](extending.md).

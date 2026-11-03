@@ -12,13 +12,13 @@ leaf solver is in @ref algo_steqr; live values are in `include/batchlas/tuning_p
 index per sub-group partition, concurrently, with one `group_barrier(wg)` between phases, instead of a
 whole-work-group reduction and a barrier per index. The WG variant (executor `v2::RtGroup`) keeps the old,
 bit-identical code as the A/B reference. Alone this gains about 5.5%; with the multiplier change it
-enabled, 15-20% end to end (batch 256, float, n = 64 0.930 -> 0.782 ms, n = 512 13.144 -> 11.162 ms).
+enabled, 15-20% end to end (batch 256, float, \f$n = 64\f$ 0.930 -> 0.782 ms, \f$n = 512\f$ 13.144 -> 11.162 ms).
 
 > **Warning:** Narrow groups make each serial Löwner product longer (8x from width 32 to 4); the naive
-> product under/overflowed at n = 64. It is accumulated as a (mantissa, exponent) pair with `frexp`.
+> product under/overflowed at \f$n = 64\f$. It is accumulated as a (mantissa, exponent) pair with `frexp`.
 
-> **Warning:** Wide groups are the opposite hazard: a group-wide product of mantissas in [0.5, 1) over
-> W = 256 lanes is zero in float (eigen_residual 0.56 at n = 512,
+> **Warning:** Wide groups are the opposite hazard: a group-wide product of mantissas in \f$[0.5, 1)\f$ over
+> \f$W = 256\f$ lanes is zero in float (eigen_residual 0.56 at \f$n = 512\f$,
 > `StedcTest.StedcFusedWideWorkgroupRescale`). The reduction runs in rounds of 32 lanes and renormalizes.
 
 > **Warning:** `dd` is rarely a multiple of `parts_per_wg`, and the sub-group shuffles need every lane:
@@ -26,7 +26,7 @@ enabled, 15-20% end to end (batch 256, float, n = 64 0.930 -> 0.782 ms, n = 512 
 
 | Alternative | Result | Verdict |
 | --- | --- | --- |
-| Recompute rescale denominators from shared memory | 8-17% slower (n = 64-512); a control with 2 unused shared arrays regressed the same | Rejected: any revisit must add no shared memory |
+| Recompute rescale denominators from shared memory | 8-17% slower (\f$64 \le n \le 512\f$); a control with 2 unused shared arrays regressed the same | Rejected: any revisit must add no shared memory |
 
 ## stedc: the dd == 1 secular-solve fault
 
@@ -43,7 +43,7 @@ configure with `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBIN
 ## stedc: the work-group multiplier after the barriers went
 
 `STEDC_WG_MULTIPLIER_*` is 8 for every size class (was 1 / 1 / 2 / 2 / 4). The width pays only because
-the partition-parallel loops removed the barriers: n = 64, batch 256, float, multiplier 1 / 8 gave
+the partition-parallel loops removed the barriers: \f$n = 64\f$, batch 256, float, multiplier 1 / 8 gave
 0.880 / 0.729 ms with them and 0.919 / 0.877 ms without.
 
 > **Warning:** At about 80 registers per work-item, 1024 work-items do not launch. `choose_wg_size`
@@ -61,13 +61,13 @@ the first \f$dd_{\max}\f$ columns need a GEMM. One uniform cuBLAS call at the ba
 
 ### stedc: the deflation GEMM threshold
 
-Learning \f$dd_{\max}\f$ costs a host sync, so the path is gated at n >= 512
+Learning \f$dd_{\max}\f$ costs a host sync, so the path is gated at \f$n \ge 512\f$
 (`stedc_deflation_gemm_min_n`) and skipped unless deflation removed at least 25% of the columns
 (`stedc_deflation_gemm_max_kept_fraction = 0.75`). Off vs on, batch 256, float, ms:
 
 | n | off | on | gain |
 | --- | --- | --- | --- |
-| 256 | 3.998 | 4.020 | noise (a gate at 128 regressed n = 256 by ~5%) |
+| 256 | 3.998 | 4.020 | noise (a gate at 128 regressed \f$n = 256\f$ by ~5%) |
 | 512 | 11.166 | 10.525 | +5.8% |
 | 1024 | 39.388 | 29.937 | +24.0% |
 
@@ -81,7 +81,7 @@ Open as a cost, avoided by `syev` (which uses `stebz` for values-only; no intern
 child's eigenvectors and the first row of the right child's. The recursive driver used to forward
 `NoEigenVectors` to the leaf `steqr_dispatch`, which then wrote no vectors, so every merge read the
 zeroed matrix: all of z deflated and the "eigenvalues" were the sorted torn diagonal, finite and
-plausible (values error 3.6e-3 against a bound of 3.4e-4 at n = 180, float, Metal). With no
+plausible (values error \f$3.6 \times 10^{-3}\f$ against a bound of \f$3.4 \times 10^{-4}\f$ at \f$n = 180\f$, float, Metal). With no
 eigenvector matrix the call threw instead. Fixed 2026-10-30: `stedc_dispatch` turns
 `NoEigenVectors` into a vector solve into a workspace Z (`stedc_buffer_size` adds \f$n^2\f$ reals
 per item) and never touches the caller's matrix. Guards: `NoEigenVectorsMatchesReferenceOnPoisonedWorkspace`
@@ -94,29 +94,29 @@ the merge reads, is the matching algorithm.
 `src/ops/syev/stedc/stedc.cc` has two drivers over one size-uniform merge of P subproblems pairwise.
 The recursive driver merges one node at a time (\f$O(2^L)\f$ launches, `batch` work-groups each). The
 level-synchronous driver merges a whole level in one launch over `nodes * batch` work-groups
-(\f$O(L)\f$ launches); n is padded to \f$\text{leaf}\cdot 2^L\f$ with a diagonal tail above the
+(\f$O(L)\f$ launches); \f$n\f$ is padded to \f$\text{leaf}\cdot 2^L\f$ with a diagonal tail above the
 Gershgorin bound (padded eigenvalues sort last), and the planner picks the tree that pads least, since
 padding costs \f$(N/n)^3\f$ in the top GEMM. Merges write into the parent's sub-blocks (up to 5% faster
 than copying); leaves are copied, because doubling the leaf leading dimension slowed CTA STEQR 10% at
-n = 64.
+\f$n = 64\f$.
 
 ## stedc: the leaf cap at the sub-group width
 
 `plan_stedc_levels` (`stedc_levels_plan.hh`) never lets a leaf exceed the sub-group width:
-`steqr_cta` stops there and `steqr_wg` is about 14x slower one step past it (n = 32 0.26 us,
-n = 36 3.76 us, batch 10,416). Trading leaf width against padding regressed `syev` 3.25x at n = 320; see
+`steqr_cta` stops there and `steqr_wg` is about 14x slower one step past it (\f$n = 32\f$ 0.26 us,
+\f$n = 36\f$ 3.76 us, batch 10,416). Trading leaf width against padding regressed `syev` 3.25x at \f$n = 320\f$; see
 [syev: the stedc merge-variant and leaf-cliff regression](syev.md#syev-the-stedc-merge-variant-and-leaf-cliff-regression).
 
 ## stedc: the absolute deflation tolerance
 
-Deflation uses LAPACK's absolute \f$\mathrm{tol} = 8\varepsilon\max(\|D\|_\infty, \|z\|_\infty)\f$
+Deflation uses LAPACK's absolute \f$\mathrm{tol} = 8\varepsilon\max(\lVert D\rVert_\infty, \lVert z\rVert_\infty)\f$
 for both small-\f$|z|\f$ and close-pole deflation. The earlier relative tolerance under-deflated
 clustered small eigenvalues: good residuals, bimodal orthogonality.
 
 ## stedc: the rejected private-pole fast path
 
 The fused merge (`stedc_merge_kernels.cc`) runs the secular solver in place in `Q_bid`. Keeping the
-poles in a private `T d_priv[128]` array gave bimodal orthogonality for float n <= 64; in place
+poles in a private `T d_priv[128]` array gave bimodal orthogonality for float \f$n \le 64\f$; in place
 matches the baseline exactly.
 
 ## stedc: convergence reporting through info
@@ -141,11 +141,11 @@ runtime cannot run the ROCm-style root routines inside SYCL kernels.
 ## stedc: current tuning values
 
 - **`STEDC_MERGE_VARIANT_*` = 2 (FusedCta)** everywhere: 11-35% faster than Fused (1) on `stedc` for
-  n = 64-640 on both drivers; Fused cost `syev` 1.24-1.37x at power-of-two n. An earlier NaN under
+  \f$64 \le n \le 640\f$ on both drivers; Fused cost `syev` 1.24-1.37x at power-of-two \f$n\f$. An earlier NaN under
   FusedCta was a since-fixed deadlock.
 - **`STEDC_THREADS_PER_ROOT_*` = 8, `STEDC_WG_MULTIPLIER_*` = 8**, chosen through `syev`, not the
   `stedc` benchmark (whose own sweep picked multiplier 2-4). Adopting `stedc`'s winners would cost
-  `syev` 2.7% at n = 256 and up to 7.6% at n = 64; at n >= 512 all values are within noise. `syev`, ms:
+  `syev` 2.7% at \f$n = 256\f$ and up to 7.6% at \f$n = 64\f$; at \f$n \ge 512\f$ all values are within noise. `syev`, ms:
 
 | syev n | wgm=2 | wgm=4 | wgm=8 | tpr=4 | tpr=8 | tpr=16 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -157,7 +157,7 @@ runtime cannot run the ROCm-style root routines inside SYCL kernels.
 ## stedc: validation protocol for merge changes
 
 Check **orthogonality**, not just residuals: the private-pole path and the relative deflation
-tolerance both passed residual checks with bimodal float orthogonality at n <= 64.
+tolerance both passed residual checks with bimodal float orthogonality at \f$n \le 64\f$.
 
 - `tests/stedc_tests.cc` is the gate (it checks eigenvalues against LAPACKE, orthogonality and
   residual).

@@ -1,6 +1,6 @@
 #pragma once
 
-// Bunch-Kaufman LDL^T as group-cooperative device code: LAPACK ?sytf2 (factor) and ?sytrs (solve),
+// Bunch-Kaufman \f$L D L^{T}\f$ as group-cooperative device code: LAPACK ?sytf2 (factor) and ?sytrs (solve),
 // written once for the lower form. Uplo::Upper runs the same steps on the index-reversed matrix
 // (logical i is physical n-1-i): the reversal maps ?sytf2's upper loop onto its lower loop step for
 // step, so the stored factor, D and ipiv are LAPACK's for either uplo, and only the referenced
@@ -120,8 +120,8 @@ template <typename D> inline Tile<D> w_tile(D* p, std::ptrdiff_t ld, int n, int 
 }
 
 // ?lasyf, lower form, on the uniform panel [k0, k0 + nb) of the logical matrix, starting at
-// `start` (k0, or k0 + 1 when the previous panel's last 2 x 2 block took column k0). The step at
-// the panel's last column is always taken, so a 2 x 2 block may take column k0 + nb (W's column nb):
+// `start` (k0, or k0 + 1 when the previous panel's last \f$2 \times 2\f$ block took column k0). The step at
+// the panel's last column is always taken, so a \f$2 \times 2\f$ block may take column k0 + nb (W's column nb):
 // the panel ends at k0 + nb or k0 + nb + 1, and the trailing update has one uniform rank, nb + 1.
 // W's columns the item did not compute are zero. Returns the end; *info as ldl_factor's.
 // evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
@@ -221,8 +221,8 @@ inline int ldl_panel(const Tile<D>& S, const Tile<D>& W, int n, int k0, int nb, 
         group_sync(g);
         k += kstep;
     }
-    // The last step's row search may have left column imax in W(:, nb) though the block was 1 x 1:
-    // the uniform-rank gemm reads that column, so it must be zero unless a 2 x 2 block owns it.
+    // The last step's row search may have left column imax in W(:, nb) though the block was \f$1 \times 1\f$:
+    // the uniform-rank gemm reads that column, so it must be zero unless a \f$2 \times 2\f$ block owns it.
     if (k == k0 + nb)
         for (int i = k0 + lid; i < n; i += nl) W(i, nb) = A::zero();
     return k;
@@ -253,7 +253,7 @@ inline void ldl_solve(const Tile<D>& S, int n, bool rev, const Vec<D>& b, const 
     using A = Ar<D>;
     using v2::Range;
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
-    // A list sytrf cannot have written (|ipiv| outside [1, n], an unpaired 2 x 2 entry) would index
+    // A list sytrf cannot have written (|ipiv| outside [1, n], an unpaired \f$2 \times 2\f$ entry) would index
     // b out of bounds: that item's X is NaN instead. Every lane walks the list, lane 0 decides.
     bool ok = true;
     for (int k = 0; k < n && ok;) {

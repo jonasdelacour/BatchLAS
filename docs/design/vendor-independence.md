@@ -118,19 +118,19 @@ overloads (`include/batchlas/blas/options.hh`).
 | `geqrf` | negative extents | squareness and `m >= n` (tall panels are the point; the vendor serves wide views); `tau` length |
 | `orgqr` | negative extents | `n <= m` (handed to a vendor); `tau` length |
 | `getrf` | negative extents | squareness; pivot length |
-| `getrs` | negative extents | A square, `A.rows() == B.rows()`, batch, pivot length (a non-conforming pair goes to the vendor) |
-| `getri` | negative extents of A | squareness of A and C, order and batch agreement, pivot length |
+| `getrs` | negative extents | \f$A\f$ square, `A.rows() == B.rows()`, batch, pivot length (a non-conforming pair goes to the vendor) |
+| `getri` | negative extents of \f$A\f$ | squareness of \f$A\f$ and \f$C\f$, order and batch agreement, pivot length |
 
 The arena spellings check the lengths. `getri` has two arities because `getri_buffer_size` and
-`ops::getri::key_of` take A alone, and the query must validate the view its choice is computed from.
+`ops::getri::key_of` take \f$A\f$ alone, and the query must validate the view its choice is computed from.
 `gesv` and `posv` (no vendor family) also check squareness, `B.rows() == A.rows()`, equal batch and
 (`posv`) `uplo`, since a bad pair would otherwise report "nothing runnable".
 
 ## Per-item info spans for potrf, getrf and getri
 
 `info` on `potrf`, `getrf` and `getri` (and through them `posv` and `gesv`) is one `int32` per batch
-item, 0 on success; above 0 it names the failing leading minor (`potrf`), the column where U is
-exactly singular (`getrf`) or the zero diagonal of U (`getri`). An empty span means "not requested";
+item, 0 on success; above 0 it names the failing leading minor (`potrf`), the column where \f$U\f$ is
+exactly singular (`getrf`) or the zero diagonal of \f$U\f$ (`getri`). An empty span means "not requested";
 a short non-empty span is treated the same on the positional path and rejected by
 `require_info_span` on the option overloads. The workspace size is the same either way. `info` is a
 separate inline overload, not a defaulted parameter, because the `sig::` aliases behind

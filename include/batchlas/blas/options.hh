@@ -57,7 +57,14 @@ namespace batchlas {
 
 namespace detail {
 
-// Named counterpart of require_pack_accessible: the error says "gemm: A".
+/// @brief Named counterpart of require_pack_accessible: the error says "gemm: A".
+///
+/// A no-op when pointer checks are disabled.
+/// @param[in] ctx    queue whose device must be able to access each argument
+/// @param[in] fn     op name that opens the error message
+/// @param[in] names  one name per element of @p args, in the same order
+/// @param[in] args   the arguments whose pointers are checked
+/// @throws batchlas::invalid_argument naming the first inaccessible argument
 template <typename... Args>
 inline void require_args_accessible(const Queue& ctx, const char* fn,
                                     const char* const* names, const Args&... args) {
@@ -95,6 +102,11 @@ namespace detail {
 // variadic dispatch overload binds prvalues better and skips the deducing one.
 // Positional primaries stay unchecked (library code under src/ops/ calls them per iteration).
 // evidence: docs/design/api-conventions.md#api-conventions-shape-checks-live-on-both-option-overloads
+/// @brief Throws unless a matrix is square.
+/// @param[in] fn    op name that opens the error message
+/// @param[in] name  argument name used in the message
+/// @param[in] A     the matrix (view) whose shape is checked
+/// @throws batchlas::invalid_argument if `A.rows() != A.cols()`
 template <typename MV>
 inline void require_square(const char* fn, const char* name, const MV& A) {
     if (A.rows() != A.cols())
@@ -102,6 +114,13 @@ inline void require_square(const char* fn, const char* name, const MV& A) {
             " must be square, got " + std::to_string(A.rows()) + "x" + std::to_string(A.cols()));
 }
 
+/// @brief Throws unless two matrices have the same number of rows.
+/// @param[in] fn  op name that opens the error message
+/// @param[in] an  name of @p A used in the message
+/// @param[in] A   first matrix (view)
+/// @param[in] bn  name of @p B used in the message
+/// @param[in] B   second matrix (view)
+/// @throws batchlas::invalid_argument if `A.rows() != B.rows()`
 template <typename MA, typename MB>
 inline void require_same_rows(const char* fn, const char* an, const MA& A,
                               const char* bn, const MB& B) {
@@ -111,6 +130,13 @@ inline void require_same_rows(const char* fn, const char* an, const MA& A,
             std::to_string(B.rows()) + ")");
 }
 
+/// @brief Throws unless two matrices have the same batch size.
+/// @param[in] fn  op name that opens the error message
+/// @param[in] an  name of @p A used in the message
+/// @param[in] A   first matrix (view)
+/// @param[in] bn  name of @p B used in the message
+/// @param[in] B   second matrix (view)
+/// @throws batchlas::invalid_argument if `A.batch_size() != B.batch_size()`
 template <typename MA, typename MB>
 inline void require_same_batch(const char* fn, const char* an, const MA& A,
                                const char* bn, const MB& B) {
@@ -121,6 +147,12 @@ inline void require_same_batch(const char* fn, const char* an, const MA& A,
 }
 
 // `>=`, not `==`: a caller may slice one big pivot/tau arena across several calls.
+/// @brief Throws unless a span holds at least @p need elements.
+/// @param[in] fn    op name that opens the error message
+/// @param[in] name  span name used in the message
+/// @param[in] have  the span's size
+/// @param[in] need  the minimum size
+/// @throws batchlas::invalid_argument if `have < need`
 inline void require_span_at_least(const char* fn, const char* name, size_t have, size_t need) {
     if (have < need)
         throw batchlas::invalid_argument(std::string(fn) + ": " + name + " holds " +
@@ -129,6 +161,11 @@ inline void require_span_at_least(const char* fn, const char* name, size_t have,
 
 // Empty `info` = "no status wanted". A too-short one would fail silently (stale
 // zeros read as "all factorised"), hence the check.
+/// @brief Throws when a nonempty `info` span is shorter than the batch.
+/// @param[in] fn          op name that opens the error message
+/// @param[in] have        the `info` span's size; 0 skips the check
+/// @param[in] batch_size  the batch size it must cover
+/// @throws batchlas::invalid_argument if `0 < have < batch_size`
 inline void require_info_span(const char* fn, size_t have, size_t batch_size) {
     if (have != 0) require_span_at_least(fn, "info", have, batch_size);
 }
@@ -144,9 +181,9 @@ inline void require_info_span(const char* fn, size_t have, size_t batch_size) {
 template <typename T>
 struct GemmOptions {
     T alpha = T(1);                                          ///< scale of the product
-    T beta = T(0);                                           ///< scale of the incoming C; 0 means C is not read
-    Transpose transA = Transpose::NoTrans;                   ///< op(A)
-    Transpose transB = Transpose::NoTrans;                   ///< op(B)
+    T beta = T(0);                                           ///< scale of the incoming C; \f$\beta = 0\f$ means C is not read
+    Transpose transA = Transpose::NoTrans;                   ///< \f$\mathrm{op}(A)\f$
+    Transpose transB = Transpose::NoTrans;                   ///< \f$\mathrm{op}(B)\f$
     ComputePrecision precision = ComputePrecision::Default;  ///< internal compute type; Default = the input type
 };
 
@@ -155,7 +192,7 @@ template <typename T>
 struct GemvOptions {
     T alpha = T(1);                         ///< scale of the product
     T beta = T(0);                          ///< scale of the incoming y
-    Transpose transA = Transpose::NoTrans;  ///< op(A)
+    Transpose transA = Transpose::NoTrans;  ///< \f$\mathrm{op}(A)\f$
 };
 
 /// @brief Options for symm(): \f$C := \alpha A B + \beta C\f$ (Left) or \f$\alpha B A + \beta C\f$ (Right), A symmetric.
@@ -220,9 +257,9 @@ struct Syr2kOptions {
 template <typename T>
 struct TrmmOptions {
     T alpha = T(1);                       ///< scale of the product
-    Side side = Side::Left;               ///< which side op(A) multiplies from
+    Side side = Side::Left;               ///< which side \f$\mathrm{op}(A)\f$ multiplies from
     Uplo uplo = Uplo::Lower;              ///< which triangle A is
-    Transpose trans = Transpose::NoTrans; ///< op(A)
+    Transpose trans = Transpose::NoTrans; ///< \f$\mathrm{op}(A)\f$
     Diag diag = Diag::NonUnit;            ///< Unit: A's diagonal is taken as ones and not read
 };
 
@@ -230,9 +267,9 @@ struct TrmmOptions {
 template <typename T>
 struct TrsmOptions {
     T alpha = T(1);                       ///< scale of the right-hand side
-    Side side = Side::Left;               ///< which side op(A) is on
+    Side side = Side::Left;               ///< which side \f$\mathrm{op}(A)\f$ is on
     Uplo uplo = Uplo::Lower;              ///< which triangle A is
-    Transpose trans = Transpose::NoTrans; ///< op(A)
+    Transpose trans = Transpose::NoTrans; ///< \f$\mathrm{op}(A)\f$
     Diag diag = Diag::NonUnit;            ///< Unit: A's diagonal is taken as ones and not read
 };
 
@@ -274,6 +311,12 @@ concept DenseMatrixLike = requires { typename dense_scalar<std::remove_cvref_t<M
 /// @brief gemm with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     batch; \f$\mathrm{op}(A_i)\f$ is \f$m \times k\f$
+/// @param[in]     B     batch; \f$\mathrm{op}(B_i)\f$ is \f$k \times n\f$
+/// @param[in,out] C     batch of \f$m \times n\f$ matrices; read when \f$\beta \ne 0\f$, overwritten
+/// @param[in]     opts  alpha, beta, transA, transB, precision
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
 inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmOptions<T>& opts) {
@@ -286,12 +329,12 @@ inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmO
 ///
 /// A batch whose items carry differing active extents is handled natively.
 /// @tparam MA,MB,MC  `Matrix` or `MatrixView`, dense; `T` is deduced from `A`
-/// @param ctx   queue; supplies the backend
-/// @param A     `op(A)` is m x k per item
-/// @param B     `op(B)` is k x n per item
-/// @param C     m x n per item; read when `beta != 0`, overwritten
-/// @param opts  alpha, beta, transA, transB, precision
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     \f$\mathrm{op}(A)\f$ is \f$m \times k\f$ per item
+/// @param[in]     B     \f$\mathrm{op}(B)\f$ is \f$k \times n\f$ per item
+/// @param[in,out] C     \f$m \times n\f$ per item; read when \f$\beta \ne 0\f$, overwritten
+/// @param[in]     opts  alpha, beta, transA, transB, precision
+/// @return        event of the last enqueued kernel
 /// @pre   all operands have the same batch size
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
@@ -305,6 +348,12 @@ inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmO
 /// @brief gemv with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     batch; \f$\mathrm{op}(A_i)\f$ is \f$m \times n\f$
+/// @param[in]     x     batch of vectors of length \f$n\f$
+/// @param[in,out] y     batch of vectors of length \f$m\f$; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, transA
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
                   const GemvOptions<T>& opts) {
@@ -313,12 +362,12 @@ inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorV
 }
 
 /// @brief Batched matrix-vector product \f$y_i := \alpha\,\mathrm{op}(A_i)\,x_i + \beta y_i\f$.
-/// @param ctx   queue; supplies the backend
-/// @param A     `op(A)` is m x n per item
-/// @param x     length n per item
-/// @param y     length m per item; overwritten
-/// @param opts  alpha, beta, transA
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     \f$\mathrm{op}(A)\f$ is \f$m \times n\f$ per item
+/// @param[in]     x     length \f$n\f$ per item
+/// @param[in,out] y     length \f$m\f$ per item; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, transA
+/// @return        event of the last enqueued kernel
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
@@ -331,6 +380,12 @@ inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorV
 /// @brief symm with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     symmetric, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); only the `uplo` triangle is read
+/// @param[in]     B     batch of \f$m \times n\f$ matrices
+/// @param[in,out] C     batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, side, uplo
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
 inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
@@ -339,11 +394,12 @@ inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmO
 }
 
 /// @brief Batched symmetric product \f$C := \alpha AB + \beta C\f$ (Left) or \f$\alpha BA + \beta C\f$ (Right).
-/// @param A     symmetric, m x m (Left) or n x n (Right); only the `uplo` triangle is read
-/// @param B     m x n per item
-/// @param C     m x n per item; overwritten
-/// @param opts  alpha, beta, side, uplo
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     symmetric, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); only the `uplo` triangle is read
+/// @param[in]     B     \f$m \times n\f$ per item
+/// @param[in,out] C     \f$m \times n\f$ per item; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, side, uplo
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` is complex-symmetric; use hemm() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
@@ -357,6 +413,12 @@ inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmO
 /// @brief hemm with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     Hermitian, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); only the `uplo` triangle is read
+/// @param[in]     B     batch of \f$m \times n\f$ matrices
+/// @param[in,out] C     batch of \f$m \times n\f$ matrices; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, side, uplo
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
     requires ComplexScalar<T>
@@ -369,8 +431,12 @@ inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmO
 ///
 /// The unread triangle is taken as the conjugate transpose of the `uplo` one and
 /// the diagonal's imaginary part as zero, whatever is stored there.
-/// @param opts  alpha, beta, side, uplo
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     Hermitian, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); only the `uplo` triangle is read
+/// @param[in]     B     \f$m \times n\f$ per item
+/// @param[in,out] C     \f$m \times n\f$ per item; input scaled by \f$\beta\f$, overwritten
+/// @param[in]     opts  alpha, beta, side, uplo
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` only.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
@@ -385,6 +451,11 @@ inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmO
 /// @brief herk with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (ConjTrans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is read and written
+/// @param[in]     opts  real alpha and beta, uplo, trans
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
     requires ComplexScalar<T>
@@ -394,11 +465,12 @@ inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& op
 }
 
 /// @brief Batched Hermitian rank-k update \f$C := \alpha AA^H + \beta C\f$ (NoTrans) or \f$\alpha A^HA + \beta C\f$ (ConjTrans).
-/// @param A     n x k (NoTrans) or k x n (ConjTrans) per item
-/// @param C     n x n per item; only the `uplo` triangle is written, the other is
-///              left exactly as it was (mirror it with `hermitize` if needed)
-/// @param opts  real alpha and beta, uplo, trans
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (ConjTrans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is written, the other is
+///                      left exactly as it was (mirror it with `hermitize` if needed)
+/// @param[in]     opts  real alpha and beta, uplo, trans
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` only.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
@@ -413,6 +485,11 @@ inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& op
 /// @brief her2k with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A,B   \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (ConjTrans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is read and written
+/// @param[in]     opts  complex alpha, real beta, uplo, trans
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
     requires ComplexScalar<T>
@@ -423,10 +500,11 @@ inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
 }
 
 /// @brief Batched Hermitian rank-2k update \f$C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B)^H + \bar\alpha\,\mathrm{op}(B)\,\mathrm{op}(A)^H + \beta C\f$.
-/// @param A,B   n x k (NoTrans) or k x n (ConjTrans) per item
-/// @param C     n x n per item; only the `uplo` triangle is written, real diagonal
-/// @param opts  complex alpha, real beta, uplo, trans
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A,B   \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (ConjTrans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is written, real diagonal
+/// @param[in]     opts  complex alpha, real beta, uplo, trans
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` only.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
@@ -442,6 +520,11 @@ inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
 /// @brief syrk with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (Trans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is read and written
+/// @param[in]     opts  alpha, beta, uplo, trans
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& opts) {
@@ -450,11 +533,12 @@ inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& op
 }
 
 /// @brief Batched symmetric rank-k update \f$C := \alpha AA^T + \beta C\f$ (NoTrans) or \f$\alpha A^TA + \beta C\f$ (Trans).
-/// @param A     n x k (NoTrans) or k x n (Trans) per item
-/// @param C     n x n per item; only the `uplo` triangle is written, the other is
-///              left exactly as it was (mirror it with `symmetrize` if needed)
-/// @param opts  alpha, beta, uplo, trans
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (Trans) per item
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is written, the other is
+///                      left exactly as it was (mirror it with `symmetrize` if needed)
+/// @param[in]     opts  alpha, beta, uplo, trans
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` is complex-symmetric (NoTrans/Trans); use herk() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
@@ -468,6 +552,11 @@ inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& op
 /// @brief syr2k with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A,B   \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (Trans) per item, \f$k > 0\f$
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is read and written
+/// @param[in]     opts  alpha, beta, uplo, trans
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
 inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
@@ -477,10 +566,11 @@ inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
 }
 
 /// @brief Batched symmetric rank-2k update \f$C := \alpha(\mathrm{op}(A)\,\mathrm{op}(B)^T + \mathrm{op}(B)\,\mathrm{op}(A)^T) + \beta C\f$.
-/// @param A,B   n x k (NoTrans) or k x n (Trans) per item, k > 0
-/// @param C     n x n per item; only the `uplo` triangle is written
-/// @param opts  alpha, beta, uplo, trans
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A,B   \f$n \times k\f$ (NoTrans) or \f$k \times n\f$ (Trans) per item, \f$k > 0\f$
+/// @param[in,out] C     \f$n \times n\f$ per item; only the `uplo` triangle is written
+/// @param[in]     opts  alpha, beta, uplo, trans
+/// @return        event of the last enqueued kernel
 /// @note  Complex `T` is complex-symmetric (NoTrans/Trans); use her2k() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
@@ -495,6 +585,12 @@ inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
 /// @brief trmm with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]  ctx   queue the kernels are enqueued on
+/// @param[in]  A     triangular, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); `uplo` and `diag` describe it
+/// @param[in]  B     \f$m \times n\f$ per item; read only
+/// @param[out] C     \f$m \times n\f$ per item; overwritten with the product
+/// @param[in]  opts  alpha, side, uplo, trans, diag
+/// @return     event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           detail::DenseMatrixLike MC, typename T = detail::dense_scalar_t<MA>>
 inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmOptions<T>& opts) {
@@ -506,11 +602,12 @@ inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmO
 /// @brief Batched triangular product, out of place: \f$C := \alpha\,\mathrm{op}(A)\,B\f$ (Left) or \f$\alpha B\,\mathrm{op}(A)\f$ (Right).
 ///
 /// Unlike reference BLAS `?trmm`, the result goes to `C`; `B` is not modified.
-/// @param A     triangular, m x m (Left) or n x n (Right); `uplo` and `diag` describe it
-/// @param B     m x n per item; read only
-/// @param C     m x n per item; overwritten
-/// @param opts  alpha, side, uplo, trans, diag
-/// @return      event of the last enqueued kernel
+/// @param[in]  ctx   queue; supplies the backend
+/// @param[in]  A     triangular, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); `uplo` and `diag` describe it
+/// @param[in]  B     \f$m \times n\f$ per item; read only
+/// @param[out] C     \f$m \times n\f$ per item; overwritten with the product
+/// @param[in]  opts  alpha, side, uplo, trans, diag
+/// @return     event of the last enqueued kernel
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
@@ -523,6 +620,11 @@ inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmO
 /// @brief trsm with a compile-time backend; same contract as the Queue-deducing
 ///        overload, without the pointer check.
 /// @tparam Back  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     triangular, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); `uplo` and `diag` describe it
+/// @param[in,out] B     \f$m \times n\f$ per item; overwritten with \f$X\f$
+/// @param[in]     opts  alpha, side, uplo, trans, diag
+/// @return        event of the last enqueued kernel
 template <Backend Back, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
@@ -531,10 +633,11 @@ inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& op
 }
 
 /// @brief Batched triangular solve \f$\mathrm{op}(A)X = \alpha B\f$ (Left) or \f$X\,\mathrm{op}(A) = \alpha B\f$ (Right), in place.
-/// @param A     triangular, m x m (Left) or n x n (Right); `uplo` and `diag` describe it
-/// @param B     m x n per item; overwritten with X
-/// @param opts  alpha, side, uplo, trans, diag
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     triangular, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right); `uplo` and `diag` describe it
+/// @param[in,out] B     \f$m \times n\f$ per item; overwritten with \f$X\f$
+/// @param[in]     opts  alpha, side, uplo, trans, diag
+/// @return        event of the last enqueued kernel
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
@@ -549,15 +652,15 @@ inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& op
 /// @brief Options for potrf(): Cholesky \f$A = LL^H\f$ (Lower) or \f$U^HU\f$ (Upper).
 struct PotrfOptions {
     Uplo uplo = Uplo::Lower;  ///< triangle read and overwritten with the factor
-    /// Per-item status, one int32 per batch item: 0 = factorised, > 0 = the order of
-    /// the leading minor that is not positive definite. Empty (the default) reports
+    /// Per-item status, one int32 per batch item: 0 if factorised, \f$i > 0\f$ if the
+    /// leading minor of order \f$i\f$ is not positive definite. Empty (the default) reports
     /// nothing; otherwise device-accessible, at least `batch_size` long, written in place.
     Span<int32_t> info = {};
 };
 
 /// @brief Options for getrs(): solve \f$\mathrm{op}(A)X = B\f$ with getrf's factors.
 struct GetrsOptions {
-    Transpose trans = Transpose::NoTrans;  ///< op(A)
+    Transpose trans = Transpose::NoTrans;  ///< \f$\mathrm{op}(A)\f$
 };
 
 /// @brief Options for syev(): symmetric/Hermitian eigendecomposition.
@@ -568,7 +671,13 @@ struct SyevOptions {
 
 /// @brief potrf with a compile-time backend and a caller workspace.
 /// @tparam B   backend to run on
-/// @param ws   at least `potrf_buffer_size<B, T>(ctx, A, opts.uplo)` bytes
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is overwritten with the factor
+/// @param[in]     opts  uplo and an optional per-item `info` span whose device buffer receives
+///                      the status (when non-empty)
+/// @param[out]    ws    at least `potrf_buffer_size<B, T>(ctx, A, opts.uplo)` bytes; contents
+///                      undefined on return
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
@@ -580,6 +689,11 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::
 
 /// @brief potrf with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is overwritten with the factor
+/// @param[in]     opts  uplo and an optional per-item `info` span whose device buffer receives
+///                      the status (when non-empty)
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `A` is not square or `opts.info` is non-empty and short
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts) {
@@ -593,8 +707,14 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts) {
 /// @brief Batched Cholesky factorisation with a caller-owned workspace.
 ///
 /// Same contract as the arena overload; the call stays asynchronous on any queue.
-/// @param ws  device-accessible scratch of at least `potrf_buffer_size` bytes;
-///            must outlive the kernels
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read and overwritten
+///                      with the factor, the other triangle is not referenced
+/// @param[in]     opts  uplo and an optional per-item `info` span whose device buffer receives
+///                      the status (when non-empty)
+/// @param[out]    ws    device-accessible scratch of at least `potrf_buffer_size` bytes;
+///                      must outlive the kernels, contents undefined on return
+/// @return        event of the last enqueued kernel
 /// @warning   With an empty option struct, write `PotrfOptions{}`: a bare `{}` is
 ///            rejected as ambiguous (it would otherwise mean `Uplo::Upper`).
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
@@ -609,11 +729,12 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::
 /// @brief Batched Cholesky factorisation \f$A_i = L_iL_i^H\f$ (Lower) or \f$U_i^HU_i\f$ (Upper), in place.
 ///
 /// Workspace is leased from the queue's arena (blocking on an out-of-order queue).
-/// @param ctx   queue; supplies the backend and the arena
-/// @param A     n x n per item; the `uplo` triangle is read and overwritten with the
-///              factor, the other triangle is not referenced
-/// @param opts  uplo (default Lower) and an optional per-item `info` span
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend and the arena
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read and overwritten with the
+///                      factor, the other triangle is not referenced
+/// @param[in]     opts  uplo (default Lower) and an optional per-item `info` span whose device
+///                      buffer receives the status (when non-empty)
+/// @return        event of the last enqueued kernel
 /// @note  A matrix that is not positive definite yields a non-zero `info` entry and
 ///        an undefined factor for that item; no exception.
 /// @throws batchlas::invalid_argument if `A` is not square or `opts.info` is non-empty
@@ -652,6 +773,13 @@ Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>)
 // would be ambiguous with the positional call.
 /// @brief getrf with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx     queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A       \f$m \times n\f$ per item; overwritten with \f$L\f$ and \f$U\f$
+/// @param[out]    pivots  at least `min(m, n) * batch_size` entries; receives the pivots
+/// @param[out]    info    optional per-item status: 0 = success, \f$i > 0\f$ if \f$U_{ii}\f$ is
+///                        exactly zero (1-based; the factorisation completed but \f$U\f$ is
+///                        singular); empty reports nothing
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> info = {}) {
@@ -667,12 +795,14 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> 
 ///
 /// Workspace is leased from the queue's arena. `L` (unit diagonal, implicit) and
 /// `U` overwrite `A`.
-/// @param ctx     queue; supplies the backend and the arena
-/// @param A       m x n per item (getrs() and getri() need m == n)
-/// @param pivots  at least `min(m, n) * batch_size` entries; pass it unchanged to getrs() or
-///                getri() (see the pivot format note on the positional getrf)
-/// @param info    optional per-item status: 0 = success, > 0 = index of the first
-///                exactly-zero pivot; empty reports nothing
+/// @param[in]     ctx     queue; supplies the backend and the arena
+/// @param[in,out] A       \f$m \times n\f$ per item (getrs() and getri() need \f$m = n\f$); overwritten
+///                        with \f$L\f$ and \f$U\f$
+/// @param[out]    pivots  at least `min(m, n) * batch_size` entries; pass it unchanged to getrs() or
+///                        getri() (see the pivot format note on the positional getrf)
+/// @param[out]    info    optional per-item status: 0 = success, \f$i > 0\f$ if \f$U_{ii}\f$ is
+///                        exactly zero (1-based; the factorisation completed but \f$U\f$ is
+///                        singular); empty reports nothing
 /// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if a span is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
@@ -688,6 +818,13 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> 
 
 /// @brief getrs with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @param[in]     ctx     queue the kernels are enqueued on
+/// @param[in]     A       \f$n \times n\f$ per item, already factorised by getrf()
+/// @param[in,out] B_      \f$n \times n_{\mathrm{rhs}}\f$ per item; overwritten with \f$X\f$
+/// @param[in]     pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[in]     opts    trans
+/// @param[out]    ws      at least `getrs_buffer_size` bytes; contents undefined on return
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
@@ -704,6 +841,12 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
 
 /// @brief getrs with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx     queue the kernels are enqueued on; supplies the arena
+/// @param[in]     A       \f$n \times n\f$ per item, already factorised by getrf()
+/// @param[in,out] B_      \f$n \times n_{\mathrm{rhs}}\f$ per item; overwritten with \f$X\f$
+/// @param[in]     pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[in]     opts    trans
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
@@ -720,7 +863,14 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
 }
 
 /// @brief Batched LU solve with a caller-owned workspace; otherwise as the arena overload.
-/// @param ws  device-accessible scratch of at least `getrs_buffer_size` bytes
+/// @param[in]     ctx     queue; supplies the backend
+/// @param[in]     A       \f$n \times n\f$ per item, already factorised by getrf()
+/// @param[in,out] B_      \f$n \times n_{\mathrm{rhs}}\f$ per item; overwritten with \f$X\f$
+/// @param[in]     pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[in]     opts    trans
+/// @param[out]    ws      device-accessible scratch of at least `getrs_buffer_size` bytes;
+///                        contents undefined on return
+/// @return        event of the last enqueued kernel
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
@@ -739,10 +889,11 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
 ///
 /// Workspace is leased from the queue's arena. No status is reported: a singular
 /// factor produces non-finite or meaningless `X` without an exception.
-/// @param A       n x n per item, already factorised by getrf()
-/// @param B_      n x nrhs per item; overwritten with X
-/// @param pivots  getrf()'s pivots, at least `n * batch_size` entries
-/// @param opts    trans
+/// @param[in]     ctx     queue; supplies the backend and the arena
+/// @param[in]     A       \f$n \times n\f$ per item, already factorised by getrf()
+/// @param[in,out] B_      \f$n \times n_{\mathrm{rhs}}\f$ per item; overwritten with \f$X\f$
+/// @param[in]     pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[in]     opts    trans
 /// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `A` is not square, `A` and `B_` differ in rows
 ///         or batch size, or `pivots` is too short
@@ -763,6 +914,13 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
 
 /// @brief getri with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]  ctx     queue the kernels are enqueued on; supplies the arena
+/// @param[in]  A       \f$n \times n\f$ per item, already factorised by getrf(); read only
+/// @param[out] Ainv    \f$n \times n\f$ per item; overwritten with \f$A^{-1}\f$; must not alias `A`
+/// @param[in]  pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[out] info    optional per-item status: 0 = success, \f$i > 0\f$ if \f$U_{ii}\f$ is
+///                     exactly zero; empty reports nothing
+/// @return     event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
@@ -783,12 +941,15 @@ inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots
 /// @brief Batched inverse \f$A_{\mathrm{inv},i} := A_i^{-1}\f$ from getrf()'s factors.
 ///
 /// Workspace is leased from the queue's arena. `A` is read only.
-/// @param A       n x n per item, already factorised by getrf()
-/// @param Ainv    n x n per item; overwritten with the inverse
-/// @param pivots  getrf()'s pivots, at least `n * batch_size` entries
-/// @param info    optional per-item status (0 = success); empty reports nothing
-/// @return        event of the last enqueued kernel
-/// @throws batchlas::invalid_argument on a non-square or mismatched operand or a short span
+/// @param[in]  ctx     queue; supplies the backend and the arena
+/// @param[in]  A       \f$n \times n\f$ per item, already factorised by getrf()
+/// @param[out] Ainv    \f$n \times n\f$ per item; overwritten with the inverse; must not alias `A`
+/// @param[in]  pivots  getrf()'s pivots, at least `n * batch_size` entries
+/// @param[out] info    optional per-item status: 0 = success, \f$i > 0\f$ if \f$U_{ii}\f$ is
+///                     exactly zero; empty reports nothing
+/// @return     event of the last enqueued kernel
+/// @throws batchlas::invalid_argument on a non-square or mismatched operand, `Ainv` aliasing
+///         `A`, or a short span
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
@@ -808,6 +969,11 @@ inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots
 
 /// @brief geqrf with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx  queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A    \f$m \times n\f$ per item; overwritten with \f$R\f$ and the Householder vectors
+/// @param[out]    tau  at least `min(m, n) * batch_size` entries; receives the reflector scalars
+/// @return        event of the last enqueued kernel
+/// @throws batchlas::invalid_argument if `tau` is too short
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
     using V = BATCHLAS_DENSE_VIEW(T);
@@ -821,10 +987,12 @@ inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
 ///
 /// `R` overwrites the upper triangle of `A`, the Householder vectors are stored
 /// below it, and their scalars go to `tau`. Workspace is leased from the arena.
-/// @param A    m x n per item (rectangular allowed)
-/// @param tau  at least `min(m, n) * batch_size` entries; item i's scalars start at
-///             `i * min(m, n)`
-/// @return     event of the last enqueued kernel
+/// @param[in]     ctx  queue; supplies the backend and the arena
+/// @param[in,out] A    \f$m \times n\f$ per item (rectangular allowed); overwritten with \f$R\f$
+///                     and the Householder vectors
+/// @param[out]    tau  at least `min(m, n) * batch_size` entries; item \f$i\f$'s scalars start at
+///                     `i * min(m, n)`
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `tau` is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
@@ -839,6 +1007,12 @@ inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
 
 /// @brief orgqr with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx  queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A    \f$m \times n\f$ per item, \f$m \ge n\f$ (not checked), as left by geqrf();
+///                     overwritten with \f$Q\f$
+/// @param[in]     tau  geqrf()'s scalars, at least `min(m, n) * batch_size` entries
+/// @return        event of the last enqueued kernel
+/// @throws batchlas::invalid_argument if `tau` is too short
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
     using V = BATCHLAS_DENSE_VIEW(T);
@@ -850,11 +1024,13 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
 
 /// @brief Form the explicit Q of geqrf() in place.
 ///
-/// Overwrites `A` (holding geqrf()'s reflectors) with the first min(m, n) columns
-/// of Q. Workspace is leased from the arena.
-/// @param A    m x n per item, as left by geqrf()
-/// @param tau  geqrf()'s scalars, at least `min(m, n) * batch_size` entries
-/// @return     event of the last enqueued kernel
+/// Overwrites `A` (holding geqrf()'s reflectors) with the first \f$n\f$ columns
+/// of \f$Q\f$. Workspace is leased from the arena.
+/// @param[in]     ctx  queue; supplies the backend and the arena
+/// @param[in,out] A    \f$m \times n\f$ per item, \f$m \ge n\f$ (not checked), as left by geqrf();
+///                     overwritten with \f$Q\f$
+/// @param[in]     tau  geqrf()'s scalars, at least `min(m, n) * batch_size` entries
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `tau` is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
@@ -868,6 +1044,13 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
 
 /// @brief syev with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read, then overwritten with
+///                      the eigenvectors (EigenVectors) or left unspecified
+/// @param[out]    W     real, at least `n * batch_size` entries; eigenvalues ascending per item
+/// @param[in]     opts  jobz, uplo
+/// @param[out]    ws    at least `syev_buffer_size` bytes; contents undefined on return
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
@@ -881,6 +1064,12 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 
 /// @brief syev with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read, then overwritten with
+///                      the eigenvectors (EigenVectors) or left unspecified
+/// @param[out]    W     real, at least `n * batch_size` entries; eigenvalues ascending per item
+/// @param[in]     opts  jobz, uplo
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
@@ -895,7 +1084,14 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 
 /// @brief Batched symmetric/Hermitian eigensolver with a caller-owned workspace;
 ///        otherwise as the arena overload.
-/// @param ws  device-accessible scratch of at least `syev_buffer_size` bytes
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read, then overwritten with
+///                      the eigenvectors (EigenVectors) or left unspecified
+/// @param[out]    W     real, at least `n * batch_size` entries; eigenvalues ascending per item
+/// @param[in]     opts  jobz, uplo
+/// @param[out]    ws    device-accessible scratch of at least `syev_buffer_size` bytes;
+///                      contents undefined on return
+/// @return        event of the last enqueued kernel
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts, Span<std::byte> ws) {
@@ -911,12 +1107,13 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 ///
 /// Workspace is leased from the queue's arena. This spelling reports no per-item
 /// convergence status; use the positional syev() with an `info` span for that.
-/// @param A     n x n per item; the `uplo` triangle is read. Overwritten with the
-///              eigenvectors (columns) when `opts.jobz == JobType::EigenVectors`,
-///              left unspecified otherwise
-/// @param W     real, at least `n * batch_size` entries; eigenvalues ascending per item
-/// @param opts  jobz, uplo
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend and the arena
+/// @param[in,out] A     \f$n \times n\f$ per item; the `uplo` triangle is read. Overwritten with the
+///                      eigenvectors (columns) when `opts.jobz == JobType::EigenVectors`,
+///                      left unspecified otherwise
+/// @param[out]    W     real, at least `n * batch_size` entries; eigenvalues ascending per item
+/// @param[in]     opts  jobz, uplo
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `A` is not square or `W` is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
@@ -936,12 +1133,22 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 /// @brief Options for ormqr(): apply geqrf()'s Q, \f$C := \mathrm{op}(Q)C\f$ (Left) or \f$C\,\mathrm{op}(Q)\f$ (Right).
 struct OrmqrOptions {
     Side side = Side::Left;                ///< which side Q multiplies from
-    Transpose trans = Transpose::NoTrans;  ///< op(Q)
+    Transpose trans = Transpose::NoTrans;  ///< \f$\mathrm{op}(Q)\f$
     int32_t block_size_hint = 0;           ///< WY panel width; 0 lets the tuning table pick
 };
 
 /// @brief ormqr with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     geqrf()'s output, \f$m \times n\f$ per item, holding \f$k = \min(m, n)\f$ reflectors
+///                      below the diagonal; not modified
+/// @param[in,out] C     \f$m\f$ rows (Left) or \f$m\f$ columns (Right) per item, \f$m\f$ = `A.rows()`;
+///                      overwritten with the product
+/// @param[in]     tau   geqrf()'s scalars, at least `min(A.rows(), A.cols()) * batch_size`
+/// @param[in]     opts  side, trans, block_size_hint
+/// @param[out]    ws    at least `ormqr_buffer_size` bytes, sized with the same
+///                      `block_size_hint`; contents undefined on return
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
@@ -956,6 +1163,14 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
 
 /// @brief ormqr with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx   queue the kernels are enqueued on; supplies the arena
+/// @param[in]     A     geqrf()'s output, \f$m \times n\f$ per item, holding \f$k = \min(m, n)\f$ reflectors
+///                      below the diagonal; not modified
+/// @param[in,out] C     \f$m\f$ rows (Left) or \f$m\f$ columns (Right) per item, \f$m\f$ = `A.rows()`;
+///                      overwritten with the product
+/// @param[in]     tau   geqrf()'s scalars, at least `min(A.rows(), A.cols()) * batch_size`
+/// @param[in]     opts  side, trans, block_size_hint
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
@@ -972,9 +1187,17 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
                        opts.block_size_hint);
 }
 
-/// @brief Apply Q from geqrf() with a caller-owned workspace; otherwise as the arena overload.
-/// @param ws  device-accessible scratch of at least `ormqr_buffer_size` bytes, sized
-///            with the same `block_size_hint`
+/// @brief Apply \f$Q\f$ from geqrf() with a caller-owned workspace; otherwise as the arena overload.
+/// @param[in]     ctx   queue; supplies the backend
+/// @param[in]     A     geqrf()'s output, \f$m \times n\f$ per item, holding \f$k = \min(m, n)\f$ reflectors
+///                      below the diagonal; not modified
+/// @param[in,out] C     \f$m\f$ rows (Left) or \f$m\f$ columns (Right) per item, \f$m\f$ = `A.rows()`;
+///                      overwritten with the product
+/// @param[in]     tau   geqrf()'s scalars, at least `min(A.rows(), A.cols()) * batch_size`
+/// @param[in]     opts  side, trans, block_size_hint
+/// @param[out]    ws    device-accessible scratch of at least `ormqr_buffer_size` bytes, sized
+///                      with the same `block_size_hint`; contents undefined on return
+/// @return        event of the last enqueued kernel
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
@@ -990,11 +1213,14 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
 /// @brief Apply the Q of geqrf() to C: \f$C_i := \mathrm{op}(Q_i)C_i\f$ (Left) or \f$C_i\,\mathrm{op}(Q_i)\f$ (Right).
 ///
 /// Workspace is leased from the queue's arena.
-/// @param A     geqrf()'s output (reflectors below the diagonal), m x k per item
-/// @param C     overwritten with the product
-/// @param tau   geqrf()'s scalars, at least `min(A.rows(), A.cols()) * batch_size`
-/// @param opts  side, trans, block_size_hint
-/// @return      event of the last enqueued kernel
+/// @param[in]     ctx   queue; supplies the backend and the arena
+/// @param[in]     A     geqrf()'s output, \f$m \times n\f$ per item, holding \f$k = \min(m, n)\f$ reflectors
+///                      below the diagonal; not modified
+/// @param[in,out] C     \f$m\f$ rows (Left) or \f$m\f$ columns (Right) per item, \f$m\f$ = `A.rows()`;
+///                      overwritten with the product
+/// @param[in]     tau   geqrf()'s scalars, at least `min(A.rows(), A.cols()) * batch_size`
+/// @param[in]     opts  side, trans, block_size_hint
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `A` and `C` differ in batch size or `tau` is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
@@ -1013,7 +1239,7 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
 /// @brief Options for gesvd(): \f$A = U\Sigma V^H\f$.
 struct GesvdOptions {
     SvdVectors jobu = SvdVectors::All;   ///< which columns of U to compute
-    SvdVectors jobvh = SvdVectors::All;  ///< which rows of V^H to compute
+    SvdVectors jobvh = SvdVectors::All;  ///< which rows of \f$V^H\f$ to compute
     /// Engaged: A is Hermitian and the given triangle is read (square only); this
     /// selects a different entry point, hence optional rather than a sentinel.
     std::optional<Uplo> hermitian_uplo = std::nullopt;
@@ -1021,6 +1247,18 @@ struct GesvdOptions {
 
 /// @brief gesvd with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @param[in]     ctx              queue the kernels are enqueued on
+/// @param[in,out] A                \f$m \times n\f$ per item (square when `hermitian_uplo` is engaged);
+///                                 overwritten (destroyed)
+/// @param[out]    singular_values  real, at least `min(m, n) * batch_size`; descending per item
+/// @param[out]    U                \f$m \times m\f$ (All) or \f$m \times k\f$ (Thin), \f$k = \min(m, n)\f$;
+///                                 default-constructed for None
+/// @param[out]    Vh               \f$V^H\f$: \f$n \times n\f$ (All) or \f$k \times n\f$ (Thin);
+///                                 default-constructed for None
+/// @param[in]     opts             jobu, jobvh, hermitian_uplo
+/// @param[out]    ws               at least `gesvd_buffer_size` bytes for the same `hermitian_uplo`
+///                                 branch; contents undefined on return
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
           detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
@@ -1038,6 +1276,16 @@ inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> si
 
 /// @brief gesvd with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @param[in]     ctx              queue the kernels are enqueued on; supplies the arena
+/// @param[in,out] A                \f$m \times n\f$ per item (square when `hermitian_uplo` is engaged);
+///                                 overwritten (destroyed)
+/// @param[out]    singular_values  real, at least `min(m, n) * batch_size`; descending per item
+/// @param[out]    U                \f$m \times m\f$ (All) or \f$m \times k\f$ (Thin), \f$k = \min(m, n)\f$;
+///                                 default-constructed for None
+/// @param[out]    Vh               \f$V^H\f$: \f$n \times n\f$ (All) or \f$k \times n\f$ (Thin);
+///                                 default-constructed for None
+/// @param[in]     opts             jobu, jobvh, hermitian_uplo
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
           detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
@@ -1063,8 +1311,19 @@ inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> si
 }
 
 /// @brief Batched SVD with a caller-owned workspace; otherwise as the arena overload.
-/// @param ws  device-accessible scratch of at least `gesvd_buffer_size` bytes, sized
-///            for the same `hermitian_uplo` branch
+/// @param[in]     ctx              queue; supplies the backend
+/// @param[in,out] A                \f$m \times n\f$ per item (square when `hermitian_uplo` is engaged);
+///                                 overwritten (destroyed)
+/// @param[out]    singular_values  real, at least `min(m, n) * batch_size`; descending per item
+/// @param[out]    U                \f$m \times m\f$ (All) or \f$m \times k\f$ (Thin), \f$k = \min(m, n)\f$;
+///                                 default-constructed for None
+/// @param[out]    Vh               \f$V^H\f$: \f$n \times n\f$ (All) or \f$k \times n\f$ (Thin);
+///                                 default-constructed for None
+/// @param[in]     opts             jobu, jobvh, hermitian_uplo
+/// @param[out]    ws               device-accessible scratch of at least `gesvd_buffer_size` bytes,
+///                                 sized for the same `hermitian_uplo` branch; contents undefined
+///                                 on return
+/// @return        event of the last enqueued kernel
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MU, detail::DenseMatrixLike MV,
           typename T = detail::dense_scalar_t<MA>>
 inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
@@ -1082,12 +1341,16 @@ inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> si
 /// Workspace is leased from the queue's arena. `A` is overwritten. This spelling
 /// reports no per-item convergence status; use the positional gesvd() with an
 /// `info` span for that.
-/// @param A                m x n per item (square when `hermitian_uplo` is engaged)
-/// @param singular_values  real, at least `min(m, n) * batch_size`; descending per item
-/// @param U                m x m (All) or m x k (Thin); default-constructed for None
-/// @param Vh               n x n (All) or k x n (Thin); default-constructed for None
-/// @param opts             jobu, jobvh, hermitian_uplo
-/// @return                 event of the last enqueued kernel
+/// @param[in]     ctx              queue; supplies the backend and the arena
+/// @param[in,out] A                \f$m \times n\f$ per item (square when `hermitian_uplo` is engaged);
+///                                 overwritten (destroyed)
+/// @param[out]    singular_values  real, at least `min(m, n) * batch_size`; descending per item
+/// @param[out]    U                \f$m \times m\f$ (All) or \f$m \times k\f$ (Thin), \f$k = \min(m, n)\f$;
+///                                 default-constructed for None
+/// @param[out]    Vh               \f$V^H\f$: \f$n \times n\f$ (All) or \f$k \times n\f$ (Thin);
+///                                 default-constructed for None
+/// @param[in]     opts             jobu, jobvh, hermitian_uplo
+/// @return        event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if `singular_values` is too short, or `A` is
 ///         not square with `hermitian_uplo` engaged
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device

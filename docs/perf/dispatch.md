@@ -26,7 +26,7 @@ Tests: `<Op>Candidates.UnknownPinsThrow`, `.CanRunFalsePinsThrow` and `.ClassWor
 | op | spellings | throws when pinned |
 |---|---|---|
 | `symm` | `mirror`, `expand`, `vendor` | `mirror`, `expand` on a heterogeneous batch; `expand` when one item's scratch does not fit (e.g. `BATCHLAS_EXPAND_MAX_BYTES=0`) |
-| `syrk` | `gram`, `triangular`, `vendor` | `triangular` on complex<double> (not compiled); `gram` at n > 128 |
+| `syrk` | `gram`, `triangular`, `vendor` | `triangular` on complex<double> (not compiled); `gram` at \f$n > 128\f$ |
 | `syr2k` | `triangular`, `vendor` | `triangular` on complex<double> (not compiled) |
 | `trmm` | `triangular`, `expand`, `vendor` | `triangular` with `Side::Right`. `vendor` is the `cublas?trmm` loop; the old `vendor` (expand + gemm) is now `expand` |
 
@@ -76,7 +76,7 @@ Each of these made the instrument look healthy while it reported almost nothing:
 
 | Alternative | Result | Verdict |
 |---|---|---|
-| Split each level-3 TU into portable and CUDA halves and transcribe the gate thresholds into `RouteTable::preferred` | Silent route change: the transcribed `>= 3` rule rejected the syrk tile route for 129 <= n <= 383 at every batch, and n = 256 went to a route that wrote both triangles | Rejected. Flat selection transcribes the whole old gate per grid cell (`--fidelity` against `ff340fc6`) and was accepted at 100.00% off-grid agreement (@ref design_flat_selection) |
+| Split each level-3 TU into portable and CUDA halves and transcribe the gate thresholds into `RouteTable::preferred` | Silent route change: the transcribed `>= 3` rule rejected the syrk tile route for \f$129 \le n \le 383\f$ at every batch, and \f$n = 256\f$ went to a route that wrote both triangles | Rejected. Flat selection transcribes the whole old gate per grid cell (`--fidelity` against `ff340fc6`) and was accepted at 100.00% off-grid agreement (@ref design_flat_selection) |
 | Public entry point as the sideways vendor fallback | A public re-entry after a gate that had already returned true recursed without bound (reachable with a forced pin on a CPU queue) | Rejected. Each `vendor` family calls `backend::<op>_vendor<B, T>` directly |
 | One flag that "becomes true for every backend" for tile substitution | Too wide in type and in backend | Replaced by `select::level3_tile_substitution_enabled<B, T>` ([why](../design/vendor-independence.md#the-vendor-gate-why-the-tile-route-predicate-is-per-backend-and-scalar)) |
 
@@ -94,7 +94,7 @@ Wrong answers found, how they hid, and what guards them now.
   `*_buffer_size` run the same choice.
 * **`vendor` must be one fieldless family.** Route-era `is_vendor()` let a forced cuBLASDx request count as "the
   caller asked for the vendor". cuBLASDx is deleted; `vendor` is the only family that calls a vendor library.
-* **An order-walk fallback inverted GEMM's default.** Taking the first merely supported route moved an 8x8x8
+* **An order-walk fallback inverted GEMM's default.** Taking the first merely supported route moved an \f$8 \times 8 \times 8\f$
   batch-1 GEMM from vendor to native. A last resort now applies only when no table entry can run.
 * **Two ROCm defects invisible to the CUDA build** (a `trsm` instantiation in the old parameter order, four
   orphaned macro-continuation lines), caught by `scripts/rocm_syntax_check.sh`.

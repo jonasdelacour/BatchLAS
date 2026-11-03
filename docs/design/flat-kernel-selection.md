@@ -109,7 +109,7 @@ so neither device borrows; per-table provenance is in @ref tuned_tables_readme.
 
 **Nearest row.** Exact keys must match, dropping exact keys from the right until some row matches.
 Among those rows the smallest \f$\sum_i w_i\,|\log_2(\mathrm{row}_i/\mathrm{key}_i)|\f$ over the
-`:log` keys wins (`<name>:log:<w>`, default weight 1); ties within 1e-9 go to the smaller log keys.
+`:log` keys wins (`<name>:log:<w>`, default weight 1); ties within \f$10^{-9}\f$ go to the smaller log keys.
 
 **Borrowing** (`tables_in_borrow_order`, `src/select/select.cc`): the device's own table; then the
 same family, nearest arch at or below, then above; then families `sm`, `gfx`, `intel`, `apple`, any
@@ -144,7 +144,7 @@ whose `can_run` is false at a cell is recorded as skipped.
 ### 6.2 Grid and edge refinement
 
 The grid is `choice.hh`'s `grid_*`. Inputs are capped at 4 GiB (`--cap-gib`); tiered runs skip any
-dimension above 2048 (`--max-dim`). The custom protocol bisects n at the geometric midpoint where
+dimension above 2048 (`--max-dim`). The custom protocol bisects \f$n\f$ at the geometric midpoint where
 neighbours disagree until `hi/lo < 1.1` (batch is not refined).
 
 ### 6.3 Noise protocol
@@ -183,7 +183,7 @@ rules are in @ref dev_agent_guide §8.
 
 Every `candidates<T>()` entry for every dtype, pinned with `ScopedPin`, on shapes straddling its
 `can_run` limits both ways, checked with `batchlas::verify`, with non-natural `ld`/stride, complex
-data, accepted poison and a >= 1024-item bit-identical batch for local-memory tiers.
+data, accepted poison and a \f$\ge 1024\f$-item bit-identical batch for local-memory tiers.
 
 ### 8.2 `can_run` equals launch
 
@@ -218,7 +218,7 @@ ops (gemm not run), and potrf on sm_120 had 0 FAIL over 33 timed changed cells (
 1. The op's `*_candidates_tests`, `tuned_tables_tests` and `select_tests` pass in the vendor and
    vendor-free trees; failing names compared with `tests/known-failures.txt`.
 2. `scripts/sweep_to_table.py --check` passes.
-3. At saturation (batch ≥ 128) the new choice is not more than 1.05× slower than the old at off-grid
+3. At saturation (batch \f$\ge 128\f$) the new choice is not more than 1.05× slower than the old at off-grid
    points, reproduced with the order reversed (`batchlas_tune --gate`).
 4. A reviewer finds the kernel for a call by reading `<op>.cc` and its table.
 
@@ -258,7 +258,7 @@ warns and runs Auto. Empty problems and heterogeneous batches throw `invalid_arg
 
 ### trsm {#phase-3-trsm}
 
-`cta` and `sg_left` (Left only) are register-resident solvers for order ≤ 32; `blocked` solves
+`cta` and `sg_left` (Left only) are register-resident solvers for order \f$\le 32\f$; `blocked` solves
 32-wide diagonal blocks with `cta` and updates with the public gemm. `uplo` and `diag` are not keys:
 an sm_120 A/B over 56 cells changed no first choice. `A.batch_size() != B.batch_size()` throws
 `invalid_argument` in `trsm_validate_params`. Batch offsets in the complex vendor substitute are 64-bit.
@@ -279,7 +279,7 @@ accepted until the sm_89 retune.
 The grids in `choice.hh` are spelled again by the transcriber (`tuned/README.md`). trsm keys only
 side × trans (N/T), because the full side × uplo × trans × diag lattice was infeasible to time. gemm
 declares its grid per (ta, tb, layout): squares for every form and both layouts; panels and skinny
-shapes for the issued forms only, `packed` panels from m, n ≥ 128; large-k Gram and skinny shapes
+shapes for the issued forms only, `packed` panels from \f$m, n \ge 128\f$; large-\f$k\f$ Gram and skinny shapes
 (not transcribed for sm_89). Real types use all four (ta, tb) pairs, complex types the issued ones.
 
 ### gemv {#phase-5-gemv}
@@ -316,12 +316,12 @@ the vendor. `transA` is not a key.
 ### orgqr {#phase-5-orgqr}
 
 `blocked` is the identity fill plus the public `ormqr` and needs `n <= m`; the vendor is a per-item
-loop and runs n > m and CPU queues. No batch key. Sizing goes through `choose()`, which fixed
+loop and runs \f$n > m\f$ and CPU queues. No batch key. Sizing goes through `choose()`, which fixed
 [the orgqr_buffer_size latent defect](../perf/qr.md#the-orgqr_buffer_size-latent-defect).
 
 ### ormqr {#phase-5-ormqr}
 
-The WY width is a positive `block_size_hint` clamped to [1, k], else
+The WY width is a positive `block_size_hint` clamped to \f$[1, k]\f$, else
 `tuning::ormqr_block_size_for_n`. Complex `Transpose::Trans` throws before `choose()`. `blocked` has
 no batch term (known-defects #16 did not reproduce on sm_120).
 
@@ -334,7 +334,7 @@ and any non-N transpose on NETLIB. No nnz key (nnz is in device memory); a CPU n
 
 ### syev {#phase-5-syev}
 
-`cta`, `cta_fused` and `jacobi` are the n ≤ 32 sub-group solvers (`cta` and `cta_fused` not on
+`cta`, `cta_fused` and `jacobi` are the \f$n \le 32\f$ sub-group solvers (`cta` and `cta_fused` not on
 ROCm); `blocked` and `two_stage` take Upper by mirroring into Lower, so `uplo` is not a key. A
 non-square A throws `invalid_argument`. ROCm has no syev table and borrows the sm tables (untested).
 

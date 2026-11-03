@@ -74,8 +74,8 @@ each such family's `can_run` caps its lease:
 
 | Family | Cap |
 | --- | --- |
-| symm/trmm `expand` (`expansion_fits`, `src/expansion_budget.hh`) | GLOBAL_MEM_SIZE / 4 (lowered by `BATCHLAS_EXPAND_MAX_BYTES`); also batch <= the device's grid z and \f$2^{31}\f$ elements of padded scratch |
-| gemm `splitk` | `select::Device::scratch_budget` = min(MAX_MEM_ALLOC_SIZE, GLOBAL_MEM_SIZE / 4); partials are \f$s \cdot ldw \cdot n \cdot batch \cdot \mathrm{sizeof}(T)\f$ ([split-k](../perf/gemm.md#gemm-wp-l-global-split-k-over-the-transposed-wide-tiles)) |
+| symm/trmm `expand` (`expansion_fits`, `src/expansion_budget.hh`) | `GLOBAL_MEM_SIZE / 4` (lowered by `BATCHLAS_EXPAND_MAX_BYTES`); also \f$\text{batch} \le\f$ the device's grid z and \f$2^{31}\f$ elements of padded scratch |
+| gemm `splitk` | `select::Device::scratch_budget` = `min(MAX_MEM_ALLOC_SIZE, GLOBAL_MEM_SIZE / 4)`; partials are \f$s \cdot \mathrm{ldw} \cdot n \cdot \mathrm{batch} \cdot \mathrm{sizeof}(T)\f$ ([split-k](../perf/gemm.md#gemm-wp-l-global-split-k-over-the-transposed-wide-tiles)) |
 
 Call `trim_workspace()` after a large call if the memory is wanted back.
 

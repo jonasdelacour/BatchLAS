@@ -18,6 +18,7 @@
 #include <src/select/vendor.hh>
 #include <src/util/resident_capacity.hh>
 #include <tests/masked_contract.hh>
+#include <tests/test_support/inputs.hh>
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 
@@ -48,14 +49,7 @@ std::string label(const Shape& s) {
     return s.spelling + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " + std::to_string(s.batch);
 }
 
-// A well-spread value in [-1, 1] per (item, element, salt): pivots move in every item.
-inline double spread(std::size_t item, std::size_t e, int salt) {
-    std::uint64_t h = (item * 0x9E3779B97F4A7C15ull) ^ (e * 0xC2B2AE3D27D4EB4Full) ^ std::uint64_t(salt * 7919);
-    h ^= h >> 29;
-    h *= 0xBF58476D1CE4E5B9ull;
-    h ^= h >> 32;
-    return double(int(h % 2001) - 1000) / 1000.0;
-}
+using test_support::spread;
 
 template <typename T, Backend B>
 struct Problem {

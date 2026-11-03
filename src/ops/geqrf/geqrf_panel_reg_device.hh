@@ -121,8 +121,8 @@ constexpr std::size_t geqrf_panel_reg_scalar_slots(int wg, int cols) {
     return 1u + static_cast<std::size_t>(wg / 32) * static_cast<std::size_t>(cols);
 }
 
-// LAPACK ?GEQR2 on an m x n panel with n <= N, in place, one row per work-item. CONTRACT the
-// launcher holds: m <= work-group size, n <= N, kmax <= min(m, n), all launch-uniform. Rows at or
+// LAPACK ?GEQR2 on an \f$m \times n\f$ panel with \f$n \le N\f$, in place, one row per work-item. CONTRACT the
+// launcher holds: \f$m \le\f$ work-group size, \f$n \le N\f$, \f$\mathrm{kmax} \le \min(m, n)\f$, all launch-uniform. Rows at or
 // above m carry zeros and suppress their store but still execute every barrier -- an early return
 // is not work-group-uniform. Three barriers per column, none double-buffered: column j's writes
 // all follow column j-1's last barrier.

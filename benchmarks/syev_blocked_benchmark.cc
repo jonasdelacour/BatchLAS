@@ -34,10 +34,6 @@ inline void SyevBlockedBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
 } // namespace
 
 // Blocked SYEV-like benchmark (sytrd_blocked + stedc + ormqr_blocked).

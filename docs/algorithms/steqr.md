@@ -1,185 +1,201 @@
-# STEQR: implicit QR/QL on symmetric tridiagonals {#algo_steqr}
+# steqr: implicit QR/QL on symmetric tridiagonals {#algo_steqr}
 
-> **Status:** current.
+> **Status:** current · checked 2026-11-01.
 
-`steqr`, `steqr_wg` and `steqr_cta` solve batches of symmetric tridiagonal eigenproblems
-\f$T = Q \Lambda Q^T\f$ by implicit shifted QR/QL with deflation; `steqr_cta` is also the leaf
-solve of `stedc` and the solver of the fused small-n `syev`. Measurements are in
-[STEQR: the CTA tridiagonal solver](../perf/steqr.md); the stedc merge is in @ref perf_stedc.
+`steqr` computes \f$T = Q \Lambda Q^T\f$ for a batch of symmetric tridiagonal \f$T\f$ by shifted
+implicit QR/QL sweeps of Givens rotations, deflating negligible off-diagonals, as LAPACK `dsteqr`
+does [2]. A sub-group kernel (`steqr_cta`) serves small \f$n\f$, a work-group kernel (`steqr_wg`) the
+rest. Measurements: [perf/steqr](../perf/steqr.md).
 
-Which path runs (`should_use_cta`, `src/ops/syev/steqr/steqr.cc`): `steqr_cta` when
-\f$0 < n \le 32\f$ and the device supports sub-group size 32, otherwise `steqr_wg`. On ROCm the
-CTA path is disabled: its chunked sub-group operations gave wrong eigenvalues on AMD gfx1200.
+## steqr: problem and notation
 
-## steqr: problem representation
-
-Each matrix is stored as its diagonal \f$d_1, \dots, d_n\f$ and off-diagonal
-\f$e_1, \dots, e_{n-1}\f$ only. No dense similarity transform is formed; Givens rotations chase a
-bulge through the band.
-
-## steqr: the relative deflation criterion
-
-An off-diagonal entry is set to zero when
+- \f$T\f$ has diagonal \f$d_1..d_n\f$ and off-diagonal \f$e_1..e_{n-1}\f$, the only stored data.
+- \f$u = \varepsilon_{\mathrm{mach}}/2\f$; \f$\mathrm{safmin}\f$, \f$\mathrm{safmax}\f$ bound the safe range
+  ([`src/math-helpers.hh:L226-L258`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L226-L258)).
+- \f$[\ell, h]\f$ is an unreduced block; \f$m\f$ the first \f$i \ge \ell\f$ with \f$e_i = 0\f$ (else \f$h\f$);
+  `max_sweeps` caps sweeps per block.
+- \f$(c, s, r) = \operatorname{lartg}(f, g)\f$ defines the rotation
+  \f$G = \left[\begin{smallmatrix} c & s \\ -s & c\end{smallmatrix}\right]\f$:
 
 \f[
-|e_i|^2 \le \varepsilon^2 |d_i| |d_{i+1}| + \mathrm{safmin},
+G\begin{bmatrix} f \\ g \end{bmatrix} = \begin{bmatrix} r \\ 0 \end{bmatrix},\qquad
+r = \operatorname{sign}(f)\sqrt{f^2+g^2},\; c = f/r,\; s = g/r,
 \f]
 
-with \f$\varepsilon\f$ the machine precision and \f$\mathrm{safmin}\f$ the safe minimum (LAPACK
-style), splitting \f$T\f$ into independent diagonal blocks. Both paths use this relative test;
-there is no absolute deflation threshold.
+with Anderson's safe scaling outside \f$(\sqrt{\mathrm{safmin}}, \sqrt{\mathrm{safmax}/2})\f$ [3, 4]
+([`src/math-helpers.hh:L373-L396`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L373-L396)). The FP32 CTA chase computes \f$c, s\f$ by multiplying with a
+Newton-refined `rsqrt` instead of dividing by \f$r\f$ ([`src/ops/syev/steqr/steqr_cta_device.hh:L49-L57`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L49-L57)).
 
-## steqr: safe scaling
+## steqr: the implicit shifted step
 
-Before sweeping an active block the solver takes \f$a = \max_i(|d_i|, |e_i|)\f$ over the block and
-scales the block by \f$\mathrm{ssfmax}/a\f$ if \f$a > \mathrm{ssfmax}\f$, or by
-\f$\mathrm{ssfmin}/a\f$ if \f$0 < a < \mathrm{ssfmin}\f$. After convergence it scales back.
+One QR step with shift \f$\mu\f$ is \f$T - \mu I = \hat Q R\f$, \f$T^+ = R\hat Q + \mu I = \hat Q^T T \hat Q\f$.
+By the implicit-Q theorem, while \f$T^+\f$ is unreduced (true on a deflated block) \f$\hat Q\f$ is fixed
+up to column signs by its first column, so the step on a block of size \f$k\f$ is a chain of
+\f$k-1\f$ rotations [1, §7.4, §8.3]:
 
-## steqr: shift selection
+1. Rotation 1, from \f$(d_1 - \mu,\, e_1)\f$, creates a bulge \f$z\f$ at \f$(1, 3)\f$.
+2. Rotation \f$i\f$, from \f$(e_{i-1}, z)\f$, annihilates \f$z\f$ and pushes it one row down.
 
-Each implicit step takes a shift \f$\mu\f$ from the \f$2 \times 2\f$ block at the end being
-converged.
-
-- **Wilkinson.** For \f$\begin{bmatrix} a & b \\ b & c \end{bmatrix}\f$,
-  \f$\lambda_\pm = \tfrac{a+c}{2} \pm \sqrt{(\tfrac{a-c}{2})^2 + b^2}\f$, and \f$\mu\f$ is the
-  \f$\lambda_\pm\f$ closer to the corner entry being converged.
-- **LAPACK-style stable shift.** With leading entries \f$d_1, d_2, e_1\f$,
-
-\f[
-g = \frac{d_2 - d_1}{2 e_1}, \qquad
-r = \sqrt{g^2 + 1}, \qquad
-\mu = d_1 - \frac{e_1}{g + \operatorname{copysign}(r, g)},
-\f]
-
-  which avoids the cancellation of the quadratic formula.
-
-`steqr_wg` always uses Wilkinson. `steqr_cta` selects with `SteqrParams::cta_shift_strategy`:
-`SteqrShiftStrategy::Lapack` (default) or `Wilkinson`. `syev`'s CTA arms (`cta_steqr_params`,
-`src/ops/syev/syev.cc`) set `Wilkinson` and `max_sweeps = 400`: the solver runs inside `syevx`,
-where an inaccurate Ritz solve stalls the outer iteration, so the slower, more robust setting wins.
-
-## steqr: the Givens bulge chase
-
-With \f$G(c,s) = \begin{bmatrix} c & -s \\ s & c \end{bmatrix}\f$ and \f$(c, s, r)\f$ from
-`lartg(x, y)` so that \f$G^T (x, y)^T = (r, 0)^T\f$, an implicit step applies adjacent rotations
-as similarities \f$T \leftarrow G_i^T T G_i\f$ on rows and columns \f$i, i+1\f$. Each touches only
-\f$(e_{i-1}, d_i, e_i, d_{i+1}, e_{i+1})\f$. The work-group path and the CTA `EXP` scheme write it
-explicitly:
+([`src/ops/syev/steqr/steqr_wg.cc:L169-L181`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L169-L181); CTA `EXP`: [`src/ops/syev/steqr/steqr_cta_device.hh:L392-L395`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L392-L395).)
+With \f$\sigma = -s\f$ ([`src/ops/syev/steqr/steqr_internal.hh:L16-L20`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_internal.hh#L16-L20)), the similarity on rows and
+columns \f$i, i+1\f$ touches five band entries:
 
 \f[
 \begin{aligned}
-d_i^+     &= c(c d_i - e_i s) - s(e_i c - s d_{i+1}), \\
-d_{i+1}^+ &= c(c d_{i+1} + e_i s) + s(e_i c + s d_i), \\
-e_i^+     &= c(c e_i + s d_i) - s(c d_{i+1} + s e_i), \\
-e_{i-1}^+ &= c e_{i-1} - s b_{\mathrm{prev}}, \\
-e_{i+1}^+ &= c e_{i+1},
+d_i^+ &= c^2 d_i - 2c\sigma e_i + \sigma^2 d_{i+1}, &
+d_{i+1}^+ &= \sigma^2 d_i + 2c\sigma e_i + c^2 d_{i+1},\\
+e_i^+ &= c\sigma(d_i - d_{i+1}) + (c^2 - \sigma^2) e_i, &
+e_{i-1}^+ &= c\, e_{i-1} - \sigma z = r,\\
+e_{i+1}^+ &= c\, e_{i+1}, &
+z^+ &= -\sigma e_{i+1}
 \end{aligned}
 \f]
 
-and the outgoing bulge is \f$b_{\mathrm{new}} = -s e_{i+1}\f$. The first rotation of a sweep is
-generated from the shifted corner \f$(d_{\mathrm{edge}} - \mu, e_{\mathrm{edge}})\f$ with
-\f$b_{\mathrm{prev}} = 0\f$, so the shift creates the bulge; each later rotation is generated from
-\f$(e_{i-1}, b_{\mathrm{prev}})\f$ and moves the bulge one position.
+([`src/ops/syev/steqr/steqr_internal.hh:L65-L82`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_internal.hh#L65-L82), [`src/ops/syev/steqr/steqr_cta_device.hh:L395-L408`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L395-L408)).
 
 ## steqr: choosing QR versus QL
 
-For a block \f$[\ell, r]\f$ the solver converges the endpoint of smaller magnitude first, as
-`dsteqr` does: QL (converge \f$d_\ell\f$ first) if \f$|d_\ell| \le |d_r|\f$, QR (converge
-\f$d_r\f$ first) otherwise. The inverted rule loses relative accuracy on graded matrices.
+A sweep converges the end its shift is taken from: QR converges \f$d_h\f$, QL (the same step on
+\f$JTJ\f$, \f$J\f$ the reversal of \f$[\ell, h]\f$) converges \f$d_\ell\f$. As in `dsteqr` [2], the solver
+converges the smaller end first: QL if \f$|d_\ell| \le |d_h|\f$, else QR. The inverted rule loses
+relative accuracy on graded input ([evidence](../perf/steqr.md#cta-steqr-chase-micro-structure-decisions)).
 
-- `steqr_wg` runs the chase in virtual indices oriented so the converged end is the shift end,
-  and records the orientation (`ApplyOrder::Forward`/`Backward`) for the eigenvector update.
-- `steqr_cta` has only a QL loop. For QR it mirrors the block, \f$T \leftarrow J T J\f$ and
-  \f$Q \leftarrow Q J\f$ with \f$J\f$ the reversal on \f$[\ell, r]\f$ (`reverse_block`), runs QL,
-  and mirrors back, also on failure. All chunks therefore share one loop nest.
+- `steqr_wg`: QR on physical indices, QL on virtual indices \f$v \mapsto k-1-v\f$; the orientation is
+  stored for the eigenvector replay ([`src/ops/syev/steqr/steqr_wg.cc:L140-L141`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L140-L141)).
+- `steqr_cta`: only a QL loop exists; QR mirrors the block (\f$T \leftarrow JTJ\f$, \f$Q \leftarrow QJ\f$),
+  runs QL, and mirrors back, also on failure
+  ([`src/ops/syev/steqr/steqr_cta_device.hh:L620-L623`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L620-L623), [`:L240-L244`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L240-L244)).
 
-## steqr: the exact 2x2 solve
+## steqr: the Wilkinson shift
 
-A block of size 2 is solved analytically (`laev2`). With eigenvectors requested it also yields
-the rotation \f$Q_2\f$ with \f$Q_2^T T_2 Q_2 = \operatorname{diag}(\lambda_1, \lambda_2)\f$, which
-is accumulated into \f$Q\f$.
+\f$\mu\f$ is the eigenvalue of the end block \f$\left[\begin{smallmatrix} \alpha & \eta \\ \eta & \delta\end{smallmatrix}\right]\f$
+closest to the corner \f$\alpha\f$ being converged. Two evaluations, equal in exact arithmetic:
 
-## steqr: split structure and book-keeping
+- `Wilkinson`: both roots by the `dlae2` formulas, then the closer one
+  ([`src/math-helpers.hh:L481-L531`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L481-L531)). `steqr_wg` always uses it ([`src/ops/syev/steqr/steqr_wg.cc:L165-L167`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L165-L167)).
+- `Lapack` (CTA default): \f$\gamma = (\delta-\alpha)/(2\eta)\f$,
+  \f$\mu = \alpha - \eta/\bigl(\gamma + \operatorname{sign}(\gamma)\sqrt{\gamma^2+1}\bigr)\f$, the
+  cancellation-free form of `dsteqr` [2] ([`src/ops/syev/steqr/steqr_cta_device.hh:L340-L342`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L340-L342)).
 
-The solver iterates on maximal blocks \f$[s, t]\f$ with \f$e_j \neq 0\f$ for
-\f$s \le j < t\f$, never on the whole matrix.
+Wilkinson-shifted tridiagonal QR/QL converges globally [5, 7], cubically in practice [1, §8.3].
 
-- **`steqr_wg`: a global block list.** Each outer pass scans \f$e\f$, records each block as
-  `(start_ix, end_ix)` (`end_ix` exclusive), compacts the descriptors of the whole batch with an
-  inclusive scan into `(batch, start, end)` triples, then applies one Francis sweep to every block
-  in parallel. A sweep can create new zeros, so the list is rebuilt every pass.
-- **`steqr_cta`: a left-to-right walk.** Each sub-group partition holds one matrix in registers
-  (lane \f$i\f$ owns \f$d_i, e_i\f$). From a running left boundary \f$b\f$ it sets
-  \f$e_{b-1} \leftarrow 0\f$, deflates the tail, takes the first zero \f$e_i\f$ with
-  \f$i \ge b\f$ as the block end, and continues after it.
+## steqr: the relative deflation criterion
 
-Inside a block the QL window \f$[\ell, m]\f$ shrinks after each step: with \f$m\f$ the first zero
-in \f$e_\ell, \dots\f$, the eigenvalue \f$d_\ell\f$ has converged if \f$m = \ell\f$, a 2x2 block
-is solved exactly if \f$m = \ell + 1\f$, and otherwise one implicit step runs on \f$[\ell, m]\f$.
+\f$e_i\f$ is set to zero when
 
-### CTA control flow on one matrix
+\f[
+e_i^2 \le u^2\,|d_i|\,|d_{i+1}| + \mathrm{safmin},
+\f]
 
-```text
-budget <- n * max_sweeps
-for each block [bb, be] found by the left-to-right walk:
-  scale the block if necessary
-  rev <- |d_be| < |d_bb|;  if rev: mirror the block (QR as QL)
-  l <- bb
-  while l <= be:
-    up to max_sweeps times:
-      deflate [l, be]; m <- first i in [l, be) with e_i = 0, else be
-      if m == l:      l += 1; next l
-      if m == l + 1:  exact 2x2 on (l, l+1); l += 2; next l
-      if budget == 0: fail
-      budget -= 1; one implicit QL step on [l, m]
-    no progress after max_sweeps: fail
-  mirror back if rev; rescale back
-  stop on failure
-```
+the `EPS2` test of `dsteqr` [2] ([`src/ops/syev/steqr/steqr_cta_device.hh:L220-L223`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L220-L223),
+[`src/ops/syev/steqr/steqr_wg.cc:L184-L190`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L184-L190)); nothing scales with \f$\|T\|\f$, `safmin` only guards
+underflow. (`dsteqr` also splits at block entry on \f$|e_i| \le u\sqrt{|d_i d_{i+1}|}\f$; BatchLAS does
+not.) The dropped entry is at most \f$u\max(|d_i|,|d_{i+1}|) + \sqrt{\mathrm{safmin}}\f$, so by Weyl's
+inequality no eigenvalue moves more: a backward-stable perturbation [1, §8.1].
+
+## steqr: safe scaling and the 2x2 solve
+
+- **Scaling.** With \f$a = \max(|d_i|, |e_i|)\f$ over the block, the block is scaled by
+  \f$\mathrm{ssfmax}/a\f$ if \f$a > \mathrm{ssfmax} = \sqrt{\mathrm{safmax}}/3\f$, by \f$\mathrm{ssfmin}/a\f$ if
+  \f$0 < a < \mathrm{ssfmin} = \sqrt{\mathrm{safmin}}/\varepsilon_{\mathrm{mach}}^2\f$
+  ([`src/math-helpers.hh:L238-L246`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L238-L246); `dsteqr` divides by \f$u^2\f$ [2], 4x larger), and back afterwards.
+  CTA scales once per block
+  ([`src/ops/syev/steqr/steqr_cta_device.hh:L590-L614`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L590-L614), [`:L671-L678`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L671-L678)); `steqr_wg` around every sweep
+  ([`src/ops/syev/steqr/steqr_wg.cc:L143-L156`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L143-L156), [`:L192-L200`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L192-L200)).
+- **2x2 blocks** are solved in closed form by `laev2` [6]: \f$\lambda_1\f$, \f$\lambda_2\f$ and the unit
+  eigenvector \f$(c_1, s_1)\f$ of \f$\lambda_1\f$, applied to \f$Q\f$ as one rotation
+  ([`src/math-helpers.hh:L559-L651`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L559-L651); [`src/ops/syev/steqr/steqr_cta_device.hh:L276-L293`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L276-L293),
+  [`src/ops/syev/steqr/steqr_wg.cc:L121-L136`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L121-L136)).
 
 ## steqr: the CTA update schemes EXP and PG
 
-`steqr_cta` writes one implicit step in one of two equivalent forms, chosen by
-`SteqrParams::cta_update_scheme` (default `EXP`).
+`SteqrParams::cta_update_scheme` (default `EXP`) picks one of two equal-in-exact-arithmetic forms of
+the QL step on \f$[\ell, m]\f$.
 
-- **`EXP`** (explicit similarity) applies the scalar band update of
-  [the bulge chase](#steqr-the-givens-bulge-chase). QL runs it as a QR-style chase in virtual
-  reversed indices inside \f$[\ell, m]\f$. This is the form closest to `steqr_wg`.
-- **`PG`** (Parlett-Gray) propagates the scalars \f$(g, p, c, s)\f$ across the sweep instead of
-  writing each local similarity. In QR form, step \f$i\f$ is
+- **`EXP`** chases the bulge upward with the band update above, in virtual indices \f$v \mapsto m - v\f$,
+  seeded with \f$(x, z) = (d_m - \mu, e_{m-1})\f$
+  ([`src/ops/syev/steqr/steqr_cta_device.hh:L368-L369`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L368-L369), [`:L378-L442`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L378-L442)).
+- **`PG`** is the scalar recurrence of the `dsteqr` QL loop [2]. With \f$g = d_m - \mu\f$,
+  \f$c = s = 1\f$, \f$p = 0\f$, for \f$i = m-1, \dots, \ell\f$:
 
 \f[
 \begin{aligned}
-f_i &= s_{i-1} e_i, \\
-(c_i, s_i, r_i) &= \operatorname{lartg}(g_{i-1}, f_i), \\
-g_i^{\star} &= d_i - p_{i-1}, \\
-r_i^{\star} &= (d_{i+1} - g_i^{\star}) s_i + 2 c_i c_{i-1} e_i, \\
-p_i &= s_i r_i^{\star}, \\
-d_i &\leftarrow g_i^{\star} + p_i, \\
-g_i &= c_i r_i^{\star} - c_{i-1} e_i ;
+&f = s e_i,\quad \beta = c e_i,\quad (c, s, \rho) = \operatorname{lartg}(g, f),\quad
+e_{i+1} \leftarrow \rho \;\;(i \ne m-1),\\
+&g \leftarrow d_{i+1} - p,\quad \rho \leftarrow (d_i - g)s + 2c\beta,\quad p = s\rho,\quad
+d_{i+1} \leftarrow g + p,\quad g \leftarrow c\rho - \beta,
 \end{aligned}
 \f]
 
-  QL is the mirrored recurrence.
+  then \f$d_\ell \leftarrow d_\ell - p\f$, \f$e_\ell \leftarrow g\f$
+  ([`src/ops/syev/steqr/steqr_cta_device.hh:L468-L541`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L468-L541)). The lockstep solver always uses `EXP`.
 
-## steqr: the lockstep flat CTA solver
+## steqr: the CTA kernel
 
-A warp holds several chunks of \f$P\f$ lanes, one tridiagonal each. In the nested loop above,
-chunks realign only at loop exits, so the warp pays the slowest chunk's sweep count per
-eigenvalue. `steqr_cta_solve_flat` hoists the sweep out of the nest: each chunk settles (opens a
-block, deflates, advances, solves 2x2 blocks) until it has a sweep \f$[\ell, m]\f$ or is done, then
-every chunk with a sweep chases in the same pass. The per-chunk operation sequence is unchanged,
-so results are bitwise equal to the nested solver. It ships where `kSteqrCtaFlatPays` holds
-(\f$P = 16\f$, or \f$P = 8\f$ in FP64); the measurements are in
-[Lockstep flat solver](../perf/steqr.md#lockstep-flat-solver).
+`steqr_cta` maps one tridiagonal to a chunk of \f$P \in \{4, 8, 16, 32\}\f$ lanes, the smallest
+\f$P \ge n\f$ ([`src/ops/syev/steqr/steqr_cta.cc:L235-L243`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta.cc#L235-L243)); lane \f$i\f$ holds \f$d_i, e_i\f$ in
+registers and row \f$i\f$ of \f$Q\f$ in shared memory, so each rotation updates \f$Q_{:,\{i,i+1\}}\f$
+lane-locally ([`src/ops/syev/steqr/steqr_cta_device.hh:L114-L143`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L114-L143)).
 
-## steqr: eigenvector accumulation and sorting
+```text
+budget <- n * max_sweeps
+for each block [bb, be] (left-to-right walk; e_{bb-1} <- 0; deflate the tail):
+  scale; if |d_be| < |d_bb|: mirror (QR as QL)
+  l <- bb
+  while l < be:
+    up to max_sweeps times:
+      deflate [l, be]; m <- first i >= l with e_i = 0, else be
+      m == l     : l += 1, next l
+      m == l + 1 : exact 2x2 on (l, l+1); l += 2, next l
+      budget == 0: fail
+      one implicit QL step on [l, m]; budget -= 1
+    no progress: fail
+  mirror back; unscale; stop on failure
+```
 
-With `back_transform = false` the solver starts from \f$Q = I\f$; otherwise it right-applies the
-rotations to the caller's matrix. Each rotation on columns \f$k, k+1\f$ does
-\f$Q_{:,\{k,k+1\}} \leftarrow Q_{:,\{k,k+1\}} G(c,s)\f$, so
-\f$Q = G_1 G_2 \cdots G_p\f$ and \f$Q^T T Q = \Lambda\f$. `steqr_wg` stores a sweep's rotations and
-applies them afterwards; `steqr_cta` applies them at once to a shared-memory cache of \f$Q\f$.
+([`src/ops/syev/steqr/steqr_cta_device.hh:L560-L683`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L560-L683)). A failed item raises `info` to 1
+([`src/ops/syev/steqr/steqr_cta.cc:L129-L136`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta.cc#L129-L136)). `steqr_cta_solve` runs these steps in one of three
+loop shapes, lockstep, flat or nested ([`src/ops/syev/steqr/steqr_cta_device.hh:L991-L1005`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L991-L1005)); the fused
+`syev` calls it directly ([`src/ops/syev/kernels/syev_cta_fused.cc:L249`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_cta_fused.cc#L249), [`:L342`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_cta_fused.cc#L342), [`:L367`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_cta_fused.cc#L367)), `stedc`
+leaves via `steqr_dispatch` ([`src/ops/syev/stedc/stedc.cc:L556`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L556)).
 
-After convergence \f$\lambda_i = d_i\f$. With `sort = true` the eigenpairs are sorted in
-`sort_order` (ascending by default) and the same permutation is applied to the columns of \f$Q\f$.
+## steqr: the work-group kernel
+
+`steqr_wg` repeats \f$n-1\f$ passes ([`src/ops/syev/steqr/steqr_wg.cc:L320-L334`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L320-L334)); each pass:
+
+1. lists every unreduced block of the batch as `(item, start, end)` by a prefix sum ([`:L56-L100`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L56-L100));
+2. runs up to `max_sweeps` QR or QL sweeps per block, in parallel over blocks, stopping at the first
+   deflation; size-2 blocks use `laev2` ([`:L121-L203`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L121-L203));
+3. replays the stored rotations on \f$Q\f$, one work-group per block ([`:L224-L235`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L224-L235)).
+
+`info` counts the off-diagonals still nonzero after the last pass ([`:L341-L353`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L341-L353)). `steqr_legacy`, the
+only solver of the NETLIB `stedc` arm ([`src/ops/syev/stedc/stedc.cc:L1030-L1035`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L1030-L1035)), runs the same
+algorithm in its own copy ([`src/ops/syev/steqr/steqr_legacy.cc:L44-L276`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_legacy.cc#L44-L276)) but stops once every
+\f$e_i = 0\f$ and replays only the sweeps performed ([`:L388-L409`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_legacy.cc#L388-L409), [`:L254-L258`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_legacy.cc#L254-L258)).
+
+## steqr: routing, eigenvectors and output
+
+- **Route.** `should_use_cta` takes `steqr_cta` when \f$0 < n \le 32\f$ on a GPU with sub-group size
+  32, not on ROCm; otherwise `steqr_wg` ([`src/ops/syev/steqr/steqr.cc:L15-L25`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr.cc#L15-L25)). There is no
+  `choice.hh` or tuned table.
+- **Eigenvectors.** Each rotation \f$G_i\f$ (the \f$G\f$ above embedded at \f$(i, i+1)\f$) does
+  \f$Q \leftarrow Q G_i^T\f$, so \f$Q^T T Q = \Lambda\f$. \f$Q\f$ starts as \f$I\f$, or as the caller's matrix
+  with `back_transform` ([`src/ops/syev/steqr/steqr_cta.cc:L170-L174`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta.cc#L170-L174), [`src/ops/syev/steqr/steqr_wg.cc:L305-L307`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L305-L307)).
+- **Output.** \f$\lambda_i = d_i\f$; with `sort` the pairs are sorted in `sort_order`, ascending by
+  default ([`src/ops/syev/steqr/steqr_cta.cc:L272-L275`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta.cc#L272-L275), [`src/ops/syev/steqr/steqr_wg.cc:L364-L367`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L364-L367)).
+
+## steqr: references
+
+1. G. H. Golub, C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press,
+   2013, §7.4, §8.1, §8.3. ISBN 978-1-4214-0794-4.
+   https://nhigham.com/2013/05/31/fourth-edition-of-matrix-computations/
+2. LAPACK, `DSTEQR` reference source. https://www.netlib.org/lapack/double/dsteqr.f
+3. LAPACK, `DLARTG` reference source (`dlartg.f90`).
+   https://github.com/Reference-LAPACK/lapack/blob/master/SRC/dlartg.f90
+4. E. Anderson, "Algorithm 978: Safe Scaling in the Level 1 BLAS", *ACM Trans. Math. Softw.* 44(1),
+   2017. https://doi.org/10.1145/3061665
+5. J. H. Wilkinson, "Global convergence of tridiagonal QR algorithm with origin shifts", *Linear
+   Algebra Appl.* 1(3):409-420, 1968. https://doi.org/10.1016/0024-3795(68)90017-7
+6. LAPACK, `DLAEV2` reference source. https://www.netlib.org/lapack/double/dlaev2.f
+7. W. Hoffmann, B. N. Parlett, "A new proof of global convergence for the tridiagonal QL algorithm",
+   *SIAM J. Numer. Anal.* 15(5):929-937, 1978. https://doi.org/10.1137/0715060

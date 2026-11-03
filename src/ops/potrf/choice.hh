@@ -14,9 +14,9 @@
 
 namespace batchlas::ops::potrf {
 
-struct Tiny : select::NoFields<"tiny"> {};  ///< potrf_tiny_dispatch: registers; n <= potrf_tiny_max_n, max_wg >= 64
-struct Cta : select::NoFields<"cta"> {};    ///< potrf_cta_dispatch: whole matrix in SLM; n <= the CTA SLM ceiling
-/// potrf_lpanel_dispatch: SLM-resident panels; Lower only, n <= the LPanel SLM ceiling for `panel`.
+struct Tiny : select::NoFields<"tiny"> {};  ///< potrf_tiny_dispatch: registers; \f$n \le\f$ potrf_tiny_max_n, max_wg \f$\ge 64\f$
+struct Cta : select::NoFields<"cta"> {};    ///< potrf_cta_dispatch: whole matrix in SLM; \f$n \le\f$ the CTA SLM ceiling
+/// potrf_lpanel_dispatch: SLM-resident panels; Lower only, \f$n \le\f$ the LPanel SLM ceiling for `panel`.
 struct Lpanel {
     int panel = 8;  ///< potrf_lpanel_dispatch's nb_hint; 16 is instantiated for float only
     static constexpr std::string_view name = "lpanel";
@@ -28,7 +28,7 @@ struct Lpanel {
 struct Blocked : select::NoFields<"blocked"> {};  ///< potrf_blocked_dispatch + gemm/trsm, Lower; nb/W: PotrfBlockedConst + env
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::potrf_vendor; needs the solver library
 
-using PotrfChoice = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;  ///< natives need a GPU, sub-group 32, n >= 1
+using PotrfChoice = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;  ///< natives need a GPU, sub-group 32, \f$n \ge 1\f$
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <typename T>
@@ -41,7 +41,7 @@ constexpr auto candidates() {
 
 inline constexpr select::OpSpec spec{Op::potrf, select::Lib::solver};  ///< default last resort: blocked, vendor
 
-/// Table keys: uplo exact (L|U); n log-distance, weight 3 (work ~ n^3); batch log, weight 1.
+/// Table keys: uplo exact (L|U); n log-distance, weight 3 (work \f$\sim n^3\f$); batch log, weight 1.
 /// evidence: docs/design/flat-kernel-selection.md (§5.4)
 inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log:3", "batch:log"};
 

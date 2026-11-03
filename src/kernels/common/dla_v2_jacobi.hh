@@ -235,6 +235,22 @@ template <class T> BATCHLAS_DLA_INLINE JacobiRotation<T> identity_rotation() {
     return {R(1), R(0), T(1), R(0), R(0), false};
 }
 
+// 1 / sqrt(a) for the rotation cosine: NVPTX folds a plain float `1 / sqrt(a)` into a bare
+// rsqrt.approx, so float runs rsqrt.approx from asm plus one Newton step in FMA form,
+// r = y + (y/2)(1 - (a y) y). a = 1 + t^2 with |t| <= 1 (or NaN) is never 0, denormal or inf,
+// so there is no edge-case guard.
+template <class R> inline R jacobi_cos_inv_sqrt(R a) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<R, float>) {
+        float y;
+        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
+        const float e = sycl::fma(-(a * y), y, 1.0f);
+        return sycl::fma(0.5f * y, e, y);
+    }
+#endif
+    return R(1) / sycl::sqrt(a);
+}
+
 // Golub & Van Loan sym.schur2 generalised by a diagonal phase: for H = [app apq; conj(apq) aqq]
 // (app, aqq real) U^H H U is diagonal. d = conj(apq) / |apq| makes the 2x2 real, then the
 // classical rotation with tau = (aqq - app) / (2 g), t = sign(tau) / (|tau| + sqrt(1 + tau^2)).
@@ -264,7 +280,7 @@ BATCHLAS_DLA_INLINE JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T
             tt = sycl::copysign(R(1), tau) / (sycl::fabs(tau) + sycl::sqrt(R(1) + tau * tau));
         }
         r.t = tt;
-        r.c = R(1) / sycl::sqrt(R(1) + tt * tt);
+        r.c = jacobi_cos_inv_sqrt(R(1) + tt * tt);
         r.s = tt * r.c;
         r.active = !(r.s == R(0));
     }

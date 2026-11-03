@@ -81,7 +81,8 @@ TU would be a duplicate symbol, and a vendor-free build would lose the op.
 @ref design_workspace.
 
 - **Append-only blocks.** Blocks never move under a live lease. A borrow that does not fit opens a
-  USM-shared block of `max(request, 2 x last block, 64 KiB)`; released bytes are rewound, not freed.
+  USM-shared block of \f$\max(\text{request},\, 2 \times \text{last block},\, 64\ \text{KiB})\f$;
+  released bytes are rewound, not freed.
 - **Release order.** Only the innermost outstanding loan moves the cursor; an out-of-order return is
   marked and reclaimed when the loans above it return. A non-empty live-loan stack means a lease is
   outstanding. Sequence numbers are never reused. `diagnose_out_of_order` is false only for
@@ -148,7 +149,7 @@ ops, @ref design_vendor_independence.
 - **It is an accumulator.** Producers only raise (`info_report`, `fetch_max`); the entry point the
   caller invoked clears once (`info_clear`). Two clears with a producer between them lose a failure,
   so `stedc` calls its leaves through `steqr_dispatch` (raises, does not clear) and folds per-leaf
-  status in with `info_item()` (leaf \f$j\f$ belongs to item \f$j / 2^L\f$).
+  status in with `info_item()` (leaf \f$j\f$ belongs to item \f$\lfloor j / 2^L \rfloor\f$).
 - **Single-writer stores** (`info_store`, `info_from_flags`) are for tiers that alone write each
   item: `bdsqr`, `syevx_lobpcg`, `syevx_filtered`, `syev_cta_fused`, `syev_jacobi_cta`,
   `gesvdj_cta`. `one_means_converged` covers `syevx_lobpcg`/`syevx_filtered`, whose flags are
@@ -176,7 +177,7 @@ ops, @ref design_vendor_independence.
 
 ## Host BLAS dgemm health check {#runtime-internals-the-host-blas-dgemm-health-check}
 
-OpenBLAS 0.3.20's Cooperlake `dgemm` is wrong by O(1) to O(100) on recent Intel parts (Known
+OpenBLAS 0.3.20's Cooperlake `dgemm` is wrong by \f$O(1)\f$ to \f$O(100)\f$ on recent Intel parts (Known
 Pitfalls in @ref dev_agent_guide). `cmake/BatchLASBlasHealthCheck.cmake` records the repairing
 `OPENBLAS_CORETYPE` as `BATCHLAS_REQUIRED_OPENBLAS_CORETYPE`; `src/backends/host_blas_health.hh`
 probes a strided sample at \f$n \in \{128, 200, 512\}\f$ (64 and 256 happen to be correct) on first

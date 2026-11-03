@@ -24,6 +24,7 @@
 #include <complex>
 #include <limits>
 #include <numeric>
+#include <type_traits>
 
 namespace batchlas {
 
@@ -42,6 +43,24 @@ class GesvdjCTAKernel;
 namespace {
 
 namespace v2 = ::batchlas::device::v2;
+
+// 1 / sqrt(a). A plain `1 / sqrt(a)` lets NVPTX fold the float case into a bare rsqrt.approx
+// (depending on inlining); the float NVPTX path is ONE fixed sequence: rsqrt.approx from asm,
+// then one Newton step in FMA form, r = y + (y/2)(1 - a y^2). a = +inf (non-finite input) keeps
+// the old 1/sqrt(inf) = 0. The rotation cosine runs the same step in v2::sym_schur2.
+template <typename R>
+inline R gesvdj_inv_sqrt(R a) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<R, float>) {
+        float y;
+        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
+        const float e = sycl::fma(-(a * y), y, 1.0f);  // not a*(y*y): overflows for denormal a
+        const float r = sycl::fma(0.5f * y, e, y);
+        return sycl::isinf(a) ? 0.0f : r;
+    }
+#endif
+    return R(1) / sycl::sqrt(a);
+}
 
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
@@ -510,7 +529,7 @@ BATCHLAS_UNROLL_FULL
                                 }
                                 const Real nrm2 = v2::allreduce(ex, v2::sumsq_owned(ex, v, RR));
                                 if (nrm2 > accept_tol) {
-                                    const Real inv_nr = Real(1) / sycl::sqrt(nrm2);
+                                    const Real inv_nr = gesvdj_inv_sqrt(nrm2);
                                     v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
                                         A(row, cdst) = v[rr] * T(inv_nr);
                                     });

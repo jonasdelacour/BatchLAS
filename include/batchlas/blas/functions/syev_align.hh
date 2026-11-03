@@ -41,6 +41,9 @@ using syev_align_buffer_size = size_t(Queue&,
 /// Checks that @p V_old and @p V share their shape and batch size, that `V.cols() <= V.rows()`,
 /// that neither is heterogeneous, that `V.rows() * V.cols()` fits in an int, and that
 /// @p eigenvalues holds `V.cols() * batch` values.
+/// @param[in] V_old        batch of \f$n \times m\f$ previous eigenvectors
+/// @param[in] eigenvalues  packed real eigenvalues, \f$m\f$ per item
+/// @param[in] V            batch of \f$n \times m\f$ new eigenvectors
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_eigen_lowlevel
 template <typename T>
@@ -76,8 +79,8 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
 /// @brief Aligns a batch of new eigenvectors with a previous basis, cluster by cluster.
 ///
 /// For every batch item, with \f$ m = \f$ `V.cols()` and \f$ M = V_{old}^H V \f$ (one gemm()):
-/// columns j-1 and j share a cluster when
-/// \f$ \lambda_j - \lambda_{j-1} \le \mathrm{tol} \cdot \max(|\lambda_0|, |\lambda_{m-1}|) \f$
+/// columns \f$j-1\f$ and \f$j\f$ share a cluster when
+/// \f[ \lambda_j - \lambda_{j-1} \le \mathrm{tol} \cdot \max(\lvert\lambda_0\rvert, \lvert\lambda_{m-1}\rvert) \f]
 /// (chained, so a cluster is a maximal run of such neighbours). Each cluster's columns
 /// \f$ V_c \f$ are replaced by \f$ V_c R \f$, where \f$ R = W U^H \f$ is the orthogonal
 /// (complex: unitary) Procrustes solution from the SVD \f$ M_{cc} = U \Sigma W^H \f$ of the
@@ -90,19 +93,21 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
 /// basis, so \f$ V_c R \f$ stays orthonormal.
 ///
 /// Asynchronous: V is readable after the returned event is waited on.
-/// @pre @p eigenvalues ascending per item (syev()'s order); column j of V pairs with value j
+/// @pre @p eigenvalues ascending per item (syev()'s order); column \f$j\f$ of V pairs with value \f$j\f$
 /// @tparam B  backend
 /// @tparam T  float, double, std::complex<float> or std::complex<double>
-/// @param ctx         queue the work is enqueued on
-/// @param V_old       batch of n x m previous eigenvectors; read only
-/// @param eigenvalues m real eigenvalues per item, packed (`V.cols() * batch` values)
-/// @param V           batch of n x m new eigenvectors; overwritten with the aligned ones
-/// @param tol         cluster tolerance relative to \f$ \max|\lambda| \f$ of the item; 0 clusters
-///                    only exactly equal values. No absolute floor, so the rule is scale invariant.
-///                    When the values passed do not reach the scale of \f$ \|A\| \f$ (a subset
-///                    of eigenpairs near zero), pass \f$ \mathrm{tol} \cdot \|A\| / \max|\lambda| \f$;
-///                    see @ref design_syev_align
-/// @param workspace   at least syev_align_buffer_size() bytes
+/// @param[in] ctx             queue the work is enqueued on
+/// @param[in] V_old           batch of \f$n \times m\f$ previous eigenvectors; not modified
+/// @param[in] eigenvalues     \f$m\f$ real eigenvalues per item, ascending, packed (`V.cols() * batch` values)
+/// @param[in,out] V           batch of \f$n \times m\f$ new eigenvectors; overwritten with the aligned ones
+/// @param[in] tol             cluster tolerance relative to \f$ \max\lvert\lambda\rvert \f$ of the item, \f$\mathrm{tol} \ge 0\f$;
+///                            0 clusters only exactly equal values. No absolute floor, so the rule is
+///                            scale invariant. When the values passed do not reach the scale of
+///                            \f$ \lVert A\rVert \f$ (a subset of eigenpairs near zero), pass
+///                            \f$ \mathrm{tol} \cdot \lVert A\rVert / \max\lvert\lambda\rvert \f$;
+///                            see @ref design_syev_align
+/// @param[out] workspace      device-accessible scratch of at least syev_align_buffer_size() bytes;
+///                            contents undefined on return
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if syev_align_validate_params() rejects the call or @p tol < 0
 /// @throws batchlas::workspace_error if @p workspace is too short
@@ -115,7 +120,14 @@ BATCHLAS_API Event syev_align(Queue& ctx,
                               typename base_type<T>::type tol,
                               Span<std::byte> workspace);
 
-/// @brief Workspace, in bytes, that syev_align() needs: about \f$ (m^2 + n m + m) \f$ scalars per item.
+/// @brief Workspace, in bytes, that syev_align() needs: about \f$ m^2 + nm + m \f$ scalars per item.
+/// @tparam B  backend
+/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @param[in] ctx          queue the call will run on
+/// @param[in] V_old        batch of \f$n \times m\f$ previous eigenvectors, as passed to syev_align()
+/// @param[in] eigenvalues  packed real eigenvalues, \f$m\f$ per item, as passed to syev_align()
+/// @param[in] V            batch of \f$n \times m\f$ new eigenvectors, as passed to syev_align()
+/// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if syev_align_validate_params() rejects the operands
 /// @ingroup api_eigen_lowlevel
 template <Backend B, typename T>

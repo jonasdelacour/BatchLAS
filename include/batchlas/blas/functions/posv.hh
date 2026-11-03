@@ -42,6 +42,9 @@ using posv_buffer_size = size_t(Queue&,
 ///
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()`, equal batch
 /// sizes and a valid @p uplo.
+/// @param[in] A     batch of \f$n \times n\f$ Hermitian positive-definite matrices
+/// @param[in] B     batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides
+/// @param[in] uplo  triangle of A that is read
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
 // Stricter than potrf's validator on purpose: with no vendor arm, a
@@ -90,14 +93,16 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// Asynchronous: A, B and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n matrices; overwritten with the Cholesky factor
-/// @param B           batch of n x nrhs right-hand sides; overwritten with X
-/// @param uplo        triangle of A that is read and receives the factor
-/// @param workspace  device-accessible scratch of at least posv_buffer_size() bytes
-/// @param info        per-item status as for potrf(): 0 on success, i > 0 if the
-///                    leading minor of order i is not positive definite (that
-///                    item's X is meaningless). Empty span = not requested.
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ Hermitian positive-definite matrices;
+///                        overwritten with the Cholesky factor
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[in] uplo        triangle of A that is read and receives the factor
+/// @param[out] workspace  device-accessible scratch of at least posv_buffer_size() bytes;
+///                        contents undefined on return
+/// @param[out] info       per-item status as for potrf(), one `int32_t` per item: 0 on success,
+///                        \f$i > 0\f$ if the leading minor of order \f$i\f$ is not positive
+///                        definite (that item's X is meaningless). Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the call
 /// @ingroup api_factorizations
@@ -112,6 +117,13 @@ BATCHLAS_API Event posv(Queue& ctx,
 /// @brief Workspace, in bytes, that posv() needs for these operands on this queue.
 ///
 /// Takes the same operands as the call, so both resolve the same route.
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx   queue the call will run on
+/// @param[in] A     batch of \f$n \times n\f$ matrices, as passed to posv()
+/// @param[in] B     batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides, as passed to posv()
+/// @param[in] uplo  triangle of A that is read
+/// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
 template <Backend Back, typename T>
@@ -121,6 +133,16 @@ BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
                                      Uplo uplo);
 
 /// @brief posv() without per-item status (`info` not requested).
+/// @tparam Back  backend
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ Hermitian positive-definite matrices;
+///                        overwritten with the Cholesky factor
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[in] uplo        triangle of A that is read and receives the factor
+/// @param[out] workspace  device-accessible scratch of at least posv_buffer_size() bytes;
+///                        contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend Back, typename T>

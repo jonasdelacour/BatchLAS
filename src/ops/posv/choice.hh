@@ -24,7 +24,7 @@ constexpr auto candidates() { return select::all_of<PosvChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::posv, select::Lib::none};  ///< no library; blocked's children report errors
 
-inline constexpr std::array<std::string_view, 4> key_names{  ///< work: n^3/3 + 2 n^2 nrhs
+inline constexpr std::array<std::string_view, 4> key_names{  ///< work: \f$n^3/3 + 2 n^2 \cdot \mathit{nrhs}\f$
     "uplo:exact", "n:log:3", "nrhs:log", "batch:log"};
 
 /// potrf's grid_n within [1, 1024]; the transcriber (tuned/README.md) spells the same grid.

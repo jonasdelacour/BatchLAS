@@ -61,9 +61,9 @@ inline int32_t sb2st_hh_work_bandwidth(int32_t n, int32_t kd) {
     return (want < cap) ? want : cap;
 }
 
-// ab_in: (kd+1) x n lower band, read-only. ab_tri_out: 2 x n, diagonal and SIGNED subdiagonal
+// ab_in: \f$(kd+1) \times n\f$ lower band, read-only. ab_tri_out: \f$2 \times n\f$, diagonal and SIGNED subdiagonal
 // (build_phase_from_kd1_band consumes it unchanged). d_out/e_out: real diagonal, |subdiagonal|.
-// v_out: kd x nrefl, reflector k in column k with v[0] = 1, zero-padded; tau_out: nrefl, where
+// v_out: \f$kd \times \mathit{nrefl}\f$, reflector k in column k with v[0] = 1, zero-padded; tau_out: nrefl, where
 // nrefl == build_sb2st_hh_schedule(n, kd).size().
 template <Backend B, typename T>
 BATCHLAS_INTERNAL_API Event sytrd_sb2st_hh(Queue& ctx,

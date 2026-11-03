@@ -37,13 +37,6 @@ inline void SyevBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-// arg4: 0 = NoEigenVectors, 1 = EigenVectors. Same convention as syev_cta_benchmark and
-// syev_blocked_benchmark. state.range() returns 0 for an absent argument, so a caller passing
-// only four args gets eigenvalues-only; every registered size passes jobz explicitly.
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
 // arg5: 0 = Lower (default, and what every registered size uses), 1 = Upper. Upper exists so
 // the mirror path in syev_blocked / syev_two_stage can be measured against the vendor at all;
 // before it, no benchmark could express an Upper solve.

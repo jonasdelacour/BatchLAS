@@ -44,18 +44,28 @@ struct BATCHLAS_API Span
     /// @brief An empty span (null data, size 0).
     inline constexpr Span() : data_(nullptr), size_(0) {}
     /// @brief Views @p size elements starting at @p data.
+    /// @param[in] data  pointer to the first element (USM the device can access)
+    /// @param[in] size  number of elements viewed
     inline constexpr Span(T *data, size_t size) : data_(data), size_(size) {}
-    /// @brief Views the range [@p begin, @p end).
+    /// @brief Views the range \f$[\mathit{begin}, \mathit{end})\f$ (@p begin to @p end, end excluded).
+    /// @param[in] begin  pointer to the first element
+    /// @param[in] end    pointer one past the last element; \f$\mathit{end} \ge \mathit{begin}\f$
     inline constexpr Span(T *begin, T *end) : data_(begin), size_(std::distance(begin, end)) {}
     /// @brief Copies the pointer and size; the elements are not copied.
+    /// @param[in] other  span whose pointer and size are copied
     inline constexpr Span(const Span<T> &other) = default;
     /// @brief Same as the copy constructor.
+    /// @param[in] other  span whose pointer and size are copied
     inline constexpr Span(Span<T> &&other) = default;
     /// @brief Views @p other with its first @p offset elements dropped.
-    /// @pre offset <= other.size()
+    /// @param[in] other   span to view a suffix of
+    /// @param[in] offset  number of leading elements dropped
+    /// @pre `offset <= other.size()`
     inline constexpr Span(const Span<T>& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) { assert(offset <= other.size_); }
     /// @brief Views @p other with its first @p offset elements dropped.
-    /// @pre offset <= other.size()
+    /// @param[in] other   span to view a suffix of
+    /// @param[in] offset  number of leading elements dropped
+    /// @pre `offset <= other.size()`
     inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) { assert(offset <= other.size_); }
     /// @brief A one-element span over @p value.
     ///
@@ -64,6 +74,7 @@ struct BATCHLAS_API Span
     /// so `syev(q, A, W[i * n], ...)` (the LAPACK idiom minus the `&`) compiled
     /// and overran the caller's array. Write `Span(x)` when one element is meant.
     /// @see @ref matrix-model-span-and-unifiedvector
+    /// @param[in] value  the element viewed (by reference: the span aliases it, nothing is copied)
     inline constexpr explicit Span(T& value) : data_(&value), size_(1) {}
 
     /// @name USM memory hints
@@ -72,47 +83,81 @@ struct BATCHLAS_API Span
     /// the advice (errors are swallowed: these are hints). Pass the Queue the data
     /// will be used on; the default Queue() is a new queue on Device::default_device().
     /// @{
-    Event set_preferred_location(const Queue &ctx = Queue()) const;    ///< Prefer residence on the device of @p ctx.
-    Event set_access_device(const Queue &ctx = Queue()) const;         ///< Map for access by the device of @p ctx.
-    Event prefetch(const Queue &ctx = Queue()) const;                  ///< Migrate to the device of @p ctx.
+
+    /// @brief Prefer residence on the device of @p ctx.
+    /// @param[in] ctx  queue whose device the data will be used on
+    /// @return event of the advice, or an empty Event
+    Event set_preferred_location(const Queue &ctx = Queue()) const;
+    /// @brief Map for access by the device of @p ctx.
+    /// @param[in] ctx  queue whose device the data will be used on
+    /// @return event of the advice, or an empty Event
+    Event set_access_device(const Queue &ctx = Queue()) const;
+    /// @brief Migrate to the device of @p ctx.
+    /// @param[in] ctx  queue whose device the data will be used on
+    /// @return event of the prefetch, or an empty Event
+    Event prefetch(const Queue &ctx = Queue()) const;
     /// @}
 
     /// @brief Reinterprets the bytes as elements of type @p U; the size is `size_bytes() / sizeof(U)`.
+    /// @tparam U  element type of the returned span
+    /// @return a span of `U` over the same memory
     template <typename U>
     inline constexpr Span<U> as_span() const {
         return Span<U>(reinterpret_cast<U*>(data_), (sizeof(T) * size_ / sizeof(U)) );
     }
 
-    /// @brief Elements [@p offset, size()).
+    /// @brief Elements \f$[\mathit{offset}, \mathit{size})\f$, i.e. from @p offset to size().
+    /// @param[in] offset  index of the first element viewed; `offset <= size()`
+    /// @return a span over the suffix
     inline constexpr Span<T> subspan(size_t offset) const { assert(offset <= size_); return Span<T>(data_ + offset, size_ - offset); }
-    /// @brief Elements [@p offset, @p offset + @p count). @pre offset + count <= size()
+    /// @brief Elements \f$[\mathit{offset}, \mathit{offset} + \mathit{count})\f$.
+    /// @param[in] offset  index of the first element viewed
+    /// @param[in] count   number of elements viewed
+    /// @return a span over the \f$\mathit{count}\f$ elements
+    /// @pre `offset + count <= size()`
     inline constexpr Span<T> subspan(size_t offset, size_t count) const { assert(offset + count <= size_);  return Span<T>(data_ + offset, count); }
     /// @brief Rebinds this span to @p other's pointer and size; no elements are copied.
+    /// @param[in] other  span whose pointer and size are taken
+    /// @return `*this`
     inline constexpr Span<T>& operator= (const Span<T> &other) { data_ = other.data_; size_ = other.size_; return *this; }
     /// @brief Same as the copy assignment.
+    /// @param[in] other  span whose pointer and size are taken
+    /// @return `*this`
     inline constexpr Span<T>& operator= (Span<T> &&other) { return *this = other; }
     /// @brief Element-wise comparison on the host.
     ///
     /// Spans of different sizes compare unequal. Real floating-point elements
-    /// compare with a relative tolerance of 20 epsilon; every other type, complex
-    /// included, compares exactly. Two spans over the same pointer are equal
-    /// without reading the data.
+    /// \f$a\f$, \f$b\f$ compare with a relative tolerance of \f$20\,\varepsilon\f$:
+    /// \f$\lvert a - b \rvert < 20\,\varepsilon \cdot \max(\lvert a \rvert, \lvert b \rvert)\f$, or
+    /// \f$\lvert a - b \rvert < 20\,\varepsilon\f$ when that maximum is at most \f$20\,\varepsilon\f$.
+    /// Every other type, complex included, compares exactly. Two spans over the same
+    /// pointer are equal without reading the data.
+    /// @param[in] other  span to compare with
+    /// @return true when the sizes match and every element pair compares equal
     /// @pre the memory is host-readable and no kernel is writing it
     bool operator==(const Span<T> other) const;
-    /// @brief Element @p index. @pre index < size()
+    /// @brief Element @p index.
+    /// @param[in] index  element index; `index < size()`
+    /// @return reference to the element
     inline constexpr T &operator[](size_t index) const {assert(index < size_); assert(data_); return data_[index];}
-    /// @brief Element @p index. @pre index < size() (asserted, not thrown)
+    /// @brief Element @p index.
+    /// @param[in] index  element index; `index < size()` (asserted, not thrown)
+    /// @return reference to the element
     inline constexpr T &at(size_t index) const{assert(index < size_); assert(data_); return data_[index];}
     inline constexpr T *data() const { return data_; }            ///< Pointer to the first element (may be null).
     inline constexpr size_t size() const { return size_; }        ///< Number of elements.
-    inline constexpr bool empty() const { return size_ == 0; }    ///< True when size() == 0.
+    inline constexpr bool empty() const { return size_ == 0; }    ///< True when `size() == 0`.
     /// @brief `size() * sizeof(T)`.
     inline constexpr size_t size_bytes() const { return size_ * sizeof(T); }
     inline constexpr T *begin() const { return data_; }           ///< Iterator to the first element.
     inline constexpr T *end() const { return data_ + size_; }     ///< Iterator one past the last element.
-    inline constexpr T &front() const { return data_[0]; }        ///< First element. @pre !empty()
-    inline constexpr T &back() const { return data_[size_ - 1]; } ///< Last element. @pre !empty()
-    /// @brief Prints the elements on the host as `[a, b, c]`. @pre the memory is host-readable
+    inline constexpr T &front() const { return data_[0]; }        ///< First element. @pre `!empty()`
+    inline constexpr T &back() const { return data_[size_ - 1]; } ///< Last element. @pre `!empty()`
+    /// @brief Prints the elements on the host as `[a, b, c]`.
+    /// @param[in,out] os   stream written to
+    /// @param[in]     vec  span whose elements are printed
+    /// @return @p os
+    /// @pre the memory is host-readable
     template <typename U>
     friend std::ostream &operator<<(std::ostream &os, const Span<U> &vec);
 

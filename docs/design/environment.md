@@ -53,7 +53,7 @@ bespoke parser gets an `EnvValue` holding the raw string, whose `get()` is `null
 
 ## Geometry variables
 
-Group `geometry`. A default that depends on n, type, argument or device stays at the
+Group `geometry`. A default that depends on \f$n\f$, type, argument or device stays at the
 [call site](#environment-geometry-defaults-stay-at-the-call-site).
 
 | Variable | Values (default) | Note |
@@ -65,8 +65,8 @@ Group `geometry`. A default that depends on n, type, argument or device stays at
 | `BATCHLAS_SB2ST_BACK_SUBS`, `BATCHLAS_SB2ST_BACK_TILE_W` | positive int (call site) | Force together; instantiated: tile {1, 2, 4, 8}, subs {4, 8, 16}. |
 | `BATCHLAS_SB2ST_BACK_TILE` | int (call site) | `0` selects the streaming kernel. |
 | `BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W` | int (type default) | nb 128/96/96/64, w 128/32/32/16 for s/d/c/z. |
-| `BATCHLAS_SYEV_TWO_STAGE_KD`, `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | positive int (32) | KD clamped to [1, n-1]. |
-| `BATCHLAS_SY2SB_ORMQR_NB` | int or `off` (unset) | `off`/`0` disable; positive forced, clamped to kd; bad, negative or > 1024 is unset. |
+| `BATCHLAS_SYEV_TWO_STAGE_KD`, `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | positive int (32) | \f$k_d\f$ clamped to \f$[1, n-1]\f$. |
+| `BATCHLAS_SY2SB_ORMQR_NB` | int or `off` (unset) | `off`/`0` disable; positive forced, clamped to \f$k_d\f$; bad, negative or \f$> 1024\f$ is unset. |
 | `BATCHLAS_SYTRD_BLOCK_SIZE` | int (bucketed by n and type) | |
 | `BATCHLAS_TRMM_TILE_M` | int (function of m) | Bucketed to 16, 32, 64, 128. |
 | `BATCHLAS_GEMM_WIDE_STAGES` | `2`, `3` (unset) | `complex<float>` wide tiles: `2` register prefetch, `3` cp.async (sm_80+, default sm_120+). |
@@ -125,13 +125,13 @@ read: `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KER
 - `BATCHLAS_SYEVX_ALGORITHM` overrides `SyevxParams::method`; an environment algorithm degrades
   where an explicit request throws.
 - `BATCHLAS_SYEVX_PRECONDITIONER` overrides a `SyevxParams` field.
-- `BATCHLAS_GESVD_BIDIAG=normal` squares the condition number (relative error 8.5e-1 against 5.0e-1
-  at kappa 1e6, [gesvd Tier 3](../perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver)); a
+- `BATCHLAS_GESVD_BIDIAG=normal` squares the condition number (relative error \f$8.5 \times 10^{-1}\f$ against \f$5.0 \times 10^{-1}\f$
+  at \f$\kappa = 10^{6}\f$, [gesvd Tier 3](../perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver)); a
   thin-tall U overrides it.
 
 ## Geometry defaults stay at the call site {#environment-geometry-defaults-stay-at-the-call-site}
 
-A knob whose default depends on n, type, argument or device stores a sentinel (0 or unset) and the
+A knob whose default depends on \f$n\f$, type, argument or device stores a sentinel (0 or unset) and the
 call site applies the default, so a tuned curve is not pinned at one point; constant defaults live in
 the struct. Where 0 is meaningful the field bypasses `env_positive_int_or` (which maps 0 to unset):
 `SB2ST_BACK_TILE` is raw because 0 selects the streaming kernel.
@@ -155,7 +155,7 @@ Each fix changes behaviour and belongs in its own commit:
 
 - `BATCHLAS_SYEVX_SOFT_LOCK` is inverted: `=off` and an empty value enable it.
 - `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` uses bare `atoi`: garbage gives 0, which widens the blocked
-  gebrd path to every n (`env_int_or` would give 1).
+  gebrd path to every \f$n\f$ (`env_int_or` would give 1).
 - `BATCHLAS_SKIP_POINTER_CHECKS` disables the checks for any non-empty value not starting with `0`.
 - `BATCHLAS_TUNE_STEDC_MERGE_VARIANT` is cast to `StedcMergeVariant` unchecked: variant 0 is
   unreachable from the environment, and one variant deadlocks on some hardware.
