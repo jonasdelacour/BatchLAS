@@ -231,8 +231,11 @@ TYPED_TEST(DeviceBlasV2StedcTest, ScaledProductLeavesTheFloatingRange) {
             EXPECT_VERIFY(T, Check::blas, hn[b], rel(o[1], half, half)) << Spec::name << " case " << b << " sqrt_scaled";
             const bool in_range = std::fabs(lg) < std::numeric_limits<T>::max_exponent - 2 && lg > std::numeric_limits<T>::min_exponent + 2;
             if (!in_range) {
-                // The case must leave range: the naive product overflows or underflows.
-                EXPECT_TRUE(o[2] == T(0) || std::isinf(o[2])) << Spec::name << " case " << b << " naive " << o[2];
+                // The case must leave range: the naive product overflows or underflows. Gradual
+                // underflow: 0.6 x the least subnormal rounds back to it, so a one-item product
+                // stops at 2^-149, not 0.
+                EXPECT_TRUE(std::fabs(o[2]) < std::numeric_limits<T>::min() || std::isinf(o[2]))
+                    << Spec::name << " case " << b << " naive " << o[2];
             } else if (o[3] <= T(32)) {
                 // One round of at most 32 items: the scaled product IS the naive one, bit for bit.
                 EXPECT_TRUE(same_bits(std::ldexp(o[0], ge[b]), o[2])) << Spec::name << " case " << b;
@@ -263,7 +266,8 @@ TYPED_TEST(DeviceBlasV2StedcTest, FoldMatchesHost) {
             const T staged = sv::fold(ex, s, sycl::plus<T>());
             const T mx = sv::fold(ex, xv, sycl::maximum<T>());
             const T sm = sv::fold(ex, xv, sycl::plus<T>());
-            const T em = sv::fold(ex, xv.head(0), sycl::maximum<T>());
+            // plus: an empty sycl::joint_reduce gives Op's identity (-inf for maximum), T{} on acpp.
+            const T em = sv::fold(ex, xv.head(0), sycl::plus<T>());
             const T win = sv::fold(ex, xv.tail(lo).head(len), sycl::plus<T>());  // off = lo, not at the start
             const T wmx = sv::fold(ex, xv.tail(lo).head(len), sycl::minimum<T>());
             if (ex.leader()) {
