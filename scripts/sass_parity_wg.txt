@@ -9,3 +9,6 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/kernels/common/lu_laswp.hh lu_laswp_deferred_left_launch, lu_laswp_right_gather_launch: wg = min(max_wg, 256),
+# 256 on every CUDA device (MAX_WORK_GROUP_SIZE 1024). LuLaswpKernel is a sycl::range launch: no row.
+256 ::LuLaswp(?:Right)?GatherKernel<
