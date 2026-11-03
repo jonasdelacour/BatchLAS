@@ -655,14 +655,17 @@ std::string first_code_line(const std::string& path, const char* token, const ch
 
 // gebrd_cta's work-group barriers are reached by every partition only when no partition returns
 // early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
-// this source scan, not a numerical case, holds the property: from the kernel's launch to the end
-// of its anonymous namespace no code line returns, and `live` reads the mask.
+// this source scan, not a numerical case, holds the property: from gebd2_tile (the body holding
+// the barriers, called by the kernel) to the end of its anonymous namespace no code line returns,
+// and `live` reads the mask.
 TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
     const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
     const char* launch = "parallel_for<GebrdCTAKernel";
     // Positive controls first: every assertion below is an absence.
     ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
-    ASSERT_FALSE(first_code_line(path, "it.barrier(", launch).empty()) << "no work-group barrier after the launch";
+    const char* body = "void gebd2_tile(";
+    ASSERT_FALSE(first_code_line(path, "gebd2_tile<", launch).empty()) << "the kernel does not call gebd2_tile";
+    ASSERT_FALSE(first_code_line(path, "it.barrier(", body).empty()) << "no work-group barrier in gebd2_tile";
     const std::string live = first_code_line(path, "const bool live", launch);
     ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
     EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
@@ -674,10 +677,10 @@ TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
         const std::string text(line);
         const std::size_t cut = text.find("//");
         const std::string code = cut == std::string::npos ? text : text.substr(0, cut);
-        if (code.find(launch) != std::string::npos) in_kernel = true;
+        if (code.find(body) != std::string::npos) in_kernel = true;
         if (!in_kernel) continue;
         if (text.rfind("} // namespace", 0) == 0 || text.rfind("}  // namespace", 0) == 0) break;  // the kernel's TU scope ends
-        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebrd_cta's packed kernel: " << text;
+        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebd2_tile or the packed kernel: " << text;
     }
     std::fclose(f);
 }
