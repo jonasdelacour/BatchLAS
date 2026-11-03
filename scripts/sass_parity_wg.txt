@@ -9,3 +9,11 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/util/norm.cc norm_launch: sycl::nd_range<1>(batch * WG, WG), WG = the last template argument
+\1  ^batchlas::NormKernel<[^,]+, [^,]+, [^,]+, (\d+)>$
+# src/util/transpose.cc transpose_impl: sycl::range<3>(1, TILE, TILE), TILE = 16
+256  ^batchlas::TransposeKernel<
+# src/util/elementwise.cc launch_2d: v2::batched2d_shape(rows, cols) (items = 256, gr * gc * lb == 256)
+256  ::TriangularMaskKernel<[^,]+, [^,]+>$
+# src/kernels/common/triangular_expand.hh: expand_group_shape (rows * cols == 256), mirrored 32 x 8
+256  ::expand_(?:triangular|mirrored)<

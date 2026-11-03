@@ -10,6 +10,8 @@
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
 #include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
+#include <src/kernels/common/dla_v2_scalar.hh>
 
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -40,15 +42,11 @@ constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the ti
 }
 
 // COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
-// lane guard belongs INSIDE it. Complex shuffles as two reals: permute/select reject an
-// aggregate (gesvdj_cta.cc:95).
+// lane guard belongs INSIDE it. Device LA v2 Partition::bcast: complex shuffles as two
+// reals (permute/select reject an aggregate, gesvdj_cta.cc:95).
 template <typename D, std::size_t P>
 inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) {
-        return D{select_from_group(part, v.re, src), select_from_group(part, v.im, src)};
-    } else {
-        return select_from_group(part, v, src);
-    }
+    return ::batchlas::device::v2::wrap(part).bcast(v, src);
 }
 
 // COMPONENT BY COMPONENT, never a plain `?:` on a complex scalar: LLVM will not build a
