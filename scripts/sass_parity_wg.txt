@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/syev/tridiag/tridiag_solver.cc tridiagonal_solver: sycl::nd_range<1>(batch_size*32, 32)
+32  batchlas::tridiagonal_solver<

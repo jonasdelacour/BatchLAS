@@ -18,7 +18,7 @@
 
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <batchlas/blas/device/v2/ext/tridiag-stebz-stein.hh>
+#include <src/ops/syev/tridiag/tridiag_v2.hh>
 
 namespace batchlas {
 
@@ -32,17 +32,18 @@ inline constexpr bool kAcpp = false;
 inline constexpr int kTridiagMaxIterations = 30;
 
 namespace v2 = device::v2;
+namespace tdv2 = device::v2::tridiag;
 // The solver's launch is nd_range(batch * 32, 32). Loops stride by the runtime local range and
-// barriers are sycl::group_barrier, as in the legacy kernel: a constant stride of 32 lets the
-// compiler unroll every elementwise loop over the generic D/L/U pointers (+23% instructions,
-// +16 registers on sm_89).
-using TridiagEx = v2::DynWorkGroup;
+// barriers fence global and local memory, as the legacy sycl::group_barrier: a constant stride
+// of 32 lets the compiler unroll every elementwise loop over the generic D/L/U pointers (+23%
+// instructions, +16 registers on sm_89).
+using TridiagEx = v2::RtGroup<>;
 
 // Q(:, k:k+1) := Q(:, k:k+1) H_k for the n reflectors H_k = I - 2 v_k v_k^T of one QR sweep.
 template <typename T>
 void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, const int m, const int ld, T* Q) {
     const auto q = v2::mat(Q, m, n + 1, ld);
-    for (int k = 0; k < n; k++) v2::refl2(ex, std::array<T, 2>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
+    for (int k = 0; k < n; k++) tdv2::refl2(ex, std::array<T, 2>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
 }
 
 // One explicit shifted QR step on the leading n x n block: T - shift = Q R, T := R Q + shift, Q
@@ -57,27 +58,27 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
     const T l_nm1 = L[n-1];
 
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 
     v2::map(ex, d, [=](T x) { return x - shift; }, d);
-    v2::fill(ex, v2::Zero{}, v2::vec(U.data() + (n + 1), n));
+    v2::map(ex, v2::vec(U.data() + (n + 1), n), [] { return T(0); });
     v2::copy(ex, v2::vec(L.data(), n - 1), v2::vec(U.data(), n - 1));
-    v2::fill(ex, v2::Zero{}, v2::vec(Vout.data(), 2 * (n - 1)));
+    v2::map(ex, v2::vec(Vout.data(), 2 * (n - 1)), [] { return T(0); });
     if (ex.leader()) {
         L[n - 1] = T(0);
         U[n - 1] = T(0);
     }
 
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 
     // Q^T from the left: H_k zeroes L[k] (rows k, k+1; columns k, k+1, k+2).
     if (ex.leader()) {
         for (int k = 0; k < n - 1; k++) {
             if (L[k] != T(0)) {
-                const auto v = v2::house2(D[k], L[k]);
+                const auto v = tdv2::house2(D[k], L[k]);
                 Vout[2 * k] = v[0];
                 Vout[2 * k + 1] = v[1];
-                v2::refl2(th, v, v2::refs(D[k], U[k], U2(k)), v2::refs(L[k], D[k + 1], U[k + 1]));
+                tdv2::refl2(th, v, tdv2::refs(D[k], U[k], U2(k)), tdv2::refs(L[k], D[k + 1], U[k + 1]));
             }
         }
     }
@@ -86,32 +87,32 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         const std::array<T, 2> v{Vout[0], Vout[1]};
         const T t1 = T(0) + D[1] * v[1];
-        v2::refl2(th, v, v2::refs(D[0]), v2::refs(U[0]));
+        tdv2::refl2(th, v, tdv2::refs(D[0]), tdv2::refs(U[0]));
         L[0] -= T(2) * v[0] * t1;
         D[1] -= T(2) * v[1] * t1;
     }
 
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 
     // H_k on columns k, k+1 (rows k-1, k, k+1).
     if (ex.leader()) {
         for (int k = 1; k < n - 1; k++) {
             const std::array<T, 2> v{Vout[2 * k], Vout[2 * k + 1]};
-            v2::refl2(th, v, v2::refs(U[k - 1], D[k], L[k]), v2::refs(U2(k - 1), U[k], D[k + 1]));
+            tdv2::refl2(th, v, tdv2::refs(U[k - 1], D[k], L[k]), tdv2::refs(U2(k - 1), U[k], D[k + 1]));
         }
     }
 
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 
     v2::map(ex, d, [=](T x) { return x + shift; }, d);
     v2::copy(ex, v2::vec(U.data(), n - 1), v2::vec(L.data(), n - 1));
 
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 
     if (ex.leader()) {
         L[n-1] = l_nm1;
     }
-    ex.barrier();
+    ex.barrier(v2::Mem::Global);
 }
 
 // Whether the four work arrays fit the local memory a 32-lane work-group may request (on Metal
@@ -169,12 +170,12 @@ Event tridiagonal_solver(Queue& ctx,
                 if (jobz == JobType::EigenVectors) v2::laset(ex, v2::Zero{}, v2::One{}, v2::mat(batch_Q, nn, nn, int(Vld)));
                 // One fused pass with the legacy int64 bound. Two v2::copy calls, or one fused
                 // for_each_owned over int n, cost 8 more registers for double on sm_89 (58 -> 66).
-                for (int i = ex.lid(); i < n; i += ex.range()) {
+                for (int i = ex.lid(); i < n; i += ex.width()) {
                     D[i] = alphas.data()[bid * n + i];
                     L[i] = betas.data()[bid * n + i];
                 }
 
-                ex.barrier();
+                ex.barrier(v2::Mem::Global);
 
                 // Every work-item reads the same local values after T_QTQ's closing barrier, so the
                 // loop decisions agree across the group. Relative deflation as LAPACK ?steqr.

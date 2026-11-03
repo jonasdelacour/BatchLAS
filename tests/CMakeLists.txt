@@ -28,6 +28,7 @@ set(TEST_TARGETS
     util_device_queue_tests
     device_blas_tests
     device_blas_v2_tests
+    device_blas_v2_tridiag-stebz-stein_tests
     mempool_tests
     backend_dispatch_tests
     options_api_tests
@@ -227,7 +228,7 @@ set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ortho_mask_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
-    steqr_tests stedc_tests stebz_tests stein_tests
+    steqr_tests stedc_tests stebz_tests stein_tests device_blas_v2_tridiag-stebz-stein_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
     sytrd_cta_tests sytrd_blocked_tests)

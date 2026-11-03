@@ -23,7 +23,7 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <batchlas/blas/device/v2/ext/tridiag-stebz-stein.hh>
+#include <src/ops/syev/tridiag/tridiag_v2.hh>
 
 namespace batchlas {
 
@@ -31,6 +31,7 @@ template <Backend B, typename T>
 struct StebzKernel;
 
 namespace v2 = device::v2;
+namespace tdv2 = device::v2::tridiag;
 
 template <Backend B, typename T>
 Event stebz(Queue& ctx,
@@ -93,12 +94,12 @@ Event stebz(Queue& ctx,
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const v2::DynWorkGroup ex{item};
+                const v2::RtGroup<> ex{item};
                 const v2::Thread th{};
                 const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
 
-                const auto g = v2::gershgorin(ex, dv, ev);
+                const auto g = tdv2::gershgorin(ex, dv, ev);
                 if (ex.leader()) {
                     const T eps = std::numeric_limits<T>::epsilon();
                     const T norm = sycl::max(sycl::fabs(g.lo), sycl::fabs(g.hi));
@@ -111,7 +112,7 @@ Event stebz(Queue& ctx,
                     found[0] = 0;
                     found[1] = 0;
                 }
-                ex.barrier();
+                ex.barrier(v2::Mem::Global);
 
                 const T glo = bounds[0];
                 const T ghi = bounds[1];
@@ -125,12 +126,12 @@ Event stebz(Queue& ctx,
                 int64_t last = iu;
                 if (value_range) {
                     if (ex.leader()) {
-                        const int c_lo = v2::sturm_count(th, dv, ev, vl, pivmin);
-                        const int c_hi = v2::sturm_count(th, dv, ev, vu, pivmin);
+                        const int c_lo = tdv2::sturm_count(th, dv, ev, vl, pivmin);
+                        const int c_hi = tdv2::sturm_count(th, dv, ev, vu, pivmin);
                         found[0] = c_hi - c_lo;
                         found[1] = c_lo;
                     }
-                    ex.barrier();
+                    ex.barrier(v2::Mem::Global);
                     first = static_cast<int64_t>(found[1]);
                     last = first + static_cast<int64_t>(found[0]) - 1;
                 } else if (ex.leader()) {
@@ -140,11 +141,11 @@ Event stebz(Queue& ctx,
                 // One work-item per wanted eigenvalue; no interaction between them.
                 const int count_wanted = static_cast<int>(last - first + 1);
                 v2::for_each_owned(ex, count_wanted, [&](int slot) {
-                    const T lambda = v2::bisect_eig(th, dv, ev, int(first) + slot, glo, ghi, tol, pivmin, max_iter);
+                    const T lambda = tdv2::bisect_eig(th, dv, ev, int(first) + slot, glo, ghi, tol, pivmin, max_iter);
                     w(descending ? (count_wanted - 1 - slot) : slot, bid) = lambda;
                 });
 
-                ex.barrier();
+                ex.barrier(v2::Mem::Global);
                 if (ex.leader()) m_ptr[bid] = found[0];
             });
     });
