@@ -49,15 +49,18 @@ template <int GR, int GC, int LB> inline constexpr bool is_grid2d_v<Grid2D<GR, G
 
 // Host side. Rows: the smallest power of two >= min(m, 32); columns: the smallest power of two
 // >= min(n, items / rows); batch items fill the rest, so tiny matrices still fill a group.
+// Batch items sit in dimension 0 (CUDA blockDim.z), capped at 64 work-items.
 struct Shape2D {
     int gr, gc, lb;
 };
+inline constexpr int kMaxGroupBatch2D = 64;
 inline Shape2D batched2d_shape(int m, int n, int items = 256) {
     int gr = 1;
     while (gr < 32 && gr < m) gr *= 2;
     int gc = 1;
     while (gc < items / gr && gc < n) gc *= 2;
-    return {gr, gc, items / (gr * gc)};
+    const int lb = items / (gr * gc);
+    return {gr, gc, lb < kMaxGroupBatch2D ? lb : kMaxGroupBatch2D};
 }
 // Dimension 0 holds at most max_groups0 groups (CUDA gridDim.z); Grid2D::for_each_batch walks
 // the rest. m, n, batch >= 1.
