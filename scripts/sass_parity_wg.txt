@@ -15,3 +15,5 @@
 128 ^batchlas::SyevxFilter(?:BoundsReduce|Residual|Finalize)Kernel<
 # src/ops/syevx/kernels/syevx_lobpcg.cc: constexpr size_t wg = 256; sycl::range{size_t(256)}
 256 ^batchlas::Syevx(?:JacobiDiagonal|ReverseEigenvectors)Kernel<
+# src/ops/syevx/kernels/syevx_lobpcg.cc: soft-lock fill/zero, restart copy, StAS deflation: sycl::range{size_t(128)}
+128 batchlas::syevx_lobpcg<.*::'lambda\d*'\(sycl::_V1::nd_item<1>\)$
