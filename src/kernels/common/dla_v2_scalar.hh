@@ -30,6 +30,9 @@ template <class R> struct Arith<sycl_device::Cx<R>> {
     BATCHLAS_DLA_INLINE static T neg(T a) { return T{-a.re, -a.im}; }
     BATCHLAS_DLA_INLINE static T zero() { return T{R(0), R(0)}; }
     BATCHLAS_DLA_INLINE static T one() { return T{R(1), R(0)}; }
+    // dev_div_real / dev_mul_real (src/sycl/device_scalar.hh), bit for bit.
+    BATCHLAS_DLA_INLINE static T div_real(const T& a, const R& s) { return T{a.re / s, a.im / s}; }
+    BATCHLAS_DLA_INLINE static T scale_real(const R& s, const T& a) { return T{s * a.re, s * a.im}; }
 };
 
 }  // namespace batchlas::device::v2
