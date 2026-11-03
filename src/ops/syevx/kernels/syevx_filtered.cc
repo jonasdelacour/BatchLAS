@@ -211,7 +211,7 @@ Event syevx_filtered(Queue& ctx,
     // sharpness, never correctness). Invariant: the inner j loop stays serial and
     // ascending, so the bounds are bit-identical to a serial row-by-row scan.
     // evidence: docs/perf/syevx.md#syevx-the-parallel-gershgorin-bounds-kernel
-    auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) {
+    auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) BATCHLAS_DLA_BODY {
         Real diag = Real(0);
         Real radius = Real(0);
         if constexpr (MFormat == MatrixFormat::Dense) {

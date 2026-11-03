@@ -634,7 +634,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     // selected block is the *top* block_vectors, hence the offset.
                     const int64_t eig_offset = find_largest ? (int64_t(num_eigvals) - block_vectors) : 0;
                     // Column of X -> reported slot (largest-first when find_largest; may be >= neigs).
-                    const auto col_to_slot = [=](int64_t c) {
+                    const auto col_to_slot = [=](int64_t c) BATCHLAS_DLA_BODY {
                         return find_largest ? (block_vectors - 1 - c) : c;
                     };
 
@@ -695,7 +695,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         const auto local_size = item.get_local_range(0);
                         int cur_col = -1;
                         float_type acc_r = 0, acc_x = 0, acc_ax = 0;
-                        auto flush = [&]() {
+                        auto flush = [&]() BATCHLAS_DLA_BODY {
                             if (cur_col < 0 || cur_col >= int(neigs)) return;
                             sycl::atomic_ref<float_type, sycl::memory_order::relaxed,
                                              sycl::memory_scope::work_group,
@@ -918,7 +918,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             if (masked && !mk[bid]) return;  // I1
                             const int nn = int(n), nb = int(nblk);
                             const auto Rb = v2::mat(Rdata + int64_t(bid) * R_stride, nn, nb, int(R_ld));
-                            const auto locked = [&](int j) {
+                            const auto locked = [&](int j) BATCHLAS_DLA_BODY {
                                 return j < int(nlock) && col_conv[bid * nlock + size_t(j)] != 0;
                             };
 
@@ -1129,7 +1129,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const float_type sentinel = sycl::sqrt(v2::allreduce(ex, hsq)) + float_type(1);
                             for (int c = int(first); c < int(nv); ++c) {
                                 const float_type norm2 = v2::sumsq<v2::alg::Unfused, v2::Scope::Group>(ex, basis.col(c));
-                                if (ex.leader() && norm2 <= null_tol) H(c, c) = T(largest ? -sentinel : sentinel);
+                                if (ex.leader() && norm2 <= null_tol) { [&]() BATCHLAS_DLA_BODY { H(c, c) = T(largest ? -sentinel : sentinel); }(); }
                             }
                         });
                 });
