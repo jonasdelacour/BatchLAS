@@ -231,7 +231,8 @@ TYPED_TEST(V2BdsdcTest, ItemNRowColAddressing) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto A = v2::item(km, b, m, n);
         const auto x = gk::item_n(vv, b, vk);
-        const auto rw = gk::row(A, r0, n - 1), cl = gk::col(A, c0, m);
+        const auto rw = gk::row(A, r0, n - 1);
+        const auto cl = gk::col(A, c0, m);
         for (int j = 0; j < rw.size(); ++j) rw(j) = T(R(b * 1000 + 100 + j));
         for (int i = 0; i < cl.size(); ++i) cl(i) = T(R(b * 1000 + 200 + i));
         for (int i = 0; i < x.size(); ++i) x(i) = T(R(-(b * 1000 + i)));
