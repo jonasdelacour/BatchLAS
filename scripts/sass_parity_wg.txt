@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/sytrs/kernels/sytrs_kernels.cc diag_launch, scatter_launch: sycl::range<1>(kWg), kWg = 256
+256  ^batchlas::sycl_sytrf::Sytrs(?:Diag|Scatter)Kernel<
