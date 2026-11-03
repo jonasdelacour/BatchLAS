@@ -160,7 +160,7 @@ template <class T, int Off, class V, class N> T virt_get(const V& v, bool forwar
 // (i-1, i+1); returns the fill at (i, i+2). forward == false indexes bottom-up (QL). I is the
 // caller's index type (its address arithmetic).
 template <class D, class E, class T, class I>
-BATCHLAS_DLA_INLINE T tridiag_rot(const v2::Thread&, const D& d, const E& e, const T& prev_bulge, I i, I j, v2::Givens<T> g,
+inline T tridiag_rot(const v2::Thread&, const D& d, const E& e, const T& prev_bulge, I i, I j, v2::Givens<T> g,
                                   bool forward) {
     const T c = g.c;
     const T s = g.s;
