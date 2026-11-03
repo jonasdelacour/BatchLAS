@@ -30,6 +30,9 @@ template <class R> struct Arith<sycl_device::Cx<R>> {
     BATCHLAS_DLA_INLINE static T neg(T a) { return T{-a.re, -a.im}; }
     BATCHLAS_DLA_INLINE static T zero() { return T{R(0), R(0)}; }
     BATCHLAS_DLA_INLINE static T one() { return T{R(1), R(0)}; }
+    // sycl_device::dev_is_zero / dev_isfinite (larfg_scalars reads these through Arith).
+    BATCHLAS_DLA_INLINE static bool is_zero(const T& a) { return a.re == R(0) && a.im == R(0); }
+    BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.re) && sycl::isfinite(a.im); }
 };
 
 }  // namespace batchlas::device::v2
