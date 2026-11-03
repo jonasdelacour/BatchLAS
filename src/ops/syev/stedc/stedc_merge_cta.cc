@@ -231,13 +231,14 @@ struct RocRoot {
 };
 
 template <typename T, typename Ex>
-inline RocRoot<T> solve_root_roc_generic(const Ex& ex,
+inline RocRoot<T> solve_root_roc_generic(const Ex& ex_in,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
                                 int32_t k,
                                 T rho,
                                 int32_t max_iter) {
+    const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
     const T pole_k = d_prob(k);
     const T pole_k1 = d_prob(k + 1);
@@ -358,12 +359,13 @@ inline RocRoot<T> solve_root_roc_generic(const Ex& ex,
 }
 
 template <typename T, typename Ex>
-inline RocRoot<T> solve_root_ext_generic(const Ex& ex,
+inline RocRoot<T> solve_root_ext_generic(const Ex& ex_in,
                                 const VectorView<T>& d_prob,
                                 const VectorView<T>& z_prob,
                                 int32_t dd,
                                 T rho,
                                 int32_t max_iter) {
+    const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
 
     // dd == 1 has no second pole: `prev` below would be -1 and d_prob(prev)

@@ -9,3 +9,9 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/syev/stedc/stedc.cc: sycl::nd_range<1>(batch_size * 128, 128) for these six
+128 ^batchlas::Stedc(?:ComputeV|Deflation|SecularSolve|RescaleV|MatrixUpdate|LevelPad)<
+# src/ops/syev/stedc/stedc.cc StedcAssignEigenvalues: sycl::nd_range<1>(batch_size*32, 32)
+32  ^batchlas::StedcAssignEigenvalues<
+# src/ops/syev/stedc/stedc_secular.cc secular_solver: sycl::nd_range<1>(d.batch_size()*128, 128)
+128 ^batchlas::Event batchlas::secular_solver<(?:float|double)>\(
