@@ -43,6 +43,7 @@ set(TEST_TARGETS
     device_blas_v2_larft-orgqr-ormqr_tests
     device_blas_v2_potrf-cta-lpanel_tests
     device_blas_v2_potri_tests
+    device_blas_v2_sb2st-sy2sb_tests
     device_blas_v2_tests
     error_model_tests
     gemm_candidates_tests
@@ -247,6 +248,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_v2_larft-orgqr-ormqr_tests
     device_blas_v2_potrf-cta-lpanel_tests
     device_blas_v2_potri_tests
+    device_blas_v2_sb2st-sy2sb_tests
     device_blas_v2_tests
     gemm_candidates_tests
     gemm_mask_tests

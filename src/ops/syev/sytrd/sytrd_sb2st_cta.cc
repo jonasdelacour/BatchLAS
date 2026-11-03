@@ -8,8 +8,11 @@
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta_instantiations.hh>
 
+
 #include <batchlas/util/group-invoke.hh>
 #include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
+#include <src/ops/syev/sytrd/sb2st_v2.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -28,6 +31,9 @@
 namespace batchlas::detail {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
+namespace sbv = batchlas::sb2st_v2;
 
 template <typename T, int32_t P>
 class BtrdLowerSubgroupKernel;
@@ -115,7 +121,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
-                const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+                const v2::SgpPartition<P> pex{sg};  // lane = pex.lid(); the same SubGroupPartition<P>
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 if (prob_id >= batch) return;
                 // I2: an inactive item chases its scratch copy like any other and stores nothing.
@@ -149,22 +155,22 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 };
 
                 auto zero_cw = [&](Real* C, T* WORK) __attribute__((always_inline)) {
-                    for (int i = lane; i < cw_len; i += P) {
+                    v2::for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
                         C[i] = Real(0);
                         WORK[i] = T(0);
-                    }
+                    });
                     group_barrier(partition);
                 };
                 // Copy (r,c) between global (ld = ABv.ld()) and tight-packed local (ld = kd+1) storage.
                 auto stage_ab = [&](T* ABl, bool to_local) __attribute__((always_inline)) {
                     if (!to_local) group_barrier(partition);
                     const int ab_elems_l = ldab_l * n;
-                    for (int t = lane; t < ab_elems_l; t += P) {
+                    v2::for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
                         const int ccol = t / ldab_l;
                         const int rrow = t - ccol * ldab_l;
                         if (to_local) ABl[t] = ABg[rrow + ccol * ABv.ld()];
                         else ABg[rrow + ccol * ABv.ld()] = ABl[t];
-                    }
+                    });
                     group_barrier(partition);
                 };
 
@@ -173,11 +179,9 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     const int kd1 = kd + 1;
                     const int kdm1 = kd - 1;
                     const int incx = ldab - 1;
-                    const int inca = kd1 * ldab;
                     const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
                     auto idx = [&](int r, int c) -> int { return r + c * ldab; };
-
 
                     // Unified accessor for AB that works whether AB points to global or local storage.
                     auto AB_at = [&](int r, int c) -> T& { return AB[idx(r, c)]; };
@@ -186,11 +190,24 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     int j1 = kdn + 1;
                     int j2 = 0;
 
+                    // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and
+                    // the band entries AB(r, j + dc), addressed as the scalar loops address them.
+                    auto rseq = [&](int cnt, auto at) {
+                        return sbv::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+                            return at(j1 + t * kd1);
+                        });
+                    };
+                    auto Cj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return C[j]; };
+                    auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
+                    auto band = [&](int r, int dc) {
+                        return [&AB_at, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB_at(r, j + dc); };
+                    };
+
                     // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
                     if constexpr (detail::is_complex<T>::value) {
-                        for (int j = lane; j < n; j += P) {
+                        v2::for_each_owned(pex, n, [&](int j) BATCHLAS_DLA_BODY {
                             AB_at(0, j) = real_as_T(AB_at(0, j));
-                        }
+                        });
                         group_barrier(partition);
                     }
 
@@ -201,45 +218,27 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                             j2 += kdn;
 
                             if (nr > 0) {
-                                // Parallel LARGV over rotations.
-                                for (int t = lane; t < nr; t += P) {
-                                    const int j = j1 + t * kd1;
-                                    const T f = AB_at(kd, j - kd1);
-                                    const T g = WORK[j];
-                                    Real ct = Real(0);
-                                    T st = T(0);
-                                    T rt = T(0);
-                                    Ops::lartg(f, g, ct, st, rt);
-                                    C[j] = ct;
-                                    WORK[j] = st;
-                                    AB_at(kd, j - kd1) = rt;
-                                }
+                                // xLARGV over the rotations.
+                                sbv::largv<Ops>(pex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                                 group_barrier(partition);
 
                                 if (nr > 2 * kd - 1) {
-                                    // Keep the l-loop sequential, but parallelize across rotations within each l.
-                                    // Rotations are independent across t; we only need one barrier after all l steps.
+                                    // xLARTV per band diagonal l (l sequential, rotations parallel);
+                                    // the rotations are independent, so one barrier after all l.
                                     for (int l = 0; l < kd - 1; ++l) {
-                                        for (int t = lane; t < nr; t += P) {
-                                            const int j = j1 + t * kd1;
-                                            Ops::rot_pair(AB_at(kd - 1 - l, j - kd1 + l + 1),
-                                                          AB_at(kd - l, j - kd1 + l + 1),
-                                                          C[j],
-                                                          WORK[j]);
-                                        }
+                                        sbv::lartv<Ops>(pex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                                       rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj),
+                                                       rseq(nr, Wj));
                                     }
                                     group_barrier(partition);
                                 } else {
-                                    // Parallelize across rotations (t). Each lane owns a subset of j = j1 + t*kd1.
+                                    // Each lane applies its own rotations along the band diagonal (xROT).
                                     if (kdm1 > 0) {
-                                        for (int t = lane; t < nr; t += P) {
+                                        v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
                                             const int j = j1 + t * kd1;
-                                            Ops::rot(kdm1,
-                                                     make_strided(AB + idx(kd - 1, j - kd), incx),
-                                                     make_strided(AB + idx(kd, j - kd), incx),
-                                                     C[j],
-                                                     WORK[j]);
-                                        }
+                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, j - kd), kdm1, incx),
+                                                         v2::vec(AB + idx(kd, j - kd), kdm1, incx), C[j], WORK[j]);
+                                        });
                                     }
                                     group_barrier(partition);
                                 }
@@ -250,25 +249,22 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                 int nr_out = nr;
                                 int j1_out = j1;
                                 if (k > 1) {
-                                        if (k <= n - i - 1) {
-                                            const T f = AB_at(k - 1, i);
-                                            const T g = AB_at(k, i);
-                                            Real ct = Real(0);
-                                            T st = T(0);
-                                            T rt = T(0);
-                                            Ops::lartg(f, g, ct, st, rt);
-                                            C[i + k] = ct;
-                                            WORK[i + k] = st;
-                                            AB_at(k - 1, i) = rt;
+                                    if (k <= n - i - 1) {
+                                        const T f = AB_at(k - 1, i);
+                                        const T g = AB_at(k, i);
+                                        Real ct = Real(0);
+                                        T st = T(0);
+                                        T rt = T(0);
+                                        Ops::lartg(f, g, ct, st, rt);
+                                        C[i + k] = ct;
+                                        WORK[i + k] = st;
+                                        AB_at(k - 1, i) = rt;
 
                                         if (k > 2) {
                                             const Real ct2 = C[i + k];
                                             const T st2 = WORK[i + k];
-                                            Ops::rot(k - 2,
-                                                     make_strided(AB + idx(k - 2, i + 1), ldab - 1),
-                                                     make_strided(AB + idx(k - 1, i + 1), ldab - 1),
-                                                     ct2,
-                                                     st2);
+                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                                         v2::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct2, st2);
                                         }
                                     }
                                     nr_out += 1;
@@ -280,23 +276,15 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                             j1 = nr_j1[1];
 
                             if (nr > 0) {
-                                // Parallel LAR2V over rotations (nrot==1 fast path).
-                                for (int t = lane; t < nr; t += P) {
-                                    const int j = j1 + t * kd1;
-                                    Ops::lar2v_pair(AB_at(0, j - 1),
-                                                   AB_at(0, j),
-                                                   AB_at(1, j - 1),
-                                                   C[j],
-                                                   WORK[j]);
-                                }
+                                // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
+                                sbv::lar2v<Ops>(pex, rseq(nr, band(0, -1)), rseq(nr, band(0, 0)), rseq(nr, band(1, -1)),
+                                               rseq(nr, Cj), rseq(nr, Wj));
                                 group_barrier(partition);
 
                                 // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                                 if constexpr (detail::is_complex<T>::value) {
-                                    for (int t = lane; t < nr; t += P) {
-                                        const int j = j1 + t * kd1;
-                                        WORK[j] = batchlas::device::detail::conj(WORK[j]);
-                                    }
+                                    const auto ws = rseq(nr, Wj);
+                                    v2::map(pex, ws, [](const T& w) { return sbv::native_t<T>::conj(w); }, ws);
                                     group_barrier(partition);
                                 }
 
@@ -304,41 +292,30 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                     for (int l = 0; l < kd - 1; ++l) {
                                         const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                         if (nrt > 0) {
-                                            for (int t = lane; t < nrt; t += P) {
-                                                const int j = j1 + t * kd1;
-                                                Ops::rot_pair(AB_at(l + 2, j - 1),
-                                                              AB_at(l + 1, j),
-                                                              C[j],
-                                                              WORK[j]);
-                                            }
+                                            sbv::lartv<Ops>(pex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                                           rseq(nrt, Cj), rseq(nrt, Wj));
                                         }
                                     }
                                     group_barrier(partition);
                                 } else {
-                                    // Parallelize across rotations (t) for the main body (0..nr-2).
+                                    // Each lane applies its own rotations (0..nr-2) from the right (xROT).
                                     const int main_nrot = nr - 1;
                                     if (kdm1 > 0 && main_nrot > 0) {
-                                        for (int t = lane; t < main_nrot; t += P) {
+                                        v2::for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DLA_BODY {
                                             const int j = j1 + t * kd1;
-                                            Ops::rot(kdm1,
-                                                     make_strided(AB + idx(2, j - 1), 1),
-                                                     make_strided(AB + idx(1, j), 1),
-                                                     C[j],
-                                                     WORK[j]);
-                                        }
+                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j - 1), kdm1),
+                                                         v2::vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
+                                        });
                                     }
 
                                     // Tail rotation ("last") has different length (lend). Do it once.
-                                    if (lane == 0) {
+                                    if (pex.leader()) {
                                         const int j1end = j1 + kd1 * (nr - 2);
                                         const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                         const int last = j1end + kd1;
                                         if (lend > 0) {
-                                            Ops::rot(lend,
-                                                     make_strided(AB + idx(2, last - 1), 1),
-                                                     make_strided(AB + idx(1, last), 1),
-                                                     C[last],
-                                                     WORK[last]);
+                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
+                                                         v2::vec(AB + idx(1, last), lend), C[last], WORK[last]);
                                         }
                                     }
                                     group_barrier(partition);
@@ -359,11 +336,12 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                 j2 = nr_j2[1];
 
                             if (nr > 0) {
-                                for (int t = lane; t < nr; t += P) {
+                                // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
+                                v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
                                     const int j = j1 + t * kd1;
                                     WORK[j + kd] = WORK[j] * AB_at(kd, j);
                                     AB_at(kd, j) = T(C[j]) * AB_at(kd, j);
-                                }
+                                });
                                 group_barrier(partition);
                             }
                         }
