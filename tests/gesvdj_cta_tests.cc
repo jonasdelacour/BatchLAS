@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <memory>
 #include <random>
 #include <tuple>
@@ -583,6 +584,52 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
             }
             EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, std::fabs(1.0 - std::abs(acc)))
                 << "U column " << c << " differs at b=" << b;
+        }
+    }
+}
+
+// Every rotation scales both columns of V by sqrt(c^2 + s^2) = c sqrt(1 + t^2), so a biased
+// c = 1/sqrt(1 + t^2) drifts every ||v_j|| (and sigma_j with it) linearly in the rotation
+// count. The bare rsqrt.approx fold is biased low; the bound is on the batch MEAN of
+// ||v_j|| - 1, which unbiased rounding averages away and orthogonality bounds never see.
+TYPED_TEST(GesvdjCtaTest, RotationsKeepRightVectorNormsUnbiased) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    if constexpr (!std::is_same_v<Real, float>) {
+        GTEST_SKIP() << "the rsqrt.approx fold is float-only";
+    } else {
+        auto& ctx = *this->ctx;
+        const int batch = 1024;
+        // Measured mean (eps, batch 1024): rsqrt.approx + Newton float +9.84 (n=32) / +25.65
+        // (n=64), complex +16.83 / +41.21; origin/main's bare fold float -33.10 / -83.25,
+        // complex -22.81 / -60.29.
+        const bool cplx = is_cplx_v<Scalar>;
+        for (const auto& [n, bound] : {std::pair{32, cplx ? 19.0 : 11.0}, std::pair{64, cplx ? 45.0 : 28.0}}) {
+            if (n > this->max_dim_with_vectors()) continue;
+            const auto h = this->random_matrix(n, n, batch, 777u + 101u * n);
+            Matrix<Scalar> A(n, n, batch);
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    std::copy_n(h.data() + (static_cast<size_t>(b) * n + j) * n, n,
+                                A.data_ptr() + b * A.stride() + static_cast<size_t>(j) * A.ld());
+            Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
+            UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+            (void)gesvdj_cta<TestFixture::B, Scalar>(ctx, A, s.to_span(), U, Vh, SvdVectors::All, SvdVectors::All);
+            ctx.wait_and_throw();
+
+            const std::vector<Scalar> vh(Vh.data_ptr(), Vh.data_ptr() + static_cast<size_t>(Vh.stride()) * batch);
+            double drift = 0.0;
+            for (int b = 0; b < batch; ++b) {
+                for (int r = 0; r < n; ++r) {
+                    double n2 = 0.0;
+                    for (int c = 0; c < n; ++c)
+                        n2 += std::norm(std::complex<double>(MV::up(vh[b * Vh.stride() + static_cast<size_t>(c) * Vh.ld() + r])));
+                    drift += std::sqrt(n2) - 1.0;
+                }
+            }
+            drift /= static_cast<double>(batch) * n * std::numeric_limits<Real>::epsilon();
+            EXPECT_LE(std::fabs(drift), bound) << "n=" << n << ": mean ||v_j|| - 1 = " << drift << " eps";
         }
     }
 }
