@@ -209,11 +209,11 @@ Event tridiagonal_solver(Queue& ctx,
             // TRAP (Metal): no generic address space, so a pointer chosen between local and global
             // memory at run time is rejected ("Conflicting address space information in PHI node").
             // There the solve is emitted once per storage; elsewhere once, on selected pointers.
-            auto smem = [&]() {
+            auto smem = [&]() BATCHLAS_DLA_BODY {
                 return std::array<Span<T>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
                                                Span(&U_smem[0], 2 * (n + 1)), Span(&V_smem[0], 2 * n)};
             };
-            auto gmem = [&]() {
+            auto gmem = [&]() BATCHLAS_DLA_BODY {
                 return std::array<Span<T>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
                                                Span(L_global.data() + bid * n, n),
                                                Span(U_global.data() + bid * 2 * (n + 1), 2 * (n + 1)),
