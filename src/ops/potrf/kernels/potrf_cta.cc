@@ -211,7 +211,6 @@ Event potrf_cta_launch(Queue& ctx,
     const int lda = p.lda;
     const int Rt0 = p.Rt0;
     const int G = p.G;
-    const int L = p.L;
     const int wg_size = p.wg_size;
     const int num_wg = p.num_wg;
     int32_t* info_ptr = info.data();
@@ -269,7 +268,7 @@ Event potrf_cta_launch(Queue& ctx,
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(matrix_id) * stride_a;
 
                 potrf_native::potrf_cta_body<D, R, NB, TS, SC>(
-                    it, sg, tid, L, p1_active, S, lda, dg, fl, of, Ag, ldg, n, upper);
+                    it, sg, p1_active, S, lda, dg, fl, of, Ag, ldg, n, upper);
 
                 // One writer per matrix; `fail` is published by B3 of the last panel.
                 if (tid == 0) info_ptr[matrix_id] = *fl;
