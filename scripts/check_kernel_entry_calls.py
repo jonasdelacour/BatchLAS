@@ -14,10 +14,15 @@ for a reason that is not the port (potri, trsm, l3tt, gemm; wf3_synthesis.txt 3.
 Rule for v2 users: the kernel lambda (or a kernel functor's operator()(sycl::nd_item...))
 calls named methods or free functions, never a local lambda, an immediately invoked lambda,
 or a v2 view's operator() (`A(i, j)` on `auto A = v2::mat(...)`) directly. Calls inside a
-nested lambda body are not direct and pass.
+nested lambda body are not direct and pass. BATCHLAS_DLA_BODY (always_inline) is the sanctioned
+invoker: a call of a local lambda declared with it, an immediately invoked lambda carrying it,
+and every call in a kernel lambda / operator() that itself carries it pass (the attribute
+inlines the callee whatever SemaSYCL picks as the body).
 
-What is scanned: src/ and include/ sources that include a v2 header (batchlas/blas/device/v2/
-or src/kernels/common/dla_v2_*), transitively. Tests are not: their codegen is not gated.
+What is scanned: src/ and include/ sources that include a v2 header DIRECTLY: batchlas/blas/
+device/v2/, src/kernels/common/dla_v2_*, or a family's private <src/...*_v2.hh>. A file that
+only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
+Tests are not scanned: their codegen is not gated.
 What is not caught (needs semantics a scan does not have): a callable passed in as a
 parameter, a captured functor member, views not declared from a v2:: factory or type.
 Exit codes: 0 clean, 1 violations (or a failed self-test).
@@ -26,10 +31,11 @@ import argparse
 import os
 import re
 import sys
+import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|src/kernels/common/dla_v2_)")
-INCLUDE = re.compile(r"#\s*include\s*<((?:batchlas|src)/[^>]+)>")
+V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
+BODY_ATTR = "BATCHLAS_DLA_BODY"
 STRIP = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
 LAUNCH = re.compile(r"\b(?:parallel_for|single_task)\b(?:\s*<)?")
 FUNCTOR = re.compile(r"\boperator\(\)\s*\(\s*(?:const\s+)?sycl::(?:nd_item|item|id)\b")
@@ -62,6 +68,11 @@ def is_lambda_intro(text, i):
     while k >= 0 and text[k].isspace():
         k -= 1
     return k < 0 or text[k] in "=(,{;:?&|!" or text[k - 5:k + 1] == "return"
+
+
+def marked(text, i, body_start):
+    """True when the lambda introducer at text[i] carries BATCHLAS_DLA_BODY before its body."""
+    return BODY_ATTR in text[i:body_start]
 
 
 def lambda_body(text, i):
@@ -97,12 +108,12 @@ def kernel_bodies(text):
             depth += (ch in "([{") - (ch in ")]}")
         if depth_ok:
             span = lambda_body(text, i + depth_ok[-1])
-            if span:
+            if span and not marked(text, i + depth_ok[-1], span[0]):
                 out.append((span[0], text[span[0]:span[1]]))
     for m in FUNCTOR.finditer(text):
         close = match(text, m.start() + m.group().index("(", 10))
         k = text.find("{", close)
-        if k >= 0 and ";" not in text[close:k]:
+        if k >= 0 and ";" not in text[close:k] and BODY_ATTR not in text[close:k]:
             out.append((k, text[k:match(text, k)]))
     return out
 
@@ -116,7 +127,7 @@ def direct_text(body):
             if span:
                 s, e = span
                 rest = body[e:].lstrip()
-                if rest.startswith("("):
+                if rest.startswith("(") and not marked(body, i, s):
                     iife.append(i)
                 for p in range(s + 1, e - 1):
                     if out[p] != "\n":
@@ -129,7 +140,11 @@ def direct_text(body):
 
 def violations(text):
     """[(offset, message)] for one stripped source text."""
-    lambdas = set(LAMBDA_DECL.findall(text))
+    marked_decl, plain_decl = set(), set()
+    for m in LAMBDA_DECL.finditer(text):
+        span = lambda_body(text, m.end() - 1)
+        (marked_decl if span and marked(text, m.end() - 1, span[0]) else plain_decl).add(m.group(1))
+    lambdas = marked_decl | plain_decl
     views = {a or b for a, b in VIEW_DECL.findall(text)} - lambdas
     found = []
     for off, body in kernel_bodies(text):
@@ -138,7 +153,7 @@ def violations(text):
             found.append((off + p, "immediately invoked lambda in the kernel body"))
         for m in re.finditer(r"(?<![\w.>:])(\w+)\s*\(", flat):
             name = m.group(1)
-            if name in lambdas:
+            if name in plain_decl:
                 found.append((off + m.start(), f"direct call of local lambda '{name}'"))
             elif name in views:
                 found.append((off + m.start(), f"direct call of v2 view operator() '{name}(...)'"))
@@ -146,6 +161,7 @@ def violations(text):
 
 
 def v2_users(root):
+    """Files that include a v2 header directly (no transitive closure)."""
     files = {}
     for top in ("src", "include"):
         for d, _, names in os.walk(os.path.join(root, top)):
@@ -153,14 +169,7 @@ def v2_users(root):
                 if n.endswith((".cc", ".hh", ".h", ".hpp", ".cpp")):
                     p = os.path.join(d, n)
                     files[os.path.relpath(p, root)] = open(p, errors="replace").read()
-    inc_of = {f: {("include/" + i if i.startswith("batchlas/") else i) for i in INCLUDE.findall(t)}
-              for f, t in files.items()}
     users = {f for f, t in files.items() if V2_INCLUDE.search(t)}
-    grew = True
-    while grew:
-        new = {f for f, incs in inc_of.items() if f not in users and incs & users}
-        grew = bool(new)
-        users |= new
     return {f: files[f] for f in sorted(users) if "/blas/device/v2/" not in f}
 
 
@@ -190,15 +199,50 @@ struct Body {
         tmp();                                 // BREAK 4
     }
 };
+void sanctioned(sycl::handler& h) {
+    auto stage = [&](int t) BATCHLAS_DLA_BODY { return t; };
+    h.parallel_for<K3>(r, [=](sycl::nd_item<1> it) {
+        stage(0);                              // marked local lambda: the sanctioned invoker
+        [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DLA_BODY { stage(J...); }(seq);
+    });
+    h.parallel_for<K4>(r, [=](sycl::nd_item<1> it) BATCHLAS_DLA_BODY BATCHLAS_REQD_SG_SIZE(32) {
+        const auto V = v2::vec(p, n);
+        V(0) = 1;                              // marked kernel lambda: every direct call passes
+        stage(1);
+    });
+}
+struct MarkedBody {
+    void operator()(sycl::nd_item<1> it) const BATCHLAS_DLA_BODY {
+        const auto V = v2::vec(p, n);
+        V(1) = 0;
+    }
+};
 """
+
+# Scope: only files that include a v2 header directly (or a private *_v2.hh) are users.
+SCOPE_TEST = {
+    "src/x/helpers.hh": "#include <batchlas/blas/device/v2/scalar.hh>\n",
+    "src/x/via_helpers.cc": "#include <src/x/helpers.hh>\n",
+    "src/x/fam_v2.hh": "#include <batchlas/blas/device/v2/dla.hh>\n",
+    "src/x/fam.cc": "#include <src/x/fam_v2.hh>\n",
+    "src/x/quoted.cc": "#include \"src/kernels/common/dla_v2_scalar.hh\"\n",
+    "src/x/legacy.cc": "#include <src/x/legacy.hh>\n",
+}
 
 
 def self_test():
     got = sorted(m for _, m in violations(strip(SELF_TEST)))
     want = sorted(["direct call of local lambda 'step'", "direct call of v2 view operator() 'W(...)'",
                    "immediately invoked lambda in the kernel body", "direct call of local lambda 'tmp'"])
-    ok = got == want
-    print(f"check_kernel_entry_calls: self-test {'passed' if ok else 'FAILED'}: {got}")
+    with tempfile.TemporaryDirectory() as root:
+        for rel, text in SCOPE_TEST.items():
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            with open(os.path.join(root, rel), "w") as fh:
+                fh.write(text)
+        scope = sorted(v2_users(root))
+    want_scope = ["src/x/fam.cc", "src/x/fam_v2.hh", "src/x/helpers.hh", "src/x/quoted.cc"]
+    ok = got == want and scope == want_scope
+    print(f"check_kernel_entry_calls: self-test {'passed' if ok else 'FAILED'}: {got}; scope {scope}")
     return 0 if ok else 1
 
 

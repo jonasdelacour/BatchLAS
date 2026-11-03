@@ -1255,6 +1255,74 @@ TYPED_TEST(DeviceBlasV2Test, ArithPoliciesAgreeAndFmaMatchesDeviceScalar) {
     EXPECT_EQ(special, 0) << "a quotient of huge operands must not overflow";
 }
 
+// Arith<sycl_device::Cx> and FmaArith<Cx> give the std::complex specialisations' bits on every
+// op, div_real / scale_real the dev_* bits, is_zero / isfinite the dev_* answers. Inputs hold
+// signed zeros, Inf and NaN parts and both Smith branches; all forms run in one kernel.
+enum CxSlot { kCxMsub, kCxDiv, kCxRecip, kCxDivR, kCxScaleR, kCxSlots };
+TYPED_TEST(DeviceBlasV2Test, PodComplexArithMatchesStdComplexAndDeviceScalar) {
+    using T = TypeParam;
+    if constexpr (is_cplx<T>) {
+        using R = real_of<T>;
+        constexpr int n = 64, S = 5;  // sets: Arith<Cx>, Arith<T>, FmaArith<Cx>, FmaArith<T>, dev_*
+        auto h = batched<T>(3 * n, 131, [](T*) {}, kPeriod);
+        const R inf = std::numeric_limits<R>::infinity(), nan = std::numeric_limits<R>::quiet_NaN();
+        const T special[] = {T(0, 0), T(R(-0.0), 0), T(0, R(-0.0)), T(inf, 1), T(1, -inf), T(nan, 0), T(0, nan), T(R(0.5), R(7))};
+        constexpr int ns = int(std::size(special));
+        for (int k = 0; k < ns; ++k) h[k] = special[k], h[n + ns + k] = special[k];
+        T* x = this->dev.up(h);
+        std::vector<T> ho(std::size_t(n) * S * kCxSlots, T(0));
+        std::vector<int> hf(std::size_t(n) * 6, -1);
+        T* o = this->dev.up(ho);
+        int* f = this->dev.up(hf);
+        this->dev.template run<32>(n / 32, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+            namespace sd = batchlas::sycl_device;
+            using Cx = sd::Cx<R>;
+            const int i = static_cast<int>(it.get_global_linear_id());
+            const T a = x[i], b = x[n + i], c = x[2 * n + i];
+            const Cx ca{a.real(), a.imag()}, cb{b.real(), b.imag()}, cc{c.real(), c.imag()};
+            const R sr = b.real();
+            auto slots = [&](auto ar, auto va, auto vb, auto vc, int set) {
+                using Ar = decltype(ar);
+                auto m = vc;
+                Ar::msub(m, va, vb);
+                const decltype(va) r[kCxSlots] = {m, Ar::div(va, vb), Ar::recip(vb), Ar::div_real(va, sr), Ar::scale_real(sr, va)};
+                for (int k = 0; k < kCxSlots; ++k) o[(std::ptrdiff_t(i) * S + set) * kCxSlots + k] = T(Ar::re(r[k]), Ar::im(r[k]));
+            };
+            slots(v2::Arith<Cx>{}, ca, cb, cc, 0);
+            slots(v2::Arith<T>{}, a, b, c, 1);
+            slots(v2::FmaArith<Cx>{}, ca, cb, cc, 2);
+            slots(v2::FmaArith<T>{}, a, b, c, 3);
+            const Cx dr = sd::dev_div_real(ca, sr), ds = sd::dev_mul_real(ca, sr);
+            o[(std::ptrdiff_t(i) * S + 4) * kCxSlots + kCxDivR] = T(dr.re, dr.im);
+            o[(std::ptrdiff_t(i) * S + 4) * kCxSlots + kCxScaleR] = T(ds.re, ds.im);
+            int* fi = f + 6 * i;
+            fi[0] = v2::Arith<Cx>::is_zero(ca), fi[1] = v2::Arith<T>::is_zero(a), fi[2] = sd::dev_is_zero(ca);
+            fi[3] = v2::Arith<Cx>::isfinite(ca), fi[4] = v2::Arith<T>::isfinite(a), fi[5] = sd::dev_isfinite(ca);
+        });
+        const auto got = this->dev.down(o, ho.size());
+        const auto flags = this->dev.down(f, hf.size());
+        auto at = [&](int i, int set, int k) { return got[(std::size_t(i) * S + set) * kCxSlots + k]; };
+        int explicit_bits = 0, fma_bits = 0, dev_bits = 0, flag_bits = 0;
+        for (int i = 0; i < n; ++i) {
+            for (int k = 0; k < kCxSlots; ++k) {
+                explicit_bits += !same_bits(at(i, 0, k), at(i, 1, k));
+                fma_bits += !same_bits(at(i, 2, k), at(i, 3, k));
+            }
+            for (int k : {kCxDivR, kCxScaleR}) dev_bits += !same_bits(at(i, 0, k), at(i, 4, k));
+            const T a = h[i];
+            const int z = a.real() == R(0) && a.imag() == R(0), fin = std::isfinite(a.real()) && std::isfinite(a.imag());
+            const int* fi = flags.data() + 6 * i;
+            flag_bits += fi[0] != z || fi[1] != z || fi[2] != z || fi[3] != fin || fi[4] != fin || fi[5] != fin;
+        }
+        EXPECT_EQ(explicit_bits, 0) << "Arith<Cx> msub/div/recip/div_real/scale_real must give Arith<std::complex>'s bits";
+        EXPECT_EQ(fma_bits, 0) << "FmaArith<Cx> must give FmaArith<std::complex>'s bits";
+        EXPECT_EQ(dev_bits, 0) << "div_real / scale_real must give dev_div_real / dev_mul_real's bits";
+        EXPECT_EQ(flag_bits, 0) << "is_zero / isfinite must agree with dev_is_zero / dev_isfinite and std::complex";
+    } else {
+        GTEST_SKIP() << "Arith<sycl_device::Cx> is the complex POD scalar";
+    }
+}
+
 // lartg (all types), larfg_scalars (three conventions), lae2 / laev2 / las2 / wilkinson_shift
 // (real) on device, against reference LAPACK on the host; inputs straddle the scaling
 // thresholds (1e-30 .. 1e30 float, 1e-300 .. 1e300 double), zeros and both signs.

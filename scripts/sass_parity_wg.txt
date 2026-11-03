@@ -9,3 +9,99 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+
+# src/ops/gesvd/bdsdc/bdsdc.cc bdsdc_extract_vectors: sycl::range<1>(kGroup), kGroup = 64
+64  ::BdsdcExtract<
+
+# src/util/norm.cc norm_launch: sycl::nd_range<1>(batch * WG, WG), WG = the last template argument
+\1  ^batchlas::NormKernel<[^,]+, [^,]+, [^,]+, (\d+)>$
+# src/util/transpose.cc transpose_impl: sycl::range<3>(1, TILE, TILE), TILE = 16
+256  ^batchlas::TransposeKernel<
+# src/util/elementwise.cc launch_2d: v2::batched2d_shape(rows, cols) (items = 256, gr * gc * lb == 256)
+256  ::TriangularMaskKernel<[^,]+, [^,]+>$
+256  ::(?:ElementwiseBinaryKernel|AxpbyKernel)<
+# src/kernels/common/triangular_expand.hh: expand_group_shape (rows * cols == 256), mirrored 32 x 8
+256  ::expand_(?:triangular|mirrored)<
+
+# src/ops/gesvd/gebrd/gebrd_blocked.cc labrd_panel_complex: sycl::range<1>(kPanelWG), kPanelWG = 128
+128  labrd_panel_complex<
+
+# src/ops/gemm/kernels/register_tiled_common.hh launch_register_tiled: local (1, TileM / TR,
+# TileN / TC); the reg_configs rows of src/ops/gemm/choice.hh (args: T, TileM, TileN, TileK, TR, TC)
+512 ::GemmRegisterTiledKernel<[^,]+, 128, 64, \d+, 4, 4,
+256 ::GemmRegisterTiledKernel<[^,]+, (?:32, 32, \d+, 2, 2|64, 64, \d+, 4, 4|128, 32, \d+, 4, 4|32, 128, \d+, 4, 4|128, 64, \d+, 8, 4),
+# src/ops/gemm/kernels/register_128x128.hh Gemm128x128Body::Threads
+256 ::GemmRegister128x128Kernel<
+# src/ops/gemm/kernels/tiled_general.hh: local (1, Tile, Tile), Tile = 16 (gemm_kernels.cc launch_tiled<T, 16>)
+256 ::GemmTiledGeneralKernel<[^,]+, 16,
+# src/ops/gemm/kernels/small_batched.hh: kSmallWg; launch_small_tiled: (NB / 4)^2 for NB 48, 56
+128 ::GemmSmallBatchedKernel<
+144 ::GemmSmallTiledKernel<[^,]+, 48,
+196 ::GemmSmallTiledKernel<[^,]+, 56,
+
+# src/ops/geqrf/kernels/geqrf_tiny.cc geqrf_tiny_launch: WG = M * N == kGeqrfTinyWg (static_assert)
+64  ^batchlas::GeqrfTinyKernel<
+# src/ops/geqrf/kernels/geqrf_cta.cc geqrf_panel_wg(n, max_wg): 32 * min(8, pow2 >= n), 256 for n >= 5
+256  ::GeqrfPanelGlobalKernel<
+
+# src/kernels/common/lu_laswp.hh lu_laswp_deferred_left_launch, lu_laswp_right_gather_launch: wg = min(max_wg, 256),
+# 256 on every CUDA device (MAX_WORK_GROUP_SIZE 1024). LuLaswpKernel is a sycl::range launch: no row.
+256 ::LuLaswp(?:Right)?GatherKernel<
+
+# src/ops/gesv/kernels/gesv_tiny.cc gesv_tiny_launch_b: sycl::range<1>(kTinyWg)
+64  ^batchlas::GesvTinyKernel<
+# src/ops/getrs/kernels/getrs_native.cc getrs_perm_gather_launch: wg = min(max_wg, 256), 256 on CUDA
+256  ::GetrsPermGatherKernel<
+
+# src/ops/iluk/iluk.cc iluk_apply: nd_range(total_systems * wg_size, wg_size), wg_size = 128
+128 ::ILUKApplyKernel<
+
+# src/kernels/common/larft_wy.hh larft_forward_columnwise_wg_{legacy,device}: sycl::range<1>(WG), WG = the template argument
+\1  ::LarftKernelName<[^,]+, [^,]+, (\d+), (?:true|false)>$
+
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc hb2st_hh chase: sycl::range<1>(kWg), kWg = 256
+256 ::Sb2stHhChaseKernel<
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc unmqr_hb2st_wave: kWg = kSg * S, S the last template argument
+128 ::Sb2stHhBackWaveKernel<.*, 4>$
+256 ::Sb2stHhBackWaveKernel<.*, 8>$
+512 ::Sb2stHhBackWaveKernel<.*, 16>$
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc unmqr_hb2st_tiled / streaming: sycl::range<1>(kSg) and (32)
+32  ::Sb2stHhBackTiledKernel<
+32  ::Sb2stHhBackKernel<
+# src/ops/syev/sytrd/sytrd_sb2st.cc btrd lower: sycl::range<1>(kWorkGroupSize), kWorkGroupSize = 128
+128 ::BtrdLowerKernel<
+# src/ops/syev/sytrd/sytrd_sb2st_cta.cc: sycl::range<1>(wg_size), wg_size = 32
+32  ::BtrdLowerSubgroupKernel<
+
+# src/ops/syev/stedc/stedc.cc: sycl::nd_range<1>(batch_size * 128, 128) for these six
+128 ^batchlas::Stedc(?:ComputeV|Deflation|SecularSolve|RescaleV|MatrixUpdate|LevelPad)<
+# src/ops/syev/stedc/stedc.cc StedcAssignEigenvalues: sycl::nd_range<1>(batch_size*32, 32)
+32  ^batchlas::StedcAssignEigenvalues<
+# src/ops/syev/stedc/stedc_secular.cc secular_solver: sycl::nd_range<1>(d.batch_size()*128, 128)
+128 ^batchlas::Event batchlas::secular_solver<(?:float|double)>\(
+
+# src/ops/syevx/kernels/syevx_filtered.cc: sycl::range{kBoundsWG}, kBoundsWG = 64
+64  ^batchlas::SyevxFilterBoundsPartialKernel<
+# src/ops/syevx/kernels/syevx_filtered.cc: constexpr int rwg = 128 / wg = 128
+128 ^batchlas::SyevxFilter(?:BoundsReduce|Residual|Finalize)Kernel<
+# src/ops/syevx/kernels/syevx_lobpcg.cc: constexpr size_t wg = 256; sycl::range{size_t(256)}
+256 ^batchlas::Syevx(?:JacobiDiagonal|ReverseEigenvectors)Kernel<
+# src/ops/syevx/kernels/syevx_lobpcg.cc: soft-lock fill/zero, restart copy, StAS deflation: sycl::range{size_t(128)}
+128 batchlas::syevx_lobpcg<.*::'lambda\d*'\(sycl::_V1::nd_item<1>\)$
+
+# src/ops/sygst/kernels/sygst_diag.cc launch_diag: wg = (ipw * KB + 31) / 32 * 32,
+# ipw = diag_items_per_group<T>(KB) (sygst_native.hh: kDiagWg 128, kDiagSlmCap 32768 bytes).
+# KB = 0 (run-time order) has no row.
+96  ::SygstDiagKernel<float, (?:true|false), 32>$
+32  ::SygstDiagKernel<.+, (?:true|false), 32>$
+64  ::SygstDiagKernel<[^,]*Cx<double>, (?:true|false), 16>$
+128 ::SygstDiagKernel<.+, (?:true|false), (?:16|8)>$
+
+# src/ops/sytrs/kernels/sytrs_kernels.cc diag_launch, scatter_launch: sycl::range<1>(kWg), kWg = 256
+256  ^batchlas::sycl_sytrf::Sytrs(?:Diag|Scatter)Kernel<
+
+# src/ops/syev/tridiag/tridiag_solver.cc tridiagonal_solver: sycl::nd_range<1>(batch_size*32, 32)
+32  batchlas::tridiagonal_solver<
+
+# src/ops/trsm/kernels/trsm_sg_left.cc trsm_native_sg_left: sycl::range<1>(kSgPerWg * kSg) == kTrsmSgLeftWgSize
+128 ::TrsmSgLeftKernel<

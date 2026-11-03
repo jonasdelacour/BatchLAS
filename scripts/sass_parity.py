@@ -21,17 +21,19 @@ Kernel<float, 128, false>). Base and cand may be the same build dir.
 Occupancy: the launch WG comes from the entry's PTX .reqntid/.maxntid, else the --wg table
 (default scripts/sass_parity_wg.txt), else it is unknown: the rule then only warns, and is
 never inferred from the name. Resident blocks/SM = min(by REG, by static + dynamic SMEM
-(dynamic from --smem), by warps, 24). strict: any change of blocks/SM is verdict "A/B";
+(dynamic from --smem, default scripts/sass_parity_smem.txt), by warps, 24). strict: any change of blocks/SM is verdict "A/B";
 algo: a decrease fails and an increase is "A/B". "A/B" means a runtime A/B decides.
 
 Total: one-sided. A shrink beyond the band passes, annotated "shrink", when every hard class
 (BAR SHFL LDS STS LDG STG LDgen LDL/STL) is <= base, REG <= base + 2 and blocks/SM is unchanged
-(at every legal WG when the WG is unknown). Growth beyond the band fails. A generic LD/ST
+(at every legal WG when the WG is unknown). With an unknown WG, a shrink whose only occupancy
+change comes from a REG decrease (blocks/SM can only rise) is "A/B". Growth beyond the band fails. A generic LD/ST
 decrease is annotated "conversion"; an increase is a hard fail.
 
 Table files (--wg, --smem): one `<value> <regex>` per line, first match on the demangled name
-wins; the value is an integer or `\\N`, capture group N of the regex. --wg/--smem also take a
-plain integer for every kernel, and --wg none disables the table.
+wins; the value is an integer or `\\N`, capture group N of the regex. An --smem value may be a
+comma list of representative sizes for an SLM sized at run time (the verdict is the worst over
+them). --wg/--smem also take a plain integer for every kernel, and `none` disables the table.
 
 Snapshots: a compact per-kernel record of one library for an explicit kernel list,
 checked with the algo thresholds. Exit codes: 0 pass, 1 fail (or nothing paired), 2 "A/B"
@@ -56,6 +58,7 @@ import check_device_calls as cdc  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_WG_TABLE = os.path.join(REPO, "scripts", "sass_parity_wg.txt")
+DEFAULT_SMEM_TABLE = os.path.join(REPO, "scripts", "sass_parity_smem.txt")
 
 # Opcode classes, as in benchmarks/sass_lab/sass_stats.py (wip/dblas-sass-lab), whose
 # numbers the calibration reproduces. First matching class wins.
@@ -243,8 +246,8 @@ def read_table(spec, what):
         if not line:
             continue
         parts = line.split(None, 1)
-        if len(parts) != 2 or not re.fullmatch(r"\d+|\\\d", parts[0]):
-            raise SystemExit(f"sass_parity: {spec}:{ln}: expected '<int|\\N> <regex>'")
+        if len(parts) != 2 or not re.fullmatch(r"\d+(?:,\d+)*|\\\d", parts[0]):
+            raise SystemExit(f"sass_parity: {spec}:{ln}: expected '<int[,int...]|\\N> <regex>'")
         rows.append((re.compile(parts[1]), parts[0]))
     return rows
 
@@ -257,7 +260,9 @@ def lookup(table, name):
     for rx, val in table:
         m = rx.search(name)
         if m:
-            return int(m.group(int(val[1:]))) if val.startswith("\\") else int(val)
+            if val.startswith("\\"):
+                return int(m.group(int(val[1:])))
+            return [int(v) for v in val.split(",")] if "," in val else int(val)
     return None
 
 
@@ -299,7 +304,23 @@ def occupancy_steps(b, c, dyn):
 
 
 def compare(b, c, mode, wg, dyn=0):
-    """{verdict, fails, ab, notes, warns, occ}: verdict FAIL > A/B > pass."""
+    """{verdict, fails, ab, notes, warns, occ}: verdict FAIL > A/B > pass. A list dyn (an --smem
+    row of representative sizes for a run-time-sized SLM) is the worst verdict over its values."""
+    if not isinstance(dyn, list):
+        return compare_one(b, c, mode, wg, dyn)
+    runs = [(d, compare_one(b, c, mode, wg, d)) for d in dyn]
+    out = {"verdict": max((r["verdict"] for _, r in runs), key=("pass", "A/B", "FAIL").index),
+           "occ": runs[0][1]["occ"]}
+    for key in ("fails", "ab", "notes", "warns"):
+        seen = []
+        for d, r in runs:
+            seen += [m if key in ("notes", "warns") else f"{m} [dyn SMEM {d}]" for m in r[key]
+                     if not (key in ("notes", "warns") and m in seen)]
+        out[key] = seen
+    return out
+
+
+def compare_one(b, c, mode, wg, dyn=0):
     fails, ab, notes, warns = [], [], [], []
 
     def fail(cond, msg):
@@ -345,6 +366,12 @@ def compare(b, c, mode, wg, dyn=0):
         notes.append(f"shrink: {tot}")
     elif dt < -band and not over and c["REG"] <= b["REG"] + 2 and wg:
         notes.append(f"shrink: {tot}, but blocks/SM changes, so the A/B decides")
+    elif dt < -band and not over and c["REG"] < b["REG"] and c["SMEM"] <= b["SMEM"]:
+        # Unknown WG and the only occupancy change is a REG decrease: blocks/SM can only rise.
+        steps = occupancy_steps(b, c, dyn)
+        notes.append(f"shrink: {tot}, but blocks/SM changes, so the A/B decides")
+        ab.append(f"launch WG unknown: REG {b['REG']}->{c['REG']} raises blocks/SM at WG "
+                  f"{steps[0]}..{steps[-1]} ({len(steps)} sizes)")
     elif dt > band:
         fails.append(f"{tot}, > {band:.0%}")
     elif dt < -band:
@@ -457,7 +484,8 @@ def snapshot_write(a, rec, lib, tool):
         wg, src, dyn, warns = launch_of(r, name, wg_t, smem_t)
         k = {key: r[key] for key in SNAP_KEYS}
         k.update({"WG": wg, "WG_src": src, "dyn_SMEM": dyn,
-                  "blocks_per_sm": blocks_per_sm(r["REG"], wg, r["SMEM"] + dyn) if wg else None,
+                  "blocks_per_sm": ([blocks_per_sm(r["REG"], wg, r["SMEM"] + d) for d in dyn] if isinstance(dyn, list)
+                                    else blocks_per_sm(r["REG"], wg, r["SMEM"] + dyn)) if wg else None,
                   "ptx_calls": r["ptx_calls"]})
         kernels[name] = k
         archs.add(r["arch"])
@@ -549,7 +577,10 @@ def self_test():
         ("shrink, LDS up", rec(total=900, LDS=21), "strict", 256, 0, "FAIL", "LDS up"),
         ("shrink, step up", rec(total=900, REG=48), "strict", 256, 0, "A/B", "A/B decides"),
         ("shrink, unknown WG, no step", rec(total=900, REG=63), "strict", None, 0, "pass", "shrink"),
-        ("shrink, unknown WG, step", rec(total=900, REG=40), "strict", None, 0, "FAIL", "blocks/SM"),
+        ("shrink, unknown WG, REG down", rec(total=900, REG=40), "strict", None, 0, "A/B", "raises blocks/SM"),
+        ("shrink, unknown WG, REG down, LDS down", rec(total=900, REG=40, LDS=18), "strict", None, 0, "FAIL", "LDS 20->18"),
+        ("dyn SMEM list: SLM binds at one size", rec(REG=48), "strict", 256, [0, 40000], "A/B", "[dyn SMEM 0]"),
+        ("dyn SMEM list: SLM binds at every size", rec(REG=48), "strict", 256, [40000, 45000], "pass", None),
         ("growth", rec(total=1040), "strict", 256, 0, "FAIL", "total"),
         ("in-band class drop", rec(LDS=19), "strict", 256, 0, "FAIL", "LDS 20->19"),
         ("conversion", rec(LDgen=0), "strict", 256, 0, "pass", "conversion"),
@@ -561,6 +592,8 @@ def self_test():
     ]
     bad = 0
     cases.append(("REG up, step down (strict)", rec(REG=66), "strict", 32, 0, "A/B", "8->7", rec(REG=64)))
+    cases.append(("shrink, unknown WG, REG up 2, step", rec(total=900, REG=65), "strict", None, 0, "FAIL", "blocks/SM",
+                  rec(REG=63)))
     for label, c, mode, wg, dyn, want, needle, *b in cases:
         r = compare(b[0] if b else base, c, mode, wg, dyn)
         text = " | ".join(r["fails"] + r["ab"] + r["notes"] + r["warns"])
@@ -577,11 +610,13 @@ def self_test():
     bad += got != want
     print(f"  {'ok ' if got == want else 'BAD'} PTX .reqntid/.maxntid: {got}")
     table = [(re.compile(r"LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+),"), "\\1"),
-             (re.compile(r"^batchlas::PosvTinyKernel<"), "64")]
+             (re.compile(r"^batchlas::PosvTinyKernel<"), "64"), (re.compile(r"Tridiag<"), "416,800")]
     lk = [lookup(table, n) for n in ("batchlas::LatrdLowerPanelKernelLegacy<float, 256, true>",
-                                     "batchlas::PosvTinyKernel<double, 8, 8, 1, 1, true>", "batchlas::Other<128>")]
-    bad += lk != [256, 64, None]
-    print(f"  {'ok ' if lk == [256, 64, None] else 'BAD'} --wg table lookup: {lk} (want [256, 64, None])")
+                                     "batchlas::PosvTinyKernel<double, 8, 8, 1, 1, true>", "batchlas::Other<128>",
+                                     "batchlas::Tridiag<float>")]
+    want_lk = [256, 64, None, [416, 800]]
+    bad += lk != want_lk
+    print(f"  {'ok ' if lk == want_lk else 'BAD'} table lookup: {lk} (want {want_lk})")
     codes = [exit_code(v) for v in (["pass"], ["pass", "A/B"], ["A/B", "FAIL"])]
     bad += codes != [0, 2, 1]
     print(f"  {'ok ' if codes == [0, 2, 1] else 'BAD'} exit codes: {codes} (want [0, 2, 1])")
@@ -598,7 +633,8 @@ def main():
     ap.add_argument("--filter", help="regex both demangled names must match (e.g. '<float, 128, false>')")
     ap.add_argument("--mode", choices=("strict", "algo"), default="strict")
     ap.add_argument("--wg", default=DEFAULT_WG_TABLE, help="launch WG: a table file, an integer, or none")
-    ap.add_argument("--smem", help="dynamic SMEM bytes per WG: a table file or an integer")
+    ap.add_argument("--smem", default=DEFAULT_SMEM_TABLE,
+                    help="dynamic SMEM bytes per WG: a table file, an integer, or none")
     ap.add_argument("--build", action="store_true", help="scripts/b the --lib target in both trees first")
     ap.add_argument("--cuobjdump")
     ap.add_argument("--json", help="output path (default: <cand>/logs/sass_parity/<stamp>-<lib>.json)")
