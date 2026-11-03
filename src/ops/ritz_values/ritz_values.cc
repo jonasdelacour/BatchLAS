@@ -14,8 +14,10 @@
 #include <batchlas/util/kernel-heuristics.hh>
 
 #include <src/util/template-instantiations.hh>
+#include <batchlas/blas/device/v2/dla.hh>
 
 namespace batchlas {
+    namespace dla = device::v2;
 
     template <Backend B, typename T, MatrixFormat MFormat>
     struct RitzValuesKernel {};
@@ -58,92 +60,34 @@ namespace batchlas {
             last_event = spmm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
         }
 
-        // Compute Ritz values as (v_j^T * (A*v_j)) / (v_j^T * v_j) for each column j
-        // using work-group parallelism with SYCL reductions for better performance
-        auto real_part = [](T value) {
-            if constexpr (detail::is_complex<T>::value) return value.real();
-            else return value;
-        };
-
-        // Determine work-group size for dot product reductions
-        size_t wg_size = std::min(size_t(256), ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-        wg_size = std::min(wg_size, size_t(n)); // Don't use more threads than vector length
-
+        // Ritz values (v_j^H A v_j) / (v_j^H v_j), one work-group per (item, column).
         auto [global_size, local_size, use_grid_stride] = compute_batched_nd_range_sizes(
             batch_size * k * n, ctx.device(), KernelType::ELEMENTWISE, batch_size, n);
 
         last_event = ctx -> submit([&](sycl::handler& h) {
             h.depends_on(*last_event);
-
-            // Create VectorViews for accessing columns with proper stride/increment handling
-            auto V_data = V.data();
-            auto AV_data = AV.data();
-
-            // Allocate local memory for partial sums
-            auto dot_mem = sycl::local_accessor<T>(wg_size, h);
             auto AV_view = AV.kernel_view();
             auto V_view = V.kernel_view();
 
             batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(global_size, local_size),
                 [=](sycl::nd_item<1> item) {
-                    auto bid = item.get_group(0); // Which batch*k combination
-                    auto tid = item.get_local_id(0);    // Thread within work-group
-                    auto wg = item.get_local_range(0);  // Work-group size
-                    auto cta = item.get_group();        // Work-group for reductions
-
-                    //Grid stride loop:
-                    for (size_t group_id = bid; group_id < batch_size * k; group_id += item.get_group_range(0)) {
-                    // Decompose group_id into batch and trial vector indices
-                    int b = group_id / k;
-                    int j = group_id % k;
-                    // Uniform per work-group (one (b, j) pair each), so the barriers below stay matched.
-                    if (masked && !mk[b]) continue;
-
-                    // Compute v_j^T * (A*v_j) using work-group reduction
-                    // Each thread computes partial sum for its assigned elements
-                    T numerator_partial = T(0);
-                    for (int i = tid; i < n; i += wg) {
-                        T v_i = V_view(i, j, b);
-                        T av_i = AV_view(i, j, b);
-                        if constexpr (detail::is_complex<T>::value) {
-                            numerator_partial += std::conj(v_i) * av_i;
-                        } else {
-                            numerator_partial += v_i * av_i;
-                        }
+                    const dla::RtGroup<> ex{item};
+                    // Column j of item b of a dense kernel view.
+                    auto col = [&](const auto& a, int j, int b) {
+                        return dla::vec(a.data() + static_cast<int64_t>(b) * a.stride() + j * a.ld(), n);
+                    };
+                    // Grid-stride loop over (item, column) pairs.
+                    for (size_t group_id = item.get_group(0); group_id < batch_size * k; group_id += item.get_group_range(0)) {
+                        const int b = group_id / k;
+                        const int j = group_id % k;
+                        // Uniform per work-group (one (b, j) pair each), so the reductions stay matched.
+                        if (masked && !mk[b]) continue;
+                        const auto v = col(V_view, j, b);
+                        const T num = dla::dotc(ex, v, col(AV_view, j, b));
+                        const real_t den = dla::sumsq<dla::alg::Fused>(ex, v);
+                        if (ex.leader()) ritz_vals(j, b) = dla::Arith<T>::re(num) / den;
                     }
-                    dot_mem[tid] = numerator_partial;
-                    sycl::group_barrier(cta);
-
-                    // Reduce across work-group
-                    T numerator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
-                    // dot_mem is reused below; no work-item may overwrite it until every
-                    // work-item has finished reading it in the reduction above.
-                    sycl::group_barrier(cta);
-
-                    // Compute v_j^T * v_j using work-group reduction
-                    T denominator_partial = T(0);
-                    for (int i = tid; i < n; i += wg) {
-                        T v_i = V_view(i, j, b);
-                        if constexpr (detail::is_complex<T>::value) {
-                            denominator_partial += std::conj(v_i) * v_i;
-                        } else {
-                            denominator_partial += v_i * v_i;
-                        }
-                    }
-                    dot_mem[tid] = denominator_partial;
-                    sycl::group_barrier(cta);
-
-                    // Reduce across work-group
-                    T denominator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
-                    // Likewise before the next grid-stride iteration overwrites dot_mem.
-                    sycl::group_barrier(cta);
-
-                    // Only the first thread in the work-group writes the result
-                    if (tid == 0) {
-                        ritz_vals(j, b) = real_part(numerator / denominator);
-                    }
-                }
                 }
             );
         });
