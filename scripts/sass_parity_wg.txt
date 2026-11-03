@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/kernels/common/larft_wy.hh larft_forward_columnwise_wg_{legacy,device}: sycl::range<1>(WG), WG = the template argument
+\1  ::LarftKernelName<[^,]+, [^,]+, (\d+), (?:true|false)>$

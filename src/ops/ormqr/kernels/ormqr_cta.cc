@@ -52,13 +52,6 @@ struct PlainVec {
 template <typename T, int N>
 using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
 
-// Named, never an immediately invoked lambda, in a v2 kernel body (check_kernel_entry_calls.py).
-template <bool Masked>
-inline bool ormqx_live(int32_t prob_id, int32_t batch_size, const std::uint8_t* mask) {
-    if constexpr (Masked) return prob_id < batch_size && mask[prob_id] != 0;
-    else return prob_id < batch_size;
-}
-
 } // namespace detail
 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
@@ -165,7 +158,9 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
                 // batch, or an inactive item: I2) applies tau = 0 reflectors to nothing and
                 // stores nothing.
-                const bool live = detail::ormqx_live<Masked>(prob_id, static_cast<int32_t>(batch_size), mask);
+                // if constexpr, never a call taking mask: the unmasked kernel must not capture it.
+                bool live = prob_id < static_cast<int32_t>(batch_size);
+                if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);
@@ -231,11 +226,9 @@ BATCHLAS_UNROLL_FULL
                 const int32_t i1 = descending ? -1 : k;
                 const int32_t step = descending ? -1 : 1;
 
-                // vh(r) == V_local[base_v + r], staged by lane r; read whole after the barrier.
                 using Ar = v2::arith_t<v2::arith::Native, T>;  // strict port: the hand loop's arithmetic
-                const auto vh = v2::assume_published(
-                    v2::Vec<T, v2::Ext<static_cast<int>(P)>, v2::Unit, v2::Mem::Local, v2::Cyclic, sycl::local_accessor<T, 1>>{
-                        V_local, {}, {}, base_v});
+                using VLocal = v2::Vec<T, v2::Ext<static_cast<int>(P)>, v2::Unit, v2::Mem::Local, v2::Cyclic,
+                                       sycl::local_accessor<T, 1>>;
 
                 for (int32_t ii = i0; ii != i1; ii += step) {
                     const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
@@ -262,6 +255,9 @@ BATCHLAS_UNROLL_FULL
                     }
 
                     group_barrier(part);
+                    // vh(r) == V_local[base_v + r], formed here as the hand loop's address was (hoisted
+                    // above the loop it holds one more register: complex P = 32 spilled 8 B more).
+                    const auto vh = v2::assume_published(VLocal{V_local, {}, {}, base_v});
                     if (active_col && tau_eff != T(0)) v2::larf_frag<v2::arith::Native>(v2::Thread{}, tau_eff, vh, C_col);  // C(:, j) := H C(:, j)
                     // Ensure all lanes have finished consuming v before overwrite.
                     group_barrier(part);
@@ -311,7 +307,8 @@ BATCHLAS_UNROLL_FULL
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
                     // inactive item) carries a zero tile and tau = 0, and stores nothing.
-                    const bool live = detail::ormqx_live<Masked>(prob_id, static_cast<int32_t>(batch_size), mask);
+                    bool live = prob_id < static_cast<int32_t>(batch_size);
+                    if constexpr (Masked) live = live && mask[prob_id] != 0;
                     const int32_t pid = live ? prob_id : 0;
                     const bool row_live = live && (lane < n);
 
