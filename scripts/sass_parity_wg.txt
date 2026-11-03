@@ -7,5 +7,7 @@
 64  ^batchlas::PotrfTinyKernel<
 # src/ops/posv/kernels/posv_tiny.cc posv_tiny_launch_b: sycl::range<1>(kTinyWg)
 64  ^batchlas::PosvTinyKernel<
+# src/ops/gesv/kernels/gesv_tiny.cc gesv_tiny_launch_b: sycl::range<1>(kTinyWg)
+64  ^batchlas::GesvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
