@@ -10,8 +10,10 @@
 
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
+#include <batchlas/blas/device/v2/dla.hh>
 
 #include <src/math-helpers.hh>
+#include <src/ops/gesvd/bdsdc/bdsdc_v2.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -24,6 +26,9 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device::v2;
+namespace gk = ::batchlas::device::v2::bdsdc;
 
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;
@@ -105,19 +110,13 @@ void bdsdc_build_gk(Queue& ctx,
         const int32_t nn = n;
         const int32_t N = 2 * n;
         h.parallel_for<BdsdcBuildGk<B, T>>(
-            sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            for (int32_t i = 0; i < N; ++i) {
-                GD(i, b) = T(0);
-            }
+            const v2::Thread th{};
+            v2::map(th, gk::item_n(GD, b, N), [] { return T(0); });
             // off-diagonal f[2k] = d_k (couples v_k,u_k), f[2k+1] = e_k (couples u_k,v_{k+1})
-            for (int32_t k = 0; k < nn; ++k) {
-                GE(2 * k, b) = D(k, b);
-                if (k < nn - 1) {
-                    GE(2 * k + 1, b) = E(k, b);
-                }
-            }
+            gk::interleave(th, gk::item_n(D, b, nn), gk::item_n(E, b, nn - 1), v2::item(GE, b));
             GS(0, b) = T(1);
             for (int32_t i = 0; i < N - 1; ++i) {
                 const T fi = GE(i, b);
@@ -189,27 +188,23 @@ void bdsdc_extract_vectors(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
+            const v2::WorkGroup<kGroup> wg{it};
             const int32_t grp = static_cast<int32_t>(it.get_group(0));
-            const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
             const int32_t b = grp / nn;
             if (mask != nullptr && mask[b] == 0) return;  // I1: one work-group per (item, column)
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
 
-            T p2 = T(0);
-            T q2 = T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                const T pv = Zk(2 * r, src, b);
-                const T qv = Zk(2 * r + 1, src, b);
-                p2 += pv * pv;
-                q2 += qv * qv;
-            }
-            p2 = batchlas::portable::reduce_over_group(it.get_group(), p2, sycl::plus<T>());
-            q2 = batchlas::portable::reduce_over_group(it.get_group(), q2, sycl::plus<T>());
+            // Eigenvector src of the Golub-Kahan matrix: even rows -> v, odd rows -> u.
+            const auto z = gk::col(v2::item(Zk, b, 2 * nn, 2 * nn), src, 2 * nn);
+            const auto s = v2::item(S, b);
+            const auto zv = gk::slice(z, 0, nn, 2), zu = gk::slice(z, 1, nn, 2);
+            const auto sv = gk::slice(s, 0, nn, 2), su = gk::slice(s, 1, nn, 2);
+            const auto [p2, q2] = v2::sumsq<v2::alg::Fused, v2::Scope::Group>(wg, zv, zu);
             const T pn = sycl::sqrt(p2);
             const T qn = sycl::sqrt(q2);
 
-            if (lid == 0) {
+            if (wg.leader()) {
                 sig[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(L(src, b), T(0));
             }
 
@@ -220,15 +215,9 @@ void bdsdc_extract_vectors(Queue& ctx,
             const T half_present = T(0.0625);
             const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
             const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                if (wv) {
-                    // Vh is V^T: row i, column r.
-                    Vh(i, r, b) = S(2 * r, b) * Zk(2 * r, src, b) * pinv;
-                }
-                if (wu) {
-                    U(r, i, b) = S(2 * r + 1, b) * Zk(2 * r + 1, src, b) * qinv;
-                }
-            }
+            // Vh is V^T: row i holds v_i. Signs undo the off-diagonal normalisation.
+            gk::dgmv_many(wg, gk::dgmv_if(wv, pinv, sv, zv, gk::row(v2::item(Vh, b, nn, nn), i, nn)),
+                          gk::dgmv_if(wu, qinv, su, zu, gk::col(v2::item(U, b, nn, nn), i, nn)));
         });
     });
 }

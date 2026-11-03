@@ -9,3 +9,5 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/gesvd/bdsdc/bdsdc.cc bdsdc_extract_vectors: sycl::range<1>(kGroup), kGroup = 64
+64  ::BdsdcExtract<
