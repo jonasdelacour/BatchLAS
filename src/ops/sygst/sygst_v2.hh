@@ -62,7 +62,9 @@ template <class M> struct HermView {
     Uplo uplo;
     using value_type = typename M::value_type;
     BATCHLAS_DLA_INLINE value_type operator()(int i, int j) const {
-        return i == j ? real_only<value_type>(a(i, j)) : in_triangle(uplo, i, j) ? a(i, j) : v2::Arith<value_type>::conj(a(j, i));
+        const bool own = in_triangle(uplo, i, j);  // one load, its address selected
+        const value_type x = a(own ? i : j, own ? j : i);
+        return i == j ? real_only<value_type>(x) : own ? x : v2::Arith<value_type>::conj(x);
     }
     BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
     BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
