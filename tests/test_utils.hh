@@ -32,6 +32,17 @@ inline constexpr const char* kSlmCappedReason =
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
 #endif
 
+// True when Device::default_device() can name a device. With none visible it throws
+// std::out_of_range (vector::_M_range_check), so a fixture that builds a Queue skips on false.
+inline bool sycl_device_visible() {
+    using batchlas::Device;
+    using batchlas::DeviceType;
+    static const bool any = !Device::get_devices(DeviceType::GPU).empty() ||
+                            !Device::get_devices(DeviceType::CPU).empty() ||
+                            !Device::get_devices(DeviceType::HOST).empty();
+    return any;
+}
+
 // True when @p msg reports a kernel with no device image (runtimes word it differently) AND
 // BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1: only then may the caller skip. Otherwise it rethrows and
 // the test fails, because a silent skip is how a dropped instantiation stays green.
