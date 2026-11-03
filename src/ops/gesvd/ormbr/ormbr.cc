@@ -10,6 +10,7 @@
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/larft_wy.hh>
+#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -21,6 +22,9 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device::v2;
+namespace glue = ::batchlas::device::v2::gesvd_glue;
 
 inline char upper_ascii(char c) {
     return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -104,13 +108,13 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t col = static_cast<int32_t>(rem / nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
 
-            AQ(row, col, b) = T(0);
-            if (col >= 1) {
-                const int32_t i = col - 1;
-                if (row >= col + 1 && row < nn) {
-                    AQ(row, col, b) = batchlas::device::detail::conj(A(i, row, b));
-                }
-            }
+            // AQ := 0, then AQ(1:, 1:) strictly lower := A(0:, 1:)^H: P's row reflectors as Q-form columns.
+            const glue::Elem2 ex{row, col};
+            const auto aq = v2::item(AQ, b, nn, nn);
+            v2::laset(ex, v2::Zero{}, v2::Zero{}, aq);
+            v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(
+                ex.sub(1, 1), glue::sub_of(v2::item(A, b, nn, nn), 0, 1, nn - 1, nn - 1),
+                glue::sub_of(aq, 1, 1, nn - 1, nn - 1));
         });
     });
 
@@ -126,12 +130,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-
-            if (j == 0) {
-                TAUQ(j, b) = T(0);
-            } else {
-                TAUQ(j, b) = (j - 1 < (nn - 1)) ? TAU(j - 1, b) : T(0);
-            }
+            glue::downshift(glue::Elem{j}, glue::item_n(TAU, b, nn - 1), glue::item_n(TAUQ, b, nn));
         });
     });
 
@@ -183,15 +182,15 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 const int r = static_cast<int>(idx[1]);
                                                 const int c = static_cast<int>(idx[2]);
                                                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                                                T val = T(0);
-                                                if (r == c) {
-                                                    val = T(1);
-                                                } else if (r > c) {
-                                                    const int row = i0 + c;
-                                                    const int col = i0 + 1 + r;
-                                                    val = batchlas::device::detail::conj(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
-                                                }
-                                                v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
+                                                // V := unit lower part of A(i0:, i0+1:)^H (row reflectors as columns).
+                                                const glue::Elem2 ex{r, c};
+                                                const auto ap = v2::mat(a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a,
+                                                                        i0 + ib, i0 + 1 + m, ld_a);
+                                                const auto v = v2::mat(v_out + static_cast<std::ptrdiff_t>(b) * stride_v_out,
+                                                                       m, ib, ld_v_out);
+                                                v2::laset<v2::Part::Upper>(ex, v2::Zero{}, v2::One{}, v);
+                                                v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(
+                                                    ex, ap.sub(i0, i0 + 1, ib, m), v);
                                             });
     });
 }
