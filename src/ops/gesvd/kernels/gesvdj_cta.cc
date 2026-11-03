@@ -167,9 +167,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
+        // BATCHLAS_DLA_BODY: direct view/lambda calls would leave the body outlined (SemaSYCL).
         batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+            [=](sycl::nd_item<1> it) BATCHLAS_DLA_BODY BATCHLAS_REQD_SG_SIZE(32) {
                 constexpr int kP = static_cast<int>(P);
                 constexpr int kC = static_cast<int>(C);
                 constexpr int K = static_cast<int>(kGramChunk);
@@ -207,7 +208,6 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 auto U_prob = U_view.batch_item(pid);
                 auto Vh_prob = Vh_view.batch_item(pid);
 
-                // Tiles and slot arrays: v2 operands over the kernel's accessors.
                 using Tile = v2::Mat<T, v2::Ext<kC>, v2::Ext<kC>, v2::Ext<LD>, v2::Mem::Local, v2::Cyclic,
                                      sycl::local_accessor<T, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
@@ -533,9 +533,8 @@ BATCHLAS_UNROLL_FULL
                             for (int32_t dst = 0; dst < LC; ++dst) U_prob(row, dst) = A(row, static_cast<int32_t>(inv(dst)));
                         }
                     } else {
-                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW,
-                        // so Thin bounds `lane`, never `r` (wrong shape, plausible
-                        // numbers).
+                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW, so Thin bounds
+                        // `lane`, never `r` (wrong shape, plausible numbers).
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                             const int32_t dst = lane + cc * kP;
                             if (!live || dst >= LC) continue;

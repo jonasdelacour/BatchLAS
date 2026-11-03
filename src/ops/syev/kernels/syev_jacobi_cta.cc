@@ -175,7 +175,6 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
-                // Tiles and rotation slots: v2 operands over the kernel's accessors.
                 using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LD>, v2::Mem::Local, v2::Cyclic,
                                      sycl::local_accessor<T, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);

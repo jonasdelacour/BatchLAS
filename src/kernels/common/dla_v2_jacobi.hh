@@ -78,8 +78,12 @@ template <int K, class Ex, class T> BATCHLAS_DLA_INLINE T reduce_scatter(const E
         const bool hi = (lane & static_cast<std::uint32_t>(mask)) != 0u;
 #pragma unroll
         for (int j = 0; j < half; ++j) {
-            const T own = hi ? x[j + half] : x[j];
-            const T send = hi ? x[j] : x[j + half];
+            // Copy both slots first: `hi ? x[a] : x[b]` is an lvalue, a lane-dependent slot index
+            // that turns x into a stack array or compare/select chains (float 8x8 +73% instructions).
+            const T lo = x[j];
+            const T up = x[j + half];
+            const T own = hi ? up : lo;
+            const T send = hi ? lo : up;
             x[j] = Arith<T>::add(own, shuffle_xor(ex, send, static_cast<std::uint32_t>(mask)));
         }
     }
