@@ -193,7 +193,8 @@ Event btrd_lower_inplace(Queue& q,
 
             const int b = static_cast<int>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group, before any barrier
-            const v2::WorkGroup<kWorkGroupSize> ex{it};
+            // Runtime stride, as legacy get_local_range(0): a constexpr one lets ptxas unroll the store loops.
+            const v2::RtGroup<v2::Scope::Group> ex{it};
 
             auto ABv = ab.batch_item(b);
             auto Cv = c.batch_item(b);
@@ -523,7 +524,8 @@ Event sytrd_sb2st(Queue& ctx,
             h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
-                v2::lacpy(v2::Thread{}, v2::mat(ABsrc.batch_item(b)), v2::mat(ABdst.batch_item(b)));
+                v2::lacpy(v2::Thread{}, v2::mat(ABsrc.batch_item(b)).sub(0, 0, ldab, n),
+                          v2::mat(ABdst.batch_item(b)).sub(0, 0, ldab, n));
             });
         });
     }

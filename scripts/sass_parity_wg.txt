@@ -9,3 +9,16 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc hb2st_hh chase: sycl::range<1>(kWg), kWg = 256
+256 ::Sb2stHhChaseKernel<
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc unmqr_hb2st_wave: kWg = kSg * S, S the last template argument
+128 ::Sb2stHhBackWaveKernel<.*, 4>$
+256 ::Sb2stHhBackWaveKernel<.*, 8>$
+512 ::Sb2stHhBackWaveKernel<.*, 16>$
+# src/ops/syev/sytrd/sytrd_sb2st_hh.cc unmqr_hb2st_tiled / streaming: sycl::range<1>(kSg) and (32)
+32  ::Sb2stHhBackTiledKernel<
+32  ::Sb2stHhBackKernel<
+# src/ops/syev/sytrd/sytrd_sb2st.cc btrd lower: sycl::range<1>(kWorkGroupSize), kWorkGroupSize = 128
+128 ::BtrdLowerKernel<
+# src/ops/syev/sytrd/sytrd_sb2st_cta.cc: sycl::range<1>(wg_size), wg_size = 32
+32  ::BtrdLowerSubgroupKernel<

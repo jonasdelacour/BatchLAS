@@ -218,8 +218,8 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 };
 
                 // larfg on A(r0:r1, col): v -> vloc and V(:, slot); the column becomes (beta, 0...).
-                auto make_reflector = [&](int32_t col, int32_t r0, int32_t r1,
-                                          int32_t slot) -> T {
+                auto make_reflector_body = [&](int32_t col, int32_t r0, int32_t r1,
+                                               int32_t slot) -> T {
                     const int32_t m = r1 - r0 + 1;
                     const auto y = A.col(col, r0, m);  // (alpha; x)
                     const auto v = v2::vec(vloc, m);
@@ -243,6 +243,13 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     if (ex.leader()) TAUv(slot, b) = h.tau;
                     v2::sync(ex, v2::Mem::Global);
                     return h.tau;
+                };
+                // Complex: out of line, as the legacy inliner left it; inlined at both sites it cost REG 70->119.
+                auto make_reflector_ool = [&](int32_t col, int32_t r0, int32_t r1, int32_t slot)
+                                              __attribute__((noinline)) -> T { return make_reflector_body(col, r0, r1, slot); };
+                auto make_reflector = [&](int32_t col, int32_t r0, int32_t r1, int32_t slot) -> T {
+                    if constexpr (detail::is_complex<T>::value) return make_reflector_ool(col, r0, r1, slot);
+                    else return make_reflector_body(col, r0, r1, slot);
                 };
 
                 // --- Sequential chase schedule. The reflector counter must match
