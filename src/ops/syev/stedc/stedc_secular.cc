@@ -125,7 +125,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     iter++;
                 }
 
-                if (ex.leader()) lam_out(i) = lam;
+                if (ex.leader()) { [&]() BATCHLAS_DLA_BODY { lam_out(i) = lam; }(); }
 
                 // Q(:, i) = d - lambda_i, its magnitude clamped away from zero.
                 const T root = lam + shift;
@@ -164,7 +164,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 stedc_v2::group_sync(ex);
                 auto log_den1 = (i + 1) < n ? stedc_v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
 
-                if (ex.leader()) lden(i) = log_den1 + log_den2;
+                if (ex.leader()) { [&]() BATCHLAS_DLA_BODY { lden(i) = log_den1 + log_den2; }(); }
             }
 
             stedc_v2::group_sync(ex);
