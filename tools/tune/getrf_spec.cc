@@ -91,6 +91,7 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             "src/kernels/common/sg_partition/backend_amdgcn.hh",
             "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
             "src/kernels/common/sg_partition/backend_generic.hh",

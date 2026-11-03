@@ -126,6 +126,7 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: direct
             "src/ops/spmm/kernels/spmm_native.cc",
             "src/ops/spmm/spmm_native.hh",
