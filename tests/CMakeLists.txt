@@ -30,6 +30,7 @@ set(TEST_TARGETS
     device_blas_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
+    device_blas_v2_gebrd_tests
     device_blas_v2_tests
     error_model_tests
     gemm_candidates_tests
@@ -221,6 +222,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
+    device_blas_v2_gebrd_tests
     device_blas_v2_tests
     gemm_candidates_tests
     gemm_mask_tests

@@ -4,8 +4,10 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
+#include <batchlas/blas/device/v2/dla.hh>
 
 #include <src/math-helpers.hh>
+#include <src/ops/gesvd/gebrd/gebrd_v2.hh>
 #include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -103,6 +105,146 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
+namespace v2 = batchlas::device::v2;
+
+// The complex labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
+constexpr int32_t kPanelWG = 128;
+using PanelEx = v2::WorkGroup<kPanelWG>;
+
+// zlabrd on panel columns j0 .. j0+ib-1 of item b (one work-group). Rows hold conj(u) on exit,
+// d and e are real (ZLARFG's real beta). wa / wx hold the negated small products, so every
+// update below is one gemv_acc: y := y0 + alpha (sum of the terms). A function, not the kernel
+// lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
+template <typename T, typename AV, typename RV, typename TV>
+BATCHLAS_DLA_INLINE void labrd_panel_v2(const PanelEx& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
+                                        const RV& E, const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work,
+                                        int32_t m, int32_t n, int32_t nb, int32_t j0, int32_t ib) {
+    using Real = typename base_type<T>::type;
+    using gebrd_v2::conj_view;
+    using gebrd_v2::herm;
+    constexpr auto C = Transpose::ConjTrans;
+    const auto Ab = v2::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
+    const auto Xb = v2::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
+    const auto Yb = v2::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
+    const auto wa = v2::vec(work, nb, 0);   // -A^H v, then -Y^H u
+    const auto wx = v2::vec(work, nb, nb);  // -X^H v, then -A u
+    const auto pub = [](auto x) { return v2::assume_published(x); };  // written before the last barrier
+    const gebrd_v2::NegZero<T> zero{};
+
+    for (int32_t ii = 0; ii < ib; ++ii) {
+        const int32_t gi = j0 + ii;
+        const int32_t mt = m - gi, nt = n - gi - 1;  // rows from gi, columns after gi
+
+        // A(gi:m, gi) -= A(gi:m, j0:gi) Y(gi, 0:ii)^H + X(gi:m, 0:ii) A(j0:gi, gi)
+        const auto acol = Ab.col(gi).tail(gi);
+        v2::gemv_acc(ex, v2::NegOne{}, acol, acol, v2::term(Ab.sub(gi, j0, mt, ii), pub(conj_view(Yb.row(gi).head(ii)))),
+                     v2::term(Xb.sub(gi, 0, mt, ii), pub(Ab.col(gi).tail(j0).head(ii))));
+        ex.barrier(v2::Mem::Global);
+
+        // H(gi) annihilates A(gi+1:m, gi); v overwrites it, A(gi, gi) = 1. Every item reads alpha
+        // before the reduction and forms the same scalars; the leader overwrites it after.
+        const auto xq = Ab.col(gi).tail(gi + 1);
+        const T alpha_q = Ab(gi, gi);
+        const Real sigma = v2::sumsq<v2::alg::Unfused>(ex, xq);
+        const auto hq = v2::larfg_scalars<v2::conv::RealBeta>(alpha_q, sycl::sqrt(sigma), mt);
+        if (ex.leader()) {
+            D(gi, b) = detail::real_part(hq.beta);
+            TAUQ(gi, b) = hq.tau;
+            Ab(gi, gi) = T(1);
+        }
+        if (hq.tau != T(0)) v2::scal(ex, hq.scale, xq);
+        ex.barrier(v2::Mem::Global);
+
+        if (gi >= n - 1) {
+            continue;
+        }
+
+        // Y(gi+1:n, ii) = tau_q (A(gi:m, gi+1:n)^H v - Y(gi+1:n, 0:ii) A(gi:m, j0:gi)^H v
+        //                        - A(j0:gi, gi+1:n)^H X(gi:m, 0:ii)^H v)
+        const auto v = pub(Ab.col(gi).tail(gi));
+        v2::gemv<C, v2::alg::GroupReducePerOutput>(ex, v2::NegOne{}, Ab.sub(gi, j0, mt, ii), v, v2::Zero{}, wa);
+        v2::gemv<C, v2::alg::GroupReducePerOutput>(ex, v2::NegOne{}, Xb.sub(gi, 0, mt, ii), v, v2::Zero{}, wx);
+        ex.barrier(v2::Mem::Local);
+        v2::gemv_acc(ex, hq.tau, zero, Yb.col(ii).tail(gi + 1), v2::term(herm(Ab.sub(gi, gi + 1, mt, nt)), v),
+                     v2::term(Yb.sub(gi + 1, 0, nt, ii), pub(wa)), v2::term(herm(Ab.sub(j0, gi + 1, ii, nt)), pub(wx)));
+        ex.barrier(v2::Mem::Global);
+
+        // Row gi, conjugated (zlabrd's lacgv before the right reflector):
+        // A(gi, gi+1:n) = conj(A(gi, gi+1:n)) - Y(gi+1:n, 0:ii+1) conj(A(gi, j0:gi+1)) - A(j0:gi, gi+1:n)^H conj(X(gi, 0:ii))
+        const auto arow = Ab.row(gi).tail(gi + 1);
+        v2::gemv_acc(ex, v2::NegOne{}, conj_view(arow), arow,
+                     v2::term(Yb.sub(gi + 1, 0, nt, ii + 1), pub(conj_view(Ab.row(gi).tail(j0).head(ii + 1)))),
+                     v2::term(herm(Ab.sub(j0, gi + 1, ii, nt)), pub(conj_view(Xb.row(gi).head(ii)))));
+        ex.barrier(v2::Mem::Global);
+
+        // G(gi) annihilates A(gi, gi+2:n); u overwrites it, A(gi, gi+1) = 1.
+        const auto xp = Ab.row(gi).tail(gi + 2);
+        const T alpha_p = Ab(gi, gi + 1);
+        const Real sigma_r = v2::sumsq<v2::alg::Unfused>(ex, xp);
+        const auto hp = v2::larfg_scalars<v2::conv::RealBeta>(alpha_p, sycl::sqrt(sigma_r), nt);
+        if (ex.leader()) {
+            E(gi, b) = detail::real_part(hp.beta);
+            TAUP(gi, b) = hp.tau;
+            Ab(gi, gi + 1) = T(1);
+        }
+        if (hp.tau != T(0)) v2::scal(ex, hp.scale, xp);
+        ex.barrier(v2::Mem::Global);
+
+        // X(gi+1:m, ii) = tau_p (A(gi+1:m, gi+1:n) u - A(gi+1:m, j0:gi+1) Y(gi+1:n, 0:ii+1)^H u
+        //                        - X(gi+1:m, 0:ii) A(j0:gi, gi+1:n) u)
+        const auto u = pub(Ab.row(gi).tail(gi + 1));
+        v2::gemv<C, v2::alg::GroupReducePerOutput>(ex, v2::NegOne{}, Yb.sub(gi + 1, 0, nt, ii + 1), u, v2::Zero{}, wa);
+        v2::gemv<Transpose::NoTrans>(ex, v2::NegOne{}, Ab.sub(j0, gi + 1, ii, nt), u, v2::Zero{}, wx);
+        ex.barrier(v2::Mem::Local);
+        v2::gemv_acc(ex, hp.tau, zero, Xb.col(ii).tail(gi + 1), v2::term(Ab.sub(gi + 1, gi + 1, mt - 1, nt), u),
+                     v2::term(Ab.sub(gi + 1, j0, mt - 1, ii + 1), pub(wa)), v2::term(Xb.sub(gi + 1, 0, mt - 1, ii), pub(wx)));
+        ex.barrier(v2::Mem::Global);
+        gebrd_v2::lacgv(ex, Ab.row(gi).tail(gi + 1));
+        ex.barrier(v2::Mem::Global);
+    }
+
+    if (ex.leader() && n > 0) {
+        TAUP(n - 1, b) = T(0);
+    }
+}
+
+// One panel launch of the complex path (one work-group of kPanelWG per item).
+template <typename T>
+void labrd_panel_complex(Queue& ctx,
+                         MatrixView<T, MatrixFormat::Dense>& a,
+                         const VectorView<typename base_type<T>::type>& d_out,
+                         const VectorView<typename base_type<T>::type>& e_out,
+                         const VectorView<T>& tauq_out,
+                         const VectorView<T>& taup_out,
+                         const MatrixView<T, MatrixFormat::Dense>& x_mat,
+                         const MatrixView<T, MatrixFormat::Dense>& y_mat,
+                         const std::uint8_t* mask,
+                         int32_t nb, int32_t j0, int32_t ib) {
+    if (static_cast<int64_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()) < kPanelWG) {
+        throw batchlas::unsupported("gebrd_blocked: the complex panel kernel needs a work-group of 128");
+    }
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t batch = static_cast<int32_t>(a.batch_size());
+    ctx->submit([&](sycl::handler& h) {
+        auto A = a.kernel_view();
+        auto D = d_out;
+        auto E = e_out;
+        auto TAUQ = tauq_out;
+        auto TAUP = taup_out;
+        auto X = x_mat.kernel_view();
+        auto Y = y_mat.kernel_view();
+        auto work_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(2 * nb)), h);
+
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kPanelWG), sycl::range<1>(kPanelWG)),
+                                     [=](sycl::nd_item<1> item) {
+            const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
+            if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
+            labrd_panel_v2<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
+        });
+    });
+}
+
 // LAPACK ?labrd + the trailing gemm. Complex follows zlabrd: rows hold conj(u) on exit (unmbr 'P'
 // order), d and e are real, and between generating and storing a right reflector its row is
 // conjugated. For real T every conj() below is the identity.
@@ -157,7 +299,11 @@ Event gebrd_blocked_impl(Queue& ctx,
         (void)x_panel.fill_zeros(ctx);
         (void)y_panel.fill_zeros(ctx);
 
-        ctx->submit([&](sycl::handler& h) {
+        // Complex panels run on the v2 core (explicit complex arithmetic, 1.3x faster); real
+        // panels keep the legacy kernel below (the v2 port cost float REG 64 -> 80 and 4%).
+        if constexpr (kComplex)
+            labrd_panel_complex<T>(ctx, a, d_out, e_out, tauq_out, taup_out, x_mat, y_mat, mask, nb, j0, ib);
+        else ctx->submit([&](sycl::handler& h) {
             auto A = a.kernel_view();
             auto D = d_out;
             auto E = e_out;

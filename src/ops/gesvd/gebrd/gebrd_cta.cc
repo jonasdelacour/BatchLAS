@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include <batchlas/util/group-invoke.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
 #include <src/kernels/common/sg_partition/sg_partition.hh>
 
 #include <src/math-helpers.hh>
@@ -10,7 +11,6 @@
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 
-#include <array>
 #include <numeric>
 #include <stdexcept>
 
@@ -19,62 +19,116 @@ namespace batchlas {
 
 namespace {
 
-template <typename T, typename Group>
-inline T group_reduce_sum_select_from_group(const Group& g, T v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    (void)lanes;
+namespace v2 = batchlas::device::v2;
 
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
-        Real re = v.real();
-        Real im = v.imag();
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            re += permute_group_by_xor(g, re, offset);
-            im += permute_group_by_xor(g, im, offset);
-        }
-        return T(re, im);
-    } else {
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
+// larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
+// The leader forms the scalars (conv::Phase: tau = 0, beta = alpha for len <= 1); on return lane
+// `head` holds beta, the x lanes v (x * scale when tau != 0), and every lane gets tau.
+template <typename Ex, typename T>
+inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bool x_active) {
+    const T sumsq = ex.team_reduce(x_active ? (x * x) : T(0));
+    T xnorm = T(0);
+    if (ex.leader()) xnorm = sycl::sqrt(sumsq);
+    xnorm = ex.bcast(xnorm, 0u);
+    const T alpha_h = ex.bcast(alpha, static_cast<std::uint32_t>(head));
+    v2::LarfgScalars<T> s{};
+    if (ex.leader()) s = v2::larfg_scalars<v2::conv::Phase>(alpha_h, xnorm, len);
+    const T beta = ex.bcast(s.beta, 0u);
+    const T tau = ex.bcast(s.tau, 0u);
+    const T scale = ex.bcast(s.scale, 0u);
+    if (ex.lid() == head) {
+        alpha = beta;
+    } else if (x_active && tau != T(0)) {
+        x *= scale;
     }
+    return tau;
 }
 
-template <typename T, typename Partition>
-inline T larfg_small(const Partition& part,
-                     int32_t len,
-                     int32_t lane,
-                     int32_t alpha_lane,
-                     T& alpha,
-                     T& x,
-                     bool x_active) {
-    using Real = typename base_type<T>::type;
+// sgebd2 on one problem's n x n tile in local memory, lane l of the P-lane partition owning row l
+// (column l in the left update). Every barrier is work-group wide: a dead partition runs a zero
+// tile and stores nothing. A function, not the kernel lambda's body, so the lambda calls no view
+// operator() (SemaSYCL entry quirk).
+template <typename T, typename Ex, typename TM, typename AV, typename RV, typename TV>
+BATCHLAS_DLA_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& A_prob,
+                                    const RV& D_prob, const RV& E_prob, const TV& TAUQ_prob, const TV& TAUP_prob,
+                                    int32_t n, bool live) {
+    const int32_t lane = ex.lid();
+    for (int32_t c = 0; c < n; ++c) {
+        if (lane < n) {
+            tile(lane, c) = live ? A_prob(lane, c) : T(0);
+        }
+    }
+    it.barrier(sycl::access::fence_space::local_space);
 
-    const Real xsq = x_active ? (x * x) : Real(0);
-    const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
-    const Real xnorm = invoke_one_broadcast(part, [&]() {
-        return sycl::sqrt(sumsq);
-    });
-
-    const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
-
-    const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
-        if (len <= 1) {
-            return std::array<T, 3>{alpha_leader, T(0), T(0)};
+    for (int32_t i = 0; i < n; ++i) {
+        // H(i) annihilates tile(i+1:n, i); lane j > i then applies it to column j.
+        T alpha_l = T(0);
+        if (lane == i) {
+            alpha_l = tile(i, i);
+        }
+        T x_l = T(0);
+        const bool x_l_active = (lane > i && lane < n);
+        if (x_l_active) {
+            x_l = tile(lane, i);
         }
 
-        const auto scalars = detail::larfg(alpha_leader, xnorm, len);
-        return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
-    });
+        const T tau_l = larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
+        if (lane == i) {
+            tile(i, i) = alpha_l;
+            if (live) {
+                D_prob(i) = alpha_l;
+                TAUQ_prob(i) = tau_l;
+            }
+        } else if (x_l_active) {
+            tile(lane, i) = x_l;
+        }
+        it.barrier(sycl::access::fence_space::local_space);
 
-    if (lane == alpha_lane) {
-        alpha = beta_b;
-    } else if (x_active && tau_b != T(0)) {
-        x *= scale_b;
+        if (i < n - 1 && lane > i && lane < n) {
+            v2::larf<Side::Left>(v2::Thread{}, tau_l, v2::unit_head(tile.col(i).tail(i), 0), tile.sub(i, lane, n - i, 1));
+        }
+        it.barrier(sycl::access::fence_space::local_space);
+
+        if (i >= n - 1) continue;
+
+        // G(i) annihilates tile(i, i+2:n); lane r > i then applies it to row r.
+        T alpha_r = T(0);
+        if (lane == i + 1) {
+            alpha_r = tile(i, i + 1);
+        }
+        T x_r = T(0);
+        const bool x_r_active = (lane > i + 1 && lane < n);
+        if (x_r_active) {
+            x_r = tile(i, lane);
+        }
+
+        const T tau_r = larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
+        if (lane == i + 1) {
+            tile(i, i + 1) = alpha_r;
+            if (live) {
+                E_prob(i) = alpha_r;
+                TAUP_prob(i) = tau_r;
+            }
+        } else if (x_r_active) {
+            tile(i, lane) = x_r;
+        }
+        it.barrier(sycl::access::fence_space::local_space);
+
+        if (lane > i && lane < n) {
+            v2::larf<Side::Right>(v2::Thread{}, tau_r, v2::unit_head(tile.row(i).tail(i + 1), 0), tile.sub(lane, i + 1, 1, n - i - 1));
+        }
+        it.barrier(sycl::access::fence_space::local_space);
     }
 
-    return tau_b;
+    if (live && lane == n - 1) {
+        TAUP_prob(n - 1) = T(0);
+    }
+
+    for (int32_t c = 0; c < n; ++c) {
+        if (live && lane < n) {
+            A_prob(lane, c) = tile(lane, c);
+        }
+    }
 }
 
 template <typename T, size_t P>
@@ -90,8 +144,6 @@ inline void gebrd_cta_impl(Queue& ctx,
                            int32_t n,
                            size_t cta_wg_size_multiplier,
                            const std::uint8_t* mask) {
-    using Real = typename base_type<T>::type;
-
     const auto batch_size = a.batch_size();
     if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
         throw batchlas::invalid_argument("gebrd_cta_impl: invalid n or matrix sizes for CTA partition");
@@ -143,16 +195,15 @@ inline void gebrd_cta_impl(Queue& ctx,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
-                const auto part = make_partition<P>(sg);
+                const v2::SgpPartition<static_cast<int>(P)> ex{sg};
 
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
-                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
-                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+                const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
+                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // NO EARLY RETURN (I2): every it.barrier below is work-group wide, so a dead
+                // NO EARLY RETURN (I2): every barrier in gebd2_tile is work-group wide, so a dead
                 // partition (batch % probs_per_wg != 0, or an inactive item) runs a zero tile
                 // (tau = 0 throughout) and stores nothing.
                 const bool live = prob_id < static_cast<int32_t>(batch_size) &&
@@ -165,103 +216,11 @@ inline void gebrd_cta_impl(Queue& ctx,
                 auto TAUQ_prob = TAUQ_view.batch_item(pid);
                 auto TAUP_prob = TAUP_view.batch_item(pid);
 
-                const int32_t base_a = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
-                for (int32_t c = 0; c < n; ++c) {
-                    if (lane < n) {
-                        A_local[base_a + lane + c * static_cast<int32_t>(P)] = live ? A_prob(lane, c) : T(0);
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                for (int32_t i = 0; i < n; ++i) {
-                    T alpha_l = T(0);
-                    if (lane == i) {
-                        alpha_l = A_local[base_a + i + i * static_cast<int32_t>(P)];
-                    }
-                    T x_l = T(0);
-                    const bool x_l_active = (lane > i && lane < n);
-                    if (x_l_active) {
-                        x_l = A_local[base_a + lane + i * static_cast<int32_t>(P)];
-                    }
-
-                    const T tau_l = larfg_small(part, n - i, lane, i, alpha_l, x_l, x_l_active);
-                    if (lane == i) {
-                        A_local[base_a + i + i * static_cast<int32_t>(P)] = alpha_l;
-                        if (live) {
-                            D_prob(i) = static_cast<Real>(alpha_l);
-                            TAUQ_prob(i) = tau_l;
-                        }
-                    } else if (x_l_active) {
-                        A_local[base_a + lane + i * static_cast<int32_t>(P)] = x_l;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i < n - 1 && tau_l != T(0) && lane > i && lane < n) {
-                        const int32_t j = lane;
-                        T dot = A_local[base_a + i + j * static_cast<int32_t>(P)];
-                        for (int32_t r = i + 1; r < n; ++r) {
-                            dot += A_local[base_a + r + i * static_cast<int32_t>(P)] *
-                                   A_local[base_a + r + j * static_cast<int32_t>(P)];
-                        }
-                        const T gamma = tau_l * dot;
-                        A_local[base_a + i + j * static_cast<int32_t>(P)] -= gamma;
-                        for (int32_t r = i + 1; r < n; ++r) {
-                            A_local[base_a + r + j * static_cast<int32_t>(P)] -=
-                                A_local[base_a + r + i * static_cast<int32_t>(P)] * gamma;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i >= n - 1) continue;
-
-                    T alpha_r = T(0);
-                    if (lane == i + 1) {
-                        alpha_r = A_local[base_a + i + (i + 1) * static_cast<int32_t>(P)];
-                    }
-                    T x_r = T(0);
-                    const bool x_r_active = (lane > i + 1 && lane < n);
-                    if (x_r_active) {
-                        x_r = A_local[base_a + i + lane * static_cast<int32_t>(P)];
-                    }
-
-                    const T tau_r = larfg_small(part, n - (i + 1), lane, i + 1, alpha_r, x_r, x_r_active);
-                    if (lane == i + 1) {
-                        A_local[base_a + i + (i + 1) * static_cast<int32_t>(P)] = alpha_r;
-                        if (live) {
-                            E_prob(i) = static_cast<Real>(alpha_r);
-                            TAUP_prob(i) = tau_r;
-                        }
-                    } else if (x_r_active) {
-                        A_local[base_a + i + lane * static_cast<int32_t>(P)] = x_r;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (tau_r != T(0) && lane > i && lane < n) {
-                        const int32_t r = lane;
-                        T dot = A_local[base_a + r + (i + 1) * static_cast<int32_t>(P)];
-                        for (int32_t c = i + 2; c < n; ++c) {
-                            dot += A_local[base_a + r + c * static_cast<int32_t>(P)] *
-                                   A_local[base_a + i + c * static_cast<int32_t>(P)];
-                        }
-                        const T gamma = tau_r * dot;
-                        A_local[base_a + r + (i + 1) * static_cast<int32_t>(P)] -= gamma;
-                        for (int32_t c = i + 2; c < n; ++c) {
-                            A_local[base_a + r + c * static_cast<int32_t>(P)] -=
-                                gamma * A_local[base_a + i + c * static_cast<int32_t>(P)];
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-
-                if (live && lane == n - 1) {
-                    TAUP_prob(n - 1) = T(0);
-                }
-
-                for (int32_t c = 0; c < n; ++c) {
-                    if (live && lane < n) {
-                        A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
-                    }
-                }
+                // The problem's P x P tile in local memory, addressed through the accessor
+                // (A_local[base + i + j * P], the shared address space kept).
+                const v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<static_cast<int>(P)>, v2::Mem::Local, v2::Cyclic, sycl::local_accessor<T, 1>> tile{
+                    A_local, {n}, {n}, {}, part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P)};
+                gebd2_tile<T>(ex, it, tile, A_prob, D_prob, E_prob, TAUQ_prob, TAUP_prob, n, live);
             });
     });
 }
