@@ -6,7 +6,6 @@
 
 #include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
-#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/mempool.hh>
@@ -21,6 +20,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <src/ops/syev/sytrd/sb2st_v2.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
@@ -40,6 +40,9 @@ namespace detail {
 
 namespace {
 
+namespace v2 = batchlas::device::v2;
+namespace sbv = batchlas::sb2st_v2;
+
 template <typename T>
 inline T real_part_as_T(const T& x) {
     if constexpr (detail::is_complex<T>::value) {
@@ -49,46 +52,8 @@ inline T real_part_as_T(const T& x) {
     }
 }
 
-template <typename T>
-inline typename base_type<T>::type abs2(const T& x) {
-    using R = typename base_type<T>::type;
-    if constexpr (detail::is_complex<T>::value) {
-        return static_cast<R>(x.real()) * static_cast<R>(x.real()) +
-               static_cast<R>(x.imag()) * static_cast<R>(x.imag());
-    } else {
-        return static_cast<R>(x) * static_cast<R>(x);
-    }
-}
-
-// Group-wide sum that also works for std::complex, which sycl::plus<> does not
-// accept directly.
-template <typename Group, typename T>
-inline T group_sum(Group g, T v) {
-    using R = typename base_type<T>::type;
-    if constexpr (detail::is_complex<T>::value) {
-        const R re = batchlas::portable::reduce_over_group(g, static_cast<R>(v.real()), sycl::plus<R>());
-        const R im = batchlas::portable::reduce_over_group(g, static_cast<R>(v.imag()), sycl::plus<R>());
-        return T(re, im);
-    } else {
-        return batchlas::portable::reduce_over_group(g, v, sycl::plus<T>());
-    }
-}
-
 template <Backend B, typename T>
 class Sb2stHhChaseKernel;
-
-// Sub-group XOR shuffle that also works for std::complex.
-template <typename T>
-inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
-    using R = typename base_type<T>::type;
-    if constexpr (detail::is_complex<T>::value) {
-        const R re = sycl::permute_group_by_xor(sg, static_cast<R>(v.real()), mask);
-        const R im = sycl::permute_group_by_xor(sg, static_cast<R>(v.imag()), mask);
-        return T(re, im);
-    } else {
-        return sycl::permute_group_by_xor(sg, v, mask);
-    }
-}
 
 // The chase is sequential per matrix; the only parallelism inside a work-group is the
 // <= kd x kd window. kWg = 256 with a 2D (row, column-chunk) mapping puts 8 lanes on
@@ -184,203 +149,100 @@ Event sytrd_sb2st_hh(Queue& ctx,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t b = static_cast<int32_t>(wg.get_group_linear_id());
-                const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
+
+                // rows: kRowsPar teams of kTpr lanes, one window row / column each (xor masks 1, 2, 4).
+                const v2::WorkGroup<kWg> ex{it};
+                const v2::Teams<kWg, kTpr, v2::bfly::Asc> rows{it};
 
                 T* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
                                       static_cast<size_t>(n);
                 auto ABs = ABsrc.batch_item(b);
                 auto ABt = ABtri.batch_item(b);
                 auto Vb = Vout.batch_item(b);
+                const sbv::HermBandLower<T> A{AB, ldw, kdw};
 
-                // --- Load the input band into the expanded working band.
-                for (int32_t idx = lid; idx < ldw * n; idx += kWg) {
+                // --- Load the input band into the expanded working band (rows past kd read 0).
+                v2::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t col = idx / ldw;
                     const int32_t row = idx - col * ldw;
                     AB[idx] = (row <= kd_i) ? ABs(row, col) : T(0);
-                }
-                sycl::group_barrier(wg);
+                });
+                v2::sync(ex, v2::Mem::Global);
 
                 // Hermitian input: force a real diagonal before we start.
                 if constexpr (detail::is_complex<T>::value) {
-                    for (int32_t j = lid; j < n; j += kWg) {
+                    v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
                         AB[j * ldw] = real_part_as_T(AB[j * ldw]);
-                    }
-                    sycl::group_barrier(wg);
+                    });
+                    v2::sync(ex, v2::Mem::Global);
                 }
 
-                auto bget = [&](int32_t i, int32_t j) -> T {
-                    if (i >= j) {
-                        const int32_t r = i - j;
-                        return (r <= kdw) ? AB[r + j * ldw] : T(0);
-                    }
-                    const int32_t r = j - i;
-                    return (r <= kdw) ? batchlas::device::detail::conj(AB[r + i * ldw]) : T(0);
-                };
-                auto bset = [&](int32_t i, int32_t j, T val) {
-                    if (i >= j) {
-                        const int32_t r = i - j;
-                        if (r <= kdw) AB[r + j * ldw] = val;
-                    } else {
-                        const int32_t r = j - i;
-                        if (r <= kdw) AB[r + i * ldw] = batchlas::device::detail::conj(val);
-                    }
-                };
-
-                // W <- H W H^H on the principal block [a..b], H = I - tau v v^H,
-                // v held in vloc with length m. Only the lower triangle is
-                // written; the update keeps the diagonal real by construction.
-                // 2D lane mapping: ti indexes the row (or column) of the window,
-                // ts indexes a chunk of the reduced dimension. Lanes sharing a ti
-                // are the kTpr contiguous lanes ti*kTpr .. ti*kTpr+kTpr-1, which
-                // sit inside one sub-group, so the partial sums reduce with XOR
-                // shuffles rather than through local memory.
-                const int32_t ti = lid / kTpr;
-                const int32_t ts = lid % kTpr;
-                const auto sg = it.get_sub_group();
-
-                // NOTE: this is a sub-group collective, so every lane in the
-                // work-group must call it -- out-of-range lanes contribute 0
-                // rather than branching around it.
-                auto reduce_tpr = [&](T v) -> T {
-                    for (uint32_t msk = 1; msk < static_cast<uint32_t>(kTpr); msk <<= 1) {
-                        v += shuffle_xor(sg, v, msk);
-                    }
-                    return v;
-                };
-
+                // W <- H W H^H on the principal block [a..bb], H = I - tau v v^H, v in vloc
+                // (zhetd2's update): p = W v, kappa = v^H p, w = conj(tau) p - (|tau|^2 kappa / 2) v,
+                // W -= w v^H + v w^H on the lower triangle (diagonal kept real).
                 auto two_sided = [&](int32_t a, int32_t bb, T tau) {
                     const int32_t m = bb - a + 1;
                     if (m <= 0) return;
+                    const auto W = A.sub(a, a, m, m);
+                    const auto v = v2::vec(vloc, m);
+                    const auto w = v2::vec(wloc, m);
+                    sbv::hemv_band<Uplo::Lower>(rows, v2::One{}, W, v2::assume_published(v), v2::Zero{}, w);
+                    v2::sync(ex, v2::Mem::Global);
 
-                    // p = W v, one row per ti, reduced over ts. The row-block
-                    // count is derived from m (uniform) so every lane makes the
-                    // same number of reduce_tpr calls.
-                    {
-                        const int32_t nrb = (m + kRowsPar - 1) / kRowsPar;
-                        for (int32_t rb = 0; rb < nrb; ++rb) {
-                            const int32_t r = rb * kRowsPar + ti;
-                            T acc = T(0);
-                            if (r < m) {
-                                for (int32_t j = ts; j < m; j += kTpr) {
-                                    acc += bget(a + r, a + j) * vloc[j];
-                                }
-                            }
-                            acc = reduce_tpr(acc);
-                            if (r < m && ts == 0) wloc[r] = acc;
-                        }
-                    }
-                    sycl::group_barrier(wg);
-
-                    // kappa = v^H W v
-                    T part = T(0);
-                    for (int32_t i = lid; i < m; i += kWg) {
-                        part += batchlas::device::detail::conj(vloc[i]) * wloc[i];
-                    }
-                    const T kappa = group_sum(wg, part);
-
-                    // w = conj(tau) p - (|tau|^2 kappa / 2) v
+                    const T kappa = v2::dotc<v2::Scope::Auto, v2::arith::Native>(ex, v, w);
                     const T coef = tau * batchlas::device::detail::conj(tau) * kappa * T(Real(0.5));
-                    for (int32_t i = lid; i < m; i += kWg) {
-                        wloc[i] = batchlas::device::detail::conj(tau) * wloc[i] - coef * vloc[i];
-                    }
-                    sycl::group_barrier(wg);
+                    // The loop is written out: through for_each_owned ptxas unrolls it 4x (latch layout).
+                    for (int i = ex.lid(); i < m; i += decltype(ex)::size)
+                        w(i) = batchlas::device::detail::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
+                    v2::sync(ex, v2::Mem::Global);
 
-                    // Rank-2 update of the lower triangle; no reduction, so ts
-                    // simply strides the inner index.
-                    for (int32_t r = ti; r < m; r += kRowsPar) {
-                        for (int32_t j = ts; j <= r; j += kTpr) {
-                            T val = bget(a + r, a + j) - wloc[r] * batchlas::device::detail::conj(vloc[j]) -
-                                    vloc[r] * batchlas::device::detail::conj(wloc[j]);
-                            if (r == j) val = real_part_as_T(val);
-                            bset(a + r, a + j, val);
-                        }
-                    }
-                    sycl::group_barrier(wg);
+                    sbv::her2<Uplo::Lower>(rows, v2::NegOne{}, v2::assume_published(w), v2::assume_published(v), W);
+                    v2::sync(ex, v2::Mem::Global);
                 };
 
-                // B <- B (I - tau v v^H), v of length (c1-c0+1) in vloc.
+                // B <- B (I - tau v v^H) on rows [r0..r1] x columns [c0..c1].
                 auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
-                    const int32_t nr = r1 - r0 + 1;
-                    const int32_t nrb = (nr + kRowsPar - 1) / kRowsPar;
-                    for (int32_t rb = 0; rb < nrb; ++rb) {
-                        const int32_t rr = rb * kRowsPar + ti;
-                        const int32_t i = r0 + rr;
-                        T y = T(0);
-                        if (rr < nr) {
-                            for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
-                                y += bget(i, j) * vloc[j - c0];
-                            }
-                        }
-                        y = tau * reduce_tpr(y);
-                        if (rr < nr) {
-                            for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
-                                bset(i, j, bget(i, j) - y * batchlas::device::detail::conj(vloc[j - c0]));
-                            }
-                        }
-                    }
-                    sycl::group_barrier(wg);
+                    const auto v = v2::assume_published(v2::vec(vloc, c1 - c0 + 1));
+                    sbv::larf_native<Side::Right>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
+                    v2::sync(ex, v2::Mem::Global);
                 };
 
-                // C <- (I - tau v v^H) C, v of length (r1-r0+1) in vloc.
+                // C <- (I - tau v v^H) C on rows [r0..r1] x columns [c0..c1].
                 auto left_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
                     if (r0 > r1 || c0 > c1) return;
-                    const int32_t nc = c1 - c0 + 1;
-                    const int32_t ncb = (nc + kRowsPar - 1) / kRowsPar;
-                    for (int32_t cb = 0; cb < ncb; ++cb) {
-                        const int32_t cc = cb * kRowsPar + ti;
-                        const int32_t j = c0 + cc;
-                        T z = T(0);
-                        if (cc < nc) {
-                            for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
-                                z += batchlas::device::detail::conj(vloc[i - r0]) * bget(i, j);
-                            }
-                        }
-                        z = tau * reduce_tpr(z);
-                        if (cc < nc) {
-                            for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
-                                bset(i, j, bget(i, j) - vloc[i - r0] * z);
-                            }
-                        }
-                    }
-                    sycl::group_barrier(wg);
+                    const auto v = v2::assume_published(v2::vec(vloc, r1 - r0 + 1));
+                    sbv::larf_native<Side::Left>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
+                    v2::sync(ex, v2::Mem::Global);
                 };
 
-                // Build a reflector from column `col`, rows [r0..r1]; write it to
-                // vloc, store it at reflector slot `slot`, and overwrite the
-                // column with (beta, 0, ..., 0). Returns tau.
+                // larfg on A(r0:r1, col): v -> vloc and V(:, slot); the column becomes (beta, 0...).
                 auto make_reflector = [&](int32_t col, int32_t r0, int32_t r1,
                                           int32_t slot) -> T {
                     const int32_t m = r1 - r0 + 1;
-                    Real partial = Real(0);
-                    for (int32_t k = lid + 1; k < m; k += kWg) {
-                        partial += abs2(bget(r0 + k, col));
-                    }
-                    const Real ss = batchlas::portable::reduce_over_group(wg, partial, sycl::plus<Real>());
-                    const Real xnorm = sycl::sqrt(ss);
-                    const T alpha = bget(r0, col);
-                    const auto res = detail::larfg<T>(alpha, xnorm, m);
+                    const auto y = A.col(col, r0, m);  // (alpha; x)
+                    const auto v = v2::vec(vloc, m);
+                    // xLARFG scalars from alpha and an unscaled ||x|| (abs2 per element, one reduction).
+                    const auto x = sbv::fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DLA_BODY { return A.get(r0 + 1 + k, col); });
+                    const Real xnorm = sycl::sqrt(v2::sumsq<v2::alg::Unfused>(ex, x));
+                    const T alpha = y(0);
+                    const auto h = v2::larfg_scalars<v2::conv::Phase>(alpha, xnorm, m);
 
-                    // v[0] = 1, v[k] = x[k] * scale. Read the column before it is
-                    // overwritten below.
-                    if (lid == 0) vloc[0] = T(1);
-                    for (int32_t k = lid + 1; k < m; k += kWg) {
-                        vloc[k] = (res.tau == T(0)) ? T(0) : bget(r0 + k, col) * res.scale;
-                    }
-                    sycl::group_barrier(wg);
+                    // v = (1; scale x), read before the column is overwritten below.
+                    if (ex.leader()) v(0) = T(1);
+                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY {
+                        v(k + 1) = (h.tau == T(0)) ? T(0) : static_cast<T>(y(k + 1)) * h.scale;
+                    });
+                    v2::sync(ex, v2::Mem::Global);
 
-                    if (lid == 0) bset(r0, col, res.beta);
-                    for (int32_t k = lid + 1; k < m; k += kWg) {
-                        bset(r0 + k, col, T(0));
-                    }
-
-                    for (int32_t k = lid; k < kd_i; k += kWg) {
-                        Vb(k, slot) = (k < m) ? vloc[k] : T(0);
-                    }
-                    if (lid == 0) TAUv(slot, b) = res.tau;
-                    sycl::group_barrier(wg);
-                    return res.tau;
+                    if (ex.leader()) y(0) = h.beta;
+                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY { y(k + 1) = T(0); });
+                    const auto vs = v2::mat(Vb).col(slot).head(kd_i);  // V(:, slot) = (v; 0)
+                    v2::for_each_owned(ex, kd_i, [&](int i) BATCHLAS_DLA_BODY { vs(i) = (i < m) ? static_cast<T>(v(i)) : T(0); });
+                    if (ex.leader()) TAUv(slot, b) = h.tau;
+                    v2::sync(ex, v2::Mem::Global);
+                    return h.tau;
                 };
 
                 // --- Sequential chase schedule. The reflector counter must match
@@ -415,21 +277,21 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 (void)ldv;
 
                 // --- Extract the tridiagonal.
-                for (int32_t j = lid; j < n; j += kWg) {
-                    const T diag = bget(j, j);
+                v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
+                    const T diag = A.get(j, j);
                     ABt(0, j) = real_part_as_T(diag);
                     if constexpr (detail::is_complex<T>::value) {
                         Dv(j, b) = static_cast<Real>(diag.real());
                     } else {
                         Dv(j, b) = static_cast<Real>(diag);
                     }
-                }
-                for (int32_t j = lid; j < n - 1; j += kWg) {
-                    const T sub = bget(j + 1, j);
+                });
+                v2::for_each_owned(ex, n - 1, [&](int32_t j) BATCHLAS_DLA_BODY {
+                    const T sub = A.get(j + 1, j);
                     ABt(1, j) = sub;  // signed: the phase pass consumes this
                     Ev(j, b) = detail::abs(sub);
-                }
-                if (lid == 0 && n > 0) ABt(1, n - 1) = T(0);
+                });
+                if (ex.leader() && n > 0) ABt(1, n - 1) = T(0);
             });
     });
 
@@ -475,7 +337,6 @@ Event unmqr_hb2st_wave(Queue& ctx,
                        const int32_t* waves_p,
                        int32_t num_waves) {
     constexpr int32_t kSg = 32;
-    constexpr int32_t G = kSg / C;
     constexpr int32_t kWg = kSg * S;
     static_assert(C >= 1 && C <= 32 && (kSg % C) == 0);
     static_assert(S >= 1);
@@ -498,32 +359,28 @@ Event unmqr_hb2st_wave(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const auto wg = it.get_group();
-                const auto sg = it.get_sub_group();
-                const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
-                const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
-                const int32_t sgid = lid / kSg;
-                const int32_t lane = lid - sgid * kSg;
+                const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
+                const int32_t sgid = static_cast<int32_t>(it.get_local_linear_id()) / kSg;
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
+                // cols: tile column lane % C is owned by the G = 32 / C lanes lane / C.
+                const v2::WorkGroup<kWg> ex{it};
+                const sbv::StridedTeams<C, kWg> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
-                auto V = Vv.batch_item(b);
+                const auto V = Vv.batch_item(b);
 
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
-                for (int32_t idx = lid; idx < n * C; idx += kWg) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
-                }
-                sycl::group_barrier(wg);
-
-                const int32_t col = lane % C;
-                const int32_t grp = lane / C;
+                });
+                v2::sync(ex, v2::Mem::Global);
 
                 // Q = H_1 ... H_m, so Z := Q Z runs the waves in reverse
                 // generation order. Order *within* a wave is free.
@@ -531,37 +388,25 @@ Event unmqr_hb2st_wave(Queue& ctx,
                     const int32_t lo = waves_p[wv];
                     const int32_t hi = waves_p[wv + 1];
 
-                    // Every lane of a sub-group shares k, so tau and L are
-                    // sub-group uniform and the shuffles below stay uniform.
+                    // k is sub-group uniform (larf's shuffles stay uniform); a wave's reflectors
+                    // touch disjoint rows, so no barrier inside a wave.
                     for (int32_t k = lo + sgid; k < hi; k += S) {
                         const T tau = TAUv(k, b);
                         if (tau == T(0)) continue;
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
-
-                        T acc = T(0);
-                        for (int32_t r = grp; r < L; r += G) {
-                            acc += batchlas::device::detail::conj(V(r, k)) * Zl[(s + r) * C + col];
-                        }
-                        if constexpr (G > 1) {
-                            for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
-                                acc += shuffle_xor(sg, acc, m);
-                            }
-                        }
-                        for (int32_t r = grp; r < L; r += G) {
-                            Zl[(s + r) * C + col] -= tau * V(r, k) * acc;
-                        }
-                        // No barrier: the next k in this wave is disjoint from
-                        // this one, and other sub-groups are on disjoint rows.
+                        sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                            cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
+                            sbv::win_of(sbv::row_major_tile<C>(Zl, n), s, 0, L, C));
                     }
-                    sycl::group_barrier(wg);
+                    v2::sync(ex, v2::Mem::Global);
                 }
 
-                for (int32_t idx = lid; idx < n * C; idx += kWg) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
-                }
+                });
             });
     });
 
@@ -589,7 +434,6 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                         const int32_t* starts_p,
                         const int32_t* lens_p) {
     constexpr int32_t kSg = 32;
-    constexpr int32_t G = kSg / C;
     static_assert(C >= 1 && C <= 32 && (kSg % C) == 0);
 
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());
@@ -610,30 +454,28 @@ Event unmqr_hb2st_tiled(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kSg),
                               sycl::range<1>(kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const auto sg = it.get_sub_group();
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
-                const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
+                // One sub-group: ex for the tile load/store, cols for the column-per-team larf.
+                const v2::WorkGroup<kSg> ex{it};
+                const sbv::StridedTeams<C> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
-                auto V = Vv.batch_item(b);
+                const auto V = Vv.batch_item(b);
 
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 // Load the column tile once.
-                for (int32_t idx = lid; idx < n * C; idx += kSg) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
-                }
-                sycl::group_barrier(sg);
-
-                const int32_t col = lid % C;
-                const int32_t grp = lid / C;
+                });
+                v2::sync(cols);
 
                 // Q = H_1 ... H_m, so Z := Q Z applies them in reverse order.
                 for (int32_t k = nrefl - 1; k >= 0; --k) {
@@ -641,27 +483,17 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     if (tau == T(0)) continue;
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
-
-                    T acc = T(0);
-                    for (int32_t r = grp; r < L; r += G) {
-                        acc += batchlas::device::detail::conj(V(r, k)) * Zl[(s + r) * C + col];
-                    }
-                    if constexpr (G > 1) {
-                        for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
-                            acc += shuffle_xor(sg, acc, m);
-                        }
-                    }
-                    for (int32_t r = grp; r < L; r += G) {
-                        Zl[(s + r) * C + col] -= tau * V(r, k) * acc;
-                    }
-                    sycl::group_barrier(sg);
+                    sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                        cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
+                        sbv::win_of(sbv::row_major_tile<C>(Zl, n), s, 0, L, C));
+                    v2::sync(cols);
                 }
 
-                for (int32_t idx = lid; idx < n * C; idx += kSg) {
+                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
-                }
+                });
             });
     });
 
@@ -849,19 +681,18 @@ streaming:
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * 32),
                               sycl::range<1>(32)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const auto sg = it.get_sub_group();
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
-                const int32_t lane = static_cast<int32_t>(it.get_local_linear_id());
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
+                const v2::WorkGroup<32> ex{it};  // one sub-group: larf walks the columns in turn
                 const int32_t c0 = chunk * kBackCols;
                 const int32_t c1 = sycl::min(c0 + kBackCols, ncols);
 
-                auto Z = Zv.batch_item(b);
-                auto V = Vv.batch_item(b);
+                const auto Z = Zv.batch_item(b);
+                const auto V = Vv.batch_item(b);
 
                 for (int32_t k = nrefl - 1; k >= 0; --k) {
                     const T tau = TAUv(k, b);
@@ -869,18 +700,9 @@ streaming:
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
 
-                    // L may exceed the 32 lanes (kd > 32), so walk the reflector
-                    // in row-blocks and accumulate across them before the update.
-                    for (int32_t c = c0; c < c1; ++c) {
-                        T part = T(0);
-                        for (int32_t r = lane; r < L; r += 32) {
-                            part += batchlas::device::detail::conj(V(r, k)) * Z(s + r, c);
-                        }
-                        const T sum = group_sum(sg, part);
-                        for (int32_t r = lane; r < L; r += 32) {
-                            Z(s + r, c) -= tau * V(r, k) * sum;
-                        }
-                    }
+                    // L may exceed the 32 lanes (kd > 32): the lanes stride the reflector.
+                    sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                        ex, tau, v2::assume_published(v2::mat(V).col(k).head(L)), v2::mat(Z).sub(s, c0, L, c1 - c0));
                 }
             });
     });

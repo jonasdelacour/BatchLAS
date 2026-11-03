@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/device/v2/dla.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -30,6 +31,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 // ---------------------------------------------------------------------------
 // WY block width for the panel back-transform. ormqr keys its block width on the
@@ -169,10 +172,9 @@ Event copy_band_lower(Queue& q,
                 const T* A = a_ptr + b * stride_a;
                 T* AB = ab_ptr + b * stride_ab;
 
+                // AB(0 : lk, j) = A(j : j + lk, j): the band part of column j.
                 const int lk = std::min(kd, n - 1 - j) + 1;
-                for (int r = 0; r < lk; ++r) {
-                    AB[r + j * ldab] = A[(j + r) + j * lda];
-                }
+                v2::copy(v2::Thread{}, v2::Vec<const T>{A, v2::Dyn{lk}, {}, j + j * lda}, v2::Vec<T>{AB, v2::Dyn{lk}, {}, j * ldab});
             });
     });
 
