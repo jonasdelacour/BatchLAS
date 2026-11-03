@@ -166,7 +166,7 @@ Traps: a harness that shrinks the batch cannot ask the routing question; the two
 
 ## The shape of the GETRF device code
 
-`getf2_panel_device` (`getrf_cta_device.hh`) is ?GETF2 over a `Tile` with `at(r, c)`, instantiated on a `local_accessor` (CTA tier) and a global pointer (blocked leaf). Load-bearing spellings: the pivot search is a sub-group butterfly plus a scan over `kLuRedSlots = 32` slots, never `reduce_over_group`; the metric is LAPACK's `cabs1`; `info` is exact-zero, 1-based, global, first-failure-wins, with no epsilon floor; barriers B1..B4 sit at the top of the kernel-uniform `k` loop; `ld` is padded odd so a row exchange does not hit one bank.
+`getf2_panel_device` (`getrf_v2.hh`) is ?GETF2 over a device LA v2 `mat_wide` view (64-bit `r + c * ld` addressing) on a run-time-width `RtGroup`, instantiated on local memory (CTA tier) and a global pointer (blocked leaf). Load-bearing spellings: the pivot search is a sub-group butterfly plus a scan over `kLuRedSlots = 32` slots, never `reduce_over_group`; the metric is LAPACK's `cabs1`; `info` is exact-zero, 1-based, global, first-failure-wins, with no epsilon floor; barriers B1..B4 sit at the top of the kernel-uniform `k` loop; `ld` is padded odd so a row exchange does not hit one bank.
 
 ## LU: correctness findings
 
