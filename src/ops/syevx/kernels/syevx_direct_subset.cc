@@ -34,6 +34,7 @@
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
 #include <src/util/batch_mask.hh>
+#include <src/ops/syevx/syevx_v2.hh>
 
 namespace batchlas {
 
@@ -344,9 +345,9 @@ Event syevx_direct_subset(Queue& ctx,
             batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
-                    const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
+                    namespace v2 = batchlas::device::v2;
+                    const v2::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
-                    const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
                     if (masked && !mk[bid]) return;  // I1
 
                     // True count for this item, as stebz found it; for a value range it is
@@ -357,28 +358,24 @@ Event syevx_direct_subset(Queue& ctx,
                     const int64_t count = (raw_count > 0) ? raw_count : int64_t(0);
                     // Only the valid prefix is written and reversed; slots [write, capacity)
                     // of W are left untouched, as are the matching columns of V.
-                    const int64_t write = (count < capacity) ? count : capacity;
+                    const int write = static_cast<int>((count < capacity) ? count : capacity);
 
-                    for (int64_t i = tid; i < write; i += local_size) {
-                        const int64_t src = reverse ? (write - 1 - i) : i;
-                        w_out[bid * capacity + i] = w_in[bid * w_in_stride + src];
-                    }
+                    v2::copy(ex, v2::syevx::flipped(v2::vec(w_in + bid * w_in_stride, write), reverse),
+                             v2::vec(w_out + bid * capacity, write));
 
                     if (v_ptr != nullptr && reverse) {
-                        // Swap column pairs; the loop covers each pair once.
-                        auto* vb = v_ptr + bid * v_stride;
-                        const int64_t half = write / 2;
-                        for (int64_t linear = tid; linear < n * half; linear += local_size) {
-                            const int64_t row = linear % n;
-                            const int64_t c = linear / n;
-                            const int64_t c2 = write - 1 - c;
-                            const T tmp = vb[row + c * v_ld];
-                            vb[row + c * v_ld] = vb[row + c2 * v_ld];
-                            vb[row + c2 * v_ld] = tmp;
-                        }
+                        // Column c <-> column write-1-c for c < write/2: each pair once.
+                        const int nn = static_cast<int>(n);
+                        const int half = write / 2;
+                        const auto Vb = v2::mat(v_ptr + bid * v_stride, nn, write, static_cast<int>(v_ld));
+                        v2::for_each_owned_2d<v2::alg::Flat>(ex, nn, half, [&](int r, int c) {
+                            const T t = Vb(r, c);
+                            Vb(r, c) = Vb(r, write - 1 - c);
+                            Vb(r, write - 1 - c) = t;
+                        });
                     }
 
-                    if (m_out != nullptr && tid == 0) {
+                    if (m_out != nullptr && ex.leader()) {
                         // The TRUE count, not `write`: m[b] > capacity is the truncation signal.
                         m_out[bid] = static_cast<int32_t>(count);
                     }

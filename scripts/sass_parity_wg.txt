@@ -9,3 +9,9 @@
 64  ^batchlas::PosvTinyKernel<
 # src/ops/syev/sytrd/latrd_lower_panel.cc: sycl::range<1>(wg), wg = the WG template argument
 \1  ::LatrdLowerPanelKernel(?:Legacy|Grid)?<[^,]+, (\d+), (?:true|false)>$
+# src/ops/syevx/kernels/syevx_filtered.cc: sycl::range{kBoundsWG}, kBoundsWG = 64
+64  ^batchlas::SyevxFilterBoundsPartialKernel<
+# src/ops/syevx/kernels/syevx_filtered.cc: constexpr int rwg = 128 / wg = 128
+128 ^batchlas::SyevxFilter(?:BoundsReduce|Residual|Finalize)Kernel<
+# src/ops/syevx/kernels/syevx_lobpcg.cc: constexpr size_t wg = 256; sycl::range{size_t(256)}
+256 ^batchlas::Syevx(?:JacobiDiagonal|ReverseEigenvectors)Kernel<
