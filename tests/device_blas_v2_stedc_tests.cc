@@ -152,6 +152,7 @@ template <class T> class DeviceBlasV2StedcTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (const auto why = skip_reason(dev); !why.empty()) GTEST_SKIP() << why;
+        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

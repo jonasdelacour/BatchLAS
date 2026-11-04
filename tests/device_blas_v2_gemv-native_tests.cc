@@ -112,6 +112,7 @@ protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "the gemv ops shuffle a 32-lane sub-group";
+        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

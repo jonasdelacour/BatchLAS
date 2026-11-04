@@ -98,6 +98,7 @@ template <class T> class DeviceBlasV2SytrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

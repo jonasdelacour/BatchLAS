@@ -100,6 +100,9 @@ struct Dev {
 
 template <class T> class DeviceBlasV2KrylovTest : public ::testing::Test {
 protected:
+    void SetUp() override {
+        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+    }
     Dev dev;
 };
 
