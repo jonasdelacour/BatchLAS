@@ -12,9 +12,10 @@ One mechanical pass, run once on a clean tree (it refuses a dirty one):
   2. Paths: `#include <old>` -> `#include <new>`; repo paths (docs, spec lists, scripts) likewise.
   3. Namespaces, outside string literals: every opener of batchlas::device::v2[::sub] becomes
      `namespace batchlas::device::inline v2[::sub]` (a plain reopen after an inline declaration
-     warns); `namespace v2 = ...device::v2;` becomes `namespace dla = ...device;` and that file's
-     `v2::` qualifiers become `dla::` (`device::` in a file without the alias); any other
-     `device::v2` spelling becomes `device`.
+     warns); every alias `namespace X = ...device::v2;` becomes `namespace X = ...device;` (the
+     name v2 is kept: `dla` is a family namespace, batchlas::potrf_native::dla, and `dev` a common
+     variable name), so `v2::` qualifiers keep compiling unchanged; any other `device::v2`
+     spelling becomes `device`.
 The inline namespace mangles exactly like batchlas::device::v2, so no symbol and no kernel name
 changes (gate: scripts/sass_parity.py --identical on every library).
 """
@@ -91,8 +92,6 @@ OPENER = re.compile(r"^(\s*namespace\s+(?:::)?batchlas::device::)v2\b(?!\s*=)")
 CLOSE_COMMENT = re.compile(r"(//\s*namespace\s+(?:::)?batchlas::device)::v2\b")
 ALIAS_V2 = re.compile(r"\bnamespace\s+v2\s*=\s*((?:::)?(?:batchlas::)?device)::v2\s*;")
 ALIAS_ANY = re.compile(r"(\bnamespace\s+\w+\s*=\s*(?:::)?(?:batchlas::)?device)::v2\b")
-QUAL_V2 = re.compile(r"(?<![\w:])(?<!inline )v2::")
-USING_V2 = re.compile(r"\busing\s+namespace\s+v2\s*;")
 DEVICE_V2 = re.compile(r"\bdevice::v2(::|\b)")
 
 
@@ -107,7 +106,6 @@ def outside_strings(line, fn):
 
 
 def rewrite_cxx(text):
-    has_alias = bool(ALIAS_V2.search(text))
     lines = []
     for line in text.split("\n"):
         if line.lstrip().startswith("#"):   # preprocessor lines: paths only
@@ -117,13 +115,8 @@ def rewrite_cxx(text):
         def fix(s):
             s = OPENER.sub(r"\1inline v2", s)
             s = CLOSE_COMMENT.sub(r"\1", s)
-            s = ALIAS_V2.sub(r"namespace dla = \1;", s)
+            s = ALIAS_V2.sub(r"namespace v2 = \1;", s)
             s = ALIAS_ANY.sub(r"\1", s)
-            # With a v2 alias in the file its qualifiers follow it; without one, `v2::` named the
-            # namespace itself or an alias from an include, and `device::` reaches the same entity.
-            s = QUAL_V2.sub("dla::" if has_alias else "device::", s)
-            if has_alias:
-                s = USING_V2.sub("using namespace dla;", s)
             s = DEVICE_V2.sub(lambda m: "device" + (m.group(1) if m.group(1) == "::" else ""), s)
             return s
 
@@ -160,8 +153,6 @@ def main():
             new = DEVICE_V2.sub(lambda m: "device" + (m.group(1) if m.group(1) == "::" else ""), new)
         if f.endswith(CXX_EXT):
             new = rewrite_cxx(new)
-            if QUAL_V2.search(STRING.sub('""', new)):
-                leftover.append(f)
         if new != text:
             changed.append(f)
             if not a.dry_run:
