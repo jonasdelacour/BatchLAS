@@ -182,10 +182,12 @@ BATCHLAS_DLA_INLINE T tridiag_rot(const v2::Thread&, const D& d, const E& e, con
     const T ei = e_get(i);
     const T ej = (j < ne) ? e_get(j) : T(0);
 
-    d_set(i, c * (c * di - ei * s) - s * (ei * c - s * dj));
-    d_set(j, c * (c * dj + ei * s) + s * (ei * c + s * di));
-    if (i > 0) e_set(i - 1, e_get(i - 1) * c - prev_bulge * s);
-    e_set(i, c * (c * ei + s * di) - s * (c * dj + s * ei));
+    // Explicit fma in the shape -ffp-contract=on gives (left product fused), so the x86 SIMD
+    // paths cannot contract differently from NVPTX: c(c di - ei s) - s(ei c - s dj), etc.
+    d_set(i, sycl::fma(c, sycl::fma(c, di, -(ei * s)), -(s * sycl::fma(ei, c, -(s * dj)))));
+    d_set(j, sycl::fma(c, sycl::fma(c, dj, ei * s), s * sycl::fma(ei, c, s * di)));
+    if (i > 0) e_set(i - 1, sycl::fma(e_get(i - 1), c, -(prev_bulge * s)));
+    e_set(i, sycl::fma(c, sycl::fma(c, ei, s * di), -(s * sycl::fma(c, dj, s * ei))));
     if (j < ne) e_set(j, c * ej);
     return -ej * s;
 }
