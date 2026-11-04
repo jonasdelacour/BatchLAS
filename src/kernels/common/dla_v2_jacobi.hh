@@ -37,13 +37,6 @@ template <int N> constexpr int ilog2() {
 }
 }  // namespace detail
 
-// x with its imaginary part zeroed (a Hermitian diagonal); identity for real T.
-template <class T> BATCHLAS_DLA_INLINE T force_real(T x) {
-    using A = Arith<T>;
-    if constexpr (A::is_complex) return A::make(A::re(x), real_t<T>(0));
-    else return x;
-}
-
 // An operand slot a kernel leaves unnamed (real T's phase, the V tile without vectors), so the
 // kernel does not capture its accessor.
 struct NoPhase {};

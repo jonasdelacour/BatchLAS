@@ -365,14 +365,198 @@ template <class T, class S> BATCHLAS_DLA_INLINE T tag_mul(S s, T x) {
     else return Arith<T>::mul(static_cast<T>(s.v), x);
 }
 
-// y := alpha * acc + beta * y; beta == Zero is a store that never loads y.
-template <class A, class B, class T, class Ref> BATCHLAS_DLA_INLINE void store(A alpha, T acc, B beta, Ref&& y) {
-    if constexpr (std::is_same_v<B, Zero>) {
-        y = tag_mul(alpha, acc);
-    } else if constexpr (std::is_same_v<B, One>) {
-        y = Arith<T>::add(tag_mul(alpha, acc), static_cast<T>(y));
+
+// ---- v2.2 scalar helpers (design A.2 arith.hh) ---------------------------------------------
+// arith::FmaSplit: Arith<T> with msub(c, a, b) = sub(c, mul(a, b)): two roundings, never one
+// fma (the getrf / potri / getrs / jacobi hand form).
+namespace arith {
+struct FmaSplit {};
+}  // namespace arith
+template <class T> struct FmaSplitArith : Arith<T> {
+    BATCHLAS_DLA_INLINE static void msub(T& c, const T& a, const T& b) { c = Arith<T>::sub(c, Arith<T>::mul(a, b)); }
+};
+template <class Ops, class T>
+using ops_arith_t = std::conditional_t<std::is_same_v<Ops, arith::FmaSplit>, FmaSplitArith<std::remove_cv_t<T>>, arith_t<Ops, T>>;
+
+// max(|re|, |im|): LAPACK's ABSSQ-free magnitude bound (izmax1's key is abs1; this is the inf norm).
+template <class T> BATCHLAS_DLA_INLINE real_t<T> abs_inf(T a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return sycl::fmax(sycl::fabs(A::re(a)), sycl::fabs(A::im(a)));
+    else return sycl::fabs(a);
+}
+// (re, 0): the real part as T (a Hermitian diagonal, a phase-free reflector beta).
+template <class T> BATCHLAS_DLA_INLINE T force_real(T a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return A::make(A::re(a), typename A::real_t(0));
+    else return a;
+}
+// A real r as T (r, 0).
+template <class T> BATCHLAS_DLA_INLINE T lift(real_t<T> r) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return A::make(r, typename A::real_t(0));
+    else return r;
+}
+// {re, im} of a (im = 0 for real T).
+template <class R> struct Parts {
+    R re, im;
+};
+template <class T> BATCHLAS_DLA_INLINE Parts<real_t<T>> by_parts(T a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    return {A::re(a), A::im(a)};
+}
+// conj(a) when C (compile time) or when on (run time, one select); the identity on real T.
+template <bool C, class T>
+    requires std::is_floating_point_v<real_t<T>>
+BATCHLAS_DLA_INLINE T conj_if(const T& a) {
+    if constexpr (C) return Arith<std::remove_cv_t<T>>::conj(a);
+    else return a;
+}
+template <class T>
+    requires std::is_floating_point_v<real_t<T>>
+BATCHLAS_DLA_INLINE T conj_if(bool on, const T& a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return on ? A::conj(a) : a;
+    else return a;
+}
+// s * x and x / s for a REAL s (componentwise; no complex multiply), and a - s * x.
+template <class T> BATCHLAS_DLA_INLINE T scale_real(real_t<T> s, const T& x) { return Arith<std::remove_cv_t<T>>::scale_real(s, x); }
+template <class T> BATCHLAS_DLA_INLINE T div_real(const T& x, real_t<T> s) { return Arith<std::remove_cv_t<T>>::div_real(x, s); }
+template <class T> BATCHLAS_DLA_INLINE T sub_scale_real(const T& a, real_t<T> s, const T& x) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return A::make(A::re(a) - s * A::re(x), A::im(a) - s * A::im(x));
+    else return a - s * x;
+}
+
+namespace detail {
+// The value a scalar tag stands for (MaybeZero: its value, the flag ignored).
+template <class T, class S> BATCHLAS_DLA_INLINE T tag_value(const S& s) {
+    if constexpr (std::is_same_v<S, One>) return Arith<T>::one();
+    else if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
+    else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(Arith<T>::one());
+    else return static_cast<T>(s.v);
+}
+template <class S> inline constexpr bool is_maybe_zero_v = false;
+template <class T> inline constexpr bool is_maybe_zero_v<MaybeZero<T>> = true;
+// out += s * x under Ar: Zero adds nothing, One / NegOne add exactly, a value is one mac.
+template <class Ar, class T, class S> BATCHLAS_DLA_INLINE void mac_term(T& out, const S& s, const T& x) {
+    if constexpr (std::is_same_v<S, Zero>) return;
+    else if constexpr (std::is_same_v<S, One>) out = Ar::add(out, x);
+    else if constexpr (std::is_same_v<S, NegOne>) out = Ar::sub(out, x);
+    else Ar::mac(out, static_cast<T>(s.v), x);
+}
+// s * x under Ar; Zero never reads x.
+template <class Ar, class T, class S> BATCHLAS_DLA_INLINE T mul_term(const S& s, const T& x) {
+    if constexpr (std::is_same_v<S, One>) return x;
+    else if constexpr (std::is_same_v<S, Zero>) return Ar::zero();
+    else if constexpr (std::is_same_v<S, NegOne>) return Ar::neg(x);
+    else return Ar::mul(static_cast<T>(s.v), x);
+}
+// beta == 0 as the epilogue sees it: a Zero tag, a MaybeZero flag, else false (a value is not
+// compared: only epi::Linear / LinearNegZero compare beta with 0, as their sources do).
+template <class S> BATCHLAS_DLA_INLINE bool known_zero(const S& s) {
+    if constexpr (std::is_same_v<S, Zero>) return true;
+    else if constexpr (is_maybe_zero_v<S>) return s.zero;
+    else return false;
+}
+}  // namespace detail
+
+// out += s * x under Ops (Zero adds nothing; MaybeZero adds nothing when its flag is set).
+template <class Ops = arith::Explicit, class T, class S> BATCHLAS_DLA_INLINE void tag_mac(T& out, S s_, const T& x) {
+    using Ar = ops_arith_t<Ops, T>;
+    const auto s = as_tag(s_);
+    if constexpr (detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) {
+        if (!s.zero) Ar::mac(out, s.v, x);
     } else {
-        y = Arith<T>::add(tag_mul(alpha, acc), tag_mul(beta, static_cast<T>(y)));
+        detail::mac_term<Ar>(out, s, x);
+    }
+}
+
+// ---- THE epilogue: y := alpha acc + beta y in one of five shapes ---------------------------
+// alpha / beta: a tag (One, Zero, NegOne, Scalar<T>), MaybeZero<T> (a value with a host-decided
+// zero flag) or a plain value. Zero beta (or a set MaybeZero flag) never reads y, except in
+// LinearNegZero, whose source reads it always. Each shape is the exact expression of the code
+// it replaces (design A.2):
+//   epi::Sum           add(alpha acc, beta y)                 (the v2.1 core store; default)
+//   epi::MacChain      out = 0; out += alpha acc; out += beta y  (gemv store_fma, sparse store_cols)
+//   epi::MulMac        out = alpha acc; out += beta y; real: one expression (gemm epilogue_store_fused)
+//   epi::Linear        beta == 0 ? alpha acc : alpha acc + beta y, beta compared at run time
+//                      (gemm LinearEpilogue)
+//   epi::LinearNegZero alpha acc + (beta == 0 ? -0 : beta) y (the wide kernels' lin_epi)
+// store<epi::MacChain, arith::Fma> is gemv's store_fma (a core store_fma would meet gemv's by ADL
+// until M4 deletes it). store(alpha, acc, beta, y) with no Shape is the v2.1 core store.
+namespace epi {
+struct Sum {};
+struct MacChain {};
+struct MulMac {};
+struct Linear {};
+struct LinearNegZero {};
+}  // namespace epi
+
+template <class Shape = epi::Sum, class Ops = arith::Explicit, class AS, class T, class BS, class Ref>
+BATCHLAS_DLA_INLINE void store(AS alpha_, T acc, BS beta_, Ref&& y) {
+    using Ar = ops_arith_t<Ops, T>;
+    const auto alpha = as_tag(alpha_);
+    const auto beta = as_tag(beta_);
+    using A = std::remove_cv_t<decltype(alpha)>;
+    using B = std::remove_cv_t<decltype(beta)>;
+    if constexpr (std::is_same_v<Shape, epi::Sum>) {
+        T ax;
+        if constexpr (detail::is_maybe_zero_v<A>) ax = detail::mul_term<Ar>(Scalar<T>{alpha.v}, acc);
+        else ax = detail::mul_term<Ar>(alpha, acc);
+        if constexpr (std::is_same_v<B, Zero>) {
+            y = ax;
+        } else if constexpr (detail::is_maybe_zero_v<B>) {
+            y = beta.zero ? ax : Ar::add(ax, Ar::mul(beta.v, static_cast<T>(y)));
+        } else if constexpr (std::is_same_v<B, One>) {
+            y = Ar::add(ax, static_cast<T>(y));
+        } else {
+            y = Ar::add(ax, detail::mul_term<Ar>(beta, static_cast<T>(y)));
+        }
+    } else if constexpr (std::is_same_v<Shape, epi::MacChain>) {
+        T out = Ar::zero();
+        if constexpr (detail::is_maybe_zero_v<A>) detail::mac_term<Ar>(out, Scalar<T>{alpha.v}, acc);
+        else detail::mac_term<Ar>(out, alpha, acc);
+        if constexpr (detail::is_maybe_zero_v<B>) {
+            if (!beta.zero) detail::mac_term<Ar>(out, Scalar<T>{beta.v}, static_cast<T>(y));
+        } else {
+            detail::mac_term<Ar>(out, beta, static_cast<T>(y));
+        }
+        y = out;
+    } else if constexpr (std::is_same_v<Shape, epi::MulMac>) {
+        const T a = detail::tag_value<T>(alpha);
+        if constexpr (std::is_same_v<B, Zero>) {
+            y = Ar::mul(a, acc);
+        } else {
+            const T b = detail::tag_value<T>(beta);
+            const bool bz = detail::known_zero(beta);
+            if constexpr (Ar::is_complex) {
+                T out = Ar::mul(a, acc);
+                if (!bz) Ar::mac(out, b, static_cast<T>(y));
+                y = out;
+            } else {
+                y = bz ? a * acc : a * acc + b * static_cast<T>(y);
+            }
+        }
+    } else if constexpr (std::is_same_v<Shape, epi::Linear>) {
+        const T a = detail::tag_value<T>(alpha), b = detail::tag_value<T>(beta);
+        if constexpr (Ar::is_complex) {
+            y = Ar::is_zero(b) ? Ar::mul(a, acc) : Ar::add(Ar::mul(a, acc), Ar::mul(b, static_cast<T>(y)));
+        } else {
+            y = b == T(0) ? a * acc : a * acc + b * static_cast<T>(y);
+        }
+    } else {
+        static_assert(std::is_same_v<Shape, epi::LinearNegZero>, "store: Shape is epi::Sum, MacChain, MulMac, Linear or LinearNegZero");
+        const T a = detail::tag_value<T>(alpha), b = detail::tag_value<T>(beta);
+        const T p = static_cast<T>(y);
+        if constexpr (Ar::is_complex) {
+            using R = typename Ar::real_t;
+            const bool bz = Ar::is_zero(b);
+            const R ar = Ar::re(a), ai = Ar::im(a), cr = Ar::re(acc), ci = Ar::im(acc), pr = Ar::re(p), pi = Ar::im(p);
+            const R br = bz ? R(-0.0) : Ar::re(b), bi_re = bz ? R(0) : Ar::im(b), bi_im = bz ? R(-0.0) : Ar::im(b);
+            y = Ar::make(ar * cr - ai * ci + br * pr - bi_re * pi, ar * ci + ai * cr + br * pi + bi_im * pr);
+        } else {
+            y = a * acc + (b == T(0) ? T(-0.0) : b) * p;
+        }
     }
 }
 

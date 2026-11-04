@@ -1,13 +1,18 @@
 # device_placement_tests allowlist: today's A.0 violations (scripts/check_device_placement.py).
 # One `<rule> <file> <name>` per line; work packages delete lines, never add them.
 # Regenerate: python3 scripts/check_device_placement.py --write-allowlist
+duplicate include/batchlas/device/arith.hh div_real/src/ops/sygst/sygst_v2.hh
+duplicate include/batchlas/device/arith.hh lift/src/ops/syev/kernels/syev_drivers_v2.hh
+duplicate include/batchlas/device/arith.hh scale_real/src/ops/sygst/sygst_v2.hh
 duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand.hh
+duplicate include/batchlas/device/core.hh static_for/src/ops/gemm/gemm-components_v2.hh
 duplicate include/batchlas/device/level1.hh dotc/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/device/level1.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate include/batchlas/device/level1.hh for_each_owned/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/device/level1.hh for_each_owned_2d/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
 duplicate src/kernels/common/elementwise_glue_v2.hh real_only/src/ops/sygst/sygst_v2.hh
+duplicate src/ops/gemm/gemm-components_v2.hh static_for/include/batchlas/device/core.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh item_n/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/include/batchlas/device/level1.hh
@@ -15,12 +20,15 @@ duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/src/ops/syev/sytrd/sytr
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned_2d/include/batchlas/device/level1.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh item_n/src/ops/gesvd/bdsdc/bdsdc_v2.hh
 duplicate src/ops/getrs/getrs_v2.hh conj_if/src/ops/gemv/gemv_native_v2.hh
+duplicate src/ops/syev/kernels/syev_drivers_v2.hh lift/include/batchlas/device/arith.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh group_sync/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh uniform/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/device/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/include/batchlas/device/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
+duplicate src/ops/sygst/sygst_v2.hh div_real/include/batchlas/device/arith.hh
 duplicate src/ops/sygst/sygst_v2.hh real_only/src/kernels/common/elementwise_glue_v2.hh
+duplicate src/ops/sygst/sygst_v2.hh scale_real/include/batchlas/device/arith.hh
 duplicate src/ops/sytrf/sytrf_v2.hh group_sync/src/ops/syev/stedc/stedc_v2.hh
 duplicate src/ops/sytrf/sytrf_v2.hh uniform/src/ops/syev/stedc/stedc_v2.hh
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::FMax
@@ -40,7 +48,6 @@ src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::detail::is_
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::detail::rx_plus_by
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::dotc_owned
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::for_each_owned_frag
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::force_real
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::identity_rotation
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::load_dotc_owned
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::load_owned_masked

@@ -5,6 +5,7 @@
 
 #include <complex>
 #include <type_traits>
+#include <utility>
 
 #include <sycl/sycl.hpp>
 
@@ -106,7 +107,8 @@ struct Unfused {};              // sumsq: the running sum adds abs2(x), its own 
 struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: v1 index math)
 struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
 struct Stepped {};              // one division per item, then r += size with a carry loop
-struct Walk {};                 // one division per item, (dr, dc) = (size % m, size / m) per step
+struct Walk {};
+struct Default {};             // a tier's own default algorithm (tier::Cta / Blocked)                 // one division per item, (dr, dc) = (size % m, size / m) per step
 }  // namespace alg
 
 // Butterfly order of a team reduction: xor masks P/2 .. 1 (Down) or 1 .. P/2 (Asc). The two
@@ -120,6 +122,47 @@ struct Asc {};
 namespace op {
 template <int K> struct ReduceN {};
 using Reduce = ReduceN<1>;
+}  // namespace op
+
+// ---- v2.2 vocabulary (design A.2 core.hh) ---------------------------------------------------
+// A scalar whose zero-ness was decided on the host (alpha == 0, beta == 0 from the BLAS value):
+// an epilogue never reads y when beta's flag is set, without comparing a value in the kernel.
+template <class T> struct MaybeZero {
+    T v;
+    bool zero;
+};
+template <class T> MaybeZero(T, bool) -> MaybeZero<T>;
+template <class T> inline constexpr bool is_scalar_tag_v<MaybeZero<T>> = true;
+
+// The absent operand / callback: an op taking an optional tau, phase or per-step hook takes
+// None and compiles the step out (if constexpr (is_none_v<X>)).
+struct None {};
+struct NoOp {
+    template <class... A> BATCHLAS_DLA_INLINE constexpr void operator()(A&&...) const {}
+};
+template <class X> inline constexpr bool is_none_v = std::is_same_v<std::remove_cvref_t<X>, None>;
+
+// Element (row) i owned by work-item i: no stride, one element per item (i < size).
+struct OnePerItem {};
+
+// f(std::integral_constant<int, I>{}) for I = 0 .. N-1, unrolled by construction (every I is a
+// constant expression inside f, so register arrays indexed by it stay in registers).
+template <int N, class F> BATCHLAS_DLA_INLINE constexpr void static_for(F&& f) {
+    [&]<int... I>(std::integer_sequence<int, I...>) { (f(std::integral_constant<int, I>{}), ...); }(std::make_integer_sequence<int, N>{});
+}
+
+// The compile-time value of an extent (Ext<N>: N), or -1 for a run-time one.
+template <class E> inline constexpr int static_extent_v = -1;
+template <int N> inline constexpr int static_extent_v<Ext<N>> = N;
+
+// NaN-losing max / min (sycl::fmax / fmin: a NaN operand yields the other), as reduction ops.
+namespace op {
+struct FMax {
+    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
+};
+struct FMin {
+    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
+};
 }  // namespace op
 
 }  // namespace batchlas::device

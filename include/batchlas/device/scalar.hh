@@ -292,4 +292,81 @@ template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alp
     return out;
 }
 
+// ---- v2.2 scalar LAPACK (design A.2 scalar.hh) ----------------------------------------------
+// dlamch: lamch<'E'>() eps (relative machine precision, eps/2 of numeric_limits as LAPACK 3.x
+// with rounding), 'S' safe minimum, 'P' eps * base, 'B' base, 'N' digits, 'U' underflow
+// threshold (min normal), 'O' overflow threshold (max), 'R' 1 (rounding mode).
+template <char C, class R> constexpr R lamch() {
+    constexpr R eps = std::numeric_limits<R>::epsilon() * R(0.5);
+    if constexpr (C == 'E') return eps;
+    else if constexpr (C == 'S') return safmin<R>();
+    else if constexpr (C == 'P') return eps * R(std::numeric_limits<R>::radix);
+    else if constexpr (C == 'B') return R(std::numeric_limits<R>::radix);
+    else if constexpr (C == 'N') return R(std::numeric_limits<R>::digits);
+    else if constexpr (C == 'U') return std::numeric_limits<R>::min();
+    else if constexpr (C == 'O') return std::numeric_limits<R>::max();
+    else {
+        static_assert(C == 'R', "lamch: one of E S P B N U O R");
+        return R(1);
+    }
+}
+
+// A quiet NaN of T's real type (both parts NaN for complex T).
+template <class T> BATCHLAS_DLA_INLINE T qnan() {
+    using A = Arith<T>;
+    using R = typename A::real_t;
+    return A::make(std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::quiet_NaN());
+}
+
+// x / |x|, and 1 at x == 0 (a unit-modulus sign: the phase a Hermitian tridiagonal's
+// off-diagonal is rotated by). Real T: copysign(1, x) with +1 at +-0.
+template <class T> BATCHLAS_DLA_INLINE T phase(T x) {
+    using A = Arith<T>;
+    using R = typename A::real_t;
+    if constexpr (A::is_complex) {
+        const R m = sycl::hypot(A::re(x), A::im(x));
+        if (m == R(0)) return A::one();
+        return A::make(A::re(x) / m, A::im(x) / m);
+    } else {
+        return x == R(0) ? R(1) : sycl::copysign(R(1), x);
+    }
+}
+// sign(re x) as +-1 with +1 at 0 (LAPACK's SIGN(ONE, x) on a real part).
+template <class T> BATCHLAS_DLA_INLINE real_t<T> sign_nonzero_real(T x) {
+    using R = real_t<T>;
+    const R r = Arith<T>::re(x);
+    return r < R(0) ? R(-1) : R(1);
+}
+
+// The eigenvalue of [[a, b], [b, c]] nearer to c (dsteqr's shift target): rt1 or rt2 of lae2,
+// whichever is closer to c (ties: rt1). The open-coded steqr form.
+template <class R> BATCHLAS_DLA_INLINE R eig2x2_nearest(R a, R b, R c) {
+    const auto [rt1, rt2] = lae2(a, b, c);
+    return sycl::fabs(rt1 - c) <= sycl::fabs(rt2 - c) ? rt1 : rt2;
+}
+
+// Multiply by the reciprocal when it is finite and nonzero, else divide (the sfmin arm), else
+// (an exact zero d) the caller's value. make() decides once per pivot; apply() branches on the
+// (uniform) flags, never a select (a select pays the divide every time).
+// evidence: docs/perf/lu.md#the-rhs-pad-column-cost
+template <class T, class Ops = arith::Fma> struct SafeRecip {
+    T d;
+    T r;
+    bool zero;
+    bool use_mul;
+    BATCHLAS_DLA_INLINE static SafeRecip make(T d) {
+        using Ar = arith_t<Ops, T>;
+        const bool z = Arith<T>::is_zero(d);  // EXACT zero, no epsilon
+        const T rc = Ar::recip(d);
+        return {d, rc, z, !z && Arith<T>::isfinite(rc) && !Arith<T>::is_zero(rc)};
+    }
+    BATCHLAS_DLA_INLINE T apply(T y, T if_zero) const {
+        using Ar = arith_t<Ops, T>;
+        T x = if_zero;
+        if (use_mul) x = Ar::mul(y, r);
+        else if (!zero) x = Ar::div(y, d);
+        return x;
+    }
+};
+
 }  // namespace batchlas::device
