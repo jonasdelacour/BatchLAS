@@ -240,7 +240,7 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
             }
         };
         auto hb = [&](int k, int y) { return y <= k ? hh[y + k * ldh] : D{}; };
-        pv::reg::laset(th, v2::Zero{}, v2::One{}, t, 1, 0);
+        v2::laset(t, v2::Zero{}, v2::One{}, -1);  // the tile at (1, 0): 1 where x + 1 == y
         store(0, false);
 
         load_b();

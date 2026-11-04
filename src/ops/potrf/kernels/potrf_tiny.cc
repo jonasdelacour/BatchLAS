@@ -129,7 +129,8 @@ Event potrf_tiny_launch(Queue& ctx,
                 }
 
                 // `linfo` is partition-uniform because the pivot is a broadcast.
-                const int32_t linfo = v2::potf2_lower<D, N, N>(v2::wrap(part), rA, n, live, v2::Shuffle{});
+                const int32_t linfo =
+                    tiny_native::potf2_lower<D, N, N>(v2::wrap(part), rA, n, live, v2::bcast_policy::Shuffle{});
 
                 D* __restrict Aout =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;

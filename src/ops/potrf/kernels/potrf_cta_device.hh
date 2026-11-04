@@ -70,7 +70,7 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
         const auto A21 = A.sub(j + ib, j, m2, ib);
 
         if (ok && p1_active) {  // (P1) sub-group barriers only: may run inside `if (sg_id == 0)`
-            dla::potf2_sg_slm<NB>(v2::SubGroup<32>{sg}, A11, ib, dg, fail, j);
+            v2::potf2_sg_slm<NB, dla::InvSqrt>(v2::SubGroup<32>{sg}, A11, ib, dg, fail, j);
         }
         potrf_phase_barrier<SC>(it);  // B1
         ok = (*fail == 0);

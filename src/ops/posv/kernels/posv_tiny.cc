@@ -156,10 +156,11 @@ BATCHLAS_UNROLL_FULL
         // batch). Slm: column j of L through local memory, double-buffered by parity.
         int32_t linfo;
         if constexpr (Slm) {
-            linfo = v2::potf2_lower<D, N, NC, v2::OrderGuard::Skip>(
-                v2::wrap(part), rA, n, live, v2::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
+            linfo = tn::potf2_lower<D, N, NC, tn::OrderGuard::Skip>(
+                v2::wrap(part), rA, n, live, v2::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
         } else {
-            linfo = v2::potf2_lower<D, N, NC, v2::OrderGuard::Skip>(v2::wrap(part), rA, n, live, v2::Shuffle{});
+            linfo = tn::potf2_lower<D, N, NC, tn::OrderGuard::Skip>(v2::wrap(part), rA, n, live,
+                                                                    v2::bcast_policy::Shuffle{});
         }
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,
