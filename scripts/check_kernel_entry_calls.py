@@ -20,8 +20,10 @@ and every call in a kernel lambda / operator() that itself carries it pass (the 
 inlines the callee whatever SemaSYCL picks as the body).
 
 What is scanned: src/ and include/ sources that include a v2 header DIRECTLY: batchlas/blas/
-device/v2/, src/kernels/common/dla_v2_*, or a family's private <src/...*_v2.hh>. A file that
-only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
+device/v2/, the public tree batchlas/device/ or batchlas/device.hh, src/kernels/common/dla_v2_*,
+or a family's private <src/...*_v2.hh>; and every file under include/batchlas/device/ (v22
+design A.0: the lapack/<routine>.hh bodies are public, so they are scanned like users). A file
+that only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
 Tests are not scanned: their codegen is not gated.
 What is not caught (needs semantics a scan does not have): a callable passed in as a
 parameter, a captured functor member, views not declared from a v2:: factory or type.
@@ -34,8 +36,10 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
+V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/|batchlas/device\.hh[>\"]|"
+                        r"src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
 BODY_ATTR = "BATCHLAS_DLA_BODY"
+PUBLIC_TREE = os.path.join("include", "batchlas", "device") + os.sep
 STRIP = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
 LAUNCH = re.compile(r"\b(?:parallel_for|single_task)\b(?:\s*<)?")
 FUNCTOR = re.compile(r"\boperator\(\)\s*\(\s*(?:const\s+)?sycl::(?:nd_item|item|id)\b")
@@ -169,7 +173,7 @@ def v2_users(root):
                 if n.endswith((".cc", ".hh", ".h", ".hpp", ".cpp")):
                     p = os.path.join(d, n)
                     files[os.path.relpath(p, root)] = open(p, errors="replace").read()
-    users = {f for f, t in files.items() if V2_INCLUDE.search(t)}
+    users = {f for f, t in files.items() if V2_INCLUDE.search(t) or f.startswith(PUBLIC_TREE)}
     return {f: files[f] for f in sorted(users) if "/blas/device/v2/" not in f}
 
 
@@ -227,6 +231,12 @@ SCOPE_TEST = {
     "src/x/fam.cc": "#include <src/x/fam_v2.hh>\n",
     "src/x/quoted.cc": "#include \"src/kernels/common/dla_v2_scalar.hh\"\n",
     "src/x/legacy.cc": "#include <src/x/legacy.hh>\n",
+    "src/x/public_user.cc": "#include <batchlas/device/lapack/potrf.hh>\n",
+    "src/x/umbrella_user.cc": "#include <batchlas/device.hh>\n",
+    "src/x/not_device.cc": "#include <batchlas/device_info.hh>\n",
+    "include/batchlas/device/lapack/potrf.hh": "#include <batchlas/device/core.hh>\n",
+    "include/batchlas/device/detail/no_include.hh": "int x;\n",
+    "include/batchlas/blas/device/v2/core.hh": "#include <batchlas/blas/device/v2/scalar.hh>\n",
 }
 
 
@@ -240,7 +250,9 @@ def self_test():
             with open(os.path.join(root, rel), "w") as fh:
                 fh.write(text)
         scope = sorted(v2_users(root))
-    want_scope = ["src/x/fam.cc", "src/x/fam_v2.hh", "src/x/helpers.hh", "src/x/quoted.cc"]
+    want_scope = ["include/batchlas/device/detail/no_include.hh", "include/batchlas/device/lapack/potrf.hh",
+                  "src/x/fam.cc", "src/x/fam_v2.hh", "src/x/helpers.hh", "src/x/public_user.cc", "src/x/quoted.cc",
+                  "src/x/umbrella_user.cc"]
     ok = got == want and scope == want_scope
     print(f"check_kernel_entry_calls: self-test {'passed' if ok else 'FAILED'}: {got}; scope {scope}")
     return 0 if ok else 1
