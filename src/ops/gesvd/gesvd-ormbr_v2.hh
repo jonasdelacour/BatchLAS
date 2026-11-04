@@ -1,48 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2, the gesvd / ormbr private pieces: element executors for the host-launched glue
-// kernels, adaptors over v2::item() views, and the bidiagonal / tridiagonal glue ops no other
-// family uses. Core ops (lacpy, laset, mirror, map, copy) run on Elem / Elem2 / ElemIn2 through
-// the for_each_owned / for_each_owned_2d overloads below, which argument-dependent lookup finds
-// from inside the core templates (they are more specialised than core's generic loops).
+// Device LA v2, the gesvd / ormbr private pieces: adaptors over v2::item() operands and the
+// bidiagonal / tridiagonal steps of the gesvd driver no other family uses. The host-launched glue
+// kernels drive core ops on core's index executors (Grid1D<true>, ElemAt<true>, ElemIn); bdsdc's
+// kernels share these adaptors.
 
 #include <type_traits>
 
 #include <batchlas/device.hh>
 
 namespace batchlas::device::inline v2::gesvd_glue {
-using device::dgmm;  // core level2.hh
-
-// ---- element executors ------------------------------------------------------------------------
-// Elem: index i of a launch that covers the extent exactly. Elem2: element (i, j) of such a 2-D
-// launch. Neither loops nor tests a bound. Elem2::sub(r0, c0) is ElemIn2: the op addresses the
-// block at (r0, c0) of the launch's grid, whose bounds are tested.
-struct Elem {
-    int i;
-};
-struct ElemIn2 {
-    int i, j;    // absolute indices of the launch
-    int r0, c0;  // origin of the block the op addresses
-};
-struct Elem2 {
-    int i, j;
-    BATCHLAS_DLA_INLINE ElemIn2 sub(int r0, int c0) const { return {i, j, r0, c0}; }
-};
-
-template <class U = unroll::Default, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Elem& ex, int, F&& f) {
-    f(ex.i);
-}
-template <class Alg = alg::Walk, class Idx = int, class F>
-BATCHLAS_DLA_INLINE void for_each_owned_2d(const Elem2& ex, int, int, F&& f) {
-    f(ex.i, ex.j);
-}
-// Column test first (the ormbr AQ kernel's order), then the rows and the far column bound.
-template <class Alg = alg::Walk, class Idx = int, class F>
-BATCHLAS_DLA_INLINE void for_each_owned_2d(const ElemIn2& ex, int m, int n, F&& f) {
-    if (ex.j >= ex.c0) {
-        if (ex.i >= ex.r0 && ex.i < ex.r0 + m && ex.j < ex.c0 + n) f(ex.i - ex.r0, ex.j - ex.c0);
-    }
-}
 
 // ---- operand adaptors ---------------------------------------------------------------------------
 // v2::item(VectorView, b) with n elements (the view's own size may be larger).
@@ -79,30 +46,6 @@ template <class M> BATCHLAS_DLA_INLINE ColOf<M> col_of(const M& a, int j) { retu
 template <class M> BATCHLAS_DLA_INLINE RowOf<M> row_of(const M& a, int i) { return {a, i}; }
 template <class M> BATCHLAS_DLA_INLINE SubOf<M> sub_of(const M& a, int r0, int c0, int m, int n) {
     return {a, r0, c0, m, n};
-}
-
-// x(n - 1 - i) and x(p(i)) (a permutation gather, p.size() elements).
-template <class V> struct Reversed {
-    V v;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return v((v.size() - 1) - i); }
-    BATCHLAS_DLA_INLINE int size() const { return v.size(); }
-};
-template <class V, class P> struct Gathered {
-    V v;
-    P p;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return v(p(i)); }
-    BATCHLAS_DLA_INLINE int size() const { return p.size(); }
-};
-template <class V> BATCHLAS_DLA_INLINE Reversed<V> reversed(const V& v) { return {v}; }
-template <class V, class P> BATCHLAS_DLA_INLINE Gathered<V, P> gathered(const V& v, const P& p) { return {v, p}; }
-
-// y := Z x for the down-shift Z: y(0) = 0, y(i) = x(i - 1) for i <= x.size(), 0 past it.
-template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void downshift(const Ex& ex, const X& x, const Y& y) {
-    using T = elem_t<Y>;
-    for_each_owned(ex, y.size(), [&](int i) {
-        if (i == 0) y(i) = Arith<T>::zero();
-        else y(i) = (i - 1 < x.size()) ? static_cast<T>(x(i - 1)) : Arith<T>::zero();
-    });
 }
 
 // The symmetric tridiagonal Gram matrix of the real upper bidiagonal B = (d, e), k = d.size():

@@ -256,7 +256,7 @@ Event solve_tridiagonal(Queue& ctx,
                 const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
                 const int32_t row = static_cast<int32_t>(rem % n);
                 const int32_t col = static_cast<int32_t>(rem / n);
-                glue::dgmm<Side::Left>(glue::Elem2{row, col}, glue::item_n(S, b, n), v2::item(Z, b, n, n));
+                v2::dgmm<Side::Left>(v2::ElemAt<true>{row, col}, glue::item_n(S, b, n), v2::item(Z, b, n, n));
             });
         });
     }
@@ -283,7 +283,7 @@ void form_right_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
-            glue::bdgram<Side::Right>(glue::Elem{i}, glue::item_n(D, b, n), glue::item_n(E, b, n - 1),
+            glue::bdgram<Side::Right>(v2::Grid1D<true>{i}, glue::item_n(D, b, n), glue::item_n(E, b, n - 1),
                                       glue::item_n(TD, b, n), glue::item_n(TE, b, n - 1));
         });
     });
@@ -309,7 +309,7 @@ void form_left_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / left_order;
             const int32_t i = linear - b * left_order;
-            glue::bdgram<Side::Left>(glue::Elem{i}, glue::item_n(D, b, k), glue::item_n(E, b, k - 1),
+            glue::bdgram<Side::Left>(v2::Grid1D<true>{i}, glue::item_n(D, b, k), glue::item_n(E, b, k - 1),
                                      glue::item_n(TD, b, left_order), glue::item_n(TE, b, left_order - 1));
         });
     });
@@ -332,9 +332,9 @@ void finalize_values_only(Queue& ctx,
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
             if (mask != nullptr && mask[b] == 0) return;  // I3: s of an inactive item is untouched
-            v2::map(glue::Elem{tgt}, v2::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
+            v2::map(v2::Grid1D<true>{tgt}, v2::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
                     [](T lambda) { return sycl::sqrt(sycl::fmax(lambda, T(0))); },
-                    glue::reversed(glue::item_n(Evals, b, n)));
+                    v2::flip(glue::item_n(Evals, b, n)));
         });
     });
 }
@@ -405,9 +405,9 @@ void finalize_hermitian_values(Queue& ctx,
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            v2::map(glue::Elem{i}, v2::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
+            v2::map(v2::Grid1D<true>{i}, v2::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
                     [](Real lambda) { return sycl::fabs(lambda); },
-                    glue::gathered(glue::item_n(Evals, b, n), glue::item_n(Perm, b, n)));
+                    v2::mapped(glue::item_n(Perm, b, n), [ev = glue::item_n(Evals, b, n)](int src) { return ev(src); }));
         });
     });
 }
@@ -475,7 +475,7 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
             if (mask != nullptr && mask[b] == 0) return;  // I3
             // One tag per call: laset(Zero, One) selects between two complex<double> lvalues,
             // which NVPTX copies through the stack (STACK 32).
-            const glue::Elem2 ex{r, c};
+            const v2::ElemAt<true> ex{r, c};
             if (r == c) v2::laset(ex, v2::One{}, v2::One{}, v2::item(M, b, rows, cols));
             else v2::laset(ex, v2::Zero{}, v2::Zero{}, v2::item(M, b, rows, cols));
         });
@@ -500,7 +500,7 @@ void expand_real_block(Queue& ctx, const MatrixView<typename base_type<T>::type,
             const int32_t lin = static_cast<int32_t>(id[1]);
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
-            v2::lacpy(glue::Elem2{r, c}, v2::item(S, b, rows, cols), v2::item(D, b, rows, cols));
+            v2::lacpy(v2::ElemAt<true>{r, c}, v2::item(S, b, rows, cols), v2::item(D, b, rows, cols));
         });
     });
 }
@@ -523,7 +523,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
             if (mask != nullptr && mask[b] == 0) return;  // I3
             // A(c, r) := conj(A(r, c)) for r > c: the item owns the mirrored element (c, r). Herm
             // also zeroes Im(A(r, r)), which the Hermitian syev never reads.
-            v2::mirror<Uplo::Lower, true>(glue::Elem2{c, r}, v2::item(A, b, n, n));
+            v2::mirror<Uplo::Lower, true>(v2::ElemAt<true>{c, r}, v2::item(A, b, n, n));
         });
     });
 }
@@ -549,7 +549,7 @@ void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, con
                 const int32_t r = lin - c * rows;
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // D(c, r) := conj(S(r, c)): the item owns D's element (c, r).
-                v2::lacpy<v2::Part::Full, Transpose::ConjTrans>(glue::Elem2{c, r}, v2::item(S, b, rows, cols),
+                v2::lacpy<v2::Part::Full, Transpose::ConjTrans>(v2::ElemAt<true>{c, r}, v2::item(S, b, rows, cols),
                                                                 v2::item(D, b, cols, rows));
             });
         });

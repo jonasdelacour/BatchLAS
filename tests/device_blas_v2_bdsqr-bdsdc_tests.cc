@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Device LA v2 ops private to bdsdc (src/ops/gesvd/bdsdc/bdsdc_v2.hh) against host references;
-// the shared ops (item, map, sumsq) are covered by device_blas_v2_tests. Guards (agent guide
-// section 8): non-natural ld, inc and batch stride, poisoned slots checked untouched, complex
-// data, a disabled dgmv_if over poison, batch 1024 with period-3 data where every item must be
-// bit-identical to its representative, n straddling the WG (1 or 2 owned elements), a WG = 1024
-// launch, and both interleave tails (b one shorter than a, and equal).
+// The compositions of bdsdc's Golub-Kahan kernels (BdsdcBuildGk, BdsdcExtract) against host
+// references: core interleave / slice / map_many over the gesvd_glue adaptors (item_n, col_of,
+// row_of, sub_of; src/ops/gesvd/gesvd-ormbr_v2.hh). Guards (agent guide section 8): non-natural
+// ld, inc and batch stride, poisoned slots checked untouched, complex data, a disabled term over
+// poison, batch 1024 with period-3 data where every item must be bit-identical to its
+// representative, n straddling the WG (1 or 2 owned elements), a WG = 1024 launch, and both
+// interleave tails (b one shorter than a, and equal).
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -18,13 +19,13 @@
 #include <vector>
 
 #include <batchlas/device.hh>
-#include <src/ops/gesvd/bdsdc/bdsdc_v2.hh>
+#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace gk = batchlas::device::bdsdc;
+namespace glue = batchlas::device::gesvd_glue;
 using batchlas::verify::Check;
 
 namespace {
@@ -127,11 +128,11 @@ template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) 
     const VectorView<T> yv(py, ylen, kBatch, 1, ylen);
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto y = gk::slice(v2::item(yv, b), 1, 2 * n, step);
+        const auto y = v2::slice(v2::item(yv, b), 1, 2 * n, step);
         if constexpr (OnThread) {
-            if (it.get_local_linear_id() == 0) gk::interleave(v2::Thread{}, gk::item_n(av, b, n), gk::item_n(bv, b, nb), y);
+            if (it.get_local_linear_id() == 0) v2::interleave(v2::Thread{}, glue::item_n(av, b, n), glue::item_n(bv, b, nb), y);
         } else {
-            gk::interleave(v2::WorkGroup<WG>{it}, gk::item_n(av, b, n), gk::item_n(bv, b, nb), y);
+            v2::interleave(v2::WorkGroup<WG>{it}, glue::item_n(av, b, n), glue::item_n(bv, b, nb), y);
         }
     });
     const auto g = dev.down(py, hy.size());
@@ -160,7 +161,7 @@ TYPED_TEST(V2BdsdcTest, InterleaveItemNIntoSlice) {
     }
 }
 
-// ---- dgmv_many over slices of a matrix column, into a row and a column (BdsdcExtract) --------
+// ---- map_many of scaled terms over slices of a matrix column, into a row and a column -------
 // Op 0 writes row 1 of O (stride ldo), op 1 column 2 of P with alpha One, op 2 is disabled and
 // its column 0 of P must keep its poison. n = 1500 straddles WG 64 and the WG 1024 ceiling.
 template <class T, int WG> void run_dgmv_many(Dev& dev) {
@@ -180,14 +181,20 @@ template <class T, int WG> void run_dgmv_many(Dev& dev) {
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<WG> wg{it};
-        const auto z = gk::col(v2::item(zm, b, 2 * n, 2), 1, 2 * n);
+        const auto z = glue::col_of(v2::item(zm, b, 2 * n, 2), 1);
         const auto s = v2::item(sv, b);
-        const auto zv = gk::slice(z, 0, n, 2), zu = gk::slice(z, 1, n, 2);
-        const auto s0 = gk::slice(s, 0, n, 2), s1 = gk::slice(s, 1, n, 2);
+        const auto zv = v2::slice(z, 0, n, 2), zu = v2::slice(z, 1, n, 2);
+        const auto s0 = v2::slice(s, 0, n, 2), s1 = v2::slice(s, 1, n, 2);
         const auto P = v2::item(pm, b, n, 3);
-        gk::dgmv_many(wg, gk::dgmv_if(true, alpha, s0, zv, gk::row(v2::item(om, b, 3, n), 1, n)),
-                      gk::dgmv_if(true, v2::One{}, s1, zu, gk::col(P, 2, n)),
-                      gk::dgmv_if(false, off_alpha, s0, zu, gk::col(P, 0, n)));
+        // BdsdcExtract's terms: y(k) := alpha * (d(k) x(k)) when on, every output in one pass.
+        const auto scaled = [](bool on, auto al, const auto& d, const auto& x, const auto& y) {
+            return [=](int k) {
+                if (on) y(k) = v2::tag_mul(v2::as_tag(al), v2::Arith<T>::mul(static_cast<T>(d(k)), static_cast<T>(x(k))));
+            };
+        };
+        const auto orow = glue::row_of(v2::item(om, b, 3, n), 1);
+        v2::map_many(wg, orow.size(), scaled(true, alpha, s0, zv, orow), scaled(true, v2::One{}, s1, zu, glue::col_of(P, 2)),
+                     scaled(false, off_alpha, s0, zu, glue::col_of(P, 0)));
     });
     const auto go = dev.down(po, ho.size());
     const auto gp = dev.down(pp, hp.size());
@@ -216,7 +223,7 @@ TYPED_TEST(V2BdsdcTest, DgmvManyLinesAndSlices) {
     run_dgmv_many<TypeParam, 1024>(this->dev);
 }
 
-// ---- item_n, row and col address item b like the v1 views (non-natural ld, inc, stride) -----
+// ---- item_n, row_of and col_of address item b like the v1 views (non-natural ld, inc, stride) -----
 TYPED_TEST(V2BdsdcTest, ItemNRowColAddressing) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -231,9 +238,9 @@ TYPED_TEST(V2BdsdcTest, ItemNRowColAddressing) {
         if (it.get_local_linear_id() != 0) return;
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto A = v2::item(km, b, m, n);
-        const auto x = gk::item_n(vv, b, vk);
-        const auto rw = gk::row(A, r0, n - 1);
-        const auto cl = gk::col(A, c0, m);
+        const auto x = glue::item_n(vv, b, vk);
+        const auto rw = glue::row_of(glue::sub_of(A, 0, 0, m, n - 1), r0);
+        const auto cl = glue::col_of(A, c0);
         for (int j = 0; j < rw.size(); ++j) rw(j) = T(R(b * 1000 + 100 + j));
         for (int i = 0; i < cl.size(); ++i) cl(i) = T(R(b * 1000 + 200 + i));
         for (int i = 0; i < x.size(); ++i) x(i) = T(R(-(b * 1000 + i)));

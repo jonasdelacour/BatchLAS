@@ -2,6 +2,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/gebrd.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
@@ -20,116 +21,6 @@ namespace batchlas {
 namespace {
 
 namespace v2 = batchlas::device;
-
-// larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
-// The leader forms the scalars (conv::Phase: tau = 0, beta = alpha for len <= 1); on return lane
-// `head` holds beta, the x lanes v (x * scale when tau != 0), and every lane gets tau.
-template <typename Ex, typename T>
-inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bool x_active) {
-    const T sumsq = ex.team_reduce(x_active ? (x * x) : T(0));
-    T xnorm = T(0);
-    if (ex.leader()) xnorm = sycl::sqrt(sumsq);
-    xnorm = ex.bcast(xnorm, 0u);
-    const T alpha_h = ex.bcast(alpha, static_cast<std::uint32_t>(head));
-    v2::LarfgScalars<T> s{};
-    if (ex.leader()) s = v2::larfg_scalars<v2::conv::Phase>(alpha_h, xnorm, len);
-    const T beta = ex.bcast(s.beta, 0u);
-    const T tau = ex.bcast(s.tau, 0u);
-    const T scale = ex.bcast(s.scale, 0u);
-    if (ex.lid() == head) {
-        alpha = beta;
-    } else if (x_active && tau != T(0)) {
-        x *= scale;
-    }
-    return tau;
-}
-
-// sgebd2 on one problem's n x n tile in local memory, lane l of the P-lane partition owning row l
-// (column l in the left update). Every barrier is work-group wide: a dead partition runs a zero
-// tile and stores nothing. A function, not the kernel lambda's body, so the lambda calls no view
-// operator() (SemaSYCL entry quirk).
-template <typename T, typename Ex, typename TM, typename AV, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& A_prob,
-                                    const RV& D_prob, const RV& E_prob, const TV& TAUQ_prob, const TV& TAUP_prob,
-                                    int32_t n, bool live) {
-    const int32_t lane = ex.lid();
-    for (int32_t c = 0; c < n; ++c) {
-        if (lane < n) {
-            tile(lane, c) = live ? A_prob(lane, c) : T(0);
-        }
-    }
-    it.barrier(sycl::access::fence_space::local_space);
-
-    for (int32_t i = 0; i < n; ++i) {
-        // H(i) annihilates tile(i+1:n, i); lane j > i then applies it to column j.
-        T alpha_l = T(0);
-        if (lane == i) {
-            alpha_l = tile(i, i);
-        }
-        T x_l = T(0);
-        const bool x_l_active = (lane > i && lane < n);
-        if (x_l_active) {
-            x_l = tile(lane, i);
-        }
-
-        const T tau_l = larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
-        if (lane == i) {
-            tile(i, i) = alpha_l;
-            if (live) {
-                D_prob(i) = alpha_l;
-                TAUQ_prob(i) = tau_l;
-            }
-        } else if (x_l_active) {
-            tile(lane, i) = x_l;
-        }
-        it.barrier(sycl::access::fence_space::local_space);
-
-        if (i < n - 1 && lane > i && lane < n) {
-            v2::larf<Side::Left>(v2::Thread{}, tau_l, v2::unit_head(tile.col(i).tail(i), 0), tile.sub(i, lane, n - i, 1));
-        }
-        it.barrier(sycl::access::fence_space::local_space);
-
-        if (i >= n - 1) continue;
-
-        // G(i) annihilates tile(i, i+2:n); lane r > i then applies it to row r.
-        T alpha_r = T(0);
-        if (lane == i + 1) {
-            alpha_r = tile(i, i + 1);
-        }
-        T x_r = T(0);
-        const bool x_r_active = (lane > i + 1 && lane < n);
-        if (x_r_active) {
-            x_r = tile(i, lane);
-        }
-
-        const T tau_r = larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
-        if (lane == i + 1) {
-            tile(i, i + 1) = alpha_r;
-            if (live) {
-                E_prob(i) = alpha_r;
-                TAUP_prob(i) = tau_r;
-            }
-        } else if (x_r_active) {
-            tile(i, lane) = x_r;
-        }
-        it.barrier(sycl::access::fence_space::local_space);
-
-        if (lane > i && lane < n) {
-            v2::larf<Side::Right>(v2::Thread{}, tau_r, v2::unit_head(tile.row(i).tail(i + 1), 0), tile.sub(lane, i + 1, 1, n - i - 1));
-        }
-        it.barrier(sycl::access::fence_space::local_space);
-    }
-
-    if (live && lane == n - 1) {
-        TAUP_prob(n - 1) = T(0);
-    }
-
-    for (int32_t c = 0; c < n; ++c) {
-        if (live && lane < n) {
-            A_prob(lane, c) = tile(lane, c);
-        }
-    }
-}
 
 template <typename T, size_t P>
 class GebrdCTAKernel;
@@ -220,7 +111,7 @@ inline void gebrd_cta_impl(Queue& ctx,
                 // (A_local[base + i + j * P], the shared address space kept).
                 const v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<static_cast<int>(P)>, v2::Mem::Local, v2::Cyclic, sycl::local_accessor<T, 1>> tile{
                     A_local, {n}, {n}, {}, part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P)};
-                gebd2_tile<T>(ex, it, tile, A_prob, D_prob, E_prob, TAUQ_prob, TAUP_prob, n, live);
+                v2::gebd2_tile<T>(ex, it, tile, A_prob, D_prob, E_prob, TAUQ_prob, TAUP_prob, n, live);
             });
     });
 }

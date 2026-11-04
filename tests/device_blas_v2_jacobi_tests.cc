@@ -27,6 +27,7 @@
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
+namespace jac = ::batchlas::device::jacobi_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -144,12 +145,12 @@ TEST(DeviceBlasV2JacobiSchedule, RoundRobinCoversEveryPairOnce) {
         for (int t = 0; t < m - 1; ++t) {
             std::vector<int> used(m, 0);
             for (int k = 0; k < m / 2; ++k) {
-                const v2::PivotPair pq = v2::round_robin_pair(m, t, k);
+                const jac::PivotPair pq = jac::round_robin_pair(m, t, k);
                 ASSERT_TRUE(0 <= pq.p && pq.p < pq.q && pq.q < m) << "m " << m << " t " << t << " k " << k;
                 EXPECT_EQ(++used[pq.p], 1);
                 EXPECT_EQ(++used[pq.q], 1);
                 ++seen[std::size_t(pq.p) * m + pq.q];
-                const v2::PivotPair back = v2::unpack_pair(v2::pack_pair(pq));
+                const jac::PivotPair back = jac::unpack_pair(jac::pack_pair(pq));
                 EXPECT_TRUE(back.p == pq.p && back.q == pq.q);
             }
         }
@@ -164,12 +165,12 @@ TEST(DeviceBlasV2JacobiSchedule, RoundRobinCoversEveryPairOnce) {
     dev.run<128>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         for (int idx = static_cast<int>(it.get_local_linear_id()); idx < slots; idx += 128) {
             const int t = idx / (m / 2);
-            d[idx] = v2::pack_pair(v2::round_robin_pair(m, t, idx - t * (m / 2)));
+            d[idx] = jac::pack_pair(jac::round_robin_pair(m, t, idx - t * (m / 2)));
         }
     });
     const auto got = dev.down(d, slots);
     for (int idx = 0; idx < slots; ++idx)
-        EXPECT_EQ(got[idx], v2::pack_pair(v2::round_robin_pair(m, idx / (m / 2), idx % (m / 2)))) << "slot " << idx;
+        EXPECT_EQ(got[idx], jac::pack_pair(jac::round_robin_pair(m, idx / (m / 2), idx % (m / 2)))) << "slot " << idx;
 }
 
 // ---- sym_schur2 ----------------------------------------------------------------------------
@@ -186,7 +187,7 @@ template <class T> struct Case2 {
 TYPED_TEST(DeviceBlasV2JacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
     using T = TypeParam;
     using R = real_of<T>;
-    const auto th = v2::JacobiThreshold<R>::relative(R(1), 8);
+    const auto th = jac::JacobiThreshold<R>::relative(R(1), 8);
     const R thresh2 = th.tol * std::sqrt(R(2));  // the threshold at app = 1, aqq = 2
     const R mn = std::numeric_limits<R>::min();
     std::vector<Case2<T>> cs = {
@@ -223,7 +224,7 @@ TYPED_TEST(DeviceBlasV2JacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
     this->dev.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int i = static_cast<int>(it.get_local_linear_id());
         if (i >= nc) return;
-        const v2::JacobiRotation<T> r = v2::sym_schur2<T>(app[i], aqq[i], apq[i], th);
+        const jac::JacobiRotation<T> r = v2::sym_schur2<T>(app[i], aqq[i], apq[i], th);
         oc[i] = r.c, os[i] = r.s, ot[i] = r.t, og[i] = r.g, od[i] = r.d, oa[i] = r.active ? 1 : 0;
     });
     const auto c = this->dev.down(oc, nc), s = this->dev.down(os, nc), t = this->dev.down(ot, nc), g = this->dev.down(og, nc);
@@ -267,7 +268,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
     using Vec2 = sycl::vec<R, 2>;
     constexpr int LDT = P + 1, kTile = P * LDT, kSlots = P / 2, kPairs = (P - 1) * kSlots, parts = 32 / P;
     const int lda = n + 3, m = (n % 2 == 0) ? n : n + 1, groups = kBatch / parts;
-    const auto th = v2::JacobiThreshold<R>::relative(R(1), n);
+    const auto th = jac::JacobiThreshold<R>::relative(R(1), n);
     auto hA = batched<T>(lda * n, 11, [&](T* a) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < j; ++i) a[i + j * lda] = T(std::numeric_limits<R>::quiet_NaN());
@@ -294,7 +295,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         std::int16_t* pairs = reinterpret_cast<std::int16_t*>(lm + off_pairs);
         for (int idx = static_cast<int>(it.get_local_linear_id()); idx < (m - 1) * (m / 2); idx += 32) {
             const int t = idx / (m / 2);
-            pairs[idx] = v2::pack_pair(v2::round_robin_pair(m, t, idx - t * (m / 2)));
+            pairs[idx] = jac::pack_pair(jac::round_robin_pair(m, t, idx - t * (m / 2)));
         }
         sycl::group_barrier(it.get_group());
         T* tile = reinterpret_cast<T*>(lm) + part * 2 * kTile;
@@ -303,7 +304,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         const auto Ag = v2::mat(gA + std::ptrdiff_t(b) * lda * n, n, n, lda);
         for (int c = 0; c < P; ++c) {
             T v = T(0);
-            if (lane < n && c < n) v = (lane >= c) ? Ag(lane, c) : v2::detail::conj_ref<T>(Ag(c, lane));
+            if (lane < n && c < n) v = (lane >= c) ? Ag(lane, c) : v2::conj(Ag(c, lane));
             A(lane, c) = (lane == c) ? v2::force_real(v) : v;
             Z(lane, c) = (lane == c && lane < n) ? T(1) : T(0);
         }
@@ -315,13 +316,13 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
             for (int t = 0; t < m - 1; ++t) {
                 const auto rnd = v2::rot_round<T>(v2::vec<v2::Mem::Local>(rcs, kSlots), v2::vec<v2::Mem::Local>(rd, kSlots),
                                                   v2::vec<v2::Mem::Local>(pairs + t * (m / 2), m / 2));
-                v2::PivotPair pq{0, 0};
+                jac::PivotPair pq{0, 0};
                 bool active = false;
                 if (lane < m / 2) {
                     pq = rnd.pair(lane);
                     active = pq.q < n;
                 }
-                v2::JacobiRotation<T> jr = v2::identity_rotation<T>();
+                jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
                 if (active) jr = v2::sym_schur2<T>(v2::Arith<T>::re(A(pq.p, pq.p)), v2::Arith<T>::re(A(pq.q, pq.q)), static_cast<T>(A(pq.p, pq.q)), th);
                 if (lane < m / 2) rnd.store(lane, jr);
                 group_barrier(ex.part);
@@ -422,8 +423,8 @@ template <class T, int P, int K> void scatter_case(Dev& dev) {
         for (int k = 0; k < K; ++k) f[k] = x[(std::ptrdiff_t(b) * P + l) * K + k];
         const R r0 = v2::Arith<T>::re(f[0]);
         const R lead = (l == 3) ? std::numeric_limits<R>::quiet_NaN() : r0;
-        const R mx = v2::allreduce(ex, lead, v2::FMax{});
-        const R mn = v2::allreduce(ex, lead, v2::FMin{});
+        const R mx = v2::allreduce(ex, lead, v2::op::FMax{});
+        const R mn = v2::allreduce(ex, lead, v2::op::FMin{});
         const T sc = v2::reduce_scatter<K>(ex, f);
         T* ob = o + (std::ptrdiff_t(b) * P + l) * kScatterSlots;
         ob[kScatter] = sc, ob[kSlotFMax] = T(mx), ob[kSlotFMin] = T(mn);
