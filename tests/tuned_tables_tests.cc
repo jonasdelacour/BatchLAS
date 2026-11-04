@@ -733,13 +733,14 @@ TEST(TunedTables, OrmqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
             }
 }
 
-// getrf's transcriber likewise, on sm_89: one row per (n, batch) of choice.hh.
+// getrf's transcriber likewise, on sm_89: one row per (n, batch) of choice.hh. float and cfloat
+// are deep ledger rows (a stride-2 lattice plus refinement), checked by sweep_to_table --check.
 TEST(TunedTables, GetrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
     namespace getrf = batchlas::ops::getrf;
     std::set<std::string> want;
     for (int n : getrf::grid_n)
         for (int b : getrf::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
-    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+    for (const char* dt : {"double", "cdouble"}) {
         std::map<std::string, std::string> rows[1];
         int i = 0;
         for (const char* dev : {"sm_89"}) {
