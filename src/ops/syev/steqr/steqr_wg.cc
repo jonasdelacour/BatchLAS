@@ -4,7 +4,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/device.hh>
-#include <src/ops/syev/steqr/steqr_v2.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <tuple>
@@ -23,7 +23,7 @@ namespace batchlas {
 namespace {
 
 namespace v2 = batchlas::device;
-namespace sv = batchlas::steqr_v2;
+namespace sv = batchlas::device::steqr_detail;
 
 template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
@@ -148,8 +148,15 @@ Event steqr_wg_impl(Queue& ctx,
                     const sv::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
                     for (size_t k = 0; k < max_sweeps; ++k) {
                         const T anorm = sv::lanst_max(th, d_, e_);
-                        if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, detail::ssfmax<T>() / anorm, d_, e_);
-                        else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, detail::ssfmin<T>() / anorm, d_, e_);
+                        if (anorm > detail::ssfmax<T>()) {
+                            const T s = detail::ssfmax<T>() / anorm;
+                            v2::scal(th, s, d_);
+                            v2::scal(th, s, e_);
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            const T s = detail::ssfmin<T>() / anorm;
+                            v2::scal(th, s, d_);
+                            v2::scal(th, s, e_);
+                        }
 
                         const auto shift = detail::wilkinson_shift(sv::virt_get<T, 1>(d_, QR, n_local, n_local - 2),
                                                            sv::virt_get<T, 2>(e_, QR, n_local, n_local - 2),
@@ -171,8 +178,15 @@ Event steqr_wg_impl(Queue& ctx,
 
                         const bool deflatable = sv::tridiag_split(th, d_, e_, tol);
 
-                        if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, anorm / detail::ssfmax<T>(), d_, e_);
-                        else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, anorm / detail::ssfmin<T>(), d_, e_);
+                        if (anorm > detail::ssfmax<T>()) {
+                            const T s = anorm / detail::ssfmax<T>();
+                            v2::scal(th, s, d_);
+                            v2::scal(th, s, e_);
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            const T s = anorm / detail::ssfmin<T>();
+                            v2::scal(th, s, d_);
+                            v2::scal(th, s, e_);
+                        }
 
                         if (deflatable) break;
                     }

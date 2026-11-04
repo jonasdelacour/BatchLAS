@@ -122,7 +122,7 @@ namespace batchlas {
                     }();
 
                     namespace v2 = batchlas::device;
-                    namespace sv = batchlas::sytrd_v2;
+                    namespace sv = batchlas::device::sytrd_detail;
                     const auto ex = v2::wrap(part);
                     auto D_prob = D_view.batch_item(prob_id);
                     auto E_prob = E_view.batch_item(prob_id);
@@ -142,7 +142,7 @@ namespace batchlas {
                     // The Hermitian tile from the named triangle only (defect 14), each lane loading its
                     // row coalesced; Im(diag) dropped as {c,z}hetrd does; zero past n. An inactive item
                     // reduces a zero tile.
-                    sv::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower, v2::arith::Native>(sv::fit(ex), A, tile, live);
+                    sv::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower, v2::arith::Native>(v2::Fit{ex}, A, tile, live);
                     group_barrier(part);
 
                     if constexpr (Upper) {
@@ -159,7 +159,7 @@ namespace batchlas {
                         }
                     } else {
                         // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then).
-                        sv::sytd2<Uplo::Lower>(ex, tile, v2::vec(V_local, n, base_v), v2::vec(W_local, n, base_w), n,
+                        v2::sytd2<Uplo::Lower>(ex, tile, v2::vec(V_local, n, base_v), v2::vec(W_local, n, base_w), n,
                                                [&](int32_t i, const T& beta, const T& taui) {
                                                    if (live) {
                                                        E_prob(i) = beta;
@@ -175,7 +175,7 @@ namespace batchlas {
                     group_barrier(part);
 
                     // Write back A, one row per lane (core lacpy owns elements 2-D Cyclic, not rows).
-                    if (live) sv::lacpy_rows(sv::fit(ex), tile.sub(0, 0, n, n), A);
+                    if (live) sv::lacpy_rows(v2::Fit{ex}, tile.sub(0, 0, n, n), A);
                 });
         });
     }

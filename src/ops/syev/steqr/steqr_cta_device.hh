@@ -11,7 +11,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/syev/steqr/steqr_v2.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/math-helpers.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -21,55 +21,6 @@
 #include <type_traits>
 
 namespace batchlas {
-
-    // Givens rotation for the real bulge chase: in range, algebraically detail::lartg()
-    // but with rsqrt + one Newton step instead of sqrt and two divisions. Out-of-range
-    // inputs fall back to the fully scaled reference implementation.
-    // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
-    template <typename T>
-    struct cta_rotation {
-        T c;
-        T s;
-        T r;
-    };
-
-    template <typename T>
-    inline cta_rotation<T> cta_lartg(const T f, const T g) {
-        if constexpr (std::is_same_v<T, float>) {
-            // Range guard: |f|, |g| in (sqrt(safmin), sqrt(safmax/2)) keeps f^2 + g^2 finite
-            // and normal; anything else (NaN included) takes the scaled reference.
-            // g == 0 must return exactly (1, 0, f): forced by the final select, not an
-            // early return, so an identity rotation does not diverge from its neighbours.
-            const bool gz = (g == T(0));
-            const T f_abs = sycl::fabs(f);
-            const T g_abs = sycl::fabs(g);
-
-            const T rtmin = sycl::sqrt(detail::safmin<T>());
-            const T rtmax = sycl::sqrt(detail::safmax<T>() / T(2));
-
-            T c = T(1), s = T(0), r = f;
-            if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
-                const T t = f * f + g * g;
-                T inv = sycl::rsqrt(t);
-                // One fused Newton step brings the hardware estimate below 0.5 ulp.
-                inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
-                const T d = sycl::sqrt(t);
-                const T signed_inv = sycl::copysign(inv, f);
-                c = f_abs * inv;
-                s = g * signed_inv;
-                r = sycl::copysign(d, f);
-            } else if (!gz) {
-                const auto res = detail::lartg(f, g);
-                c = res.c;
-                s = res.s;
-                r = res.r;
-            }
-            return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
-        } else {
-            const auto res = detail::lartg(f, g);
-            return {res.c, res.s, res.r};
-        }
-    }
 
     // Compile-time selectable shared-memory cache for Q, column-major:
     // Q_local[base_q + row + col*LDQ] = Q(row, col). LDQ == P suits row-indexed use;
@@ -169,7 +120,7 @@ namespace batchlas {
         inline void reverse_columns(int32_t bb, int32_t be, bool rev) {
             if (!rev) return;
             const int32_t pN = static_cast<int32_t>(LDQ);
-            steqr_v2::reverse(device::Thread{}, bb, be + 1,
+            device::steqr_detail::reverse(device::Thread{}, bb, be + 1,
                               [&](int32_t col) -> T& { return Q_local[base_q + lane + col * pN]; });
         }
     };
@@ -195,16 +146,10 @@ namespace batchlas {
         inline void reverse_columns(int32_t, int32_t, bool) {}
     };
 
-    // The v2 executor over the solver's chunk: same lanes, reductions are butterflies.
-    template <size_t P, bool M>
-    inline device::SgpPartition<static_cast<int>(P), M> steqr_v2_exec(const SubGroupPartition<P, M>& part) {
-        return device::wrap(part);
-    }
-
     // dsteqr's relative split test (no absolute threshold).
     // evidence: docs/algorithms/steqr.md#steqr-the-relative-deflation-criterion
     template <typename T>
-    inline steqr_v2::SplitTol<T> steqr_split_tol() {
+    inline device::steqr_detail::SplitTol<T> steqr_split_tol() {
         return {detail::eps2<T>(), detail::safmin<T>()};
     }
 
@@ -219,9 +164,9 @@ namespace batchlas {
                               int32_t bb,
                               int32_t be,
                               bool rev) {
-        namespace sv = steqr_v2;
-        const auto ex = steqr_v2_exec(partition);
-        sv::reverse(ex, sv::lane_vec(diag, bb, be + 1), sv::lane_vec(offdiag, bb, be), rev);
+        namespace sv = device::steqr_detail;
+        const auto ex = device::wrap(partition);
+        sv::reverse(ex, device::lane_vec(diag, bb, be + 1), device::lane_vec(offdiag, bb, be), rev);
         qcache.reverse_columns(bb, be, rev);
     }
 
@@ -297,9 +242,7 @@ namespace batchlas {
                 // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
                 mu = detail::wilkinson_shift(dlp1, e0, p0);
             } else {
-                const T gg = (dlp1 - p0) / (T(2) * e0);
-                const T rr = sycl::hypot(gg, T(1));
-                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                mu = device::wilkinson_shift(p0, e0, dlp1);
             }
 
             const int32_t nrot = Pad ? lockstep_max(partition, active ? m - l : 0) : m - l;
@@ -352,14 +295,14 @@ namespace batchlas {
                     const T x = act ? eprev : T(1);
                     const T y = act ? bulge : T(0);
 
-                    const auto [c1, s1, r1] = cta_lartg(x, y);
+                    const auto [c1, s1, r1] = device::lartg<device::lartg_alg::Fast>(x, y);
                     const T sigma = -s1; // match steqr.cc / saved-rotation convention
 
                     // Update the offdiagonal to the *higher* physical index (virtual e(v-1) -> physical e(hi)).
                     // This corresponds to LAPACK's QL inner-loop assignment E(i+1)=r.
                     const T e_hi_new = x * c1 - y * sigma; // only meaningful when !first
 
-                    // Explicit similarity update (steqr_v2::tridiag_rot), virtual order.
+                    // Explicit similarity update (steqr_detail::tridiag_rot), virtual order.
                     const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
                     const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
                     const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
@@ -437,9 +380,7 @@ namespace batchlas {
                 mu = detail::wilkinson_shift(dlp1, e0, p0);
             } else {
                 // LAPACK-style stable implicit shift.
-                const T gg = (dlp1 - p0) / (T(2) * e0);
-                const T rr = sycl::hypot(gg, T(1));
-                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
+                mu = device::wilkinson_shift(p0, e0, dlp1);
             }
             g = dm - mu;
         }
@@ -460,7 +401,7 @@ namespace batchlas {
                 const T f = s * ei;
                 T rout = T(0);
 
-                const auto [c1, s1, r1] = cta_lartg(g, f);
+                const auto [c1, s1, r1] = device::lartg<device::lartg_alg::Fast>(g, f);
 
                 // In the original local-memory version: E(i+1) = r1 for i != m-1, when i+1 < N-1.
                 if (do_e_upd) {
@@ -513,8 +454,8 @@ namespace batchlas {
                                        int32_t max_sweeps,
                                        SteqrShiftStrategy cta_shift_strategy,
                                        SteqrUpdateScheme cta_update_scheme) {
-        namespace sv = steqr_v2;
-        const auto ex = steqr_v2_exec(partition);
+        namespace sv = device::steqr_detail;
+        const auto ex = device::wrap(partition);
         const auto tol = steqr_split_tol<T>();
         const auto is_zero = [](T x) { return x == T(0); };
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -532,18 +473,18 @@ namespace batchlas {
             }
 
             // Split the tail, then the block ends at its first zero E (n-1 if none).
-            const auto tail_e = sv::lane_vec(offdiag, block_begin, n - 1);
+            const auto tail_e = device::lane_vec(offdiag, block_begin, n - 1);
             sv::tridiag_split(ex, diag, tail_e, tol);
-            const int32_t block_end = sv::find_first_lane(ex, tail_e, n - 1, is_zero);
+            const int32_t block_end = device::find_first(ex, tail_e, n - 1, is_zero);
             next_block_begin = block_end + 1;
             if (block_end <= block_begin) {
                 continue;  // size-0/1 block
             }
 
             // dlascl: bring the block norm into the safe range (overflow/underflow).
-            const auto blk_d = sv::lane_vec(diag, block_begin, block_end + 1);
-            const auto blk_e = sv::lane_vec(offdiag, block_begin, block_end);
-            const T anorm = sv::lanst_max(ex, blk_d, blk_e);
+            const auto blk_d = device::lane_vec(diag, block_begin, block_end + 1);
+            const auto blk_e = device::lane_vec(offdiag, block_begin, block_end);
+            const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
 
             T scale = T(1);
             if (anorm > detail::ssfmax<T>()) {
@@ -577,9 +518,9 @@ namespace batchlas {
                 bool advanced = false;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                     // Split the active subproblem [l..lend]; m = its first zero E, else lend.
-                    const auto act_e = sv::lane_vec(offdiag, l, block_end);
+                    const auto act_e = device::lane_vec(offdiag, l, block_end);
                     sv::tridiag_split(ex, diag, act_e, tol);
-                    const int32_t m = sv::find_first_lane(ex, act_e, block_end, is_zero);
+                    const int32_t m = device::find_first(ex, act_e, block_end, is_zero);
 
                     if (m == l) {
                         l += 1;
@@ -636,8 +577,8 @@ namespace batchlas {
                                      int32_t max_sweeps,
                                      SteqrShiftStrategy cta_shift_strategy,
                                      SteqrUpdateScheme cta_update_scheme) {
-        namespace sv = steqr_v2;
-        const auto ex = steqr_v2_exec(partition);
+        namespace sv = device::steqr_detail;
+        const auto ex = device::wrap(partition);
         const auto tol = steqr_split_tol<T>();
         const auto is_zero = [](T x) { return x == T(0); };
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -665,9 +606,9 @@ namespace batchlas {
                     if (bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                         offdiag = T(0);
                     }
-                    const auto tail_e = sv::lane_vec(offdiag, bb, n - 1);
+                    const auto tail_e = device::lane_vec(offdiag, bb, n - 1);
                     sv::tridiag_split(ex, diag, tail_e, tol);
-                    const int32_t be = sv::find_first_lane(ex, tail_e, n - 1, is_zero);
+                    const int32_t be = device::find_first(ex, tail_e, n - 1, is_zero);
                     next_block_begin = be + 1;
                     if (be <= bb) {
                         if (next_block_begin >= n) {
@@ -677,9 +618,9 @@ namespace batchlas {
                         continue;
                     }
 
-                    const auto blk_d = sv::lane_vec(diag, bb, be + 1);
-                    const auto blk_e = sv::lane_vec(offdiag, bb, be);
-                    const T anorm = sv::lanst_max(ex, blk_d, blk_e);
+                    const auto blk_d = device::lane_vec(diag, bb, be + 1);
+                    const auto blk_e = device::lane_vec(offdiag, bb, be);
+                    const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
                     scale = T(1);
                     if (anorm > detail::ssfmax<T>()) {
                         scale = detail::ssfmax<T>() / anorm;
@@ -711,9 +652,9 @@ namespace batchlas {
                     failed = true;
                     closing = true;
                 } else {
-                    const auto act_e = sv::lane_vec(offdiag, l, block_end);
+                    const auto act_e = device::lane_vec(offdiag, l, block_end);
                     sv::tridiag_split(ex, diag, act_e, tol);
-                    m = sv::find_first_lane(ex, act_e, block_end, is_zero);
+                    m = device::find_first(ex, act_e, block_end, is_zero);
                     if (m == l) {
                         l += 1;
                     } else if (m == l + 1) {
@@ -732,8 +673,8 @@ namespace batchlas {
                 if (closing) {
                     reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
                     if (scale != T(1)) {
-                        sv::scal_lane(ex, inv_scale, sv::lane_vec(diag, block_begin, block_end + 1));
-                        sv::scal_lane(ex, inv_scale, sv::lane_vec(offdiag, block_begin, block_end));
+                        sv::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                        sv::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                     }
                     need_block = true;
                     if (failed || next_block_begin >= n) {
@@ -764,8 +705,8 @@ namespace batchlas {
                                          int32_t max_sweeps,
                                          SteqrShiftStrategy cta_shift_strategy,
                                          SteqrUpdateScheme cta_update_scheme) {
-        namespace sv = steqr_v2;
-        const auto ex = steqr_v2_exec(partition);
+        namespace sv = device::steqr_detail;
+        const auto ex = device::wrap(partition);
         const auto tol = steqr_split_tol<T>();
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
 
@@ -793,14 +734,14 @@ namespace batchlas {
                     if (opening && bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                         offdiag = T(0);
                     }
-                    sv::tridiag_split(ex, diag, sv::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
-                    const int32_t be = sv::find_first_lane(ex, sv::lane_vec(offdiag, bb, n - 1), n - 1,
+                    sv::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
+                    const int32_t be = device::find_first(ex, device::lane_vec(offdiag, bb, n - 1), n - 1,
                                                       [&](T x) { return opening && x == T(0); });
                     const bool opened = opening && be > bb;
 
-                    const auto blk_d = sv::lane_vec(diag, bb, opened ? be + 1 : bb);  // empty unless opened
-                    const auto blk_e = sv::lane_vec(offdiag, bb, opened ? be : bb);
-                    const T anorm = sv::lanst_max(ex, blk_d, blk_e);
+                    const auto blk_d = device::lane_vec(diag, bb, opened ? be + 1 : bb);  // empty unless opened
+                    const auto blk_e = device::lane_vec(offdiag, bb, opened ? be : bb);
+                    const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
                     T sc = T(1);
                     if (anorm > detail::ssfmax<T>()) {
                         sc = detail::ssfmax<T>() / anorm;
@@ -839,8 +780,8 @@ namespace batchlas {
                 const bool cap = testing && sweeps_at_l >= max_sweeps;
                 const bool active = testing && !cap;
                 if (lockstep_any(partition, active)) {
-                    sv::tridiag_split(ex, diag, sv::lane_vec(offdiag, active ? l : n, block_end), tol);
-                    const int32_t mm = sv::find_first_lane(ex, sv::lane_vec(offdiag, l, block_end), block_end,
+                    sv::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
+                    const int32_t mm = device::find_first(ex, device::lane_vec(offdiag, l, block_end), block_end,
                                                       [&](T x) { return active && x == T(0); });
                     const bool adv1 = active && mm == l;
                     const bool adv2 = active && mm == l + 1;
@@ -863,8 +804,8 @@ namespace batchlas {
                 if (lockstep_any(partition, closing)) {
                     reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
                     if (closing && scale != T(1)) {
-                        sv::scal_lane(ex, inv_scale, sv::lane_vec(diag, block_begin, block_end + 1));
-                        sv::scal_lane(ex, inv_scale, sv::lane_vec(offdiag, block_begin, block_end));
+                        sv::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                        sv::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                     }
                     need_block = need_block || closing;
                     done = done || (closing && (failed || next_block_begin >= n));

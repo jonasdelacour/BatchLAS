@@ -9,7 +9,7 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/math-helpers.hh>
-#include <src/ops/syev/sytrd/sytrd_v2.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 
 #include <cstdint>
 
@@ -19,7 +19,7 @@ namespace batchlas {
     using LocalDecorated = typename sycl::multi_ptr<T, sycl::access::address_space::local_space,
                                                     sycl::access::decorated::yes>::pointer;
 
-    // sytrd_v2::sytd2<Upper> on the full Hermitian tile (ld LDA, zero past n) at A_local[base_a];
+    // device::sytd2<Upper> on the full Hermitian tile (ld LDA, zero past n) at A_local[base_a];
     // returns tau(lane), 0 for lane >= n-1. The inliner declines this body for complex T, so the
     // call carries decorated local pointers by value: an accessor taken by reference is copied
     // to the stack (cf/cd Upper STACK 0->344), and &A_local[base] is generic.
@@ -31,8 +31,8 @@ namespace batchlas {
         using LP = LocalDecorated<T>;
         using Tile = v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<LDA>, v2::Mem::Local, v2::Cyclic, LP>;
         using Col = v2::Vec<T, v2::Dyn, v2::Unit, v2::Mem::Local, v2::Cyclic, LP>;
-        return sytrd_v2::sytd2<Uplo::Upper>(v2::wrap(part), Tile{A_local, v2::Dyn{n}, v2::Dyn{n}, {}, base_a},
-                                            Col{V_local, v2::Dyn{n}, {}, base_v}, Col{W_local, v2::Dyn{n}, {}, base_w}, n);
+        return v2::sytd2<Uplo::Upper>(v2::wrap(part), Tile{A_local, v2::Dyn{n}, v2::Dyn{n}, {}, base_a},
+                                      Col{V_local, v2::Dyn{n}, {}, base_v}, Col{W_local, v2::Dyn{n}, {}, base_w}, n);
     }
 
     template <typename T, int32_t LDA, size_t P, bool M>
