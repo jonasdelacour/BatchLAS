@@ -129,7 +129,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 
-    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Threads, kMinGroupsPerCu)
     BATCHLAS_SYMM_MIRROR_REQD_WG
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;

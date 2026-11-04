@@ -253,7 +253,7 @@ template <typename Body>
 struct GemmK8S4LargeKernel {
     Body body;
 
-    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, 1)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Body::Threads, 1)
     BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);
