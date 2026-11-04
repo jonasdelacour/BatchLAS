@@ -404,8 +404,8 @@ TYPED_TEST(DeviceBlasV2TrsmTest, DivisionFallbackOnSubnormalDiagonal) {
     }
 }
 
-// The kernels re-type std::complex as sycl_device::Cx: the private ops (finite<Ar>, TpDiag,
-// guarded_recip) under arith::Fma must give the same bits on Cx (its Arith has no isfinite).
+// The kernels re-type std::complex as sycl_device::Cx: the private ops (TpDiag, guarded_recip,
+// core Arith::isfinite) under arith::Fma must give the same bits on Cx.
 TYPED_TEST(DeviceBlasV2TrsmTest, CxMatchesStdComplex) {
     using T = TypeParam;
     if constexpr (!is_cplx<T>) {

@@ -2,8 +2,9 @@
 #pragma once
 // Level 3 C epilogues (v22 design B.2), moved from the tuned gemm kernels unchanged:
 //   LinearEpilogue          C := alpha acc + beta C, beta compared with 0 at run time
-//   epilogue_store_fused    C := alpha acc + beta C with a host beta_zero flag
 //   store_tile_staged       a register tile through local memory to C, coalesced at any ldc
+// C := alpha acc + beta C with a host beta_zero flag is core store<epi::MulMac, Ops> with
+// MaybeZero beta (arith.hh).
 
 #include <cstddef>
 #include <type_traits>
@@ -26,20 +27,6 @@ struct LinearEpilogue {
         *dst = beta == T(0) ? alpha * accum : apply(alpha, beta, accum, *dst);
     }
 };
-
-// *dst := alpha acc + beta *dst with the host's beta_zero flag (beta_zero never reads *dst). A
-// complex takes Ops' product and accumulate (arith::Fma: sycl_device's dev_mul and fma_acc), a
-// real scalar the operators.
-template <class Ops, class T> BATCHLAS_DLA_INLINE void epilogue_store_fused(T* dst, T alpha, T beta, bool beta_zero, T acc) {
-    using Ar = arith_t<Ops, T>;
-    if constexpr (Ar::is_complex) {
-        T out = Ar::mul(alpha, acc);
-        if (!beta_zero) Ar::mac(out, beta, *dst);
-        *dst = out;
-    } else {
-        *dst = beta_zero ? alpha * acc : alpha * acc + beta * *dst;
-    }
-}
 
 // C(m0 + r, n0 + c) := alpha acc + beta C for a TileM x TileN tile whose item (local_row,
 // local_col) holds rows local_row * TR + i, cols local_col * TC + j. Columns pass through local

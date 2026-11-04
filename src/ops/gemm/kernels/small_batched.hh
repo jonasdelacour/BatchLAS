@@ -154,7 +154,7 @@ Event launch_small_batched(Queue& ctx,
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) gc::epilogue_store_fused<Ops>(Cb + r + c * ldc, alpha_d, beta_d, beta_zero, acc[j]);
+                        if (c < n) v2::store<v2::epi::MulMac, Ops>(alpha_d, acc[j], v2::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
                     }
                 }
             });
@@ -259,7 +259,7 @@ BATCHLAS_UNROLL_FULL
                             // acc.v, not acc(i, j): a direct operator() call in the kernel lambda
                             // would become SemaSYCL's force-inlined "body" (scripts/check_kernel_entry_calls.py).
                             if constexpr (PrefetchC) *dst = alpha * acc.v[i][j] + beta * prior[i][j];
-                            else gc::epilogue_store_fused<v2::arith::Fma>(dst, alpha, beta, beta_zero, acc.v[i][j]);
+                            else v2::store<v2::epi::MulMac, v2::arith::Fma>(alpha, acc.v[i][j], v2::MaybeZero<T>{beta, beta_zero}, *dst);
                         }
                     }
                 }

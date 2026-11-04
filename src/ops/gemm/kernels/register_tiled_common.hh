@@ -21,18 +21,9 @@ namespace batchlas::sycl_gemm {
 
 namespace v2 = batchlas::device;
 namespace gc = batchlas::device::l3;
+using batchlas::device::static_for;  // core.hh; the wide kernels' halves and the host row tables
 using batchlas::device::l3::supports_aligned_packet_loads;
 using batchlas::device::l3::supports_packet_v;
-
-template <int Count, typename Fn, std::size_t... I>
-inline void static_for_impl(Fn&& fn, std::index_sequence<I...>) {
-    (fn(std::integral_constant<int, static_cast<int>(I)>{}), ...);
-}
-
-template <int Count, typename Fn>
-inline void static_for(Fn&& fn) {
-    static_for_impl<Count>(std::forward<Fn>(fn), std::make_index_sequence<Count>{});
-}
 
 template <typename T,
           int TileM,

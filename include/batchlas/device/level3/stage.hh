@@ -5,7 +5,6 @@
 // same loops, pragmas, predicate order and helpers, so a kernel built from them keeps its SASS.
 //   stage_block, stage_block_packet, stage_block_packet_aligned, stage_storage
 
-#include <complex>
 #include <type_traits>
 #include <utility>
 
@@ -19,17 +18,8 @@
 
 namespace batchlas::device::inline v2::l3 {
 
-template <typename T>
-inline T maybe_conj(const T& value, bool conjugate) {
-    static_cast<void>(conjugate);
-    return value;
-}
-
-template <typename T>
-inline std::complex<T> maybe_conj(const std::complex<T>& value, bool conjugate) {
-    return conjugate ? std::conj(value) : value;
-}
-
+// op(X)(row, col) of a column-major X: the conjugate (core conj: std::conj, by reference) only
+// for a complex ConjTrans.
 template <typename T>
 inline T operand_value(const T* ptr,
                        int ld,
@@ -41,7 +31,8 @@ inline T operand_value(const T* ptr,
     const bool conjugate = trans == Transpose::ConjTrans;
     const int source_row = transpose ? col : row;
     const int source_col = transpose ? row : col;
-    return maybe_conj(ptr[batch_offset + source_col * ld + source_row], conjugate);
+    const T& value = ptr[batch_offset + source_col * ld + source_row];
+    return conjugate ? device::conj(value) : value;
 }
 
 template <typename T, Transpose Op>

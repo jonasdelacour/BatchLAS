@@ -15,12 +15,6 @@ namespace batchlas::sycl_trsm::dla {
 
 namespace v2 = batchlas::device;
 
-// isfinite under Ar: the POD-complex Arith (arith.hh) had no isfinite.
-template <class Ar, class T> BATCHLAS_DLA_INLINE bool finite(T a) {
-    if constexpr (Ar::is_complex) return sycl::isfinite(Ar::re(a)) && sycl::isfinite(Ar::im(a));
-    else return sycl::isfinite(a);
-}
-
 // ---- views ----------------------------------------------------------------------------------
 // Element (s, t) of the canonical lower factor Lc of a stored triangle: rho(s) = fwd ? s :
 // n-1-s maps canonical to stored indices, Left keeps (row, col) and Right swaps them, trans
@@ -132,7 +126,7 @@ BATCHLAS_DLA_INLINE void tp_diag_recip(const Ex& ex, const T* ap, int n, bool un
         if (s < n && !unit) {
             const T d = ap[tp_idx(s, s)];
             r = Ar::recip(d);
-            if (!finite<Ar>(r)) {
+            if (!Ar::isfinite(r)) {
                 sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group,
                                  sycl::access::address_space::local_space>(bad[0])
                     .store(1);
@@ -223,7 +217,7 @@ template <class T> struct GuardedRecip {
 };
 template <class Ar, int P, class T> BATCHLAS_DLA_INLINE GuardedRecip<T> guarded_recip(const v2::Partition<P>& ex, T d) {
     const T rinv = Ar::recip(d);
-    int bad = finite<Ar>(rinv) ? 0 : 1;
+    int bad = Ar::isfinite(rinv) ? 0 : 1;
     bad = ex.team_reduce(bad, sycl::bit_or<int>());
     return {d, rinv, bad != 0};
 }
