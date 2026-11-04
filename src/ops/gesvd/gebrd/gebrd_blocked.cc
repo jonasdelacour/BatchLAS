@@ -137,7 +137,7 @@ BATCHLAS_DLA_INLINE void labrd_panel_v2(const PanelEx& ex, int32_t b, const AV& 
 
         // A(gi:m, gi) -= A(gi:m, j0:gi) Y(gi, 0:ii)^H + X(gi:m, 0:ii) A(j0:gi, gi)
         const auto acol = Ab.col(gi).tail(gi);
-        v2::gemv_acc(ex, v2::NegOne{}, acol, acol, v2::term(Ab.sub(gi, j0, mt, ii), pub(conj_view(Yb.row(gi).head(ii)))),
+        v2::gemv_acc(ex, v2::NegOne{}, acol, acol, v2::term(Ab.sub(gi, j0, mt, ii), pub(gebrd_v2::conj_view(Yb.row(gi).head(ii)))),
                      v2::term(Xb.sub(gi, 0, mt, ii), pub(Ab.col(gi).tail(j0).head(ii))));
         ex.barrier(v2::Mem::Global);
 
@@ -172,9 +172,9 @@ BATCHLAS_DLA_INLINE void labrd_panel_v2(const PanelEx& ex, int32_t b, const AV& 
         // Row gi, conjugated (zlabrd's lacgv before the right reflector):
         // A(gi, gi+1:n) = conj(A(gi, gi+1:n)) - Y(gi+1:n, 0:ii+1) conj(A(gi, j0:gi+1)) - A(j0:gi, gi+1:n)^H conj(X(gi, 0:ii))
         const auto arow = Ab.row(gi).tail(gi + 1);
-        v2::gemv_acc(ex, v2::NegOne{}, conj_view(arow), arow,
-                     v2::term(Yb.sub(gi + 1, 0, nt, ii + 1), pub(conj_view(Ab.row(gi).tail(j0).head(ii + 1)))),
-                     v2::term(herm(Ab.sub(j0, gi + 1, ii, nt)), pub(conj_view(Xb.row(gi).head(ii)))));
+        v2::gemv_acc(ex, v2::NegOne{}, gebrd_v2::conj_view(arow), arow,
+                     v2::term(Yb.sub(gi + 1, 0, nt, ii + 1), pub(gebrd_v2::conj_view(Ab.row(gi).tail(j0).head(ii + 1)))),
+                     v2::term(herm(Ab.sub(j0, gi + 1, ii, nt)), pub(gebrd_v2::conj_view(Xb.row(gi).head(ii)))));
         ex.barrier(v2::Mem::Global);
 
         // G(gi) annihilates A(gi, gi+2:n); u overwrites it, A(gi, gi+1) = 1.
