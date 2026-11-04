@@ -1,39 +1,13 @@
 # device_placement_tests allowlist: today's A.0 violations (scripts/check_device_placement.py).
 # One `<rule> <file> <name>` per line; work packages delete lines, never add them.
 # Regenerate: python3 scripts/check_device_placement.py --write-allowlist
-duplicate include/batchlas/blas/device/detail/group_blas_gemv.hh gemv/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_ger.hh ger/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_ger.hh ger/src/ops/potri/potri_v2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_ger.hh gerc/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_ger.hh geru/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_subgroup_common.hh static_for/src/ops/gemm/gemm-components_v2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_symv.hh hemv/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_symv.hh symv/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_trmv.hh trmv/include/batchlas/blas/device/v2/level2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_vector.hh axpy/include/batchlas/blas/device/v2/level1.hh
-duplicate include/batchlas/blas/device/detail/group_blas_vector.hh copy/include/batchlas/blas/device/v2/level1.hh
-duplicate include/batchlas/blas/device/detail/group_blas_vector.hh dotc/include/batchlas/blas/device/v2/level1.hh
-duplicate include/batchlas/blas/device/detail/group_blas_vector.hh dotc/src/ops/syev/sytrd/sytrd_v2.hh
-duplicate include/batchlas/blas/device/detail/group_blas_vector.hh scal/include/batchlas/blas/device/v2/level1.hh
 duplicate include/batchlas/blas/device/v2/core.hh store/include/batchlas/blas/device/v2/operand.hh
-duplicate include/batchlas/blas/device/v2/level1.hh axpy/include/batchlas/blas/device/detail/group_blas_vector.hh
-duplicate include/batchlas/blas/device/v2/level1.hh copy/include/batchlas/blas/device/detail/group_blas_vector.hh
-duplicate include/batchlas/blas/device/v2/level1.hh dotc/include/batchlas/blas/device/detail/group_blas_vector.hh
 duplicate include/batchlas/blas/device/v2/level1.hh dotc/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/blas/device/v2/level1.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate include/batchlas/blas/device/v2/level1.hh for_each_owned/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/blas/device/v2/level1.hh for_each_owned_2d/src/ops/gesvd/gesvd-ormbr_v2.hh
-duplicate include/batchlas/blas/device/v2/level1.hh scal/include/batchlas/blas/device/detail/group_blas_vector.hh
-duplicate include/batchlas/blas/device/v2/level2.hh gemv/include/batchlas/blas/device/detail/group_blas_gemv.hh
-duplicate include/batchlas/blas/device/v2/level2.hh ger/include/batchlas/blas/device/detail/group_blas_ger.hh
-duplicate include/batchlas/blas/device/v2/level2.hh gerc/include/batchlas/blas/device/detail/group_blas_ger.hh
-duplicate include/batchlas/blas/device/v2/level2.hh geru/include/batchlas/blas/device/detail/group_blas_ger.hh
-duplicate include/batchlas/blas/device/v2/level2.hh hemv/include/batchlas/blas/device/detail/group_blas_symv.hh
-duplicate include/batchlas/blas/device/v2/level2.hh symv/include/batchlas/blas/device/detail/group_blas_symv.hh
-duplicate include/batchlas/blas/device/v2/level2.hh trmv/include/batchlas/blas/device/detail/group_blas_trmv.hh
 duplicate include/batchlas/blas/device/v2/operand.hh store/include/batchlas/blas/device/v2/core.hh
 duplicate src/kernels/common/elementwise_glue_v2.hh real_only/src/ops/sygst/sygst_v2.hh
-duplicate src/ops/gemm/gemm-components_v2.hh static_for/include/batchlas/blas/device/detail/group_blas_subgroup_common.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh item_n/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/include/batchlas/blas/device/v2/level1.hh
@@ -41,10 +15,8 @@ duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/src/ops/syev/sytrd/sytr
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned_2d/include/batchlas/blas/device/v2/level1.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh item_n/src/ops/gesvd/bdsdc/bdsdc_v2.hh
 duplicate src/ops/getrs/getrs_v2.hh conj_if/src/ops/gemv/gemv_native_v2.hh
-duplicate src/ops/potri/potri_v2.hh ger/include/batchlas/blas/device/detail/group_blas_ger.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh group_sync/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh uniform/src/ops/sytrf/sytrf_v2.hh
-duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/blas/device/detail/group_blas_vector.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/blas/device/v2/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/include/batchlas/blas/device/v2/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
