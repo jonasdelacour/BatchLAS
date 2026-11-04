@@ -851,6 +851,14 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_kernel_entry_calls.py"
                 --root "${PROJECT_SOURCE_DIR}")
     set_tests_properties(kernel_entry_calls_tests PROPERTIES LABELS "util")
+
+    # device_placement_tests: device LA placement (design A.0): no batchlas::device definitions
+    # under src/, LAPACK routines only in lapack/<routine>.hh, no helper defined twice; findings
+    # beyond scripts/device_placement_allowlist.txt fail, and so do stale allowlist lines.
+    add_test(NAME device_placement_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_device_placement.py"
+                --root "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(device_placement_tests PROPERTIES LABELS "util")
 endif()
 
 # no_raw_subgroup_queries: every sub-group capability check goes through

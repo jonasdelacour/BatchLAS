@@ -35,6 +35,11 @@ wins; the value is an integer or `\\N`, capture group N of the regex. An --smem 
 comma list of representative sizes for an SLM sized at run time (the verdict is the worst over
 them). --wg/--smem also take a plain integer for every kernel, and `none` disables the table.
 
+Identity (--identical): each kernel's SASS text (every instruction line with its encoding, NOPs
+included) is hashed; the verdict becomes "every pair byte-identical and, without --pair, the same
+kernel set in both builds" (exit 0, else 1), with the strict/algo report still printed. It is the
+proof behind the tuned-table SASS-identity rehash (v22 decision 18, F-D1).
+
 Snapshots: a compact per-kernel record of one library for an explicit kernel list,
 checked with the algo thresholds. Exit codes: 0 pass, 1 fail (or nothing paired), 2 "A/B"
 and no fail, 77 no NVPTX image, no cuobjdump or no image for the snapshot's arch.
@@ -44,6 +49,7 @@ import argparse
 import collections
 import datetime
 import glob
+import hashlib
 import json
 import math
 import os
@@ -77,6 +83,7 @@ HARD = ("BAR", "SHFL", "LDS", "STS", "LDG", "STG", "LDgen", "LDL/STL")
 BAND = {"strict": 0.03, "algo": 0.10}
 BANNED_CALL = re.compile(r"^_ZN8batchlas6device|^__(mul|div)[sd]c3$")
 
+ENCODING = re.compile(r"\s*/\* 0x[0-9a-f]{16} \*/\s*$")
 INSN = re.compile(r"/\*[0-9a-f]{4,}\*/\s+(.*?)\s*;")
 NTID = re.compile(r"\.(reqntid|maxntid)\s+(\d+)(?:\s*,\s*(\d+))?(?:\s*,\s*(\d+))?")
 SM89 = {"subpartitions": 4, "regs_per_subpartition": 16384, "max_warps": 48, "max_blocks": 24,
@@ -90,13 +97,16 @@ def opcode(text):
     return tok[0] if tok else ""
 
 
-def parse_sass(text):
-    funcs, cur = {}, None
+def parse_sass(text, digests=None):
+    """{function: opcode Counter}; digests, if given, gets {function: sha256 of its SASS text}."""
+    funcs, cur, hashes = {}, None, {}
     for line in text.splitlines():
         if "Function :" in line:
             cur = line.split("Function :", 1)[1].strip()
-            funcs[cur] = collections.Counter()
+            funcs[cur], hashes[cur] = collections.Counter(), hashlib.sha256()
             continue
+        if cur and (INSN.search(line) or ENCODING.match(line)):
+            hashes[cur].update(line.strip().encode() + b"\n")
         m = INSN.search(line) if cur else None
         if not m:
             continue
@@ -112,6 +122,8 @@ def parse_sass(text):
             if base in ops:
                 c[cls] += 1
                 break
+    if digests is not None:
+        digests.update({f: h.hexdigest() for f, h in hashes.items()})
     return funcs
 
 
@@ -211,7 +223,8 @@ def records(lib, tool):
     out = {}
     for blob in blobs:
         sass_text = cuobjdump(tool, "-sass", blob)
-        sass, res = parse_sass(sass_text), parse_res(cuobjdump(tool, "-res-usage", blob))
+        digests = {}
+        sass, res = parse_sass(sass_text, digests), parse_res(cuobjdump(tool, "-res-usage", blob))
         arch = ",".join(sorted(set(re.findall(r"arch = (sm_\d+)", sass_text)))) or "?"
         ptx = cuobjdump(tool, "-ptx", blob)
         calls, launch = dict(cdc.scan_ptx(ptx)), parse_ptx_launch(ptx)
@@ -224,7 +237,7 @@ def records(lib, tool):
                 r[k] = sass[name][k]
             r["ptx_calls"] = dict(collections.Counter(calls.get(name, [])))
             r.update(launch.get(name, {"ptx_wg": None, "ptx_wg_src": None, "dyn_smem": False}))
-            r["arch"] = arch
+            r["arch"], r["sass_sha256"] = arch, digests[name]
             out[name] = r
     dem = demangle(sorted(out))
     for n, r in out.items():
@@ -438,7 +451,8 @@ COLS = ("REG", "STACK", "LMEM", "SMEM", "total", "FMA", "LDG", "STG", "LDS", "ST
 
 def report(bn, cn, b, c, wg, wg_src, r):
     occ = f", {r['occ']['base']['blocks']}->{r['occ']['cand']['blocks']} blocks/SM" if r["occ"] else ""
-    print(f"\n{r['verdict']:4}  {short(bn)}\n      vs {short(cn)}   (WG {wg or '?'} {wg_src}{occ})")
+    same = {True: ", SASS identical", False: ", SASS differs"}.get(r.get("identical"), "")
+    print(f"\n{r['verdict']:4}  {short(bn)}\n      vs {short(cn)}   (WG {wg or '?'} {wg_src}{occ}{same})")
     print("  " + "".join(k.rjust(10) for k in COLS))
     print("  " + "".join(f"{b[k]}/{c[k]}".rjust(10) for k in COLS))
     calls = sorted(set(b.get("ptx_calls", {})) | set(c.get("ptx_calls", {})))
@@ -448,6 +462,20 @@ def report(bn, cn, b, c, wg, wg_src, r):
     for key, tag in (("fails", "fail"), ("ab", "A/B"), ("notes", "note"), ("warns", "warn")):
         for m in r[key]:
             print(f"  {tag}: {m}")
+
+
+def identical_report(results, only, empty):
+    """The --identical verdict: 0 when every pair's SASS text is byte-identical and no kernel exists
+    in one build only, else 1. This is the proof the tuned-table SASS-identity rehash needs."""
+    same = [r for r in results if r["identical"]]
+    for r in results:
+        if not r["identical"]:
+            print(f"  differs: {short(r['cand'])}")
+    one = sum(map(len, only.values()))
+    status = 1 if empty or one or len(same) != len(results) else 0
+    print(f"sass_parity: identical {len(same)}/{len(results)} pairs, {len(results) - len(same)} differ, "
+          f"{one} in one build only -> exit {status}")
+    return status
 
 
 def toolchain_id(build_dir, tool, arch):
@@ -617,6 +645,25 @@ def self_test():
     want_lk = [256, 64, None, [416, 800]]
     bad += lk != want_lk
     print(f"  {'ok ' if lk == want_lk else 'BAD'} table lookup: {lk} (want {want_lk})")
+    sass = ("\t\tFunction : _Z1Kv\n        /*0000*/  MOV R1, c[0x0][0x28] ;  /* 0x00000a0000017a02 */\n"
+            "                                    /* 0x000fe40000000f00 */\n"
+            "        /*0010*/  NOP ;  /* 0x0000000000007918 */\n                    /* 0x000fc00000000000 */\n")
+    variants = {"same": sass, "encoding": sass.replace("0x000fe40000000f00", "0x000fe40000000f01"),
+                "nop": sass.replace("NOP", "BRA"), "indent": sass.replace("        /*0010*/", "  /*0010*/")}
+    dig = {}
+    for k, text in variants.items():
+        d = {}
+        parse_sass(text, d)
+        dig[k] = d["_Z1Kv"]
+    want_dig = {"encoding": False, "nop": False, "indent": True}
+    got_dig = {k: dig[k] == dig["same"] for k in want_dig}
+    bad += got_dig != want_dig
+    print(f"  {'ok ' if got_dig == want_dig else 'BAD'} SASS digest equal to base: {got_dig} (want {want_dig})")
+    rs = [{"identical": True, "cand": "A"}, {"identical": False, "cand": "B"}]
+    idc = [identical_report(rs[:1], {}, False), identical_report(rs, {}, False),
+           identical_report(rs[:1], {"base": ["C"], "cand": []}, False), identical_report([], {}, True)]
+    bad += idc != [0, 1, 1, 1]
+    print(f"  {'ok ' if idc == [0, 1, 1, 1] else 'BAD'} --identical exit codes: {idc} (want [0, 1, 1, 1])")
     codes = [exit_code(v) for v in (["pass"], ["pass", "A/B"], ["A/B", "FAIL"])]
     bad += codes != [0, 2, 1]
     print(f"  {'ok ' if codes == [0, 2, 1] else 'BAD'} exit codes: {codes} (want [0, 2, 1])")
@@ -642,6 +689,8 @@ def main():
     ap.add_argument("--select", action="append", default=[], help="snapshot kernel regex (repeatable)")
     ap.add_argument("--snapshot-check", metavar="FILE", action="append",
                     help="compare --cand against a snapshot with the algo thresholds (repeatable)")
+    ap.add_argument("--identical", action="store_true",
+                    help="verdict = byte-identical SASS text of every pair (and equal kernel sets when unpaired)")
     ap.add_argument("--self-test", action="store_true", help="run the rule self-test and exit")
     ap.add_argument("-v", "--verbose", action="store_true", help="snapshot check: print passing kernels too")
     a = ap.parse_args()
@@ -691,16 +740,23 @@ def main():
         wg, src, dyn, lwarns = launch_of(c, cn, wg_t, smem_t)
         r = compare(b, c, a.mode, wg, dyn)
         r["warns"] = lwarns + r["warns"]
+        r["identical"] = b["sass_sha256"] == c["sass_sha256"]
         results.append(dict(r, base=bn, cand=cn, wg=wg, wg_src=src, dyn_smem=dyn, base_rec=b, cand_rec=c))
         report(bn, cn, b, c, wg, src, r)
-    if not a.pair:
-        only = sorted(set(rec["base"]) ^ set(rec["cand"]))
-        if only:
-            print(f"\nsass_parity: {len(only)} kernels exist in one build only (not compared)")
+    only = {} if a.pair else {side: sorted(set(rec[side]) - set(rec[other]))
+                              for side, other in (("base", "cand"), ("cand", "base"))}
+    if any(only.values()):
+        print(f"\nsass_parity: {sum(map(len, only.values()))} kernels exist in one build only (not compared)")
+        if a.identical:
+            for side, names in only.items():
+                for n in names:
+                    print(f"  {side} only: {n}")
     status = exit_code([r["verdict"] for r in results], bool(empty) or not pairs)
     count = collections.Counter(r["verdict"] for r in results)
     print(f"\nsass_parity: {len(results)} pairs, {count['pass']} pass, {count['A/B']} A/B, "
-          f"{count['FAIL']} fail -> exit {status}")
+          f"{count['FAIL']} fail" + ("" if a.identical else f" -> exit {status}"))
+    if a.identical:
+        status = identical_report(results, only, bool(empty) or not pairs)
 
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     path = a.json or os.path.join(a.cand, "logs", "sass_parity",
@@ -708,7 +764,7 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as fh:
         json.dump({"args": vars(a), "libs": libs, "cuobjdump": tool, "exit": status, "empty_pairs": empty,
-                   "pairs": results}, fh, indent=1)
+                   "one_side_only": only, "pairs": results}, fh, indent=1)
     print(f"sass_parity: json {path}")
     return status
 
