@@ -37,8 +37,6 @@ duplicate src/ops/getrs/getrs_v2.hh conj_if/include/batchlas/device/view.hh
 duplicate src/ops/getrs/getrs_v2.hh conj_if/src/ops/gemv/gemv_native_v2.hh
 duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
 duplicate src/ops/syev/kernels/syev_drivers_v2.hh lift/include/batchlas/device/arith.hh
-duplicate src/ops/syev/stedc/stedc_v2.hh group_sync/src/ops/sytrf/sytrf_v2.hh
-duplicate src/ops/syev/stedc/stedc_v2.hh uniform/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/sytrd/sb2st_v2.hh fn_vec/include/batchlas/device/view.hh
 duplicate src/ops/syev/sytrd/sb2st_v2.hh her2/include/batchlas/device/level2.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/device/level1.hh
@@ -47,8 +45,6 @@ duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/src/ops/gesvd/gesvd-ormb
 duplicate src/ops/sygst/sygst_v2.hh div_real/include/batchlas/device/arith.hh
 duplicate src/ops/sygst/sygst_v2.hh real_only/src/kernels/common/elementwise_glue_v2.hh
 duplicate src/ops/sygst/sygst_v2.hh scale_real/include/batchlas/device/arith.hh
-duplicate src/ops/sytrf/sytrf_v2.hh group_sync/src/ops/syev/stedc/stedc_v2.hh
-duplicate src/ops/sytrf/sytrf_v2.hh uniform/src/ops/syev/stedc/stedc_v2.hh
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::FMax
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::FMin
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::JacobiRotation

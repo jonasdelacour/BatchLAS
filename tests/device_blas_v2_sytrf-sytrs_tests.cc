@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// sytrf / sytrs-private v2 ops (src/ops/sytrf/sytrf_v2.hh) against long-double host references.
+// sytrf / sytrs device routine internals (batchlas/device/lapack/sytrf.hh and sytrs.hh, their
+// sytrf_detail / sytrs_detail pieces) against long-double host references.
 // The shared ops the kernels use (RtGroup, SubGroup, for_each_owned over a Range, lacpy,
 // for_each_owned_2d, abs1, arith::Fma) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld, the index-reversed view
@@ -23,13 +24,15 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/ops/sytrf/sytrf_v2.hh>
+#include <batchlas/device/lapack/sytrf.hh>
+#include <batchlas/device/lapack/sytrs.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace sy = batchlas::sytrf_v2;
+namespace sy = batchlas::device::sytrf_detail;
+namespace st = batchlas::device::sytrs_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -147,7 +150,7 @@ TYPED_TEST(DeviceBlasV2SytrfTest, RevMatRevVecLowerCopy) {
         const auto G = sy::rev_mat(gp + b * std::ptrdiff_t(pg), lg, n, true);
         const auto S = sy::rev_mat(sp + b * std::ptrdiff_t(ps), ls, n, false);
         v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(g, G, S);
-        sy::group_sync(g);
+        v2::sync<v2::scope::Group>(g, v2::Mem::Global);
         const sy::RevVec<T> v{vp + b * n, n, true};
         v2::for_each_owned(g, n, [&](int i) { v(i) = S(i, 0); });
     });
@@ -181,7 +184,7 @@ template <class T, int WG, bool SgOnly>
 void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& hy, const std::vector<T>& hz, std::vector<int>& oi,
                std::vector<T>& ov) {
     using R = real_of<T>;
-    using A = sy::Ar<T>;
+    using A = v2::arith_t<v2::arith::Fma, T>;
     T* x = dev.up(hx);
     T* y = dev.up(hy);
     T* z = dev.up(hz);
@@ -204,7 +207,7 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
         auto body = [&](const auto& g) {
             const auto lo = sy::iamax_bk(g, am, xv, v2::Range{3, n}, true);
             const auto hi = sy::iamax_bk(g, am, xv, v2::Range{3, n}, false);
-            const auto sk = sy::iamax_bk<true>(g, am, xv, v2::Range{0, n}, true, lo.i);
+            const auto sk = sy::iamax_bk<true>(g, am, xv, v2::Range{0, n}, true, lo.index);
             const auto em = sy::iamax_bk(g, am, xv, v2::Range{n, n}, true);
             const auto nl = sy::iamax_bk(g, am, yv, v2::Range{0, n}, true);
             const auto nh = sy::iamax_bk(g, am, yv, v2::Range{0, n}, false);
@@ -219,9 +222,9 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
             const T se = sy::sum_reduce(g, ss, pe);
             if (g.leader()) {
                 int* o = oip + b * kISlots;
-                o[kLow] = lo.i, o[kHigh] = hi.i, o[kSkip] = sk.i, o[kEmpty] = em.i, o[kNanLow] = nl.i, o[kNanHigh] = nh.i;
+                o[kLow] = lo.index, o[kHigh] = hi.index, o[kSkip] = sk.index, o[kEmpty] = em.index, o[kNanLow] = nl.index, o[kNanHigh] = nh.index;
                 T* q = ovp + b * kSSlots;
-                q[kVal] = T(lo.v), q[kEmptyVal] = T(em.v), q[kS0] = s0, q[kS1] = s1, q[kSEmpty] = se;
+                q[kVal] = T(lo.value), q[kEmptyVal] = T(em.value), q[kS0] = s0, q[kS1] = s1, q[kSEmpty] = se;
             }
         };
         if constexpr (SgOnly) body(v2::SubGroup<32>{sg});
@@ -369,12 +372,12 @@ TYPED_TEST(DeviceBlasV2SytrfTest, LdlBlockSolves) {
         const T* p = in + b * per;
         T* o = out + b * 5;
         const T dkk = p[0], dk1 = p[1], off = p[2], b0 = p[3], b1 = p[4];
-        o[0] = sy::ldl_dsolve_row(1, b0, b1, dkk, dk1, off);
-        o[1] = sy::ldl_dsolve_row(2, b1, b0, dk1, dkk, off);
+        o[0] = st::ldl_dsolve_row(1, b0, b1, dkk, dk1, off);
+        o[1] = st::ldl_dsolve_row(2, b1, b0, dk1, dkk, off);
         const auto blk = sy::bk_block2(dkk, off, dk1);
         o[2] = blk.first(b0, b1);
         o[3] = blk.second(b0, b1);
-        o[4] = sy::ldl_dsolve_row(0, b0, b0, dkk, dkk, dkk);
+        o[4] = st::ldl_dsolve_row(0, b0, b0, dkk, dkk, dkk);
     });
     const auto got = this->dev.down(out, ho.size());
     EXPECT_EQ(twins_differ(got, 5), 0);
@@ -438,19 +441,20 @@ TYPED_TEST(DeviceBlasV2SytrfTest, TrsvFragAndDsolveFrag) {
         const auto Dm = v2::mat(Dp + b * std::ptrdiff_t(pL), n, n, ld);
         const T* bb = bp + b * n;
         T* o = op + b * 3 * n;
-        T x[RR], y[RR];
+        const v2::SubGroup<32> ex{sg};
+        v2::Frag<T, RR, v2::Cyclic> x, y;
         for (int r = 0; r < RR; ++r) {
             const int t = lane + 32 * r;
             x[r] = t < n ? bb[t] : T(0);
             y[r] = x[r];
         }
-        sy::trsv_frag<Transpose::NoTrans>(sg, lane, L, n, x);
+        st::trsv_frag<Transpose::NoTrans>(ex, L, n, x);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[lane + 32 * r] = x[r];
-        sy::trsv_frag<Transpose::Trans>(sg, lane, L, n, x);
+        st::trsv_frag<Transpose::Trans>(ex, L, n, x);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[n + lane + 32 * r] = x[r];
-        sy::ldl_dsolve_frag<RR>(sg, lane, Dm, kp, ep + b * n, n, y);
+        st::ldl_dsolve_frag(ex, Dm, kp, ep + b * n, n, y);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[2 * n + lane + 32 * r] = y[r];
     });
@@ -517,7 +521,7 @@ TYPED_TEST(DeviceBlasV2SytrfTest, SyconvColumnByHand) {
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const v2::RtGroup<> g(it);
         const auto M = v2::mat(L, n, n, ld);
-        v2::for_each_owned(g, n, [&](int j) { sy::syconv_col<T>(M, P, n, j, E); });
+        v2::for_each_owned(g, n, [&](int j) { v2::syconv_col<T>(M, P, n, j, E); });
     });
     const auto got = this->dev.down(L, h.size());
     const auto ge = this->dev.down(E, he.size());

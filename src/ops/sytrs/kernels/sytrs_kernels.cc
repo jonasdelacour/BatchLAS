@@ -1,5 +1,5 @@
-// Native batched sytrs from Bunch-Kaufman factors, LAPACK ?sytrs2 form (sytrs_device.hh): `cta`
-// (one work-group per item, the converted factor in local memory, one sub-group per right-hand
+// Native batched sytrs from Bunch-Kaufman factors, LAPACK ?sytrs2 form
+// (batchlas/device/lapack/sytrs.hh): `cta` (one work-group per item, the converted factor in local memory, one sub-group per right-hand
 // side) and `blocked` (the converted factor and the gathered B in workspace per chunk of items,
 // then two public trsm around a D^-1 kernel, and the scatter). evidence: docs/perf/sytrf.md
 //
@@ -7,7 +7,7 @@
 // any other cluster.
 
 #include <src/ops/sytrf/sytrf_native.hh>
-#include <src/ops/sytrs/sytrs_device.hh>
+#include <batchlas/device/lapack/sytrs.hh>
 
 #include <src/queue.hh>
 #include <src/select/grid_chunk.hh>
@@ -39,10 +39,10 @@ template <typename T> class SytrsScatterKernel;
 namespace {
 
 namespace v2 = batchlas::device;
-using sytrf_device::Staged;
-using sytrf_device::Tile;
-using sytrf_device::Vec;
-using sytrf_v2::rev_mat;
+using v2::sytrs_detail::Staged;
+template <typename D> using Tile = v2::sytrf_detail::RevMat<D>;
+template <typename D> using Vec = v2::sytrf_detail::RevVec<D>;
+using v2::sytrf_detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -100,11 +100,11 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
                 const int* const gp = piv + b * n;
                 v2::for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY {
-                    S.ps[k] = sytrf_device::logical_piv(gp[rev ? n - 1 - k : k], n, rev);
+                    S.ps[k] = v2::sytrs_detail::logical_piv(gp[rev ? n - 1 - k : k], n, rev);
                 });
-                sytrf_v2::group_sync(all);
-                const bool ok = sytrf_device::ldl_convert<D>(S, n, S.ps, S.perm, S.kind, S.e, all, &im[3 * n]);
-                sytrf_device::solve_columns<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
+                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
+                const bool ok = v2::syconv<D>(S, n, S.ps, S.perm, S.kind, S.e, all, &im[3 * n]);
+                v2::sytrs_cols<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -185,18 +185,18 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 int* const perm = pw + i0 * n;
                 int* const kind = kw + i0 * n;
                 v2::for_each_owned(ex, n, [&](int k) BATCHLAS_DLA_BODY {
-                    ps[k] = sytrf_device::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
+                    ps[k] = v2::sytrs_detail::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
                 });
-                sytrf_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 if (ex.leader()) {
-                    const bool valid = sytrf_device::piv_list_valid(ps, n);
+                    const bool valid = v2::sytrs_detail::piv_list_valid(ps, n);
                     flag[0] = valid ? 1 : 0;
-                    if (valid) sytrf_device::build_perm(ps, n, perm, kind);
+                    if (valid) v2::sytrs_detail::build_perm(ps, n, perm, kind);
                 }
-                sytrf_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 const bool ok = flag[0] != 0;
                 if (ok) {
-                    sytrf_device::convert_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, ex);
+                    v2::syconv_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, ex);
                 } else {  // an invalid list: L as stored, P the identity, every block 1 x 1
                     v2::for_each_owned_2d<v2::alg::DivMod, std::ptrdiff_t>(ex, n, n, [&](int i, int j) BATCHLAS_DLA_BODY {
                         if (i > j) W(i, j) = G(i, j);
@@ -205,7 +205,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                         perm[t] = t;
                         kind[t] = 0;
                     });
-                    sytrf_v2::group_sync(ex);
+                    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 }
                 D* const y = bw + i0 * nb;
                 const D* const src = bp + i0 * strb;
@@ -213,7 +213,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                     const int t = static_cast<int>(idx % n), c = static_cast<int>(idx / n);
                     const int lt = rev ? n - 1 - t : t;
                     const int s = rev ? n - 1 - perm[lt] : perm[lt];
-                    y[idx] = ok ? src[s + static_cast<std::ptrdiff_t>(c) * ldb] : sytrf_device::nan_of<D>();
+                    y[idx] = ok ? src[s + static_cast<std::ptrdiff_t>(c) * ldb] : v2::qnan<D>();
                 }
             });
     });
@@ -245,12 +245,12 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
                 const Tile<D> G = rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
                 const Vec<D> x{bw + static_cast<std::ptrdiff_t>(rest) * n, n, rev};
                 if (kd == 0) {
-                    x(t) = sytrf_v2::ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
+                    x(t) = v2::sytrs_detail::ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
                     return;
                 }
                 const D x0 = x(t), x1 = x(t + 1), d0 = G(t, t), d1 = G(t + 1, t + 1), off = G(t + 1, t);
-                x(t) = sytrf_v2::ldl_dsolve_row(1, x0, x1, d0, d1, off);
-                x(t + 1) = sytrf_v2::ldl_dsolve_row(2, x1, x0, d1, d0, off);
+                x(t) = v2::sytrs_detail::ldl_dsolve_row(1, x0, x1, d0, d1, off);
+                x(t + 1) = v2::sytrs_detail::ldl_dsolve_row(2, x1, x0, d1, d0, off);
             });
     });
 }

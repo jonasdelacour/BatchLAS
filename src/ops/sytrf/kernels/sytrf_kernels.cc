@@ -1,15 +1,15 @@
 // Native batched Bunch-Kaufman LDL^T: the CTA tier (one sub-group per matrix, the logical lower
 // triangle resident in local memory, n <= 32; with B it is sysv's fused factor-and-solve), the
 // work-group tier (one work-group per matrix, unblocked ?sytf2 in place in global memory, any n),
-// and sytrs `wg` (one work-group per right-hand side). All run sytrf_device.hh's one algorithm;
-// sytrs `cta` and `blocked` are sytrs_kernels.cc.
+// and sytrs `wg` (one work-group per right-hand side). All run the public device routines of
+// batchlas/device/lapack/sytrf.hh and sytrs.hh; sytrs `cta` and `blocked` are sytrs_kernels.cc.
 // evidence: docs/perf/sytrf.md
 //
 // Belongs in EXTENSIONS_FACTORIZATION_SOURCES: it shares no device symbol with any other cluster.
 
 #include <src/ops/sytrf/sytrf_native.hh>
-#include <src/ops/sytrf/sytrf_device.hh>
-#include <src/ops/sytrs/sytrs_device.hh>
+#include <batchlas/device/lapack/sytrf.hh>
+#include <batchlas/device/lapack/sytrs.hh>
 
 #include <src/kernels/common/info_span.hh>
 #include <src/queue.hh>
@@ -41,11 +41,10 @@ template <typename T> class SytrfBlockedTrailKernel;
 namespace {
 
 namespace v2 = batchlas::device;
-using sytrf_device::Tile;
-using sytrf_device::Vec;
-using sytrf_v2::Ar;
-using sytrf_v2::ArgMaxScratch;
-using sytrf_v2::rev_mat;
+template <typename D> using Tile = v2::sytrf_detail::RevMat<D>;
+template <typename D> using Vec = v2::sytrf_detail::RevVec<D>;
+using v2::sytrf_detail::ArgMaxScratch;
+using v2::sytrf_detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -87,7 +86,7 @@ Span<int32_t> info_layout(Queue& ctx, BumpAllocator& pool, Span<int32_t> info_ou
 // One launch for sytrf's `cta` and sysv's `cta`: B is null for the factor alone. Sub-group 0
 // factors (sub-group collectives only, so the factor is the same with or without B); sysv's
 // work-group has one sub-group per right-hand side (at most kSytrsCtaMaxSg), which then solve in
-// parallel with sytrs `cta`'s converted solve (sytrs_device.hh).
+// parallel with sytrs `cta`'s converted solve (v2::sytrs_cols).
 template <typename T>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int* piv, int32_t* info,
                  const MatrixView<T, MatrixFormat::Dense>* B, const std::uint8_t* mask) {
@@ -127,10 +126,10 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Tile<D> S = rev_mat(tp, kLdt, n, false);
                 v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
-                sytrf_v2::group_sync(all);
+                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
                 if (sgid == 0) {
                     int* const gp = piv + b * n;
-                    const int st = sytrf_device::ldl_factor(S, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]}, [&](int k, int v) {
+                    const int st = v2::sytf2(S, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]}, [&](int k, int v) {
                         gp[k] = v;
                         pp[k] = v;
                     });
@@ -141,15 +140,15 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                     }
                 }
                 if (bp == nullptr) return;
-                sytrf_v2::group_sync(all);
+                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
                 if (pp[4 * kN + 1] != 0) return;
-                const sytrf_device::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
+                const v2::sytrs_detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
                 v2::for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY {
-                    L.ps[k] = sytrf_device::logical_piv(pp[upper ? n - 1 - k : k], n, upper);
+                    L.ps[k] = v2::sytrs_detail::logical_piv(pp[upper ? n - 1 - k : k], n, upper);
                 });
-                sytrf_v2::group_sync(all);
-                const bool ok = sytrf_device::ldl_convert<D>(L, n, L.ps, L.perm, L.kind, L.e, all, pp + 4 * kN);
-                sytrf_device::solve_columns<1>(sg, lane, sgid, nsg, L, ok, upper, bp + b * strb, ldb, nrhs);
+                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
+                const bool ok = v2::syconv<D>(L, n, L.ps, L.perm, L.kind, L.e, all, pp + 4 * kN);
+                v2::sytrs_cols<1>(sg, lane, sgid, nsg, L, ok, upper, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -223,7 +222,7 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                 const v2::RtGroup<> g(it);
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 int* const gp = piv + b * n;
-                const int st = sytrf_device::ldl_factor(G, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]},
+                const int st = v2::sytf2(G, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]},
                                                         [&](int k, int v) { gp[k] = v; });
                 if (lid == 0) info[b] = st;
             });
@@ -266,7 +265,7 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Vec<D> x{bp + b * strb + c * ldb, n, upper};
                 const int* const gp = piv + b * n;
-                sytrf_device::ldl_solve(G, n, upper, x, g, sytrf_v2::SumScratch<R>{&red[0], &red[wg / 32]},
+                v2::sytrs_col(G, n, upper, x, g, v2::sytrf_detail::SumScratch<R>{&red[0], &red[wg / 32]},
                                         [&](int k) { return gp[k]; });
             });
     });
@@ -335,8 +334,8 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 int* const gp = piv + b * n;
                 const int first = state[2 * b], end = state[2 * b + 1];
                 int st = info[b];
-                sytrf_v2::group_sync(g);
-                sytrf_device::ldl_undo(S, first, end, g, [&](int j, bool& two) {
+                v2::sync<v2::scope::Group>(g, v2::Mem::Global);
+                v2::lasyf_undo(S, first, end, g, [&](int j, bool& two) {
                     const int raw = gp[upper ? n - 1 - j : j];
                     two = raw < 0;
                     const int p = (raw < 0 ? -raw : raw) - 1;
@@ -346,13 +345,13 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                     const int sub = n - end;
                     const int off = upper ? 0 : end;
                     const Tile<D> T2 = rev_mat(item + off + static_cast<std::ptrdiff_t>(off) * lda, lda, sub, upper);
-                    const int t = sub > 0 ? sytrf_device::ldl_factor(T2, sub, upper, g, am, [&](int k, int v) {
+                    const int t = sub > 0 ? v2::sytf2(T2, sub, upper, g, am, [&](int k, int v) {
                         gp[k + off] = v > 0 ? v + off : v - off;
                     }) : 0;
                     if (st == 0 && t > 0) st = t + off;
                 } else {
-                    const Tile<D> W = sytrf_device::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
-                    const int e = sytrf_device::ldl_panel(S, W, n, k0, nb, end, upper, g, am, st,
+                    const Tile<D> W = v2::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                    const int e = v2::lasyf(S, W, n, k0, nb, end, upper, g, am, st,
                                                           [&](int k, int v) { gp[k] = v; });
                     if (lid == 0) {
                         state[2 * b] = end;
@@ -371,6 +370,7 @@ template <typename T>
 void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool upper, int wg, int k0,
                    const int* state, const std::uint8_t* mask) {
     using D = Dev<T>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     constexpr int nb = kSytrfBlockedNb, ub = kSytrfBlockedUb;
     const int kt = k0 + nb + 1;
     const int nblk = (n - kt + ub - 1) / ub + 1;
@@ -386,12 +386,12 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                 const int t = static_cast<int>(grp % nblk);
                 const v2::RtGroup<> ex(it);
                 const Tile<D> S = rev_mat(ap + b * stra, lda, n, upper);
-                const Tile<D> W = sytrf_device::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                const Tile<D> W = v2::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
                 const int rank = state[2 * b + 1] - k0;
                 // C(i, j) -= sum_l L(i, l) W(j, l), one term at a time from C (?gemmt, alpha -1).
                 auto upd = [&](int i, int j) {
                     D acc = S(i, j);
-                    for (int l = 0; l < rank; ++l) acc = Ar<D>::sub(acc, Ar<D>::mul(S(i, k0 + l), W(j, l)));
+                    for (int l = 0; l < rank; ++l) acc = A::sub(acc, A::mul(S(i, k0 + l), W(j, l)));
                     S(i, j) = acc;
                 };
                 if (t == nblk - 1) {
