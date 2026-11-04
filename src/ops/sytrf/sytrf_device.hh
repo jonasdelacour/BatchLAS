@@ -25,7 +25,7 @@
 
 namespace batchlas::sytrf_device {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 using sytrf_v2::Ar;
 using sytrf_v2::ArgMaxScratch;
 using sytrf_v2::group_sync;

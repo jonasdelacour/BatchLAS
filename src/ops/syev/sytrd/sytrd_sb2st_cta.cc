@@ -10,7 +10,7 @@
 
 
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 #include <src/ops/syev/sytrd/sb2st_v2.hh>
 
@@ -19,9 +19,9 @@
 #include <batchlas/backend_config.h>
 
 #include <src/math-helpers.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 #include <array>
 #include <cstdint>
@@ -32,7 +32,7 @@ namespace batchlas::detail {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace sbv = batchlas::sb2st_v2;
 
 template <typename T, int32_t P>

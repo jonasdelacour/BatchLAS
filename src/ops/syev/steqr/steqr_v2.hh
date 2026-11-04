@@ -6,12 +6,12 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 
 namespace batchlas::steqr_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 struct OnePerItem {};  // layout of LaneVec
 

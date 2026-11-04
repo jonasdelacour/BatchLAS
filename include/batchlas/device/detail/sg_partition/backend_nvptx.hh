@@ -21,7 +21,7 @@
 #include <cstring>
 #include <type_traits>
 
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sgp {
 

@@ -98,8 +98,8 @@ inline uint32_t lcg(uint32_t& state) {
 
 } // namespace stein_detail
 
-namespace v2 = device::v2;
-namespace tdv2 = device::v2::tridiag;
+namespace v2 = device;
+namespace tdv2 = device::tridiag;
 
 template <Backend B, typename T>
 Event stein(Queue& ctx,

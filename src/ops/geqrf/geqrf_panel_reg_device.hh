@@ -124,7 +124,7 @@ constexpr std::size_t geqrf_panel_reg_scalar_slots(int wg, int cols) {
 template <typename D, int N, typename Real>
 inline void geqr2_panel_reg_device(sycl::nd_item<1> it, D* a, int ld, int m, int n, int kmax,
                                    D* tau_ptr, Real* sred, D* sw) {
-    namespace v2 = batchlas::device::v2;
+    namespace v2 = batchlas::device;
     namespace q2 = batchlas::geqrf_v2;
     using R = real_of<D>;
     using A = v2::Arith<D>;

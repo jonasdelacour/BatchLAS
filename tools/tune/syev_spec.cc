@@ -116,16 +116,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: cta
             "src/ops/syev/kernels/syev_cta.cc",
             "src/ops/ormqr/kernels/ormqr_cta.cc",

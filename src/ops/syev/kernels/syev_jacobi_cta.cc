@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -9,7 +9,7 @@
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_jacobi.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -37,7 +37,7 @@ class SyevJacobiCTAKernel;
 
 namespace {
 
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,

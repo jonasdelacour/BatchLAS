@@ -2,9 +2,9 @@
 #pragma once
 // syevx-private device LA v2 ops (no second family uses them); shared ops come from v2 core.
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
-namespace batchlas::device::v2::syevx {
+namespace batchlas::device::inline v2::syevx {
 
 // x(rev ? n-1-i : i), the direction chosen at run time.
 template <class V> struct Flipped {
@@ -47,4 +47,4 @@ template <class X, class R> BATCHLAS_DLA_INLINE int count_le(const X& x, R v) {
     return lo;
 }
 
-}  // namespace batchlas::device::v2::syevx
+}  // namespace batchlas::device::syevx

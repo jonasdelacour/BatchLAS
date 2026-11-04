@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 #include <src/math-helpers.hh>
 #include <src/ops/gesvd/gebrd/gebrd_v2.hh>
@@ -15,7 +15,7 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // dgebd2 on one matrix (one work-item): H(i) from the left, then G(i) from the right. A function,
 // not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).

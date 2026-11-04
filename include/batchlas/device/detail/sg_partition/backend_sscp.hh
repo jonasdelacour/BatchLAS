@@ -16,8 +16,8 @@
 #include <cstring>
 #include <type_traits>
 
-#include <src/sycl/kernel_attrs.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 // Multipass CUDA (cuda:sm_XX) compiles a real NVPTX device pass, where the __nvvm_* builtins exist.
 #if !ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA
@@ -79,8 +79,8 @@ BATCHLAS_SSCP_NVVM void __nvvm_bar_warp_sync(unsigned m) {
 #undef BATCHLAS_SSCP_NVVM
 #endif
 
-#include <src/kernels/common/sg_partition/backend_generic.hh>
-#include <src/kernels/common/sg_partition/backend_nvptx.hh>
+#include <batchlas/device/detail/sg_partition/backend_generic.hh>
+#include <batchlas/device/detail/sg_partition/backend_nvptx.hh>
 
 namespace batchlas::sgp {
 

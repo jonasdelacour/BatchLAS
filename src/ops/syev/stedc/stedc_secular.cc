@@ -16,7 +16,7 @@
 namespace batchlas {
 
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // psi_1(x) = sum_{k <= i} z_k / (d_k - x), psi_2(x) = the same over k > i, and their derivatives
 // (terms z_k / (d_k - x)^2), for z = v .* v. Each sum stages its terms in local memory, then

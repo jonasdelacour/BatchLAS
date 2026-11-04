@@ -13,7 +13,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/util/resident_capacity.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <cstddef>
 #include <cstdint>

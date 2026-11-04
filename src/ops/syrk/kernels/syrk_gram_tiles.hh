@@ -13,7 +13,7 @@
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -186,8 +186,8 @@ BATCHLAS_UNROLL_FULL
                                     // for ConjTrans, column for NoTrans). The
                                     // wrong one is still Hermitian: test vs GEMM.
                                     if constexpr (Conjugate) {
-                                        af[b * 4 + e] = TransOperand ? batchlas::device::v2::conj(va.v[e]) : va.v[e];
-                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::v2::conj(vb.v[e]);
+                                        af[b * 4 + e] = TransOperand ? batchlas::device::conj(va.v[e]) : va.v[e];
+                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::conj(vb.v[e]);
                                     } else {
                                         af[b * 4 + e] = va.v[e];
                                         bf[b * 4 + e] = vb.v[e];

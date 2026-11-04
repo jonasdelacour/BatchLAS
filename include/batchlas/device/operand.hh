@@ -6,10 +6,10 @@
 #include <cstddef>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/core.hh>
-#include <batchlas/blas/device/v2/exec.hh>
+#include <batchlas/device/core.hh>
+#include <batchlas/device/exec.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // ---- address bases ------------------------------------------------------------------------
 // How an operand reaches element k. B = T* (default); Aligned<T, A>: a pointer whose alignment
@@ -284,4 +284,4 @@ template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE Mat<T, Dyn, Dyn, Dyn
     return {p, Dyn{m}, Dyn{n}, Dyn{ld}};
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

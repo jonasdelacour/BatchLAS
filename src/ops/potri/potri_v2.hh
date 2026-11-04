@@ -3,7 +3,7 @@
 // potri-private device LA v2 ops (src/ops/potri/kernels/potri_cta.cc): register-tile BLAS on the
 // Thread executor (namespace reg), the 4-deep batched column-major walk, trttp / tpttr of a column
 // range and the row-packed triangle index. Everything shared comes from the v2.1 core
-// (include/batchlas/blas/device/v2/dla.hh): RtGroup, for_each_owned(_2d), find_first, Tile,
+// (include/batchlas/device.hh): RtGroup, for_each_owned(_2d), find_first, Tile,
 // Frag, load, fill, arith::Fma. Every op is DLA-inline and adds no barrier; register tiles are
 // indexed by unrolled constants only.
 
@@ -12,14 +12,14 @@
 
 #include <sycl/sycl.hpp>
 
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/blas/enums.hh>
 
 namespace batchlas::sycl_potri {
 
-namespace dla = batchlas::device::v2;
+namespace dla = batchlas::device;
 
 // (e % m, e / m) for e = start, start + step, ... with no division per step. (Not in a nested
 // `detail`: that would hide batchlas::detail from the kernels in this namespace.)

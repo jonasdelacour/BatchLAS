@@ -11,7 +11,7 @@
 
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 

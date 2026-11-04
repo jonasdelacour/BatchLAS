@@ -7,7 +7,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -121,7 +121,7 @@ namespace batchlas {
                         else return true;
                     }();
 
-                    namespace v2 = batchlas::device::v2;
+                    namespace v2 = batchlas::device;
                     namespace sv = batchlas::sytrd_v2;
                     const auto ex = v2::wrap(part);
                     auto D_prob = D_view.batch_item(prob_id);

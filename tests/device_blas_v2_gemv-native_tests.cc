@@ -23,15 +23,15 @@
 #include <type_traits>
 #include <vector>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/ops/gemv/gemv_native_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace dla = batchlas::sycl_gemv::dla;
 using batchlas::verify::Check;
 using Fma = v2::arith::Fma;

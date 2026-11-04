@@ -18,7 +18,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -40,7 +40,7 @@ namespace {
 namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab

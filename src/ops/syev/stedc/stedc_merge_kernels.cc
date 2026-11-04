@@ -14,7 +14,7 @@
 
 namespace batchlas {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <Backend B, typename T> class StedcFusedMerge;
 

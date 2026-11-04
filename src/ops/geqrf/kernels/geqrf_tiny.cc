@@ -11,7 +11,7 @@
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -33,7 +33,7 @@ namespace {
 
 namespace gn = ::batchlas::geqrf_native;
 namespace tn = ::batchlas::tiny_native;
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 namespace q2 = ::batchlas::geqrf_v2;
 
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second

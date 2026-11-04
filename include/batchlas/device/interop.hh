@@ -6,10 +6,10 @@
 #include <cassert>
 #include <cstdint>
 
-#include <batchlas/blas/device/v2/operand.hh>
+#include <batchlas/device/operand.hh>
 #include <batchlas/blas/matrix.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE Vec<T, Dyn, Dyn, M> vec(const VectorView<T>& v) {
     return {v.data_ptr(), Dyn{v.size()}, Dyn{v.inc()}};
@@ -60,4 +60,4 @@ template <class T> BATCHLAS_DLA_INLINE ItemVec<T> item(const VectorView<T>& v, i
     return {v.data_ptr(), b, v.stride(), v.inc(), v.size()};
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

@@ -7,12 +7,12 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 
 namespace batchlas::sytrd_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // ---- executors ---------------------------------------------------------------------------
 // Item lid owns element / row lid (n <= size); core copy / axpy find for_each_owned(Fit) by ADL.

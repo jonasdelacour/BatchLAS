@@ -29,7 +29,7 @@ namespace sycl_getrs {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // Per-TU tag: this cluster's own instantiation of the shared LASWP kernel.
 struct GetrsLaswpTag {};

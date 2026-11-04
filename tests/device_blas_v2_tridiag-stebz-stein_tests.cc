@@ -27,13 +27,13 @@
 #include <optional>
 #include <vector>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/syev/tridiag/tridiag_v2.hh>
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
-namespace tdv2 = batchlas::device::v2::tridiag;
+namespace v2 = batchlas::device;
+namespace tdv2 = batchlas::device::tridiag;
 using batchlas::verify::Check;
 
 namespace {

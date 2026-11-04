@@ -14,10 +14,10 @@
 #include <batchlas/util/kernel-heuristics.hh>
 
 #include <src/util/template-instantiations.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
-    namespace dla = device::v2;
+    namespace dla = device;
 
     template <Backend B, typename T, MatrixFormat MFormat>
     struct RitzValuesKernel {};

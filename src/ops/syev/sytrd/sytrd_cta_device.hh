@@ -7,7 +7,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/math-helpers.hh>
 #include <src/ops/syev/sytrd/sytrd_v2.hh>
 
@@ -27,7 +27,7 @@ namespace batchlas {
     inline T sytd2_cta_upper_tile(const SubGroupPartition<P, M>& part, LocalDecorated<T> A_local, int32_t base_a,
                                   LocalDecorated<T> V_local, int32_t base_v, LocalDecorated<T> W_local,
                                   int32_t base_w, int32_t n) {
-        namespace v2 = batchlas::device::v2;
+        namespace v2 = batchlas::device;
         using LP = LocalDecorated<T>;
         using Tile = v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<LDA>, v2::Mem::Local, v2::Cyclic, LP>;
         using Col = v2::Vec<T, v2::Dyn, v2::Unit, v2::Mem::Local, v2::Cyclic, LP>;

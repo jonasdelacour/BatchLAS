@@ -6,16 +6,16 @@
 //   house2 refl2          2-element Householder reflector (unit v, tau = 2), generate / apply
 //   gershgorin lanst_inf  symmetric tridiagonal reductions
 //   sturm_count bisect_eig  dstebz / dlaebz counting and bisection
-// Executors, loops, reductions and level-1 ops come from core (batchlas/blas/device/v2).
+// Executors, loops, reductions and level-1 ops come from core (batchlas/device).
 
 #include <array>
 #include <limits>
 #include <type_traits>
 #include <utility>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
-namespace batchlas::device::v2::tridiag {
+namespace batchlas::device::inline v2::tridiag {
 
 template <class T, int N> struct Refs {
     using value_type = std::remove_cv_t<T>;
@@ -133,4 +133,4 @@ BATCHLAS_DLA_INLINE R bisect_eig(const Thread& th, const D& d, const E& e, int j
     return left + (right - left) * R(0.5);
 }
 
-}  // namespace batchlas::device::v2::tridiag
+}  // namespace batchlas::device::tridiag

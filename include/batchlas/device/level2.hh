@@ -14,9 +14,9 @@
 
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/level1.hh>
+#include <batchlas/device/level1.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 namespace detail {
 template <class Ex, Transpose TR> constexpr auto default_gemv_alg() {
@@ -362,4 +362,4 @@ BATCHLAS_DLA_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
     trmv<UL, TR, DG, Ops>(th, a, xv, x.size());
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

@@ -8,7 +8,7 @@
 #include <src/ops/getrf/getrf_v2.hh>
 
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

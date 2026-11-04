@@ -3,11 +3,11 @@
 // Family-private v2 ops of larft and ormqr_cta, forms core lacks (larf on a Frag; a distributed
 // trmv) and larft's T recurrence. Everything else these kernels use comes from core.
 
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // x := H x, H = I - tau v v^H (conj(tau) for H^H), x a register column one item owns; fully
 // unrolled so x stays in registers. v Published. Native: the hand loop's arithmetic (strict).
@@ -69,4 +69,4 @@ BATCHLAS_DLA_INLINE void larft_forward_colwise(const Ex& ex, const MV& V, const 
     laset<Part::StrictLower>(ex, Zero{}, Zero{}, Tm);
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

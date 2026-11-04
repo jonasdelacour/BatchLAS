@@ -23,8 +23,8 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = ::batchlas::device::v2;
-namespace glue = ::batchlas::device::v2::gesvd_glue;
+namespace v2 = ::batchlas::device;
+namespace glue = ::batchlas::device::gesvd_glue;
 
 inline char upper_ascii(char c) {
     return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

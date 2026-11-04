@@ -26,20 +26,20 @@
 
 #include <batchlas/backend_config.h>
 
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <src/kernels/common/sg_partition/backend_generic.hh>
+#include <batchlas/device/detail/sg_partition/backend_generic.hh>
 
 // acpp SSCP picks the target at JIT time (SscpBackend); FORCE_GENERIC is the break (divergence
 // tests hang). evidence: docs/design/sycl-implementations.md#sycl-impl-device-target-dispatch
 #if BATCHLAS_SYCL_IMPL_ACPP && !defined(BATCHLAS_SGP_FORCE_GENERIC)
-#include <src/kernels/common/sg_partition/backend_sscp.hh>
+#include <batchlas/device/detail/sg_partition/backend_sscp.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#include <src/kernels/common/sg_partition/backend_nvptx.hh>
+#include <batchlas/device/detail/sg_partition/backend_nvptx.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__AMDGCN__)
-#include <src/kernels/common/sg_partition/backend_amdgcn.hh>
+#include <batchlas/device/detail/sg_partition/backend_amdgcn.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && (defined(__SPIR__) || defined(__SPIRV__))
-#include <src/kernels/common/sg_partition/backend_spirv.hh>
+#include <batchlas/device/detail/sg_partition/backend_spirv.hh>
 #endif
 
 namespace batchlas {

@@ -19,7 +19,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -42,7 +42,7 @@ namespace {
 
 namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");

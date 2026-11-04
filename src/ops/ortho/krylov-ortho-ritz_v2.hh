@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Device LA v2 ops private to the ortho SVQB kernels (krylov-ortho-ritz family). Everything
-// else those kernels call is v2 core (batchlas/blas/device/v2/dla.hh).
+// else those kernels call is v2 core (batchlas/device.hh).
 
 #include <type_traits>
 #include <utility>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas::krylov_v2 {
-namespace dla = device::v2;
+namespace dla = device;
 
 // x(i) = f(i), computed on read: never stored, so any item may read any index unpublished.
 template <class F> struct Generated {

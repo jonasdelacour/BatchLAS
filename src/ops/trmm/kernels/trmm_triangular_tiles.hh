@@ -12,7 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -176,11 +176,11 @@ BATCHLAS_UNROLL_FULL
                                         value = unit
                                             ? T(1)
                                             : conjugated
-                                                ? batchlas::device::v2::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
+                                                ? batchlas::device::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
                                                 : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
                                     } else if (lower_eff ? (p < i) : (p > i)) {
                                         const T raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
-                                        value = conjugated ? batchlas::device::v2::conj(raw) : raw;
+                                        value = conjugated ? batchlas::device::conj(raw) : raw;
                                     }
                                 }
                                 sa[(pp0 + e) * SA + phys] = value;

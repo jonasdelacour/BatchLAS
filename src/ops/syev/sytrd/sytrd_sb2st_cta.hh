@@ -184,7 +184,7 @@ struct btrd_givens_ops<T, true> {
         const T xt = x;
         const T yt = y;
         x = T(c) * xt + s * yt;
-        y = T(c) * yt - batchlas::device::v2::conj(s) * xt;
+        y = T(c) * yt - batchlas::device::conj(s) * xt;
     }
 
     static inline void rot(int nrot, StridedView<T> x, StridedView<T> y, Real c, const T& s) {
@@ -221,15 +221,15 @@ struct btrd_givens_ops<T, true> {
         const Real t1i = sir * zii + sii * zir;
 
         const T t2 = T(ci * zir, ci * zii);
-        const T t3 = t2 - batchlas::device::v2::conj(si) * T(xi, Real(0));
-        const T t4 = batchlas::device::v2::conj(t2) + si * T(yi, Real(0));
+        const T t3 = t2 - batchlas::device::conj(si) * T(xi, Real(0));
+        const T t4 = batchlas::device::conj(t2) + si * T(yi, Real(0));
 
         const Real t5 = ci * xi + t1r;
         const Real t6 = ci * yi - t1r;
 
         const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
         const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
-        const T znew = T(ci) * t3 + batchlas::device::v2::conj(si) * T(t6, t1i);
+        const T znew = T(ci) * t3 + batchlas::device::conj(si) * T(t6, t1i);
 
         x = T(xnew, Real(0));
         y = T(ynew, Real(0));
@@ -250,7 +250,7 @@ struct btrd_givens_ops<T, true> {
     static inline void prepare_work_for_right(int nrot, T* s, int stride) {
         // ZHBTRD requirement: conjugate WORK(J1) vector before applying from the right.
         for (int t = 0; t < nrot; ++t) {
-            s[t * stride] = batchlas::device::v2::conj(s[t * stride]);
+            s[t * stride] = batchlas::device::conj(s[t * stride]);
         }
     }
 

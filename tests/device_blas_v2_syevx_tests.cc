@@ -21,11 +21,11 @@
 
 #include <src/ops/syevx/syevx_v2.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
-namespace sx = batchlas::device::v2::syevx;
+namespace v2 = batchlas::device;
+namespace sx = batchlas::device::syevx;
 using batchlas::verify::Check;
 
 namespace {

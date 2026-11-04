@@ -14,9 +14,9 @@
 #include <src/util/resident_capacity.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/lapack.hh>
+#include <batchlas/device/lapack_aux.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <algorithm>
@@ -33,7 +33,7 @@ namespace sycl_getrf {
 namespace {
 
 namespace gn = ::batchlas::getrf_native;
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 // Convenience overloads only; every real decision re-reads the device, never
 // device_limits.hh. evidence: docs/perf/lu.md#one-spelling-per-ceiling

@@ -9,13 +9,13 @@
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/kernels/common/tiny_device.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/operand.hh>
+#include <batchlas/device/operand.hh>
 
 #include <cstdint>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // How column j of L reaches the lanes below the pivot.
 struct Shuffle {};  // one indexed shuffle per element: no local memory, no barrier
@@ -110,4 +110,4 @@ BATCHLAS_UNROLL_FULL
     return linfo;
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

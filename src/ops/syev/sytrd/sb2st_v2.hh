@@ -18,12 +18,12 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 
 namespace batchlas::sb2st_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <class T> using native_t = v2::arith_t<v2::arith::Native, T>;
 

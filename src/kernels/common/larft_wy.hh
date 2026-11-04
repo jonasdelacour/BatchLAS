@@ -12,7 +12,7 @@
 #include <src/kernels/common/dla_v2_larft.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -47,7 +47,7 @@ sycl::event larft_forward_columnwise_wg(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
-                namespace v2 = batchlas::device::v2;
+                namespace v2 = batchlas::device;
                 const v2::WorkGroup<WG, 32> ex{it};
                 v2::larft_forward_colwise(
                     ex, v2::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v),

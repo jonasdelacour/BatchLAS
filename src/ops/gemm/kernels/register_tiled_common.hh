@@ -16,7 +16,7 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace gc = batchlas::sycl_gemm::components;
 
 template <int Count, typename Fn, std::size_t... I>

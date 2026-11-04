@@ -126,7 +126,7 @@ re-run to confirm.
 ## Defect 20: `BATCHLAS_LAUNCH_BOUNDS` emits no `.maxntid`, so ptxas ignores the bound
 
 Open, performance only. `intel::max_work_group_size(1, 1, N)` in the macro
-(`src/sycl/kernel_attrs.hh:18-19`) lowers to no `.maxntid` on NVPTX with the `/opt/dpcpp-cuda`
+(`include/batchlas/device/detail/kernel_attrs.hh:18-19`) lowers to no `.maxntid` on NVPTX with the `/opt/dpcpp-cuda`
 DPC++, and `.minnctapersm` alone is dropped, so register counts are uncapped. Still affected:
 `getrf_tiny.cc:90`, `gesv_tiny.cc:101`, `posv_tiny.cc:96`. Every gemm functor that uses the macro
 also declares `reqd_work_group_size` (`.reqntid`;

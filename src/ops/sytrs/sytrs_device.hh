@@ -10,7 +10,7 @@
 // evidence: docs/perf/sytrf.md#sytrs-the-converted-solve
 
 #include <src/ops/sytrf/sytrf_device.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <cstddef>
 

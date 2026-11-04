@@ -8,9 +8,9 @@
 
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
-namespace batchlas::device::v2::gesvd_glue {
+namespace batchlas::device::inline v2::gesvd_glue {
 
 // ---- element executors ------------------------------------------------------------------------
 // Elem: index i of a launch that covers the extent exactly. Elem2: element (i, j) of such a 2-D
@@ -191,4 +191,4 @@ template <class Ex, class E, class S> BATCHLAS_DLA_INLINE void tridiag_abs_offdi
     }
 }
 
-}  // namespace batchlas::device::v2::gesvd_glue
+}  // namespace batchlas::device::gesvd_glue

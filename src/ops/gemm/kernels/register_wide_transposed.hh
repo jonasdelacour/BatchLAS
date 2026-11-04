@@ -14,7 +14,7 @@
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/ops/gemm/kernels/copy_async.hh>
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

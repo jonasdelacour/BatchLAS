@@ -5,12 +5,12 @@
 
 #include <src/ops/spmm/spmm_native.hh>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/kernels/common/dla_v2_sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
@@ -28,7 +28,7 @@ using sycl_device::dev_is_complex_v;
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // Body-for-body copy of gemv_wg_ladder (gemv_native.cc), kept diffable -- hence
 // the `units_per_wg_shift` parameter that every caller here passes 0 for.

@@ -20,13 +20,13 @@
 #include <type_traits>
 #include <vector>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/ops/ortho/krylov-ortho-ritz_v2.hh>
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 namespace {
 

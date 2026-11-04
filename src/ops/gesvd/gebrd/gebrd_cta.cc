@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -19,7 +19,7 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
 // The leader forms the scalars (conv::Phase: tau = 0, beta = alpha for len <= 1); on return lane

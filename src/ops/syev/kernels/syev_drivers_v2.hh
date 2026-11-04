@@ -7,12 +7,12 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 
 namespace batchlas::syev_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // ---- executors and flat 2-D glue ---------------------------------------------------------------
 // One element (r, c) as an executor (Grid2D's row()/col() contract): core 2-D ops visit only it.

@@ -30,7 +30,7 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace sbv = batchlas::sb2st_v2;
 
 template <typename T>

@@ -16,9 +16,9 @@
 #include <limits>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 template <class R> constexpr R safmin() {
     constexpr R eps = std::numeric_limits<R>::epsilon();
@@ -292,4 +292,4 @@ template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alp
     return out;
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

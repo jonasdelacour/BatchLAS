@@ -8,13 +8,13 @@
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 #include <src/ops/syev/steqr/steqr_v2.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/math-helpers.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <array>
 #include <cstdint>
@@ -116,7 +116,7 @@ namespace batchlas {
 
         inline void apply(int32_t col0, int32_t col1, T c, T s) {
             const int32_t pN = static_cast<int32_t>(LDQ);
-            device::v2::rot<device::v2::rot_conv::Transposed>(device::v2::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
+            device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
                             Q_local[base_q + lane + col1 * pN]);
         }
 
@@ -137,7 +137,7 @@ namespace batchlas {
             const int32_t next = idx + Dir * static_cast<int32_t>(LDQ);
             T q0 = carry;
             T q1 = Q_local[next];
-            device::v2::rot<device::v2::rot_conv::Transposed>(device::v2::Givens<T>{c, s}, q0, q1);
+            device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, q0, q1);
             Q_local[idx] = q0;
             carry = q1;
             idx = next;
@@ -151,7 +151,7 @@ namespace batchlas {
             const int32_t next = act ? idx + Dir * static_cast<int32_t>(LDQ) : idx;
             T q0 = carry;
             T q1 = Q_local[next];
-            device::v2::rot<device::v2::rot_conv::Transposed>(device::v2::Givens<T>{c, s}, q0, q1);
+            device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, q0, q1);
             if (act) Q_local[idx] = q0;
             carry = act ? q1 : carry;
             idx = next;
@@ -169,7 +169,7 @@ namespace batchlas {
         inline void reverse_columns(int32_t bb, int32_t be, bool rev) {
             if (!rev) return;
             const int32_t pN = static_cast<int32_t>(LDQ);
-            steqr_v2::reverse(device::v2::Thread{}, bb, be + 1,
+            steqr_v2::reverse(device::Thread{}, bb, be + 1,
                               [&](int32_t col) -> T& { return Q_local[base_q + lane + col * pN]; });
         }
     };
@@ -197,8 +197,8 @@ namespace batchlas {
 
     // The v2 executor over the solver's chunk: same lanes, reductions are butterflies.
     template <size_t P, bool M>
-    inline device::v2::SgpPartition<static_cast<int>(P), M> steqr_v2_exec(const SubGroupPartition<P, M>& part) {
-        return device::v2::wrap(part);
+    inline device::SgpPartition<static_cast<int>(P), M> steqr_v2_exec(const SubGroupPartition<P, M>& part) {
+        return device::wrap(part);
     }
 
     // dsteqr's relative split test (no absolute threshold).

@@ -27,14 +27,14 @@
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <src/ops/gemm/gemm-components_v2.hh>
 #include <sycl/sycl.hpp>
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace gc = batchlas::sycl_gemm::components;
 
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>

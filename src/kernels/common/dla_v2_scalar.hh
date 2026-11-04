@@ -3,10 +3,10 @@
 // Device LA v2 arithmetic for the POD device scalar sycl_device::Cx (src-only type), so v2 ops
 // run on kernels that re-type std::complex at the pointer boundary.
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 #include <src/sycl/device_scalar.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 template <class R> struct Arith<sycl_device::Cx<R>> {
     using T = sycl_device::Cx<R>;
@@ -58,4 +58,4 @@ template <class R> struct Arith<sycl_device::Cx<R>> {
     BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.re) && sycl::isfinite(a.im); }
 };
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

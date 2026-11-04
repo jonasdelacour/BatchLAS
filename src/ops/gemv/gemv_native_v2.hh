@@ -18,12 +18,12 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 
 namespace batchlas::sycl_gemv::dla {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // `zero` is decided on the host from the BLAS value (alpha == 0, beta == 0). store_fma honours
 // beta's flag; alpha's flag is the caller's cue to skip the reduction that makes acc.

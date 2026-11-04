@@ -11,10 +11,10 @@
 #include <type_traits>
 #include <utility>
 
-#include <batchlas/blas/device/v2/operand.hh>
-#include <batchlas/blas/device/v2/scalar.hh>
+#include <batchlas/device/operand.hh>
+#include <batchlas/device/scalar.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
 
@@ -690,4 +690,4 @@ BATCHLAS_DLA_INLINE auto amax_by(const Ex& ex, const X& x) {
     }
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

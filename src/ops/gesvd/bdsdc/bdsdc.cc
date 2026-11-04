@@ -10,7 +10,7 @@
 
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 #include <src/math-helpers.hh>
 #include <src/ops/gesvd/bdsdc/bdsdc_v2.hh>
@@ -27,8 +27,8 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = ::batchlas::device::v2;
-namespace gk = ::batchlas::device::v2::bdsdc;
+namespace v2 = ::batchlas::device;
+namespace gk = ::batchlas::device::bdsdc;
 
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;

@@ -10,7 +10,7 @@
 #include <src/queue.hh>
 #include <src/math-helpers.hh>
 #include <src/kernels/common/elementwise_glue_v2.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 namespace batchlas
 {
@@ -115,7 +115,7 @@ namespace batchlas
             auto [data, batch_size, rows, cols, ld, stride] =
                 std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
             batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(cgh, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> item) {
-                namespace v2 = ::batchlas::device::v2;
+                namespace v2 = ::batchlas::device;
                 const auto b = item.get_group_linear_id();
                 if (masked && !mk[b]) return;  // I1: uniform per work-group, before any barrier
                 const v2::WorkGroup<WG> ex{item};

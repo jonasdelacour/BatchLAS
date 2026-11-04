@@ -24,10 +24,10 @@
 #include <src/ops/gemm/gemm-components_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace gc = batchlas::sycl_gemm::components;
 using batchlas::verify::Check;
 

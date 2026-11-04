@@ -13,7 +13,7 @@
 #include <src/select/grid_chunk.hh>
 #include <src/select/select.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <batchlas/error.hh>
@@ -38,7 +38,7 @@ template <typename T> class SytrsScatterKernel;
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 using sytrf_device::Staged;
 using sytrf_device::Tile;
 using sytrf_device::Vec;

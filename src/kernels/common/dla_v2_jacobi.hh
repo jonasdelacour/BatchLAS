@@ -17,11 +17,11 @@
 #include <limits>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/operand.hh>
-#include <batchlas/blas/device/v2/scalar.hh>
+#include <batchlas/device/operand.hh>
+#include <batchlas/device/scalar.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 namespace detail {
 // conj of an element reference: the load happens inside, as with v1 device::detail::conj.
@@ -418,4 +418,4 @@ BATCHLAS_DLA_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR>& 
     }
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

@@ -6,7 +6,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <src/queue.hh>
 #include <src/sycl/local_mem.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <array>
@@ -31,8 +31,8 @@ inline constexpr bool kAcpp = false;
 // QR steps allowed per eigenvalue before the item is reported unconverged (LAPACK ?steqr's MAXIT).
 inline constexpr int kTridiagMaxIterations = 30;
 
-namespace v2 = device::v2;
-namespace tdv2 = device::v2::tridiag;
+namespace v2 = device;
+namespace tdv2 = device::tridiag;
 // The solver's launch is nd_range(batch * 32, 32). Loops stride by the runtime local range and
 // barriers fence global and local memory, as the legacy sycl::group_barrier: a constant stride
 // of 32 lets the compiler unroll every elementwise loop over the generic D/L/U pointers (+23%

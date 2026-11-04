@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// sytrf / sytrs-private device LA v2 pieces (beyond include/batchlas/blas/device/v2): the
+// sytrf / sytrs-private device LA v2 pieces (beyond include/batchlas/device): the
 // index-reversed views, the deterministic Bunch-Kaufman pivot search, ?SYTF2's two pivot tests,
 // the 2 x 2 pivot block, ?SYCONV on one column and the sub-group register sweeps of the fused
 // ?SYTRS tiers. Executors are v2::RtGroup<Group> (one work-group per item) and v2::SubGroup<32>
@@ -19,14 +19,14 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sytrf_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <class T> using Ar = v2::arith_t<v2::arith::Fma, T>;
 

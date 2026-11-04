@@ -11,12 +11,12 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/core.hh>
-#include <batchlas/blas/device/v2/exec.hh>
-#include <batchlas/blas/device/v2/operand.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/core.hh>
+#include <batchlas/device/exec.hh>
+#include <batchlas/device/operand.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // One scalar access, or a complex as one 2-wide vector access (needs 2 * sizeof(real) alignment).
 template <bool Pair> struct PairAccess {
@@ -184,4 +184,4 @@ BATCHLAS_DLA_INLINE void load_cols_scaled(const Thread&, T alpha, const B& b, in
     }
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

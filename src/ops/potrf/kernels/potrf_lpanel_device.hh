@@ -11,9 +11,9 @@
 
 #include <src/ops/potrf/potrf_cta_lpanel_v2.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/lapack.hh>
+#include <batchlas/device/lapack_aux.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -32,7 +32,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               int* __restrict fail,
                               D* __restrict Ag, int ldg,
                               int n) {
-    namespace v2 = batchlas::device::v2;
+    namespace v2 = batchlas::device;
     using Ar = dla::Ar<D>;
     const dla::SlotItems ex{tid, L};  // this matrix's slot of the packed work-group
     const auto A = v2::mat_wide(Ag, n, n, ldg);

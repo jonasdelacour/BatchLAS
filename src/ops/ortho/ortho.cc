@@ -20,14 +20,14 @@
 
 #include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/ortho/krylov-ortho-ritz_v2.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
 namespace batchlas {
-    namespace dla = device::v2;
+    namespace dla = device;
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};

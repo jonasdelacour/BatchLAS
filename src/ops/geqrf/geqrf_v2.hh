@@ -10,13 +10,13 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::geqrf_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // NaN-dropping max for shuffle butterflies (one FMNMX per step).
 struct Fmax {

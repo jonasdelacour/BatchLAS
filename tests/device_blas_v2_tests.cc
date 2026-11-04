@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Device LA v2 (include/batchlas/blas/device/v2) against host references.
+// Device LA v2 (include/batchlas/device) against host references.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld / inc and rectangular
 // shapes, complex data with nonzero imaginary parts, ConjTrans, beta != 0 and beta == Zero over
 // NaN-poisoned outputs, a poisoned unread triangle, batch 1024 with period-3 data where every
@@ -19,17 +19,17 @@
 #include <optional>
 #include <vector>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 #include <src/kernels/common/dla_v2_potf2.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // LAPACKE's ?larfg is the reflector oracle (linked through batchlas::verify; skipped when
 // BATCHLAS_VERIFY_HAVE_LAPACKE is 0). Declared here with std::complex (layout-compatible).

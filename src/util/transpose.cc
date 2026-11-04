@@ -35,7 +35,7 @@ namespace batchlas {
                     sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                     sycl::range<3>(1, TILE, TILE)),
                 [=](sycl::nd_item<3> item) {
-                    namespace v2 = ::batchlas::device::v2;
+                    namespace v2 = ::batchlas::device;
                     const v2::Grid2D<TILE, TILE, 1> ex{item};
                     const int b = ex.batch();
                     if (mask && !mask[b]) return;  // uniform per work-group: before the barrier

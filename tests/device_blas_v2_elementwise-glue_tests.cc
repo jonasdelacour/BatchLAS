@@ -24,15 +24,15 @@
 #include <utility>
 #include <vector>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/elementwise_glue_v2.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
-namespace glue = batchlas::device::v2::glue;
+namespace v2 = batchlas::device;
+namespace glue = batchlas::device::glue;
 using batchlas::verify::Check;
 
 namespace {

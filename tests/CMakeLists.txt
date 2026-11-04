@@ -423,7 +423,7 @@ endfunction()
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
     if(test_name STREQUAL "sg_partition_tests")
-        # Header-only: compiles src/kernels/common/sg_partition/ directly and links
+        # Header-only: compiles include/batchlas/device/detail/sg_partition/ directly and links
         # no batchlas library, only the SYCL compiler and include paths.
         batchlas_configure_binary_target(${test_name}
             NO_FACADE

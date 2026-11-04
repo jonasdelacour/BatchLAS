@@ -261,7 +261,7 @@ Event syevx_filtered(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
                                   sycl::range{kBoundsWG}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device::v2;
+                    namespace v2 = batchlas::device;
                     const v2::WorkGroup<static_cast<int>(kBoundsWG)> ex{item};
                     const size_t gid = item.get_group_linear_id();
                     const int b = static_cast<int>(gid / rg);
@@ -291,7 +291,7 @@ Event syevx_filtered(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
                                   sycl::range{static_cast<size_t>(rwg)}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device::v2;
+                    namespace v2 = batchlas::device;
                     const v2::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
@@ -380,7 +380,7 @@ Event syevx_filtered(Queue& ctx,
                     sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
                                       sycl::range{static_cast<size_t>(wg)}),
                     [=](sycl::nd_item<1> item) {
-                        namespace v2 = batchlas::device::v2;
+                        namespace v2 = batchlas::device;
                         const v2::RtGroup<> ex{item};
                         const int b = static_cast<int>(item.get_group_linear_id());
                         // I1, before the reduction. "Converged" is the neutral flag: the host
@@ -559,8 +559,8 @@ Event syevx_filtered(Queue& ctx,
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
-                        using batchlas::device::v2::syevx::sub_scaled;
-                        using Ar = batchlas::device::v2::Arith<T>;
+                        using batchlas::device::syevx::sub_scaled;
+                        using Ar = batchlas::device::Arith<T>;
                         // D := ca (A S - c S) - cb P, every scalar real (complex: algo mode,
                         // no Annex-G multiply; real: the legacy expressions).
                         const T av = sub_scaled(Tk(r, c, b), cvals[b], Sk(r, c, b));
@@ -662,7 +662,7 @@ Event syevx_filtered(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
                                   sycl::range{static_cast<size_t>(wg)}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device::v2;
+                    namespace v2 = batchlas::device;
                     const v2::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1

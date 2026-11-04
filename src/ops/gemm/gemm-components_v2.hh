@@ -19,16 +19,16 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/gemm/kernels/accessors.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/ops/gemm/kernels/load_policies.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sycl_gemm::components {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // ---- epilogue ------------------------------------------------------------------------------
 // *dst := alpha acc + beta *dst with the host's beta_zero flag (beta_zero never reads *dst). A

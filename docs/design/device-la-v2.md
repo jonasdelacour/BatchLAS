@@ -2,7 +2,7 @@
 
 > **Status:** current · checked 2026-11-04
 
-`batchlas::v2` (`#include <batchlas/blas/device/v2/dla.hh>`) is the in-kernel linear-algebra layer the
+`batchlas::v2` (`#include <batchlas/device.hh>`) is the in-kernel linear-algebra layer the
 LAPACK-like kernels are written in. Executor, layout and algorithm are compile-time types and the caller
 owns every barrier, so a v2 call compiles to the SASS of the hand-written code it replaces.
 
@@ -53,7 +53,7 @@ library CALLs), address-space loss (0 generic LD/ST), spills (LMEM 0) and `reqd_
 
 ## Device LA v2: API map
 
-| Header (`include/batchlas/blas/device/v2/`) | Provides |
+| Header (`include/batchlas/device/`) | Provides |
 | --- | --- |
 | `dla.hh` | umbrella |
 | `core.hh` | inline macros, extents, `Scope`, layout tags, `unroll::*`, `Range`, `alg::*`, `arith::*`, scalar tags, `Scratch` |
@@ -112,6 +112,6 @@ tridiag 0.919. Accepted by user decision: `Sytd2CTAKernel<float,16>` 1.021 (a 0.
 ## Device LA v2: open debts
 
 - latrd P3 occupancy decision (SLM floor, tuned occupancy or a gate rule).
-- clang 24 drops `[[intel::max_work_group_size]]` (`BATCHLAS_LAUNCH_BOUNDS`, `src/sycl/kernel_attrs.hh`):
+- clang 24 drops `[[intel::max_work_group_size]]` (`BATCHLAS_LAUNCH_BOUNDS`, `include/batchlas/device/detail/kernel_attrs.hh`):
   port it to the `max_work_group_size` kernel property before moving off clang 22.
 - `PotriCtaKernel<cfloat>` WG clamped to `kernel_max_wg_size` (352, not 384); the timing is unmeasured.

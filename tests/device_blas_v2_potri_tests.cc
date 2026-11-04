@@ -21,14 +21,14 @@
 #include <string>
 #include <vector>
 
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/ops/potri/potri_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace pv = batchlas::sycl_potri;
 using batchlas::verify::Check;
 

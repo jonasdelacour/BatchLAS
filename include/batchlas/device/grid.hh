@@ -9,9 +9,9 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // Local range (LB, GC, GR), dimension 2 fastest, so consecutive items walk a column and both
 // sides of a copy coalesce. Item (row(), col()) of batch items batch() + k * global_range(0).
@@ -93,4 +93,4 @@ template <class Name = void, class F> sycl::event batched2d(sycl::queue& q, int 
     return batched2d<Name>(q, batch, m, n, f, batched2d_shape(m, n));
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

@@ -3,7 +3,7 @@
 // its upper one P = diag(L) L^-1 transposed, so neither overwrites the other; Upper runs the same
 // code on L = U^H. Both O(m^3) phases accumulate TS x TS register tiles (one or two per work-item)
 // and read 2 TS local values per TS^2 multiply-adds. evidence: docs/perf/potri.md#potri-the-algorithm
-// The body is written on device LA v2.1 core (include/batchlas/blas/device/v2/dla.hh) and the
+// The body is written on device LA v2.1 core (include/batchlas/device.hh) and the
 // potri-private tile ops of src/ops/potri/potri_v2.hh.
 //
 // Invariants: acc[] tiles are indexed only by unrolled constants (a dynamic index moves them to
@@ -14,7 +14,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/ops/potri/potri_v2.hh>
 #include <src/queue.hh>
@@ -33,7 +33,7 @@ namespace batchlas::sycl_potri {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <typename T> class PotriCtaKernel;
 

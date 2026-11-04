@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// stedc-private device LA v2 helpers (beyond include/batchlas/blas/device/v2), on v2::RtGroup,
+// stedc-private device LA v2 helpers (beyond include/batchlas/device), on v2::RtGroup,
 // v2::WorkGroup and v2 partitions. Tests: tests/device_blas_v2_stedc_tests.cc.
 
 #include <cstdint>
@@ -8,12 +8,12 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 
 namespace batchlas::stedc_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <class Ex> inline constexpr bool is_group_v = v2::is_work_group_v<Ex>;
 template <int SG> inline constexpr bool is_group_v<v2::RtGroup<v2::Scope::Group, SG>> = true;

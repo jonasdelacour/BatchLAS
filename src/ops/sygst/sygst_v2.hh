@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// sygst's private device LA v2 ops (core: include/batchlas/blas/device/v2):
+// sygst's private device LA v2 ops (core: include/batchlas/device):
 //   - trsv_packed / trmv_packed: op(A)^-1 x and op(A) x, op = A^T or A^H, on one work-item with x
 //     in a register Frag; A's columns are read as aligned 16-byte packs into W split
 //     accumulators and its diagonal as real (a Cholesky factor). Core trsv / trmv are the row
@@ -13,13 +13,13 @@
 
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sycl_sygst::dla {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // One aligned 16-byte load of consecutive elements (one element when T is 16 bytes).
 template <class T> struct alignas(16) Pack16 {

@@ -9,10 +9,10 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 
-namespace batchlas::device::v2::lu {
+namespace batchlas::device::inline v2::lu {
 
 // One entry of laswp(ipiv(k1 .. k2-1)) applied to the identity: Forward applies k1 first,
 // Backward k2-1 first (the inverse). Pivots are LAPACK's, 1-based, as in core laswp.
@@ -49,4 +49,4 @@ struct LocalMinSlot {
     }
 };
 
-}  // namespace batchlas::device::v2::lu
+}  // namespace batchlas::device::lu

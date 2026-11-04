@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/extensions.hh>
@@ -106,7 +106,7 @@ Event update_vw_lower_small_legacy(Queue& q,
                     const T vck = V[c + k * ldv];
                     const T wrk = W[r + k * ldw];
                     const T wck = W[c + k * ldw];
-                    acc += vrk * batchlas::device::v2::conj(wck) + wrk * batchlas::device::v2::conj(vck);
+                    acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                 }
 
                 A[r + c * lda] -= acc;
@@ -155,7 +155,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
-                const batchlas::device::v2::WorkGroup<WG> ex{it};
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 T* A = a_ptr + b * stride_a;
                 T* Eb = e_ptr + b * stride_e;
@@ -251,7 +251,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     T dot_partial = T(0);
                     if (lane >= alpha_row && lane < n) {
                         const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        dot_partial = batchlas::device::v2::conj(vr) * W_local[lane];
+                        dot_partial = batchlas::device::conj(vr) * W_local[lane];
                     }
                     const T dot = ex.group_reduce(dot_partial);
 
@@ -269,10 +269,10 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                             const T vc = (c == alpha_row) ? T(1) : Al(c, k);
                             const T wc = W_local[c];
                             T a_rc = Al(lane, c);
-                            a_rc -= vr * batchlas::device::v2::conj(wc) + wr * batchlas::device::v2::conj(vc);
+                            a_rc -= vr * batchlas::device::conj(wc) + wr * batchlas::device::conj(vc);
                             Al(lane, c) = a_rc;
                             if (lane != c) {
-                                Al(c, lane) = batchlas::device::v2::conj(a_rc);
+                                Al(c, lane) = batchlas::device::conj(a_rc);
                             } else if constexpr (detail::is_complex<T>::value) {
                                 Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
                             }
@@ -328,7 +328,7 @@ Event restore_tridiag_lower(Queue& q,
                 if (i < n - 1) {
                     const T ei = Eb[i];
                     A[(i + 1) + i * lda] = ei;
-                    A[i + (i + 1) * lda] = batchlas::device::v2::conj(ei);
+                    A[i + (i + 1) * lda] = batchlas::device::conj(ei);
                 }
             });
     });

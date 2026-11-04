@@ -4,7 +4,7 @@
 
 #include <src/util/template-instantiations.hh>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/blas/functions/iluk.hh>
 #include <src/kernels/common/dla_v2_sparse.hh>
 #include <batchlas/util/mempool.hh>
@@ -24,7 +24,7 @@
 namespace batchlas {
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <typename T>
 using RealT = typename base_type<T>::type;

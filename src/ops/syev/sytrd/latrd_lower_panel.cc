@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -249,7 +249,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
-                const batchlas::device::v2::WorkGroup<WG> ex{it};
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
@@ -269,7 +269,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::v2::conj(wip) + wip * batchlas::device::v2::conj(vip);
+                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -288,7 +288,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             }
 
                             const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::v2::conj(wip) + wrp * batchlas::device::v2::conj(vip);
+                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -400,10 +400,10 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int c = i + 1 + lid; c < n; c += wg) {
                             const T vc = v_local[c];
 
-                            gamma_partial += batchlas::device::v2::conj(Wb(c, pc)) * vc;
+                            gamma_partial += batchlas::device::conj(Wb(c, pc)) * vc;
 
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::v2::conj(vcp) * vc;
+                            delta_partial += batchlas::device::conj(vcp) * vc;
                         }
                         const T gamma = ex.group_reduce(gamma_partial);
                         const T delta = ex.group_reduce(delta_partial);
@@ -422,7 +422,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     T dot_partial = T(0);
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         const T vr = v_local[r];
-                        dot_partial += batchlas::device::v2::conj(vr) * wcol_local[r];
+                        dot_partial += batchlas::device::conj(vr) * wcol_local[r];
                     }
                     const T dot = ex.group_reduce(dot_partial);
 
@@ -454,7 +454,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::v2::conj(wck) + wrk * batchlas::device::v2::conj(vck);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
@@ -553,7 +553,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                 const int gg = glid - b * G;
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
-                const batchlas::device::v2::WorkGroup<WG> ex{it};
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
@@ -587,7 +587,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::v2::conj(wip) + wip * batchlas::device::v2::conj(vip);
+                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -605,7 +605,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                 vrp = Ab(r, p);
                             }
                             const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::v2::conj(wip) + wrp * batchlas::device::v2::conj(vip);
+                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -708,9 +708,9 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         T delta_partial = T(0);
                         for (int c = rlo + lid; c < rhi; c += wg) {
                             const T vc = v_local[c];
-                            gamma_partial += batchlas::device::v2::conj(Wb(c, p)) * vc;
+                            gamma_partial += batchlas::device::conj(Wb(c, p)) * vc;
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::v2::conj(vcp) * vc;
+                            delta_partial += batchlas::device::conj(vcp) * vc;
                         }
                         gamma_partial = ex.group_reduce(gamma_partial);
                         delta_partial = ex.group_reduce(delta_partial);
@@ -750,7 +750,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 
                     T dot_partial = T(0);
                     for (int r = rlo + lid; r < rhi; r += wg) {
-                        dot_partial += batchlas::device::v2::conj(v_local[r]) * wcol_local[r];
+                        dot_partial += batchlas::device::conj(v_local[r]) * wcol_local[r];
                     }
                     dot_partial = ex.group_reduce(dot_partial);
                     if (lid == 0) red_dot[gg] = dot_partial;
@@ -786,7 +786,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::v2::conj(wck) + wrk * batchlas::device::v2::conj(vck);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;

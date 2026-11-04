@@ -12,12 +12,12 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::v2::lu {
+namespace batchlas::device::inline v2::lu {
 
 template <class T> using lu_arith = arith_t<arith::Fma, T>;
 
@@ -152,4 +152,4 @@ BATCHLAS_DLA_INLINE void lapmr_copy(const Ex& ex, const MA& a, const P& perm, co
     for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int c) BATCHLAS_DLA_BODY { b(i, c) = a(perm(i), c); });
 }
 
-}  // namespace batchlas::device::v2::lu
+}  // namespace batchlas::device::lu

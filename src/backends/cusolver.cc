@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //#include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <src/queue.hh>
@@ -309,7 +309,7 @@ namespace batchlas {
                             const int64_t r = lin / nn;
                             const int64_t c = lin - r * nn;
                             // Vh(r,c) = conj(V(c,r)); V(i,j) == src[b*nn*nn + j*nn + i]
-                            Vh(r, c, b) = batchlas::device::v2::conj(src[b * nn * nn + r * nn + c]);
+                            Vh(r, c, b) = batchlas::device::conj(src[b * nn * nn + r * nn + c]);
                         });
                 });
             }

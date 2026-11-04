@@ -5,12 +5,12 @@
 
 #include <cstdint>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::v2::lu {
+namespace batchlas::device::inline v2::lu {
 
 // Multiply by the reciprocal when it is finite and nonzero, else divide (the sfmin arm), else
 // (an exact zero pivot) the caller's singular value. Branches on the uniform flags, never a
@@ -47,4 +47,4 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-}  // namespace batchlas::device::v2::lu
+}  // namespace batchlas::device::lu

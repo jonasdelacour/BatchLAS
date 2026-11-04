@@ -3,7 +3,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/syev/steqr/steqr_v2.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
@@ -20,7 +20,7 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace sv = batchlas::steqr_v2;
 
 // Distinct from steqr_wg.cc's tags: both TUs link into one device image.

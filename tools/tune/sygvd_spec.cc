@@ -97,7 +97,7 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
             "src/ops/sygvd/choice.hh",
             // family: compose
             "src/ops/sygvd/kernels/sygvd_native.cc",

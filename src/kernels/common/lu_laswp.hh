@@ -12,7 +12,7 @@
 #include <src/queue.hh>
 
 #include <batchlas/util/sycl-device-queue.hh>
-#include <batchlas/blas/device/v2/lapack.hh>
+#include <batchlas/device/lapack_aux.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -22,7 +22,7 @@
 
 namespace batchlas::lu_native {
 
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 template <typename Tag, typename T> class LuLaswpKernel;
 

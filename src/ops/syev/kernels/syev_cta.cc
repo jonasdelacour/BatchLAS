@@ -22,12 +22,12 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/tuning_params.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/syev/kernels/syev_drivers_v2.hh>
 
 namespace batchlas {
 
-namespace v2 = device::v2;
+namespace v2 = device;
 namespace sv = syev_v2;
 
 namespace {

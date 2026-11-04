@@ -15,10 +15,10 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <src/sort.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
-    namespace dla = device::v2;
+    namespace dla = device;
 
     template <Backend B, typename T, MatrixFormat MF>
     struct InitKernel {};

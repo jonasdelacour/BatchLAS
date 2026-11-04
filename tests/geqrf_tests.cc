@@ -1884,7 +1884,7 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
            "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
            "is warp-uniform here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is backend-specific (src/kernels/common/sg_partition/; "
+        << path << ": group_barrier(part) is backend-specific (include/batchlas/device/detail/sg_partition/; "
            "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
            "correct on this box and not ordered everywhere: " << part_barrier;
 }

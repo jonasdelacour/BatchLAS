@@ -29,7 +29,7 @@
 #define BATCHLAS_DLA_BODY __attribute__((always_inline))
 #endif
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // ---- loop policy --------------------------------------------------------------------------
 // The unroll policy of a v2-owned loop, emitted as loop metadata: Default adds none (LLVM and
@@ -424,4 +424,4 @@ template <int K> struct ReduceN {};
 using Reduce = ReduceN<1>;
 }  // namespace op
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

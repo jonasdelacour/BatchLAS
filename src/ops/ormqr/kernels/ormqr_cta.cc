@@ -8,14 +8,14 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 
 #include <src/kernels/common/dla_v2_larft.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 
@@ -49,7 +49,7 @@ using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).

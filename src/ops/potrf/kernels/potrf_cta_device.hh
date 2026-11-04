@@ -11,9 +11,9 @@
 
 #include <src/ops/potrf/potrf_cta_lpanel_v2.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/lapack.hh>
+#include <batchlas/device/lapack_aux.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -46,7 +46,7 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
                            int* __restrict off,
                            D* __restrict Ag, int ldg,
                            int n, bool upper) {
-    namespace v2 = batchlas::device::v2;
+    namespace v2 = batchlas::device;
     const v2::RtGroup<(SC == PotrfScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group)> ex(it);
     const auto A = dla::slm_mat(S, lda, n, lda);  // lda rows: the pad rows too
     const v2::Vec<R, v2::Ext<NB>, v2::Unit, v2::Mem::Local> dg{diag, {}};

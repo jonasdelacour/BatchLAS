@@ -6,12 +6,12 @@
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <batchlas/blas/device/v2/scalar.hh>
+#include <batchlas/device/scalar.hh>
 
 #include <complex>
 
 #include <src/queue.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 
 namespace batchlas {
@@ -223,10 +223,10 @@ namespace batchlas {
         }
 
         template <RealScalar T>
-        inline constexpr T safmin(){ return ::batchlas::device::v2::safmin<T>(); }
+        inline constexpr T safmin(){ return ::batchlas::device::safmin<T>(); }
 
         template <RealScalar T>
-        inline constexpr T safmax(){ return ::batchlas::device::v2::safmax<T>(); }
+        inline constexpr T safmax(){ return ::batchlas::device::safmax<T>(); }
 
         template <RealScalar T>
         inline constexpr T ssfmin(){
@@ -274,7 +274,7 @@ namespace batchlas {
         }
 
         template <typename T>
-        using lartg_result = ::batchlas::device::v2::LartgResult<T>;
+        using lartg_result = ::batchlas::device::LartgResult<T>;
 
         // Three fields, not v2::LarfgScalars (five): invoke_one_broadcast moves it whole.
         template <typename T>
@@ -290,24 +290,24 @@ namespace batchlas {
         __attribute__((always_inline)) inline lartg_result<T> lartg(const T& f, const T& g)
         {
             if constexpr (is_complex<T>::value && std::is_same_v<base_float_t<T>, float>) {
-                if (sycl_impl::on_metal()) return ::batchlas::device::v2::lartg<float>(f, g);
-                return ::batchlas::device::v2::lartg<double>(f, g);
+                if (sycl_impl::on_metal()) return ::batchlas::device::lartg<float>(f, g);
+                return ::batchlas::device::lartg<double>(f, g);
             } else {
-                return ::batchlas::device::v2::lartg(f, g);
+                return ::batchlas::device::lartg(f, g);
             }
         }
 
-        // The phase-keeping larfg convention (device::v2::conv::Phase).
+        // The phase-keeping larfg convention (device::conv::Phase).
         template <typename T>
         __attribute__((always_inline)) inline larfg_result<T> larfg(const T& alpha, base_float_t<T> xnorm, int len)
         {
-            const auto s = ::batchlas::device::v2::larfg_scalars<::batchlas::device::v2::conv::Phase>(alpha, xnorm, len);
+            const auto s = ::batchlas::device::larfg_scalars<::batchlas::device::conv::Phase>(alpha, xnorm, len);
             return {s.tau, s.beta, s.scale};
         }
 
         template <typename T>
         __attribute__((always_inline)) inline auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
-            return ::batchlas::device::v2::lae2(a, b, c);
+            return ::batchlas::device::lae2(a, b, c);
         }
 
         // The eigenvalue of [[a, b], [b, c]] closest to c.
@@ -319,12 +319,12 @@ namespace batchlas {
 
         template <typename T>
         __attribute__((always_inline)) inline std::array<T, 2> las2(const T& f, const T& g, const T& h) {
-            return ::batchlas::device::v2::las2(f, g, h);
+            return ::batchlas::device::las2(f, g, h);
         }
 
         template <typename T>
         __attribute__((always_inline)) inline auto laev2(const T& a, const T& b, const T& c) {
-            return ::batchlas::device::v2::laev2(a, b, c);
+            return ::batchlas::device::laev2(a, b, c);
         }
 
     }

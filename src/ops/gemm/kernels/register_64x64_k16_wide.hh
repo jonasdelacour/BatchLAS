@@ -15,7 +15,7 @@
 #include <src/ops/gemm/kernels/register_tiled_common.hh>
 
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 
 #include <batchlas/backend_config.h>

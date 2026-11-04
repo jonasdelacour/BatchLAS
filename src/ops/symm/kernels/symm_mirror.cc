@@ -13,7 +13,7 @@
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 

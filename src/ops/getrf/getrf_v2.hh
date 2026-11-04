@@ -11,9 +11,9 @@
 #include <src/ops/getrf/getrf_cta_device.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/level1.hh>
+#include <batchlas/device/level1.hh>
 #include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
@@ -23,7 +23,7 @@
 
 namespace batchlas::getrf_native {
 
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 // The panel's executor: the launch picks the width per shape (getrf_leaf_wg: 64..512).
 template <LuScope SC>

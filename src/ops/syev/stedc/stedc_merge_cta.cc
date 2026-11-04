@@ -8,7 +8,7 @@
 #include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 #include <src/ops/syev/stedc/stedc_v2.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -17,7 +17,7 @@
 #include <src/ops/syev/stedc/stedc_secular.hh>
 #include <src/ops/syev/stedc/stedc_merge_kernels.hh>
 #include <src/kernels/common/info_span.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <cassert>
 #include <algorithm>
@@ -27,7 +27,7 @@
 
 namespace batchlas {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <Backend B, typename T, int32_t P>
 class StedcFusedCtaMerge;

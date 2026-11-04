@@ -20,9 +20,9 @@
 
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/sycl/inv_sqrt.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <batchlas/blas/device/v2/level1.hh>
+#include <batchlas/device/level1.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -32,7 +32,7 @@
 
 namespace batchlas::potrf_native::dla {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // The arithmetic of both kernels: explicit fma chains, bit-equal to device_scalar.hh.
 template <class D> using Ar = v2::arith_t<v2::arith::Fma, D>;

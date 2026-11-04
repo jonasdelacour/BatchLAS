@@ -8,10 +8,10 @@
 
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/interop.hh>
-#include <batchlas/blas/device/v2/level1.hh>
+#include <batchlas/device/interop.hh>
+#include <batchlas/device/level1.hh>
 
-namespace batchlas::device::v2::bdsdc {
+namespace batchlas::device::inline v2::bdsdc {
 
 // item(v, b) restricted to its first n elements.
 template <class T> BATCHLAS_DLA_INLINE ItemVec<T> item_n(const VectorView<T>& v, int b, int n) {
@@ -86,4 +86,4 @@ BATCHLAS_DLA_INLINE void dgmv_many(const Ex& ex, const Op0& op0, const Ops&... o
     });
 }
 
-}  // namespace batchlas::device::v2::bdsdc
+}  // namespace batchlas::device::bdsdc

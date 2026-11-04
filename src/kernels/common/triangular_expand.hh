@@ -68,7 +68,7 @@ Event expand_triangular(Queue& ctx,
                                static_cast<std::size_t>(shape.rows));
 
     ctx->parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-        namespace v2 = ::batchlas::device::v2;
+        namespace v2 = ::batchlas::device;
         const v2::Grid2D<0, 0, 1> ex{item};
         const int b = ex.batch();
         v2::glue::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
@@ -118,7 +118,7 @@ Event expand_mirrored(Queue& ctx,
             sycl::range<1>(kMirrorTile * (kMirrorTile + 1)), cgh);
 
         batchlas::impl::parallel_for(cgh, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-            namespace v2 = ::batchlas::device::v2;
+            namespace v2 = ::batchlas::device;
             const v2::Grid2D<kMirrorTile, kMirrorGroupCols, 1> ex{item};
             const int ti = static_cast<int>(item.get_group(1));
             const int tj = static_cast<int>(item.get_group(2));

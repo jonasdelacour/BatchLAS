@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -32,7 +32,7 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // ---------------------------------------------------------------------------
 // WY block width for the panel back-transform. ormqr keys its block width on the

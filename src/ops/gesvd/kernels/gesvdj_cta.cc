@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -10,13 +10,13 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_jacobi.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 #include <algorithm>
@@ -41,7 +41,7 @@ class GesvdjCTAKernel;
 
 namespace {
 
-namespace v2 = ::batchlas::device::v2;
+namespace v2 = ::batchlas::device;
 
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,

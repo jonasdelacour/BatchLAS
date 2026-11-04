@@ -5,7 +5,7 @@
 /// @file
 /// @brief Everything `<batchlas.hh>` provides: containers, entry points, extensions and the linalg layer.
 ///
-/// Does not include `<batchlas/blas/device/v2/dla.hh>` (device LA v2, in-kernel) or
+/// Does not include `<batchlas/device.hh>` (device LA v2, in-kernel) or
 /// `<sycl/sycl.hpp>`; include those yourself where needed.
 /// @ingroup api_reference
 

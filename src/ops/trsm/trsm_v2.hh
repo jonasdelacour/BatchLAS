@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/dla.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sycl_trsm::dla {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // isfinite under Ar: core's Arith<sycl_device::Cx> (dla_v2_scalar.hh) has no isfinite.
 template <class Ar, class T> BATCHLAS_DLA_INLINE bool finite(T a) {

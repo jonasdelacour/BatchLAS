@@ -8,10 +8,10 @@
 
 #include <type_traits>
 
-#include <batchlas/blas/device/v2/level1.hh>
-#include <batchlas/blas/device/v2/scalar.hh>
+#include <batchlas/device/level1.hh>
+#include <batchlas/device/scalar.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 // The part of a matrix an op touches: Full, a triangle with its diagonal (Lower, Upper) or
 // without it (StrictLower, StrictUpper).
@@ -244,4 +244,4 @@ template <Side SD, class Ex, class T, class V, class MC> BATCHLAS_DLA_INLINE voi
     }
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

@@ -25,7 +25,7 @@ JIT-compiled at first launch); a third configuration is acpp with its Metal back
 - Device-link options (`BATCHLAS_SYCL_LINK_JOBS`, FTZ, `native_cpu`) are DPC++ only. On acpp
   `BATCHLAS_CPU_TARGET` takes only `auto` or `none` (@ref design_cpu_target_detection).
 - `backend_config.h` carries `BATCHLAS_SYCL_IMPL_DPCPP` / `_ACPP`. acpp runtime names appear only in
-  `src/sycl/impl.hh` and `src/sycl/sscp_target.hh`.
+  `src/sycl/impl.hh` and `include/batchlas/device/detail/sscp_target.hh`.
 - A consumer must use the same implementation (`BatchLASConfig.cmake` records `BatchLAS_SYCL_IMPL`);
   an acpp install ships `include/batchlas/acpp/annexg_complex.hh` and `-include`s it through
   `BatchLAS_SYCL_COMPILE_OPTIONS`.
@@ -48,14 +48,14 @@ on DPC++ each helper is the plain DPC++ call.
 | `on_async_errors`, `throw_async_errors`, `throw_launch_errors`, `wait_and_throw` | the error sink ([asynchronous errors](#sycl-impl-asynchronous-errors)) |
 | `check_group_count`, `check_global_range` | CUDA grid-limit check; on Metal the \f$2^{32} - 1\f$ global-range check |
 
-Kernel-level differences live in `src/sycl/sscp_target.hh`, `src/sycl/kernel_attrs.hh`,
+Kernel-level differences live in `include/batchlas/device/detail/sscp_target.hh`, `include/batchlas/device/detail/kernel_attrs.hh`,
 `src/sycl/local_mem.hh` and `include/batchlas/util/group-collectives.hh`; DPC++-only intrinsics and
 PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Every vendor call runs as
 `impl::run_native<impl::Native::Cuda>(*ctx, [=](auto s){ handle.setStream(s); ... })`.
 
 ### Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
 
-- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`src/sycl/sscp_target.hh`): `constexpr` from
+- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`include/batchlas/device/detail/sscp_target.hh`): `constexpr` from
   `__SYCL_DEVICE_ONLY__`/`__NVPTX__`/`__SYCL_CUDA_ARCH__` on DPC++; on acpp generic, which compiles
   one IR for every target and defines neither macro, JIT-reflection queries inside
   `__acpp_if_target_sscp`, and the JIT deletes the dead branch.
@@ -64,7 +64,7 @@ PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Ever
 - `sg_partition`'s `SscpBackend` (`backend_sscp.hh`) reuses `NvptxBackend` on PTX; its `__nvvm_*`
   names are asm labels on the LLVM intrinsics, so they keep `convergent`. Other targets take
   `GenericBackend`.
-- `src/sycl/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
+- `include/batchlas/device/detail/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
   and `BATCHLAS_UNROLL_FULL` is `clang loop unroll(full)` (SSCP unrolls a bare `#pragma unroll` only
   partially). `Device::supports_sub_group_size(n)` is true only for the device's single sub-group
   size, so `can_run`s that need sg 32 refuse other devices.

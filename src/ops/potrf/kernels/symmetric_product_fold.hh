@@ -7,7 +7,7 @@
 // is not read, so a poisoned C cannot produce NaN. C's batch mask skips its inactive items (I3).
 // evidence: docs/perf/level3.md#level-3-generic-syrk-and-syr2k-fallbacks-fold-one-triangle
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 
@@ -39,7 +39,7 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
     const size_t c_stride = static_cast<size_t>(C.stride());
     const size_t p_ld = static_cast<size_t>(product.ld());
     const size_t p_stride = static_cast<size_t>(product.stride());
-    namespace v2 = ::batchlas::device::v2;
+    namespace v2 = ::batchlas::device;
     const bool upper = uplo == Uplo::Upper;
     const bool ignore_c = beta == T(0);
     const std::uint8_t* const mask = C.batch_mask().empty() ? nullptr : C.batch_mask().data();

@@ -13,7 +13,7 @@
 #include <src/linalg-impl.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 #include <src/kernels/common/dla_v2_scalar.hh>
 
@@ -25,12 +25,12 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas::sycl_trsm {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 namespace {
 

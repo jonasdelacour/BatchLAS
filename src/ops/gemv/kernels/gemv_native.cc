@@ -12,7 +12,7 @@
 #include <src/kernels/common/dla_v2_scalar.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
@@ -29,7 +29,7 @@
 
 namespace batchlas::sycl_gemv {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 using sycl_device::DevMap;
 using Fma = v2::arith::Fma;
 

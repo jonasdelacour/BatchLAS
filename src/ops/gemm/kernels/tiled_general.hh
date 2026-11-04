@@ -9,7 +9,7 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace gc = batchlas::sycl_gemm::components;
 
 template <typename T, int Tile, Transpose OpA, Transpose OpB>

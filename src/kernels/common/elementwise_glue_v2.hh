@@ -10,9 +10,9 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
-namespace batchlas::device::v2::glue {
+namespace batchlas::device::inline v2::glue {
 
 // Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
 // (the legacy spelling, so a 1:1 port stays 1:1).
@@ -239,4 +239,4 @@ BATCHLAS_DLA_INLINE auto lange(const Ex& ex, const MA& a) {
     }
 }
 
-}  // namespace batchlas::device::v2::glue
+}  // namespace batchlas::device::glue

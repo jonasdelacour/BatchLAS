@@ -14,7 +14,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <src/ops/getrs/getrs_v2.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -35,7 +35,7 @@ namespace sycl_getrs {
 namespace {
 
 using namespace batchlas::sycl_device;
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // nb must not exceed the sub-group size: the block solve is a sub-group shuffle
 // recurrence with lane i owning row i.

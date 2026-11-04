@@ -9,14 +9,14 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 #include <src/ops/syev/kernels/syev_drivers_v2.hh>
 
 #include <complex>
 
 namespace batchlas {
 
-namespace v2 = device::v2;
+namespace v2 = device;
 namespace sv = syev_v2;
 
 namespace {

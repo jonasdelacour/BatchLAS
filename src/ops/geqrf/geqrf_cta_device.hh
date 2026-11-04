@@ -9,7 +9,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/geqrf/geqrf_v2.hh>
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -58,7 +58,7 @@ enum class GeqrfScope { SubGroup, WorkGroup };
 template <typename D, GeqrfScope SC, typename Tile>
 inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int kmax,
                                D* tau_ptr) {
-    namespace v2 = batchlas::device::v2;
+    namespace v2 = batchlas::device;
     namespace q2 = batchlas::geqrf_v2;
     using R = real_of<D>;
     using F = v2::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit

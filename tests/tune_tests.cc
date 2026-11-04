@@ -355,8 +355,8 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
-               p.rfind("src/kernels/common/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+        return p == "include/batchlas/device/detail/kernel_attrs.hh" || p == "include/batchlas/device/detail/sscp_target.hh" ||
+               p.rfind("include/batchlas/device/detail/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
     int specs = 0;
@@ -365,7 +365,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
         if (name.size() < 8 || name.substr(name.size() - 8) != "_spec.cc") continue;
         ++specs;
         const KernelBlock b = parse_kernel_block(read_file(entry.path()));
-        std::set<std::string> reached{"src/sycl/kernel_attrs.hh"}, seen;
+        std::set<std::string> reached{"include/batchlas/device/detail/kernel_attrs.hh"}, seen;
         std::vector<fs::path> todo;
         for (const auto& f : b.all) todo.push_back(repo / f);
         while (!todo.empty()) {

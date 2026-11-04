@@ -30,8 +30,8 @@ namespace batchlas {
 template <Backend B, typename T>
 struct StebzKernel;
 
-namespace v2 = device::v2;
-namespace tdv2 = device::v2::tridiag;
+namespace v2 = device;
+namespace tdv2 = device::tridiag;
 
 template <Backend B, typename T>
 Event stebz(Queue& ctx,

@@ -4,7 +4,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 #include <src/math-helpers.hh>
 #include <src/ops/gesvd/gebrd/gebrd_v2.hh>
@@ -105,7 +105,7 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // The complex labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
 constexpr int32_t kPanelWG = 128;

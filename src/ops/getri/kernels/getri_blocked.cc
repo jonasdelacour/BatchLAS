@@ -30,7 +30,7 @@ namespace sycl_getri {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <typename T> class GetriZeroKernel;
 template <typename T> class GetriPermKernel;

@@ -14,10 +14,10 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::v2 {
+namespace batchlas::device::inline v2 {
 
 template <class V> struct Published;
 
@@ -175,7 +175,7 @@ template <int SG = 32> struct SubGroup {
 // P consecutive lanes of a sub-group. Impl = sycl::sub_group is the built-in lockstep form
 // (all lanes of the sub-group reach every collective); for Masked chunks pass the src-side
 // SubGroupPartition<P, true> (src/kernels/common/dla_v2_partition.hh), which include/ cannot
-// name: sg_partition lives under src/ and pulls src/sycl/kernel_attrs.hh.
+// name: sg_partition lives under src/ and pulls include/batchlas/device/detail/kernel_attrs.hh.
 template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Partition {
     static_assert(detail::is_pow2(P), "v2::Partition: P must be a power of two");
     static_assert(!(Masked && std::is_same_v<Impl, sycl::sub_group>),
@@ -347,4 +347,4 @@ template <class Op, class Ex, class T> constexpr int scratch_elements() {
     }
 }
 
-}  // namespace batchlas::device::v2
+}  // namespace batchlas::device

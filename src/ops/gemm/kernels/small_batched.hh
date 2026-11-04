@@ -21,14 +21,14 @@
 #include <stdexcept>
 #include <type_traits>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/ops/gemm/gemm-components_v2.hh>
 
 namespace batchlas::sycl_gemm_small {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace gc = batchlas::sycl_gemm::components;
 
 template <typename T, int NB, bool Masked>

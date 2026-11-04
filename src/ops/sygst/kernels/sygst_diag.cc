@@ -22,7 +22,7 @@ namespace batchlas::sycl_sygst {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;

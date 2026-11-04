@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <src/kernels/common/sg_partition/backend_amdgcn_core.hh>
+#include <batchlas/device/detail/sg_partition/backend_amdgcn_core.hh>
 
 namespace batchlas::sgp {
 

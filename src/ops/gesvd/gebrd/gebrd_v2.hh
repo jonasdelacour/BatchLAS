@@ -3,11 +3,11 @@
 // gebrd-private device LA v2 pieces the v2.1 core lacks: lacgv, the read-only adaptors
 // conj_view / herm, and a gemv_acc y0 that adds nothing. The rest comes from v2/dla.hh.
 
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas::gebrd_v2 {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 
 // x(i) := conj(x(i)) on every owned i (LAPACK lacgv); nothing for real T. No barrier.
 template <class Ex, class X> BATCHLAS_DLA_INLINE void lacgv(const Ex& ex, const X& x) {

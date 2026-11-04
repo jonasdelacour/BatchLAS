@@ -4,7 +4,7 @@
 // rationale and for the schedule, which is validated in
 // playground/sb2st_hh_sequential.py.
 
-#include <batchlas/blas/device/v2/core.hh>
+#include <batchlas/device/core.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
@@ -22,7 +22,7 @@
 
 #include <src/ops/syev/sytrd/sb2st_v2.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 
 #include <algorithm>
@@ -40,7 +40,7 @@ namespace detail {
 
 namespace {
 
-namespace v2 = batchlas::device::v2;
+namespace v2 = batchlas::device;
 namespace sbv = batchlas::sb2st_v2;
 
 template <typename T>
@@ -191,10 +191,10 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     v2::sync(ex, v2::Mem::Global);
 
                     const T kappa = v2::dotc<v2::Scope::Auto, v2::arith::Native>(ex, v, w);
-                    const T coef = tau * batchlas::device::v2::conj(tau) * kappa * T(Real(0.5));
+                    const T coef = tau * batchlas::device::conj(tau) * kappa * T(Real(0.5));
                     // The loop is written out: through for_each_owned ptxas unrolls it 4x (latch layout).
                     for (int i = ex.lid(); i < m; i += decltype(ex)::size)
-                        w(i) = batchlas::device::v2::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
+                        w(i) = batchlas::device::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
                     v2::sync(ex, v2::Mem::Global);
 
                     sbv::her2<Uplo::Lower>(rows, v2::NegOne{}, v2::assume_published(w), v2::assume_published(v), W);

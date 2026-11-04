@@ -345,7 +345,7 @@ Event syevx_direct_subset(Queue& ctx,
             batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device::v2;
+                    namespace v2 = batchlas::device;
                     const v2::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1
