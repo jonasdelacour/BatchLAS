@@ -11,6 +11,7 @@
 #include <batchlas/device.hh>
 
 namespace batchlas::device::inline v2::gesvd_glue {
+using device::dgmm;  // core level2.hh
 
 // ---- element executors ------------------------------------------------------------------------
 // Elem: index i of a launch that covers the extent exactly. Elem2: element (i, j) of such a 2-D
@@ -94,21 +95,6 @@ template <class V, class P> struct Gathered {
 };
 template <class V> BATCHLAS_DLA_INLINE Reversed<V> reversed(const V& v) { return {v}; }
 template <class V, class P> BATCHLAS_DLA_INLINE Gathered<V, P> gathered(const V& v, const P& p) { return {v, p}; }
-
-// ---- ops ----------------------------------------------------------------------------------------
-// A := diag(d) A (Side::Left) or A diag(d) (Side::Right); a real d scales a complex A by
-// components (two multiplies, no complex product).
-template <Side SD, class Ex, class D, class MA> BATCHLAS_DLA_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
-    using T = typename MA::value_type;
-    using A = Arith<T>;
-    using S = std::remove_cvref_t<decltype(d(0))>;
-    for_each_owned_2d(ex, a.rows(), a.cols(), [&](int i, int j) {
-        const S s = d(SD == Side::Left ? i : j);
-        const T aij = a(i, j);
-        if constexpr (A::is_complex && !Arith<S>::is_complex) a(i, j) = A::make(A::re(aij) * s, A::im(aij) * s);
-        else a(i, j) = A::mul(aij, static_cast<T>(s));
-    });
-}
 
 // y := Z x for the down-shift Z: y(0) = 0, y(i) = x(i - 1) for i <= x.size(), 0 past it.
 template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void downshift(const Ex& ex, const X& x, const Y& y) {

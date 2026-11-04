@@ -9,7 +9,7 @@
 // (b tiny against a, c) and on the tie a == c; device and host results compared, never device to
 // itself.
 // Red set (each break was made once, 2026-11-04, and this suite failed): SafeRecip with use_mul
-// for an infinite reciprocal.
+// for an infinite reciprocal; v2.2 (lartg Fast): s = g * inv without f's sign.
 #include <tests/device_core_common.hh>
 
 #include <cmath>
@@ -160,6 +160,57 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     EXPECT_TRUE(same_bits(got[2], dv::lift<T>(R(-7)))) << "exact zero: the caller's value";
     EXPECT_EQ(F[6], 1) << "1 / safmin is finite: multiply";
     EXPECT_LE(err(got[3], wide(yy[3]) / wide(dd[3])), tol<T>() * static_cast<double>(1 / dv::safmin<R>()));
+}
+
+
+// v2.2: lartg<lartg_alg::Fast> (float: rsqrt + Newton inside the unscaled range) against the
+// exact rotation within 4 ulp (both use sqrt.approx; Fast's 1/r is rsqrt + Newton), g == 0
+// giving exactly (1, 0, f), and arguments outside the range (|f| ~ 2^120, 2^-140) taking the
+// Exact path bit for bit; other T: Fast is Exact.
+TYPED_TEST(DeviceCoreScalarTest, LartgFastMatchesExact) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    auto& d = this->dev;
+    constexpr int n = 64;
+    std::vector<T> f_h = vals<T>(n, 61), g_h = vals<T>(n, 62);
+    g_h[3] = T(0);
+    if constexpr (!is_cplx<T>) {
+        f_h[5] = std::ldexp(R(1), std::numeric_limits<R>::max_exponent - 8);
+        f_h[6] = std::ldexp(R(1), std::numeric_limits<R>::min_exponent - 10);
+    }
+    T* f = d.up(f_h);
+    T* g = d.up(g_h);
+    T* fast = d.template alloc<T>(3 * n, T(0));
+    T* exact = d.template alloc<T>(3 * n, T(0));
+    d.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int i = static_cast<int>(it.get_local_linear_id());
+        const auto a = dv::lartg<dv::lartg_alg::Fast>(f[i], g[i]);
+        const auto b = dv::lartg<dv::lartg_alg::Exact>(f[i], g[i]);
+        fast[3 * i] = T(a.c);
+        fast[3 * i + 1] = a.s;
+        fast[3 * i + 2] = a.r;
+        exact[3 * i] = T(b.c);
+        exact[3 * i + 1] = b.s;
+        exact[3 * i + 2] = b.r;
+    });
+    const auto fa = d.down(fast, 3 * n), ex = d.down(exact, 3 * n);
+    const double ulp = static_cast<double>(std::numeric_limits<R>::epsilon());
+    for (int i = 0; i < n; ++i) {
+        const bool outside = !is_cplx<T> && (i == 5 || i == 6);
+        for (int k = 0; k < 3; ++k) {
+            if (!std::is_same_v<T, float> || outside || i == 3) {
+                EXPECT_TRUE(same_bits(fa[3 * i + k], ex[3 * i + k])) << "Fast == Exact, i " << i << " k " << k;
+            } else {
+                const double ref = static_cast<double>(std::abs(ex[3 * i + k]));
+                EXPECT_LE(static_cast<double>(std::abs(fa[3 * i + k] - ex[3 * i + k])), 4 * ulp * std::max(ref, 1e-30)) << i << " " << k;
+            }
+        }
+        if (i == 3) {
+            EXPECT_TRUE(same_bits(fa[0 + 9], T(1)));
+            EXPECT_TRUE(same_bits(fa[1 + 9], T(0)));
+            EXPECT_TRUE(same_bits(fa[2 + 9], f_h[3]));
+        }
+    }
 }
 
 }  // namespace

@@ -12,6 +12,7 @@
 #include <batchlas/device/level1.hh>
 
 namespace batchlas::device::inline v2::bdsdc {
+using device::interleave;  // core level1.hh
 
 // item(v, b) restricted to its first n elements.
 template <class T> BATCHLAS_DLA_INLINE ItemVec<T> item_n(const VectorView<T>& v, int b, int n) {
@@ -49,16 +50,6 @@ template <class V> struct Sliced {
 };
 template <class V> BATCHLAS_DLA_INLINE Sliced<V> slice(const V& v, int start, int n, int step) {
     return {v, start, n, step};
-}
-
-// y(2k) := a(k), y(2k+1) := b(k) for k < a.size(); b.size() is a.size() or a.size() - 1.
-template <class Ex, class A, class B, class Y>
-BATCHLAS_DLA_INLINE void interleave(const Ex& ex, const A& a, const B& b, const Y& y) {
-    const int nb = b.size();
-    for_each_owned(ex, a.size(), [&](int k) {
-        y(2 * k) = a(k);
-        if (k < nb) y(2 * k + 1) = b(k);
-    });
 }
 
 // y := alpha diag(d) x when `on`, rounded as alpha * (d_i x_i); a deferred op for dgmv_many.

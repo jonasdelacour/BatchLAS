@@ -24,6 +24,9 @@
 namespace batchlas::sb2st_v2 {
 
 namespace v2 = batchlas::device;
+using batchlas::device::largv;  // core lapack_aux.hh (Rot-kernel form)
+using batchlas::device::lartv;
+using batchlas::device::lar2v;
 
 template <class T> using native_t = v2::arith_t<v2::arith::Native, T>;
 
@@ -309,36 +312,6 @@ BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const XP& xp, const YP& y
 //   Rot::lartg(f, g, c&, s&, r&)   Rot::rot_pair(x&, y&, c, s)   Rot::lar2v_pair(x&, y&, z&, c, s)
 // The ops distribute the rotation index over the executor's Cyclic layout; LAPACK's vector strides
 // are the operands' own. Core rot / lasr fix the arithmetic (Arith products), these keep Rot's.
-
-// (c(t), s(t)) := lartg(x(t), y(t)); x(t) := r, y(t) := s  (xLARGV, y holds g in and s out)
-template <class Rot, class Ex, class X, class Y, class C>
-BATCHLAS_DLA_INLINE void largv(const Ex& ex, const X& x, const Y& y, const C& c) {
-    using T = detail::vt<X>;
-    using R = v2::real_t<T>;
-    v2::for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY {
-        const T f = x(t);
-        const T g = y(t);
-        R ct = R(0);
-        T st = T(0);
-        T rt = T(0);
-        Rot::lartg(f, g, ct, st, rt);
-        c(t) = ct;
-        y(t) = st;
-        x(t) = rt;
-    });
-}
-
-// (x(t), y(t)) := rotation t applied to the pair  (xLARTV)
-template <class Rot, class Ex, class X, class Y, class C, class S>
-BATCHLAS_DLA_INLINE void lartv(const Ex& ex, const X& x, const Y& y, const C& c, const S& s) {
-    v2::for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY { Rot::rot_pair(x(t), y(t), c(t), s(t)); });
-}
-
-// two-sided rotation t of the 2x2 Hermitian block [x z; conj(z) y]  (xLAR2V)
-template <class Rot, class Ex, class X, class Y, class Z, class C, class S>
-BATCHLAS_DLA_INLINE void lar2v(const Ex& ex, const X& x, const Y& y, const Z& z, const C& c, const S& s) {
-    v2::for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DLA_BODY { Rot::lar2v_pair(x(t), y(t), z(t), c(t), s(t)); });
-}
 
 // one rotation (c, s) applied to the vector pair (x, y)  (xROT through Rot::rot_pair)
 template <class Rot, class Ex, class X, class Y, class Rc, class Sc>

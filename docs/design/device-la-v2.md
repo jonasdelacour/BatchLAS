@@ -60,18 +60,18 @@ or single headers; kernels are compiled with `-fsycl`.
 | Header (`include/batchlas/device/`) | Provides |
 | --- | --- |
 | `../device.hh` | umbrella (every header below except `sg_partition.hh` and `detail/`) |
-| `core.hh` | inline macros, extents, `Scope`, layout tags (`OnePerItem`), `unroll::*`, `Range`, `alg::*`, scalar tags, `MaybeZero`, `None` / `NoOp`, `static_for`, `static_extent_v`, `op::FMax` / `FMin`, `Scratch` |
+| `core.hh` | inline macros, extents, `Scope`, layout tags (`OnePerItem`), `unroll::*`, `Range`, `alg::*`, scalar tags, `MaybeZero`, `None` / `NoOp`, `static_for`, `static_extent_v`, `op::FMax` / `FMin`, `Scratch`, `Part`, `scope::*`, `loop::*`, `alpha_side::*`, `tri_diag::*` |
 | `arith.hh` | `Arith<T>` (real, `std::complex`, any POD `{re, im}` such as `Cx<R>`), `arith::*` policies, `arith_t`, `arith::FmaSplit` (`ops_arith_t`), `abs1`, `abs2`, `abs_inf`, `conj`, `conj_if`, `force_real`, `lift`, `by_parts`, `scale_real`, `div_real`, `sub_scale_real`, `select`, `tag_mul`, `tag_mac`, `store<Shape, Ops>` (`epi::Sum` default, `MacChain`, `MulMac`, `Linear`, `LinearNegZero`) |
-| `exec.hh` | `WorkGroup`, `Teams`, `SubGroup`, `Partition`, `Thread`, `RtGroup`, `sync` |
+| `exec.hh` | `WorkGroup`, `Teams`, `SubGroup`, `Partition`, `Thread`, `RtGroup` (members `bcast`, `uniform`, `shuffle`, `shift`), `sync`, `sync<scope::*>`, index-only `Slot<N>` / `Slot<>`, `ElemAt<Exact>` / `ElemIn`, `Grid1D<Exact>`, `Fit<Ex>`, `bcast_policy::Shuffle` / `Slm<Mpw, Acc>` |
 | `grid.hh` | `Grid2D`, `batched2d_shape`, `batched2d` host launcher |
-| `operand.hh` | `Vec`, `Mat`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill` |
+| `operand.hh` | `Vec`, `Mat`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill`, `load_row<Part, Herm>` / `store_row<Part>` (column window), `unit_head<refl::*, unit_fill::*>`, `LaneVec` / `lane_vec`, `frag_bcast`, `neighbor_exchange`, `StridedMat` / `mat_strided`, `mat_local` / `tile_local` |
 | `interop.hh` | `vec(VectorView)`, `mat(KernelMatrixView)`, `item(view, b)` |
-| `level1.hh` | `for_each_owned[_2d]`, `axpy`, `scal`, `copy`, `swap`, `dot[c]`, `dotN<K>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax`, `argmax`, `find_first` |
-| `level2.hh` | `gemv`, `symv` / `hemv`, `ger[u,c]`, `trsv` / `trmv` (Thread) |
-| `lapack_aux.hh` | `lacpy`, `laset`, `mirror`, `laswp`, `rot`, `lasr`, `larfg`, `larf` |
-| `scalar.hh` | `Givens`, `lartg`, `lae2`, `laev2`, `las2`, `wilkinson_shift`, `eig2x2_nearest`, `larfg_scalars`, `lamch<C>`, `qnan`, `phase`, `sign_nonzero_real`, `SafeRecip` |
-| `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>`, `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `allreduce(ex, Scratch, v, op)`, `tie::*`, `nan::*` |
-| `view.hh` | `row` / `col` / `window`, `flip<axis::*>`, `conj_view`, `conj_if`, `op_view<TR>`, `herm_view<UL>`, `sym_view<UL>`, `PackedTri<UL, order::*>`, `packed`, `Packet<T, Bytes>`, `fn_vec`, `mapped`, `slice`, `gathered` |
+| `level1.hh` | `for_each_owned[_2d]`, `for_each_team_owned<loop::*>`, `for_each_owned_tiles<TR, TC>`, `axpy`, `scal`, `copy`, `swap`, `fill`, `map_many`, `interleave`, `reverse`, `upper_bound`, `rscl`, `dot[c]`, `dot_partial`, `dot_slab<N>`, `dotN<K>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax`, `argmax` (also over `Scratch`, a `Range` and a skip index), `find_first` (also `none`, `LaneVec`), `prod_scaled` / `ScaledProd` / `sqrt_scaled` |
+| `level2.hh` | `gemv<TR, Alg, Ops, Shape, AlphaSide>` (`alg::TeamPerRow`, `alg::ColDot<W>`), `symv` / `hemv`, `ger[u,c]<Alg, Ops>` (`alg::Flat`), `ger_row`, `her2<Part, Alg, Ops>`, `trsv` / `trmv` (Thread), `trsv<UL, TR, tri_diag::*, Alg>` (`alg::LanePerRow`), `dgmm<Side>`, `gbmv<KL, KU>` |
+| `lapack_aux.hh` | `lacpy<Part, OP, Alg, edge::*, diag_fill::*>`, `laset` (block offset, `Frag`, `Tile`), `mirror`, `laswp`, `laswp_index`, `laswp_gather`, `lapmr`, `IpivSink`, `rot` (`rot_conv::Reflector2`), `lasr`, `largv` / `lartv` / `lar2v`, `larfg` (also one element per item), `larf<Side, Ops, larf_form::*, loop::*>` (also on a `Frag` column), `lanst<NormType>`, `lange<NormType>`, `laqge`, `lascl<Part>`, `lacgv`, `trttp` / `tpttr` |
+| `scalar.hh` | `Givens`, `lartg<W>` (`lartg_alg::Exact` / `Fast`), `lae2`, `laev2`, `las2`, `wilkinson_shift`, `eig2x2_nearest`, `larfg_scalars`, `lamch<C>`, `qnan`, `phase`, `sign_nonzero_real`, `SafeRecip` |
+| `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>`, `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `allreduce(ex, Scratch, v, op)`, `AtomicMinSlot`, `tie::*`, `nan::*` |
+| `view.hh` | `row` / `col` / `window`, `flip<axis::*>`, `conj_view`, `conj_if`, `op_view<TR>`, `herm_view<UL>`, `herm_view<UL, storage::*, loads::*>`, `sym_view<UL>`, `PackedTri<UL, order::*>`, `packed`, `Packet<T, Bytes>`, `fn_vec`, `mapped`, `slice`, `gathered`, `shifted`, `refs` |
 | `level3.hh` | register tier: `gemm<TA, TB, Shape, Ops>`, `gemm_sub<Ops>`, `trsm<SD, UL, TR, DG, Ops>` on `Tile` operands |
 | `tier.hh` | `tier::Reg` / `Cta` / `Blocked` / `upto` / `list`, `tier_info`, `tiers_t`, `resolve_tier_t`, `DeviceLimits`, `with_tier` (host) |
 | `workspace.hh` | `WorkspaceSize`, `Workspace`, `Plan` (constexpr bump carve), `carve_local`, `carve_global`, `global_slice` |

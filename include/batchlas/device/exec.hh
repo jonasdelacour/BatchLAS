@@ -92,7 +92,41 @@ template <class G, class R> BATCHLAS_DLA_INLINE R group_bcast(const G& g, R x, i
 #endif
 }
 
+// f applied to each real word of v (complex: re then im), reassembled.
+template <class T, class F> BATCHLAS_DLA_INLINE T per_word(T v, F&& f) {
+    using A = Arith<T>;
+    if constexpr (A::is_complex) return A::make(f(A::re(v)), f(A::im(v)));
+    else return f(v);
+}
+// Lane `src` (any, per lane) and lane + d of a sycl::sub_group or a SubGroupPartition (ADL).
+template <class Impl, class R> BATCHLAS_DLA_INLINE R select_word(const Impl& g, R v, std::uint32_t src) {
+    if constexpr (sycl::is_group_v<Impl>) return sycl::select_from_group(g, v, src);
+    else return select_from_group(g, v, src);
+}
+template <class Impl, class R> BATCHLAS_DLA_INLINE R shift_word(const Impl& g, R v, std::uint32_t d) {
+    if constexpr (sycl::is_group_v<Impl>) return sycl::shift_group_left(g, v, d);
+    else return shift_group_left(g, v, d);
+}
+// Lane collectives of a team that is the aligned P-lane block of a sub-group (P == SG: the
+// sub-group): bcast/shuffle address lanes of the block, shift(v, d) reads lane + d of the
+// sub-group (past the block: the next block's value, unspecified for the caller).
+template <int P, class T> BATCHLAS_DLA_INLINE T block_select(const sycl::sub_group& sg, T v, int src) {
+    const auto base = static_cast<std::uint32_t>(sg.get_local_linear_id()) & ~std::uint32_t(P - 1);
+    return per_word(v, [&](auto w) { return select_word(sg, w, base + static_cast<std::uint32_t>(src)); });
+}
+template <class G, class T> BATCHLAS_DLA_INLINE T team_shift(const G& g, T v, int d) {
+    return per_word(v, [&](auto w) { return shift_word(g, w, static_cast<std::uint32_t>(d)); });
+}
+
 }  // namespace detail
+
+// Lane movement on every executor (members, v22 design A.2):
+//   bcast(v, src)    COLLECTIVE, src uniform: item src's v to every item of the executor
+//   uniform(v)       bcast(v, 0): a value made uniform from the leader
+//   shuffle(v, src)  COLLECTIVE, src per item: v of lane src of the item's team
+//   shift(v, d)      COLLECTIVE: v of lane (lane + d) of the item's team; past its end unspecified
+// On WorkGroup and RtGroup<Group>, shuffle / shift act inside the item's sub-group (its team);
+// on Thread all four return v. Index-only executors (Slot, ElemAt, Grid1D) have none.
 
 // Whole work-group of WG items in sub-groups of SG. The kernel must be launched with local
 // range WG (and sub-group size SG); a debug build asserts the local range.
@@ -122,6 +156,12 @@ template <int WG, int SG = 32> struct WorkGroup {
     }
     // Barrier + type change: the operand is now readable by every item (D4).
     template <class V> BATCHLAS_DLA_INLINE Published<V> publish(V v) const;
+    template <class T> BATCHLAS_DLA_HELPER T bcast(T v, int src) const {
+        return detail::per_word(v, [&](auto w) { return detail::group_bcast(it.get_group(), w, src, lid()); });
+    }
+    template <class T> BATCHLAS_DLA_HELPER T uniform(T v) const { return bcast(v, 0); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const { return detail::block_select<SG>(it.get_sub_group(), v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return detail::team_shift(it.get_sub_group(), v, d); }
 };
 
 // Teams of P lanes working independently inside a WG launch (P == SG: whole sub-groups; P < SG:
@@ -151,6 +191,10 @@ template <int WG, int P = 32, class O = bfly::Down, int SG = 32> struct Teams {
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
     }
+    template <class T> BATCHLAS_DLA_INLINE T bcast(T v, int src) const { return detail::block_select<P>(it.get_sub_group(), v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T uniform(T v) const { return bcast(v, 0); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const { return detail::block_select<P>(it.get_sub_group(), v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return detail::team_shift(it.get_sub_group(), v, d); }
 };
 
 template <int SG = 32> struct SubGroup {
@@ -170,6 +214,10 @@ template <int SG = 32> struct SubGroup {
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
     }
+    template <class T> BATCHLAS_DLA_INLINE T bcast(T v, int src) const { return detail::block_select<SG>(sg, v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T uniform(T v) const { return bcast(v, 0); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const { return detail::block_select<SG>(sg, v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return detail::team_shift(sg, v, d); }
 };
 
 // P consecutive lanes of a sub-group. Impl = sycl::sub_group is the built-in lockstep form
@@ -218,6 +266,12 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
         if constexpr (A::is_complex) return A::make(bcast_real(A::re(v), src), bcast_real(A::im(v), src));
         else return bcast_real(v, src);
     }
+    template <class T> BATCHLAS_DLA_INLINE T uniform(T v) const { return bcast(v, 0u); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const {
+        if constexpr (std::is_same_v<Impl, sycl::sub_group>) return detail::block_select<P>(part, v, src);
+        else return detail::per_word(v, [&](auto w) { return detail::select_word(part, w, static_cast<std::uint32_t>(src)); });
+    }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return detail::team_shift(part, v, d); }
 
   private:
     template <class R> inline R bcast_real(R v, std::uint32_t src) const {
@@ -241,6 +295,10 @@ struct Thread {
     BATCHLAS_DLA_INLINE bool leader() const { return true; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op = {}) const { return v; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op = {}) const { return v; }
+    template <class T> BATCHLAS_DLA_INLINE T bcast(T v, int) const { return v; }
+    template <class T> BATCHLAS_DLA_INLINE T uniform(T v) const { return v; }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int) const { return v; }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int) const { return v; }
 };
 
 // A work-group whose size is a launch value (one binary for every WG), or one sub-group of it
@@ -297,6 +355,11 @@ template <Scope S = Scope::Group, int SG = 32> struct RtGroup {
         if constexpr (A::is_complex) return A::make(one(A::re(v)), one(A::im(v)));
         else return one(v);
     }
+    template <class T> BATCHLAS_DLA_HELPER T uniform(T v) const { return bcast(v, 0); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const {
+        return detail::per_word(v, [&](auto w) { return detail::select_word(it.get_sub_group(), w, static_cast<std::uint32_t>(src)); });
+    }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return detail::team_shift(it.get_sub_group(), v, d); }
 };
 
 template <class Ex> inline constexpr bool is_runtime_v = requires { Ex::runtime; };
@@ -321,6 +384,8 @@ template <class Ex> BATCHLAS_DLA_INLINE int nteams_of(const Ex& ex) {
 template <class Ex> inline constexpr bool is_work_group_v = false;
 template <int WG, int SG> inline constexpr bool is_work_group_v<WorkGroup<WG, SG>> = true;
 template <class Ex> inline constexpr bool is_thread_v = std::is_same_v<Ex, Thread>;
+template <class Ex> inline constexpr bool is_teams_v = false;
+template <int WG, int P, class O, int SG> inline constexpr bool is_teams_v<Teams<WG, P, O, SG>> = true;
 
 // A barrier over the executor's scope: work-group barrier on WorkGroup / RtGroup<Group>, a
 // sub-group barrier on Teams, SubGroup, Partition and RtGroup<Sub>, nothing on Thread.
@@ -345,5 +410,118 @@ template <class Op, class Ex, class T> constexpr int scratch_elements() {
         return 0;
     }
 }
+
+// sync<scope::S>(ex[, mem]) (scope:: in core.hh). Group is sync(ex, m). Sub: the sub-group
+// barrier (nothing on Thread). Part: a Partition's own barrier (SubGroupPartition's masked one,
+// else the sub-group's), a work-group barrier on WorkGroup / RtGroup<Group>, the sub-group's on
+// SubGroup / RtGroup<Sub>, nothing on Teams (lockstep slices of one sub-group) and Thread.
+template <class S, class Ex> BATCHLAS_DLA_INLINE void sync(const Ex& ex, Mem m = Mem::Local) {
+    static_assert(std::is_same_v<S, scope::Part> || std::is_same_v<S, scope::Sub> || std::is_same_v<S, scope::Group>,
+                  "sync<S>: scope::Part, scope::Sub or scope::Group");
+    if constexpr (requires { ex.ex; }) {
+        sync<S>(ex.ex, m);  // an adaptor (Fit) syncs its executor
+    } else if constexpr (is_thread_v<Ex>) {
+        return;
+    } else if constexpr (std::is_same_v<S, scope::Group>) {
+        sync(ex, m);
+    } else if constexpr (std::is_same_v<S, scope::Sub>) {
+        sycl::group_barrier(ex.sub());
+    } else if constexpr (requires { ex.part; }) {
+        if constexpr (sycl::is_group_v<std::remove_cvref_t<decltype(ex.part)>>) sycl::group_barrier(ex.part);
+        else group_barrier(ex.part);  // ADL: SubGroupPartition's own barrier
+    } else if constexpr (is_teams_v<Ex>) {
+        return;  // lockstep slices of one sub-group
+    } else if constexpr (is_work_group_v<Ex> || is_runtime_v<Ex>) {
+        ex.barrier(m);  // RtGroup<Sub>::barrier is the sub-group's
+    } else {
+        sycl::group_barrier(ex.sub());
+    }
+}
+
+// ---- index-only executors (no collectives) ---------------------------------------------------
+// Item `id` of a caller-mapped slot of N items (N == 0: n is a run-time width). Cyclic ops stride
+// by the width; there is one team; no member exchanges values.
+template <int N = 0> struct Slot {
+    static_assert(N >= 1, "Slot<N>: N >= 1 (Slot<0> is the run-time width form)");
+    static constexpr int size = N, team_size = N, nteams = 1;
+    static constexpr bool sub_whole = true;
+    static constexpr Scope natural_scope = Scope::Sub;
+    int id;
+    BATCHLAS_DLA_INLINE int lid() const { return id; }
+    BATCHLAS_DLA_INLINE int lane() const { return id; }
+    BATCHLAS_DLA_INLINE int team() const { return 0; }
+    BATCHLAS_DLA_INLINE bool leader() const { return id == 0; }
+};
+template <> struct Slot<0> {
+    static constexpr bool runtime = true;
+    static constexpr bool sub_whole = true;
+    static constexpr Scope natural_scope = Scope::Sub;
+    int id;
+    int n;
+    BATCHLAS_DLA_INLINE int lid() const { return id; }
+    BATCHLAS_DLA_INLINE int lane() const { return id; }
+    BATCHLAS_DLA_INLINE int width() const { return n; }
+    BATCHLAS_DLA_INLINE int team_size() const { return n; }
+    BATCHLAS_DLA_INLINE int nteams() const { return 1; }
+    BATCHLAS_DLA_INLINE int team() const { return 0; }
+    BATCHLAS_DLA_INLINE bool leader() const { return id == 0; }
+};
+// One element (r, c) of a 2-D launch: for_each_owned_2d visits it alone, guarded by the op's
+// extent unless Exact (the launch covers the extent exactly: no test). sub(r0, c0): the same
+// item addressing the block at (r0, c0) (columns tested first, as the gesvd glue).
+struct ElemIn {
+    int r, c;    // the launch's element
+    int r0, c0;  // origin of the block the op addresses
+};
+template <bool Exact = false> struct ElemAt {
+    int r, c;
+    BATCHLAS_DLA_INLINE int row() const { return r; }
+    BATCHLAS_DLA_INLINE int col() const { return c; }
+    BATCHLAS_DLA_INLINE ElemIn sub(int r0, int c0) const { return {r, c, r0, c0}; }
+};
+ElemAt(int, int) -> ElemAt<false>;
+// Element i of a 1-D launch: for_each_owned calls f(i) (Exact) or f(i) when i < n.
+template <bool Exact = false> struct Grid1D {
+    int i;
+};
+Grid1D(int) -> Grid1D<false>;
+
+// Ex restricted to one index per item (item lid owns index lid, n <= size): for_each_owned on a
+// Fit is one guarded call, no loop. Collectives and barriers forward to ex.
+template <class Ex> struct Fit {
+    static constexpr int size = Ex::size, team_size = Ex::team_size, nteams = Ex::nteams;
+    static constexpr bool sub_whole = Ex::sub_whole;
+    static constexpr Scope natural_scope = Ex::natural_scope;
+    Ex ex;
+    BATCHLAS_DLA_INLINE int lid() const { return ex.lid(); }
+    BATCHLAS_DLA_INLINE int lane() const { return ex.lane(); }
+    BATCHLAS_DLA_INLINE int team() const { return ex.team(); }
+    BATCHLAS_DLA_INLINE bool leader() const { return ex.leader(); }
+    BATCHLAS_DLA_INLINE auto sub() const { return ex.sub(); }
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const { return ex.team_reduce(v, op); }
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const { return ex.group_reduce(v, op); }
+    template <class T, class S> BATCHLAS_DLA_INLINE T bcast(T v, S src) const { return ex.bcast(v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T uniform(T v) const { return ex.uniform(v); }
+    template <class T> BATCHLAS_DLA_INLINE T shuffle(T v, int src) const { return ex.shuffle(v, src); }
+    template <class T> BATCHLAS_DLA_INLINE T shift(T v, int d) const { return ex.shift(v, d); }
+};
+template <class Ex> Fit(Ex) -> Fit<Ex>;
+template <class Ex> inline constexpr bool is_fit_v = false;
+template <class Ex> inline constexpr bool is_fit_v<Fit<Ex>> = true;
+
+// ---- broadcast policies of the unblocked factorizations (potf2, getf2) ------------------------
+// How a pivot column / row reaches the lanes that update with it. Shuffle: one indexed shuffle
+// per element (no memory, no barrier). Slm<Mpw, Acc>: every lane stores its element, one
+// sub-group barrier, vector loads; double-buffered by column parity, buffer(j, nv) is the
+// first unit of this partition's buffer for column j (Mpw partitions per sub-group, pidx this one).
+namespace bcast_policy {
+struct Shuffle {};
+template <int Mpw, class Acc> struct Slm {
+    static constexpr int mpw = Mpw;
+    Acc slm;
+    int pidx;
+    BATCHLAS_DLA_INLINE int buffer(int j, int nv) const { return ((j & 1) * Mpw + pidx) * nv; }
+};
+}  // namespace bcast_policy
 
 }  // namespace batchlas::device

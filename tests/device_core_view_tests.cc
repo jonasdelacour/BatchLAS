@@ -5,7 +5,8 @@
 // must mask; every (i, j) of PackedTri for n = 1 .. 40 in all four layouts, index and decode;
 // a run-time flip / conj switch in both states; Packet through a 16-byte aligned pointer.
 // Red set (each break was made once, 2026-11-04, and this suite failed): herm_view reading
-// a(i, j) outside the stored triangle (the poisoned triangle surfaces).
+// a(i, j) outside the stored triangle (the poisoned triangle surfaces); v2.2 (herm_view band,
+// shifted, refs): the Upper band row index kd - d replaced by d.
 #include <tests/device_core_common.hh>
 #include <batchlas/device/view.hh>
 
@@ -154,6 +155,79 @@ TYPED_TEST(DeviceCoreViewTest, PacketMovesOneAlignedUnit) {
     });
     const auto got = d.down(dst, 64);
     for (int k = 0; k < 64; ++k) EXPECT_TRUE(same_bits(got[k], src_h[k])) << k;
+}
+
+
+// v2.2: herm_view<UL, storage::Band> of LAPACK band storage and herm_view<UL, storage::Full,
+// loads::Two>, against a host Hermitian built from the full matrix; shifted; refs. The band
+// array's unused corner and the matrix's unstored triangle are NaN-poisoned.
+TYPED_TEST(DeviceCoreViewTest, HermBandAndTwoLoadViewsShiftedRefs) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    auto& d = this->dev;
+    constexpr int n = 10, kd = 3, ld = n + 3, ldab = kd + 1 + 2;
+    const T poison = [] {
+        constexpr R q = std::numeric_limits<R>::quiet_NaN();
+        if constexpr (is_cplx<T>) return T(q, q);
+        else return T(q);
+    }();
+    auto a_h = vals<T>(std::size_t(ld) * n, 90);  // Im(diag) != 0: must be dropped
+    std::vector<T> lo_h(a_h), up_h(a_h);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            if (i < j) lo_h[j * ld + i] = poison;
+            if (i > j) up_h[j * ld + i] = poison;
+        }
+    std::vector<T> abl(std::size_t(ldab) * n, poison), abu(std::size_t(ldab) * n, poison);
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i <= std::min(n - 1, j + kd); ++i) abl[j * ldab + (i - j)] = a_h[j * ld + i];
+    for (int j = 0; j < n; ++j)
+        for (int i = std::max(0, j - kd); i <= j; ++i) abu[j * ldab + (kd + i - j)] = up_h[j * ld + i];
+    T* lo = d.up(lo_h);
+    T* ab = d.up(abl);
+    T* au = d.up(abu);
+    T* out = d.template alloc<T>(3 * n * n, T(0));
+    const auto x_h = vals<T>(n, 91);
+    T* x = d.up(x_h);
+    T* sh = d.template alloc<T>(n + 2, T(0));
+    d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int g = static_cast<int>(it.get_local_linear_id());
+        const auto two = dv::herm_view<Uplo::Lower, dv::storage::Full, dv::loads::Two>(dv::mat(lo, n, n, ld));
+        const auto bl = dv::herm_view<Uplo::Lower, dv::storage::Band>(dv::mat(ab, ldab, n, ldab), n, kd);
+        const auto bu = dv::herm_view<Uplo::Upper, dv::storage::Band>(dv::mat(au, ldab, n, ldab), n, kd);
+        for (int e = g; e < n * n; e += 32) {
+            const int i = e % n, j = e / n;
+            out[e] = two(i, j);
+            out[n * n + e] = bl(i, j);
+            out[2 * n * n + e] = bu(i, j);
+        }
+        const auto s = dv::shifted(dv::vec(x, n), 1, n + 2);
+        if (g < n + 2) sh[g] = s(g);
+    });
+    const auto o = d.down(out, 3 * n * n), gs = d.down(sh, n + 2);
+    auto herm = [&](const std::vector<T>& m, bool lower, int i, int j) {
+        const bool stored = lower ? i >= j : i <= j;
+        T v = stored ? m[j * ld + i] : m[i * ld + j];
+        if constexpr (is_cplx<T>) {
+            if (i == j) return T(v.real(), R(0));
+            if (!stored) v = std::conj(v);
+        }
+        return v;
+    };
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const int e = j * n + i;
+            EXPECT_TRUE(same_bits(o[e], herm(lo_h, true, i, j))) << "loads::Two " << i << "," << j;
+            const bool in_band = std::abs(i - j) <= kd;
+            EXPECT_TRUE(same_bits(o[n * n + e], in_band ? herm(lo_h, true, i, j) : T(0))) << "Band Lower " << i << "," << j;
+            EXPECT_TRUE(same_bits(o[2 * n * n + e], in_band ? herm(up_h, false, i, j) : T(0))) << "Band Upper " << i << "," << j;
+        }
+    for (int i = 0; i < n + 2; ++i) EXPECT_TRUE(same_bits(gs[i], (i >= 1 && i <= n) ? x_h[i - 1] : T(0))) << "shifted " << i;
+    T p = val<T>(1), q = val<T>(2), r = val<T>(3);
+    const auto rf = dv::refs(p, q, r);
+    EXPECT_EQ(rf.size(), 3);
+    rf(1) = rf(2);
+    EXPECT_TRUE(same_bits(q, r));
 }
 
 }  // namespace

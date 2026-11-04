@@ -8,6 +8,7 @@
 
 #include <batchlas/device/core.hh>
 #include <batchlas/device/exec.hh>
+#include <batchlas/device/workspace.hh>
 
 namespace batchlas::device::inline v2 {
 
@@ -213,6 +214,136 @@ template <class V> struct UnitHead {
     BATCHLAS_DLA_INLINE UnitHead<decltype(std::declval<V>().tail(0))> tail(int k) const { return {v.tail(k), head - k}; }
 };
 template <class V> BATCHLAS_DLA_INLINE UnitHead<V> unit_head(V v, int head) { return {v, head}; }
+// The general form: refl::QR (zero / stored past the head as above) or refl::QL (xORG2L: stored
+// above the head, zero below); unit_fill::Zero (the other side reads 0) or unit_fill::Keep (the
+// other side reads the stored values: LAPACK's temporary unit of a stored reflector). In every
+// form v(head) is never read.
+namespace refl {
+struct QR {};
+struct QL {};
+}  // namespace refl
+namespace unit_fill {
+struct Zero {};
+struct Keep {};
+}  // namespace unit_fill
+template <class Dir, class Fill, class V> struct UnitHeadOf {
+    static_assert(std::is_same_v<Dir, refl::QR> || std::is_same_v<Dir, refl::QL>, "unit_head: refl::QR or refl::QL");
+    static_assert(std::is_same_v<Fill, unit_fill::Zero> || std::is_same_v<Fill, unit_fill::Keep>, "unit_head: unit_fill::Zero or Keep");
+    V v;
+    int head;
+    using value_type = typename V::value_type;
+    BATCHLAS_DLA_INLINE value_type operator()(int i) const {
+        using A = Arith<value_type>;
+        if (i == head) return A::one();
+        if constexpr (std::is_same_v<Fill, unit_fill::Keep>) return static_cast<value_type>(v(i));
+        else if constexpr (std::is_same_v<Dir, refl::QR>) return i > head ? static_cast<value_type>(v(i)) : A::zero();
+        else return i < head ? static_cast<value_type>(v(i)) : A::zero();
+    }
+    BATCHLAS_DLA_INLINE int size() const { return v.size(); }
+};
+template <class Dir, class Fill = unit_fill::Zero, class V> BATCHLAS_DLA_INLINE UnitHeadOf<Dir, Fill, V> unit_head(V v, int head) {
+    return {v, head};
+}
+
+// ---- register vectors and staged operands (v22 design A.2) --------------------------------------
+// One element per item, held in a register: element i belongs to the item with lid == i; the
+// window [lo, hi) is the live part (owns(ex)). Every op on it reads x.v on the owning item only.
+template <class T> struct LaneVec {
+    using value_type = std::remove_cv_t<T>;
+    using layout = OnePerItem;
+    T& v;
+    int lo;
+    int hi;
+    BATCHLAS_DLA_INLINE T& operator()(int) const { return v; }
+    BATCHLAS_DLA_INLINE int size() const { return hi; }
+    template <class Ex> BATCHLAS_DLA_INLINE bool owns(const Ex& ex) const {
+        const int l = ex.lid();
+        return l >= lo && l < hi;
+    }
+};
+template <class T> BATCHLAS_DLA_INLINE LaneVec<T> lane_vec(T& v, int lo, int hi) { return {v, lo, hi}; }
+
+// Element k of a lane-cyclic register vector (lane l holds elements l + size * r in f[r]), to
+// every lane of the executor (one bcast; f[k / size] selected by unrolled compares). COLLECTIVE.
+template <class Ex, class T, int R, class L> BATCHLAS_DLA_HELPER T frag_bcast(const Ex& ex, const Frag<T, R, L>& f, int k) {
+    constexpr int P = Ex::size;
+    T v = f[0];
+#pragma unroll
+    for (int r = 1; r < R; ++r)
+        if (k / P == r) v = f[r];
+    return ex.bcast(v, k % P);
+}
+// The neighbours of every element of a lane-cyclic register vector: up[r] = element e + 1 and
+// dn[r] = element e - 1 for this lane's element e = lane + size * r (wrapping lanes read the
+// adjacent register of lane 0 / lane size - 1; the vector's two ends: unspecified). COLLECTIVE.
+template <class Ex, class T, int R, class L>
+BATCHLAS_DLA_INLINE void neighbor_exchange(const Ex& ex, const Frag<T, R, L>& x, Frag<T, R, L>& up, Frag<T, R, L>& dn) {
+    constexpr int P = Ex::size;
+    const int lane = ex.lane();
+#pragma unroll
+    for (int r = 0; r < R; ++r) {
+        const T u = ex.shuffle(x[r], (lane + 1) & (P - 1));
+        const T d = ex.shuffle(x[r], (lane + P - 1) & (P - 1));
+        const T hi = ex.bcast(x[r + 1 < R ? r + 1 : r], 0);
+        const T lo = ex.bcast(x[r > 0 ? r - 1 : 0], P - 1);
+        up[r] = (lane == P - 1 && r + 1 < R) ? hi : u;
+        dn[r] = (lane == 0 && r > 0) ? lo : d;
+    }
+}
+
+// RowFrag row moves on part P of a matrix, columns c0 .. c0 + N - 1: f[j] := A(r, c0 + j) for
+// (r, c0 + j) in P and j < live; outside P, Herm reads conj(A(c0 + j, r)) (the stored mirror of a
+// Hermitian matrix, Im(diag) dropped), else zero. store_row writes only (r, c0 + j) in P, j < live.
+template <Part P, bool Herm = false, class T, int N, class MA>
+BATCHLAS_DLA_INLINE void load_row(Frag<T, N, RowFrag>& f, const MA& a, int r, int c0, int live = N) {
+    using A = Arith<T>;
+#pragma unroll
+    for (int j = 0; j < N; ++j) {
+        const int c = c0 + j;
+        T v = A::zero();
+        if (j < live) {
+            if (detail::in_part<P>(r, c)) v = static_cast<T>(a(r, c));
+            else if constexpr (Herm) v = A::conj(static_cast<T>(a(c, r)));
+            if constexpr (Herm && A::is_complex)
+                if (r == c) v = A::make(A::re(v), real_t<T>(0));
+        }
+        f[j] = v;
+    }
+}
+template <Part P, class T, int N, class MA>
+BATCHLAS_DLA_INLINE void store_row(const Frag<T, N, RowFrag>& f, const MA& a, int r, int c0, int live = N) {
+#pragma unroll
+    for (int j = 0; j < N; ++j)
+        if (j < live && detail::in_part<P>(r, c0 + j)) a(r, c0 + j) = f[j];
+}
+
+// A matrix with both strides named: element (i, j) at p[i * rs + j * cs] (a row-major tile is
+// rs = C, cs = 1). Ext strides fold.
+template <class T, class RS = Dyn, class CS = Unit, Mem M = Mem::Global, class B = T*> struct StridedMat {
+    using value_type = std::remove_cv_t<T>;
+    static constexpr Mem mem = M;
+    B p;
+    int m;
+    int n;
+    RS rs{};
+    CS cs{};
+    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return p[i * int(rs) + j * int(cs)]; }
+    BATCHLAS_DLA_INLINE int rows() const { return m; }
+    BATCHLAS_DLA_INLINE int cols() const { return n; }
+};
+template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE StridedMat<T, Dyn, Dyn, M> mat_strided(T* p, int m, int n, int rs, int cs) {
+    return {p, m, n, Dyn{rs}, Dyn{cs}};
+}
+// Local memory through a decorated local pointer (a Workspace slice, workspace.hh): the access
+// stays in the shared address space. tile_local<R, C>: compile-time extents.
+template <class T>
+BATCHLAS_DLA_INLINE Mat<T, Dyn, Dyn, Dyn, Mem::Local, Cyclic, local_mptr<T>> mat_local(local_mptr<T> p, int m, int n, int ld, int off = 0) {
+    return {p, Dyn{m}, Dyn{n}, Dyn{ld}, off};
+}
+template <int R, int C, class T>
+BATCHLAS_DLA_INLINE Mat<T, Ext<R>, Ext<C>, Dyn, Mem::Local, Cyclic, local_mptr<T>> tile_local(local_mptr<T> p, int ld, int off = 0) {
+    return {p, Ext<R>{}, Ext<C>{}, Dyn{ld}, off};
+}
 
 // A(k:, k:) or x(k:) addressed in the parent's coordinates (LAPACK panel indexing). An op on a
 // Trailing operand loops i in [k, n) with i owned by lid == (i - k) mod size: the same owners as

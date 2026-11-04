@@ -8,14 +8,7 @@
 namespace batchlas::gebrd_v2 {
 
 namespace v2 = batchlas::device;
-
-// x(i) := conj(x(i)) on every owned i (LAPACK lacgv); nothing for real T. No barrier.
-template <class Ex, class X> BATCHLAS_DLA_INLINE void lacgv(const Ex& ex, const X& x) {
-    using T = v2::elem_t<X>;
-    if constexpr (v2::Arith<T>::is_complex) {
-        v2::map(ex, x, [](const T& v) { return v2::Arith<T>::conj(v); }, x);
-    }
-}
+using batchlas::device::lacgv;  // core lapack_aux.hh
 
 // conj(v(i)), read only.
 template <class V> struct ConjView {

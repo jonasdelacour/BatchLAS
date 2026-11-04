@@ -176,4 +176,23 @@ BATCHLAS_DLA_HELPER T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op,
     }
 }
 
+// The minimum offered by any item of a work-group (one local int, a relaxed atomic): reset() by
+// the leader, barrier, offer() from any item, barrier, value() (INT_MAX if none; or_zero(): 0).
+struct AtomicMinSlot {
+    int* p;
+    template <class Ex> BATCHLAS_DLA_INLINE void reset(const Ex& ex) const {
+        if (ex.leader()) *p = INT_MAX;
+    }
+    BATCHLAS_DLA_INLINE void offer(int v) const {
+        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group, sycl::access::address_space::local_space>(*p)
+            .fetch_min(v);
+    }
+    BATCHLAS_DLA_INLINE int value() const { return *p; }
+    BATCHLAS_DLA_INLINE int or_zero() const {
+        const int v = *p;
+        return v == INT_MAX ? 0 : v;
+    }
+};
+BATCHLAS_DLA_INLINE AtomicMinSlot atomic_min_slot(int* p) { return {p}; }
+
 }  // namespace batchlas::device

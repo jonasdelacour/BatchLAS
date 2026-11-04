@@ -13,6 +13,7 @@
 #include <batchlas/device.hh>
 
 namespace batchlas::device::inline v2::glue {
+using device::lange;  // core lapack_aux.hh
 
 // Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
 // (the legacy spelling, so a 1:1 port stays 1:1).
@@ -175,68 +176,6 @@ BATCHLAS_DLA_INLINE void tile_store_diag(const Ex& ex, U uplo, const MT& t, cons
         }
         b(i, j) = value;
     });
-}
-
-// ---- lange --------------------------------------------------------------------------------
-// LAPACK lange on a Cyclic executor (|.| is the modulus). Max / Fro walk the flat column-major
-// order; One gives each item whole columns, Inf whole rows (serial sums, no SLM), then one
-// Scope S max. Fro: alg::Unscaled = sqrt(sum |a|^2), one reduction (overflows past
-// sqrt(max)); alg::Scaled = the two-pass lassq. Max keeps std::max(|a|, m)'s NaN behaviour.
-template <NormType NT, class Alg = alg::Unscaled, Scope S = Scope::Auto, class Ex, class MA>
-BATCHLAS_DLA_INLINE auto lange(const Ex& ex, const MA& a) {
-    using T = typename MA::value_type;
-    using R = real_t<T>;
-    const int m = a.rows(), n = a.cols();
-    if constexpr (NT == NormType::Max) {
-        R mx = R(0);
-        for_each_owned_2d(ex, m, n, [&](int i, int j) {
-            const R v = modulus(static_cast<T>(a(i, j)));
-            mx = v < mx ? mx : v;
-        });
-        return detail::scope_reduce<S>(ex, mx, sycl::maximum<R>());
-    } else if constexpr (NT == NormType::One || NT == NormType::Inf) {
-        constexpr bool one = NT == NormType::One;
-        const int outer = one ? n : m, inner = one ? m : n;
-        R mx = R(0);
-        for (int k = ex.lid(); k < outer; k += Ex::size) {  // caller-owned shape (core 2.2 rule)
-            R s = R(0);
-            for (int l = 0; l < inner; ++l) s += modulus(static_cast<T>(one ? a(l, k) : a(k, l)));
-            mx = sycl::maximum<R>()(mx, s);
-        }
-        return detail::scope_reduce<S>(ex, mx, sycl::maximum<R>());
-    } else {
-        static_assert(NT == NormType::Frobenius, "glue::lange: Max, One, Inf or Frobenius");
-        if constexpr (std::is_same_v<Alg, alg::Unscaled>) {
-            R ss = R(0);
-            for_each_owned_2d(ex, m, n, [&](int i, int j) { ss += abs2(static_cast<T>(a(i, j))); });
-            return static_cast<R>(sycl::sqrt(detail::scope_reduce<S>(ex, ss)));
-        } else {
-            static_assert(std::is_same_v<Alg, alg::Scaled>, "glue::lange: Frobenius is alg::Unscaled or alg::Scaled");
-            using A = Arith<T>;
-            R sc = R(0);
-            auto upd = [&](R v) { sc = (v > sc || sycl::isnan(v)) ? v : sc; };
-            for_each_owned_2d(ex, m, n, [&](int i, int j) {
-                const T v = a(i, j);
-                upd(sycl::fabs(A::re(v)));
-                if constexpr (A::is_complex) upd(sycl::fabs(A::im(v)));
-            });
-            const R scale = detail::scope_reduce<S>(ex, sc, sycl::maximum<R>());
-            if (sycl::isinf(scale)) return scale;
-            const R inv = scale > R(0) ? R(1) / scale : R(1);
-            R ss = R(0);
-            for_each_owned_2d(ex, m, n, [&](int i, int j) {
-                const T v = a(i, j);
-                const R tr = A::re(v) * inv;
-                ss += tr * tr;
-                if constexpr (A::is_complex) {
-                    const R ti = A::im(v) * inv;
-                    ss += ti * ti;
-                }
-            });
-            ss = detail::scope_reduce<S>(ex, ss);
-            return scale > R(0) ? scale * sycl::sqrt(ss) : sycl::sqrt(ss);
-        }
-    }
 }
 
 }  // namespace batchlas::device::glue

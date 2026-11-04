@@ -149,6 +149,93 @@ template <Uplo UL, bool Conj, bool DiagReal, class M> struct HermView {
 template <Uplo UL, bool DiagReal = false, class M> BATCHLAS_DLA_INLINE HermView<UL, true, DiagReal, M> herm_view(const M& a) { return {a}; }
 template <Uplo UL, class M> BATCHLAS_DLA_INLINE HermView<UL, false, false, M> sym_view(const M& a) { return {a}; }
 
+// The general Hermitian view (Im(diag) always dropped): herm_view<UL, Storage, Load>.
+//   storage::Full        a is the n x n matrix, its UL triangle stored
+//   storage::Band        a is LAPACK band storage of the UL band (kd + 1 rows, n columns):
+//                        Lower AB(i - j, j) = A(i, j) for 0 <= i - j <= kd, Upper AB(kd + i - j, j);
+//                        outside the band the view reads 0
+//   loads::One           one load at the selected index; loads::Two: one load per branch
+//                        (the stored and the mirrored element are separate loads, so a caller's
+//                        guard folds into one CFG: syev's herm_load)
+namespace storage {
+struct Full {};
+struct Band {};
+}  // namespace storage
+namespace loads {
+struct One {};
+struct Two {};
+}  // namespace loads
+template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
+    static_assert(std::is_same_v<Load, loads::One> || std::is_same_v<Load, loads::Two>, "herm_view: loads::One or loads::Two");
+    M a;
+    int n;
+    int kd;
+    BATCHLAS_DLA_INLINE auto operator()(int i, int j) const {
+        using T = detail::view_elem2_t<M>;
+        using A = Arith<T>;
+        const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
+        const int si = stored ? i : j, sj = stored ? j : i;  // the stored element's indices
+        T v;
+        if constexpr (std::is_same_v<Storage, storage::Band>) {
+            const int d = UL == Uplo::Lower ? si - sj : sj - si;
+            if (d > kd) return A::zero();
+            const int br = UL == Uplo::Lower ? d : kd - d;
+            v = static_cast<T>(a(br, sj));
+        } else {
+            static_assert(std::is_same_v<Storage, storage::Full>, "herm_view: storage::Full or storage::Band");
+            if constexpr (std::is_same_v<Load, loads::Two>) {
+                if (stored) v = static_cast<T>(a(i, j));
+                else v = static_cast<T>(a(j, i));
+            } else {
+                v = static_cast<T>(a(si, sj));
+            }
+        }
+        if constexpr (A::is_complex) {
+            if (i == j) return A::make(A::re(v), typename A::real_t(0));
+            return stored ? v : A::conj(v);
+        } else {
+            return v;
+        }
+    }
+    BATCHLAS_DLA_INLINE int rows() const { return n; }
+    BATCHLAS_DLA_INLINE int cols() const { return n; }
+};
+template <Uplo UL, class Storage, class Load = loads::One, class M> BATCHLAS_DLA_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& a) {
+    static_assert(std::is_same_v<Storage, storage::Full>, "herm_view<UL, storage::Band>: pass kd and n, herm_view<UL, storage::Band>(ab, n, kd)");
+    return {a, a.rows(), 0};
+}
+template <Uplo UL, class Storage, class Load = loads::One, class M>
+BATCHLAS_DLA_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& ab, int n, int kd) {
+    return {ab, n, kd};
+}
+
+// x(i - k) for 0 <= i - k < x.size(), else 0, over n elements (k = 1: the down-shift that puts
+// a zero first).
+template <class X> struct Shifted {
+    X x;
+    int k, n;
+    BATCHLAS_DLA_INLINE auto operator()(int i) const {
+        using T = detail::view_elem_t<X>;
+        const int s = i - k;
+        return (s >= 0 && s < x.size()) ? static_cast<T>(x(s)) : Arith<T>::zero();
+    }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+};
+template <class X> BATCHLAS_DLA_INLINE Shifted<X> shifted(const X& x, int k, int n) { return {x, k, n}; }
+
+// N scalar references as a vector (element i is *p[i], writable): loose registers or fields as
+// an operand of the Thread ops.
+template <class T, int N> struct Refs {
+    using value_type = std::remove_cv_t<T>;
+    T* p[N];
+    BATCHLAS_DLA_INLINE T& operator()(int i) const { return *p[i]; }
+    BATCHLAS_DLA_INLINE constexpr int size() const { return N; }
+};
+template <class T, class... U> BATCHLAS_DLA_INLINE Refs<T, 1 + int(sizeof...(U))> refs(T& a, U&... b) {
+    static_assert((std::is_same_v<T, U> && ...), "refs: every element has one type");
+    return {{&a, &b...}};
+}
+
 // ---- packed triangles ----------------------------------------------------------------------
 // The element map of an n x n triangle stored packed (no padding), LAPACK's AP for ByCols:
 // Upper (i <= j): i + j (j + 1) / 2; Lower (i >= j): i + j (2n - j - 1) / 2. ByRows is the

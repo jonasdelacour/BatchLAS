@@ -67,6 +67,50 @@ BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f)
 template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned_exact(const Ex& ex, [[maybe_unused]] int n, F&& f) {
     f(ex.lid());
 }
+// Fit<Ex> (exec.hh): index lid only, one guarded call (n <= size); Range: lo + lid.
+template <class U = unroll::Default, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Fit<Ex>& ex, int n, F&& f) {
+    const int i = ex.lid();
+    if (i >= 0 && i < n) f(i);
+}
+template <class U = unroll::Default, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Fit<Ex>& ex, Range r, F&& f) {
+    const int i = r.lo + ex.lid();
+    if (i < r.hi) f(i);
+}
+// Grid1D (exec.hh): the launch's element i; Exact drops the i < n test.
+template <class U = unroll::Default, bool E, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Grid1D<E>& g, int n, F&& f) {
+    if constexpr (E) f(g.i);
+    else if (g.i < n) f(g.i);
+}
+
+// The team loop: f(o, live) for the outputs o this item's team owns (o = team + k * nteams).
+// loop::Lockstep: every team runs ceil(nout / nteams) trips with live = o < nout, so a team
+// collective inside f is reached by every lane; loop::Diverge: o < nout only (live is true).
+template <class Loop = loop::Lockstep, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_team_owned(const Ex& ex, int nout, F&& f) {
+    const int nt = detail::nteams_of(ex);
+    const int t = is_thread_v<Ex> ? 0 : ex.team();
+    if constexpr (std::is_same_v<Loop, loop::Lockstep>) {
+        const int nb = (nout + nt - 1) / nt;
+        for (int ob = 0; ob < nb; ++ob) {
+            const int o = ob * nt + t;
+            f(o, o < nout);
+        }
+    } else {
+        static_assert(std::is_same_v<Loop, loop::Diverge>, "for_each_team_owned: loop::Lockstep or loop::Diverge");
+        for (int o = t; o < nout; o += nt) f(o, true);
+    }
+}
+
+// f(i0, j0, live_r, live_c) for every TR x TC tile of an m x n grid this item owns: tiles in
+// column-major tile order, tile t owned by lid == t mod size; live_* clip the edge tiles.
+template <int TR, int TC, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned_tiles(const Ex& ex, int m, int n, F&& f) {
+    static_assert(TR >= 1 && TC >= 1, "for_each_owned_tiles: TR, TC >= 1");
+    const int tr = (m + TR - 1) / TR, tc = (n + TC - 1) / TC;
+    for_each_owned(ex, tr * tc, [&](int t) {
+        const int bj = t / tr, bi = t - bj * tr;
+        const int i0 = bi * TR, j0 = bj * TC;
+        f(i0, j0, sycl::min(TR, m - i0), sycl::min(TC, n - j0));
+    });
+}
 
 // f(r, c) for every element of an m x n column-major grid this item owns: flat e = lid + s *
 // size, so consecutive items take consecutive rows (loads coalesce) and per-item partial sums
@@ -125,6 +169,20 @@ BATCHLAS_DLA_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
                 ++c;
             }
         }
+    }
+}
+
+// ElemAt (exec.hh): the item's one element; Exact drops the extent test. ElemIn: the
+// element relative to its block origin, column test first.
+template <class Alg = alg::Walk, class Idx = int, bool E, class F>
+BATCHLAS_DLA_INLINE void for_each_owned_2d(const ElemAt<E>& ex, int m, int n, F&& f) {
+    if constexpr (E) f(ex.r, ex.c);
+    else if (ex.r < m && ex.c < n) f(ex.r, ex.c);
+}
+template <class Alg = alg::Walk, class Idx = int, class F>
+BATCHLAS_DLA_INLINE void for_each_owned_2d(const ElemIn& ex, int m, int n, F&& f) {
+    if (ex.c >= ex.c0) {
+        if (ex.r >= ex.r0 && ex.r < ex.r0 + m && ex.c < ex.c0 + n) f(ex.r - ex.r0, ex.c - ex.c0);
     }
 }
 
@@ -676,6 +734,163 @@ BATCHLAS_DLA_INLINE auto amax_by(const Ex& ex, const X& x) {
         });
         return detail::scope_reduce<S>(ex, m, sycl::maximum<R>());
     }
+}
+
+// ---- v2.2 level 1 (design A.2) ------------------------------------------------------------------
+
+// fs(i)... in argument order for every owned i < n: several outputs in ONE owned pass.
+template <class Ex, class... Fs> BATCHLAS_DLA_INLINE void map_many(const Ex& ex, int n, const Fs&... fs) {
+    for_each_owned(ex, n, [&](int i) { (fs(i), ...); });
+}
+
+// x(i) := alpha (a tag or a value).
+template <class Ex, class AS, class X> BATCHLAS_DLA_INLINE void fill(const Ex& ex, AS alpha, const X& x) {
+    using T = elem_t<X>;
+    const T v = tag_mul(as_tag(alpha), Arith<T>::one());
+    for_each_owned(ex, x.size(), [&](int i) { x(i) = v; });
+}
+
+// y(2k) := a(k) for k < a.size(), y(2k + 1) := b(k) for k < b.size() (the perfect shuffle;
+// b.size() is a.size() or a.size() - 1), one owned loop over k.
+template <class Ex, class A, class B, class Y> BATCHLAS_DLA_INLINE void interleave(const Ex& ex, const A& a, const B& b, const Y& y) {
+    const int nb = b.size();
+    for_each_owned(ex, a.size(), [&](int k) {
+        y(2 * k) = a(k);
+        if (k < nb) y(2 * k + 1) = b(k);
+    });
+}
+
+// x := x reversed, in place: item owning i < n / 2 swaps x(i) and x(n - 1 - i) (Thread: the
+// serial two-pointer loop). LaneVec (operand.hh) form: each window [lo, hi) reversed by one
+// shuffle when on (uniform); items outside it keep their value.
+template <class Ex, class X> BATCHLAS_DLA_INLINE void reverse(const Ex& ex, const X& x) {
+    const int n = x.size();
+    if constexpr (is_thread_v<Ex>) {
+        for (int a = 0, b = n - 1; a < b; ++a, --b) {
+            const auto t = x(a);
+            x(a) = x(b);
+            x(b) = t;
+        }
+    } else {
+        for_each_owned(ex, n / 2, [&](int i) {
+            const auto t = x(i);
+            x(i) = x(n - 1 - i);
+            x(n - 1 - i) = t;
+        });
+    }
+}
+template <class Ex, class T> BATCHLAS_DLA_INLINE void reverse(const Ex& ex, const LaneVec<T>& x, bool on) {
+    const int l = ex.lid();
+    const int src = (on && l >= x.lo && l < x.hi) ? (x.lo + x.hi - 1 - l) : l;
+    x.v = ex.shuffle(static_cast<std::remove_cv_t<T>>(x.v), src);
+}
+
+// The number of x(i) <= v on an ascending x (C++ upper_bound's offset), by bisection on one item.
+template <class X, class R> BATCHLAS_DLA_INLINE int upper_bound(const Thread&, const X& x, R v) {
+    int lo = 0, hi = x.size();
+    while (lo < hi) {
+        const int mid = lo + (hi - lo) / 2;
+        if (!(v < x(mid))) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+
+// x := x / d (LAPACK ?RSCL): one reciprocal and a multiply when 1/d is finite and nonzero, else a
+// division per element (SafeRecip, scalar.hh); d == 0 divides (Inf / NaN, as LAPACK).
+template <class Ops = arith::Fma, class Ex, class T, class X> BATCHLAS_DLA_INLINE void rscl(const Ex& ex, const T& d, const X& x) {
+    using E = elem_t<X>;
+    const auto s = SafeRecip<E, Ops>::make(static_cast<E>(d));
+    for_each_owned(ex, x.size(), [&](int i) {
+        const E v = x(i);
+        x(i) = s.use_mul ? arith_t<Ops, E>::mul(v, s.r) : arith_t<Ops, E>::div(v, s.d);
+    });
+}
+
+// This item's partial x^T y (Conj: x^H y) over its owned elements; no reduction (the caller
+// combines partials, e.g. through a Scratch exchange shared with other sums).
+template <bool Conj = false, class Ops = arith::Explicit, class Ex, class X, class Y>
+BATCHLAS_DLA_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
+    return detail::dot_partial<Conj, Ops>(ex, x, y);
+}
+
+// acc += x(t) y(t) for t < N with kk0 + t < k, in index order: one item's dot over a staged slab.
+template <int N, class Ops = arith::Native, class T, class VX, class VY>
+BATCHLAS_DLA_INLINE void dot_slab(T& acc, const VX& x, const VY& y, int kk0, int k) {
+    using A = arith_t<Ops, T>;
+    for (int t = 0; t < N && kk0 + t < k; ++t) A::mac(acc, x(t), y(t));
+}
+
+// prod_i f(i) as mant * 2^expo (mant in [0.5, 1) unless the product is 0, Inf or NaN), free of
+// over/underflow: each item renormalises its running product by frexp, then the mantissas
+// combine 32 items at a time (2^-32 <= a product of 32 mantissas <= 1) with renormalisation.
+template <class R> struct ScaledProd {
+    R mant;
+    std::int32_t expo;
+};
+template <class Ex, class F> BATCHLAS_DLA_INLINE auto prod_scaled(const Ex& ex, int n, F&& f) {
+    using R = std::remove_cvref_t<decltype(f(0))>;
+    R mant = R(1);
+    std::int32_t expo = 0;
+    for_each_owned(ex, n, [&](int i) {
+        mant *= f(i);
+        if (mant != R(0) && sycl::isfinite(mant)) {
+            int e = 0;
+            mant = sycl::frexp(mant, &e);
+            expo += e;
+        }
+    });
+    R mant_all = R(1);
+    std::int32_t expo_all = allreduce(ex, expo);
+    const int width = detail::size_of(ex);
+    const int lane = ex.lid();
+    for (std::int32_t r0 = 0; r0 < width; r0 += 32) {
+        const bool mine = lane >= r0 && lane < r0 + 32;
+        mant_all *= allreduce(ex, mine ? mant : R(1), sycl::multiplies<R>());
+        if (mant_all != R(0) && sycl::isfinite(mant_all)) {
+            int e = 0;
+            mant_all = sycl::frexp(mant_all, &e);
+            expo_all += e;
+        }
+    }
+    return ScaledProd<R>{mant_all, expo_all};
+}
+// sqrt(|mant| 2^expo) without forming the power.
+template <class R> BATCHLAS_DLA_INLINE R sqrt_scaled(ScaledProd<R> q) {
+    const std::int32_t half = q.expo >> 1;  // floor(expo / 2)
+    const std::int32_t rem = q.expo - 2 * half;
+    const R mag = sycl::sqrt(sycl::fabs(q.mant) * (rem ? R(2) : R(1)));
+    return sycl::ldexp(mag, half);
+}
+
+// find_first with the miss value named (none instead of -1); LaneVec form: the smallest lid in
+// [x.lo, x.hi) whose element satisfies pred, else none (a min butterfly, masks ascending).
+template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DLA_INLINE int find_first(const Ex& ex, int n, P&& pred, int none) {
+    const int f = find_first<S>(ex, n, pred);
+    return f < 0 ? none : f;
+}
+template <class Ex, class T, class P> BATCHLAS_DLA_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, int none, P&& pred) {
+    const int l = ex.lid();
+    const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
+    return butterfly<1, Ex::size, bfly::Asc>(ex, cand, sycl::minimum<int>());
+}
+
+// argmax over x(i), i in [r.lo, r.hi) except i == skip, through a Group-scope exchange: per-item
+// candidates merged by argmax_merge<Tie, NaN> in ONE allreduce (reduce.hh) over Scratch<ArgMax<R>>
+// (scratch_elements<op::Reduce, Ex, ArgMax<R>>() slots). Uniform; no candidate -> index -1.
+template <class Tie = tie::Lowest, class NaN = nan::First, class Key = key::Abs1, class Ex, class R, int Slots, class X>
+BATCHLAS_DLA_INLINE ArgMax<R> argmax(const Ex& ex, Scratch<ArgMax<R>, Slots> scr, const X& x, Range r, int skip = -1) {
+    using T = elem_t<X>;
+    auto keyf = [](const T& v) -> R {
+        if constexpr (std::is_same_v<Key, key::Abs1>) return abs1(v);
+        else if constexpr (std::is_same_v<Key, key::Abs>) return modulus(v);
+        else return Arith<T>::re(v);
+    };
+    ArgMax<R> best{-1, R(0)};
+    for_each_owned(ex, r, [&](int i) {
+        if (i != skip) best = argmax_merge<Tie, NaN>(best, ArgMax<R>{i, keyf(x(i))});
+    });
+    return allreduce(ex, scr, best, ArgMaxMerge<Tie, NaN>{});
 }
 
 }  // namespace batchlas::device

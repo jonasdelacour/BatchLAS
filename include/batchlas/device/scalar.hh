@@ -76,10 +76,46 @@ template <class W, class T> BATCHLAS_DLA_INLINE LartgResult<T> lartg_complex_sca
 }
 }  // namespace detail
 
-// W: the working precision of the complex branch (void: real_t<T>); the real branch is
-// SLARTG/DLARTG with its unscaled fast path. Bit-identical to src/math-helpers.hh lartg.
+// W: lartg_alg::Exact (= void) or a working precision type of the complex branch (void:
+// real_t<T>); the real branch is SLARTG/DLARTG with its unscaled fast path, bit-identical to
+// src/math-helpers.hh lartg. lartg_alg::Fast, float only (other T: Exact): inside the unscaled
+// range r = sqrt(f^2 + g^2) with 1/r from rsqrt + one fused Newton step (< 0.5 ulp), outside
+// it the Exact path; g == 0 gives (1, 0, f) by a final select, not an early return (an
+// identity rotation does not diverge from its neighbours): steqr_cta's rotation.
+namespace lartg_alg {
+struct Exact {};
+struct Fast {};
+}  // namespace lartg_alg
 template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const T& g) {
     using R = real_t<T>;
+    if constexpr (std::is_same_v<W, lartg_alg::Exact>) {
+        return lartg<void>(f, g);
+    } else if constexpr (std::is_same_v<W, lartg_alg::Fast>) {
+        if constexpr (std::is_same_v<T, float>) {
+            const bool gz = (g == T(0));
+            const T f_abs = sycl::fabs(f), g_abs = sycl::fabs(g);
+            const T rtmin = sycl::sqrt(safmin<T>());
+            const T rtmax = sycl::sqrt(safmax<T>() / T(2));
+            T c = T(1), s = T(0), r = f;
+            if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
+                const T t = f * f + g * g;
+                T inv = sycl::rsqrt(t);
+                inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
+                const T d = sycl::sqrt(t);
+                c = f_abs * inv;
+                s = g * sycl::copysign(inv, f);
+                r = sycl::copysign(d, f);
+            } else if (!gz) {
+                const auto e = lartg<void>(f, g);
+                c = e.c;
+                s = e.s;
+                r = e.r;
+            }
+            return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
+        } else {
+            return lartg<void>(f, g);
+        }
+    } else {
     const R f_abs = modulus(f);
     const R g_abs = modulus(g);
     if (g_abs == R(0)) return {R(1), T(0), f};
@@ -109,6 +145,7 @@ template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const
         const R c = sycl::fabs(fs) / d;
         const R r_unscaled = sycl::copysign(d, f_r);
         return {c, T(gs / r_unscaled), T(r_unscaled * u)};
+    }
     }
 }
 

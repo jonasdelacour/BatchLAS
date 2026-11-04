@@ -29,6 +29,7 @@
 namespace batchlas::sycl_gemm::components {
 
 namespace v2 = batchlas::device;
+using batchlas::device::dot_slab;  // core level1.hh
 
 // ---- epilogue ------------------------------------------------------------------------------
 // *dst := alpha acc + beta *dst with the host's beta_zero flag (beta_zero never reads *dst). A
@@ -87,13 +88,6 @@ BATCHLAS_DLA_INLINE void mma_slab(v2::Tile<T, TR, TC>& acc, int kk0, const int& 
                 step(t0 + unroll);
         }
     }
-}
-
-// acc += x(t) y(t) for t < N with kk0 + t < k, in index order: one item's dot over a staged slab.
-template <int N, class Ops = v2::arith::Native, class T, class VX, class VY>
-BATCHLAS_DLA_INLINE void dot_slab(T& acc, const VX& x, const VY& y, int kk0, int k) {
-    using A = v2::arith_t<Ops, T>;
-    for (int t = 0; t < N && kk0 + t < k; ++t) A::mac(acc, x(t), y(t));
 }
 
 namespace detail {

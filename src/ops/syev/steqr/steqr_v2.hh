@@ -12,32 +12,15 @@
 namespace batchlas::steqr_v2 {
 
 namespace v2 = batchlas::device;
+using batchlas::device::LaneVec;  // core operand.hh
+using batchlas::device::lane_vec;
 
-struct OnePerItem {};  // layout of LaneVec
 
 // dsteqr's split tolerances: e(i) is negligible when |e(i)|^2 <= eps2 |d(i)| |d(i+1)| + safmin.
 template <class R> struct SplitTol {
     R eps2;
     R safmin;
 };
-
-// One element per item, held in a register: element i belongs to the item with lid == i.
-template <class T> struct LaneVec {
-    using value_type = std::remove_cv_t<T>;
-    using layout = OnePerItem;
-    T& v;
-    int lo;
-    int hi;
-
-    BATCHLAS_DLA_INLINE T& operator()(int) const { return v; }
-    BATCHLAS_DLA_INLINE int size() const { return hi; }
-    template <class Ex> BATCHLAS_DLA_INLINE bool owns(const Ex& ex) const {
-        const int l = ex.lid();
-        return l >= lo && l < hi;
-    }
-};
-// The window [lo, hi) of the lane-register vector whose own element is v.
-template <class T> BATCHLAS_DLA_INLINE LaneVec<T> lane_vec(T& v, int lo, int hi) { return {v, lo, hi}; }
 
 namespace detail {
 

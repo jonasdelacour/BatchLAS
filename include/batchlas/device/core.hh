@@ -161,6 +161,57 @@ struct FMin {
 };
 }  // namespace op
 
+// The part of a matrix an op touches: Full, a triangle with its diagonal (Lower, Upper) or
+// without it (StrictLower, StrictUpper).
+enum class Part { Full, Lower, Upper, StrictLower, StrictUpper };
+namespace detail {
+template <Part P> BATCHLAS_DLA_INLINE bool in_part(int i, int j) {
+    if constexpr (P == Part::Full) return true;
+    else if constexpr (P == Part::Lower) return i >= j;
+    else if constexpr (P == Part::Upper) return i <= j;
+    else if constexpr (P == Part::StrictLower) return i > j;
+    else return i < j;
+}
+}  // namespace detail
+
+// sync<S>(ex) barrier scopes: Part = the executor's own unit (a masked partition's own barrier;
+// nothing on Teams, whose team is a lockstep slice of a sub-group), Sub = the sub-group,
+// Group = the whole executor (sync(ex): work-group on WorkGroup, sub-group on a team executor).
+namespace scope {
+struct Part {};
+struct Sub {};
+struct Group {};
+}  // namespace scope
+
+// Team loops: Lockstep runs ceil(n / nteams) trips on every team; Diverge stops at its own bound.
+namespace loop {
+struct Lockstep {};
+struct Diverge {};
+}  // namespace loop
+
+namespace alg {
+struct TeamPerRow {};                   // gemv N / her2: one team per output row, lanes stride columns
+template <int W> struct ColDot {        // gemv T/C: W consecutive lanes per output column
+    static_assert(W > 0 && (W & (W - 1)) == 0, "alg::ColDot: W is a power of two");
+    static constexpr int width = W;
+};
+struct LanePerRow {};                   // trsv: lane i holds x(i); column j reaches the lanes by bcast
+}  // namespace alg
+
+// Which side of the accumulated product alpha multiplies (gemv): Left alpha * acc, Right acc * alpha.
+namespace alpha_side {
+struct Left {};
+struct Right {};
+}  // namespace alpha_side
+
+// Triangular-solve diagonal: Unit (not read), Div, Recip (x * (1 / a_ii)), Real (x / re(a_ii)).
+namespace tri_diag {
+struct Unit {};
+struct Div {};
+struct Recip {};
+struct Real {};
+}  // namespace tri_diag
+
 }  // namespace batchlas::device
 
 #include <batchlas/device/arith.hh>   // every core.hh user also reads Arith (arith.hh includes core.hh)

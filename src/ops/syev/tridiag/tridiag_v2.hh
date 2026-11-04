@@ -16,17 +16,8 @@
 #include <batchlas/device.hh>
 
 namespace batchlas::device::inline v2::tridiag {
-
-template <class T, int N> struct Refs {
-    using value_type = std::remove_cv_t<T>;
-    T* p[N];
-    BATCHLAS_DLA_INLINE T& operator()(int i) const { return *p[i]; }
-    BATCHLAS_DLA_INLINE constexpr int size() const { return N; }
-};
-template <class T, class... U> BATCHLAS_DLA_INLINE Refs<T, 1 + int(sizeof...(U))> refs(T& a, U&... b) {
-    static_assert((std::is_same_v<T, U> && ...), "tridiag::refs: every element has one type");
-    return {{&a, &b...}};
-}
+using device::Refs;  // core view.hh
+using device::refs;
 
 // v with (I - 2 v v^T) (a0, a1)^T = (-sign(a0) ||a||, 0)^T; unscaled norms (inputs are O(||T||)).
 template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> house2(R a0, R a1) {

@@ -6,7 +6,7 @@
 // (Lowest and Highest), NaN (First and Skip), empty candidates, and a WG = 1024 launch where
 // every one of 1024 items must be bit-identical to its period-3 representative (SLM scratch).
 // Red set (each break was made once, 2026-11-04, and this suite failed): the butterfly mask loop
-// starting at Hi instead of Hi / 2.
+// starting at Hi instead of Hi / 2; v2.2 (AtomicMinSlot): fetch_min replaced by fetch_max.
 #include <tests/device_core_common.hh>
 #include <batchlas/device/reduce.hh>
 
@@ -154,6 +154,38 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
         if (!std::isnan(k) && k > bv) bv = k, best = i;
     }
     for (int b = 2; b < items; b += period) EXPECT_EQ(S[b], best) << b;
+}
+
+
+// v2.2: AtomicMinSlot on a WG = 1024 work-group: every item offers a value, the minimum (held by
+// one item of the last sub-group) wins; no offer leaves INT_MAX (or_zero: 0).
+TYPED_TEST(DeviceCoreReduceTest, AtomicMinSlotKeepsTheMinimumOffer) {
+    using T = TypeParam;
+    auto& d = this->dev;
+    constexpr int WG = 1024;
+    int* out = d.template alloc<int>(3, -1);
+    d.template run<WG>(1, sizeof(int), [=](sycl::nd_item<1> it, unsigned char* lm) {
+        const dv::WorkGroup<WG, 32> ex{it};
+        const auto slot = dv::atomic_min_slot(reinterpret_cast<int*>(lm));
+        slot.reset(ex);
+        ex.barrier();
+        slot.offer(ex.lid() == 1000 ? 7 : 7 + (ex.lid() * 37) % 991 + 1);
+        ex.barrier();
+        const int v = slot.value();
+        ex.barrier();
+        slot.reset(ex);
+        ex.barrier();
+        if (ex.leader()) {
+            out[0] = v;
+            out[1] = slot.value();
+            out[2] = slot.or_zero();
+        }
+    });
+    const auto o = d.down(out, 3);
+    EXPECT_EQ(o[0], 7);
+    EXPECT_EQ(o[1], INT_MAX);
+    EXPECT_EQ(o[2], 0);
+    (void)sizeof(T);
 }
 
 }  // namespace
