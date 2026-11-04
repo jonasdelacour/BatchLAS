@@ -378,6 +378,7 @@ struct GeometrySettings {
         EnvValue sy2sb_ormqr_nb{};             ///< `BATCHLAS_TUNE_SY2SB_ORMQR_NB`
         EnvValue sytrd_block_size{};           ///< `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`
         EnvValue latrd_wg_hint{};              ///< `BATCHLAS_TUNE_LATRD_WG_HINT`
+        EnvValue latrd_slm_floor{};            ///< `BATCHLAS_TUNE_LATRD_SLM_FLOOR`
         EnvValue stedc_recursion_threshold{};  ///< `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`
 
         /// `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`: a StedcMergeVariant value; 0 (Auto) is unreachable.
@@ -389,7 +390,7 @@ struct GeometrySettings {
         EnvValue stedc_wg_multiplier{};        ///< `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`
         EnvValue l2_chunk_percent{};           ///< `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
         EnvValue l2_chunk_items{};             ///< `BATCHLAS_TUNE_L2_CHUNK_ITEMS`
-    } tune{};  ///< The thirteen `BATCHLAS_TUNE_*` overrides.
+    } tune{};  ///< The fourteen `BATCHLAS_TUNE_*` overrides.
 };
 
 /// @brief Tracing, dumping, profiling and the opt-in checks. None changes a numeric result.

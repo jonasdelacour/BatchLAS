@@ -207,6 +207,7 @@ void load_geometry(GeometrySettings& g) {
     set_if_present(g.tune.sy2sb_ormqr_nb, "BATCHLAS_TUNE_SY2SB_ORMQR_NB");
     set_if_present(g.tune.sytrd_block_size, "BATCHLAS_TUNE_SYTRD_BLOCK_SIZE");
     set_if_present(g.tune.latrd_wg_hint, "BATCHLAS_TUNE_LATRD_WG_HINT");
+    set_if_present(g.tune.latrd_slm_floor, "BATCHLAS_TUNE_LATRD_SLM_FLOOR");
     set_if_present(g.tune.stedc_recursion_threshold, "BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD");
     set_if_present(g.tune.stedc_merge_variant, "BATCHLAS_TUNE_STEDC_MERGE_VARIANT");
     set_if_present(g.tune.stedc_threads_per_root, "BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT");

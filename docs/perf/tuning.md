@@ -74,8 +74,8 @@ the consumer, where a retune cannot overwrite them:
 
 Each runtime accessor passes its captured `settings().geometry.tune.<field>` and the table value to
 `detail::tuning_env_override`. One process can therefore A/B a retune without a rebuild. The
-thirteen variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
-SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD,
+fourteen variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
+SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, LATRD_SLM_FLOOR, STEDC_RECURSION_THRESHOLD,
 STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER, L2_CHUNK_PERCENT, L2_CHUNK_ITEMS}`.
 `L2_CHUNK_ITEMS` overrides no constant: it forces the blocked drivers' chunk size as given.
 

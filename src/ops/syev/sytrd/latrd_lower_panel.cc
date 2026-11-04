@@ -26,6 +26,7 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 
@@ -231,6 +232,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                           const MatrixView<T, MatrixFormat::Dense>& w,
                                           const std::uint8_t* mask) {
     constexpr int wg = WG;
+    const int32_t slm_floor = tuning::latrd_lower_panel_slm_floor<T>();
 
     (void)q->submit([&](sycl::handler& h) {
         KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
@@ -244,7 +246,11 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
         const int ib = W_view.cols();
 
         auto v_local   = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        // Pad wcol_local so the four accessors total >= slm_floor bytes (occupancy cap; tuning_params.hh).
+        const std::ptrdiff_t pad = (static_cast<std::ptrdiff_t>(slm_floor) + static_cast<std::ptrdiff_t>(sizeof(T)) - 1) /
+                                       static_cast<std::ptrdiff_t>(sizeof(T)) - n - 2 * ib;
+        const size_t wcol_elems = static_cast<size_t>(std::max<std::ptrdiff_t>(n, pad));
+        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(wcol_elems), h);
         auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 

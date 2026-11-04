@@ -76,7 +76,7 @@ Group `geometry`. A default that depends on \f$n\f$, type, argument or device st
 | `BATCHLAS_SYEVX_CHECK_EVERY` | int (4) | Each check drains the pipeline. |
 | `BATCHLAS_SYEVX_EXTRA_DIRECTIONS` | int (`max(2, k/4)`) | `0` = no guard block; negative is unset. |
 | `BATCHLAS_SYEVX_FILTER_DEGREE`, `_INIT_POWER`, `_LOCK_FACTOR` | int > 0 (auto); int (4); float > 0 (0.1) | `INIT_POWER=0` = no power iterations. |
-| `BATCHLAS_TUNE_*` (13: `ORMQR_BLOCK_SIZE`, `GEBRD_BLOCK_SIZE`, `SB2ST_BACK_TILE`, `SB2ST_BACK_SUBS`, `SY2SB_ORMQR_NB`, `SYTRD_BLOCK_SIZE`, `LATRD_WG_HINT`, `STEDC_RECURSION_THRESHOLD`, `STEDC_MERGE_VARIANT`, `STEDC_THREADS_PER_ROOT`, `STEDC_WG_MULTIPLIER`, `L2_CHUNK_PERCENT`, `L2_CHUNK_ITEMS`) | int (tuned) | `tuning_env_override`, @ref perf_tuning. `L2_CHUNK_ITEMS` forces the blocked drivers' batch chunk. |
+| `BATCHLAS_TUNE_*` (14: `ORMQR_BLOCK_SIZE`, `GEBRD_BLOCK_SIZE`, `SB2ST_BACK_TILE`, `SB2ST_BACK_SUBS`, `SY2SB_ORMQR_NB`, `SYTRD_BLOCK_SIZE`, `LATRD_WG_HINT`, `LATRD_SLM_FLOOR`, `STEDC_RECURSION_THRESHOLD`, `STEDC_MERGE_VARIANT`, `STEDC_THREADS_PER_ROOT`, `STEDC_WG_MULTIPLIER`, `L2_CHUNK_PERCENT`, `L2_CHUNK_ITEMS`) | int (tuned) | `tuning_env_override`, @ref perf_tuning. `L2_CHUNK_ITEMS` forces the blocked drivers' batch chunk. |
 
 ## Diagnostic variables
 

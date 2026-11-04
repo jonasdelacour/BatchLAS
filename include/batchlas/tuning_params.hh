@@ -18,8 +18,10 @@
 // The accessors, this include and these doc comments are mirrored in the generator's template:
 // change both or a retune reverts it. evidence: docs/perf/tuning.md#tuning-regenerating-the-header
 
+#include <complex>
 #include <cstdint>
 #include <cstdlib>
+#include <type_traits>
 
 #include <batchlas/settings.hh>
 
@@ -99,6 +101,14 @@ inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_SMALL = 0;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_MEDIUM = 0;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_LARGE = 128;
 inline constexpr int32_t LATRD_LOWER_PANEL_WG_HINT_XLARGE = 0;
+
+/// Local-memory floor (bytes per work-group) that caps blocks/SM of LatrdLowerPanelKernelLegacy;
+/// 0 = no floor. Occupancy-sensitive (cache reuse in the hemv column walk), chosen by runtime A/B on sm_89.
+/// A value below the kernel's own SLM use has no effect, so 1 also means no floor.
+inline constexpr int32_t LATRD_LOWER_PANEL_SLM_FLOOR_FLOAT = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_SLM_FLOOR_DOUBLE = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_SLM_FLOOR_CFLOAT = 0;
+inline constexpr int32_t LATRD_LOWER_PANEL_SLM_FLOOR_CDOUBLE = 0;
 
 inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_TINY = 0;
 inline constexpr int32_t SYTRD_FUSE_PANEL_UPDATE_SMALL = 0;
@@ -219,6 +229,18 @@ inline constexpr int32_t latrd_lower_panel_wg_hint_default_for_n(int32_t n) {
     if (n <= 256) return LATRD_LOWER_PANEL_WG_HINT_MEDIUM;
     if (n <= 512) return LATRD_LOWER_PANEL_WG_HINT_LARGE;
     return LATRD_LOWER_PANEL_WG_HINT_XLARGE;
+}
+
+/// @brief Compiled `LATRD_LOWER_PANEL_SLM_FLOOR_*` constant for scalar type \f$T\f$ (no override).
+/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @return the SLM floor in bytes, 0 for none
+/// @ingroup api_config_lowlevel
+template <typename T>
+inline constexpr int32_t latrd_lower_panel_slm_floor_default() {
+    if constexpr (std::is_same_v<T, float>) return LATRD_LOWER_PANEL_SLM_FLOOR_FLOAT;
+    else if constexpr (std::is_same_v<T, double>) return LATRD_LOWER_PANEL_SLM_FLOOR_DOUBLE;
+    else if constexpr (std::is_same_v<T, std::complex<float>>) return LATRD_LOWER_PANEL_SLM_FLOOR_CFLOAT;
+    else return LATRD_LOWER_PANEL_SLM_FLOOR_CDOUBLE;
 }
 
 /// @brief Compiled `STEDC_RECURSION_THRESHOLD_*` bucket for \f$n\f$ (no override).
@@ -345,6 +367,17 @@ inline int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {
 /// @return the work-group size hint, 0 for none
 /// @ingroup api_config_lowlevel
 inline int32_t latrd_lower_panel_wg_hint() { return latrd_lower_panel_wg_hint_for_n(256); }
+
+/// @brief latrd lower-panel SLM floor in bytes for scalar type \f$T\f$, 0 for none; override
+/// `BATCHLAS_TUNE_LATRD_SLM_FLOOR`.
+/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @return the override if it is a positive integer, else latrd_lower_panel_slm_floor_default()
+/// @ingroup api_config_lowlevel
+template <typename T>
+inline int32_t latrd_lower_panel_slm_floor() {
+    return detail::tuning_env_override(settings().geometry.tune.latrd_slm_floor,  // BATCHLAS_TUNE_LATRD_SLM_FLOOR
+                                       latrd_lower_panel_slm_floor_default<T>());
+}
 
 /// @brief Whether sytrd fuses the panel update at order \f$n\f$. No `BATCHLAS_TUNE_*` override; see
 /// SelectionSettings::sytrd_fuse_panel_update.
