@@ -186,8 +186,8 @@ BATCHLAS_UNROLL_FULL
                                     // for ConjTrans, column for NoTrans). The
                                     // wrong one is still Hermitian: test vs GEMM.
                                     if constexpr (Conjugate) {
-                                        af[b * 4 + e] = TransOperand ? batchlas::device::detail::conj(va.v[e]) : va.v[e];
-                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::detail::conj(vb.v[e]);
+                                        af[b * 4 + e] = TransOperand ? batchlas::device::v2::conj(va.v[e]) : va.v[e];
+                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::v2::conj(vb.v[e]);
                                     } else {
                                         af[b * 4 + e] = va.v[e];
                                         bf[b * 4 + e] = vb.v[e];

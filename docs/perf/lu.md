@@ -220,7 +220,7 @@ Older `experiments/` paths live at the tag `perf-evidence/vendor-independence` (
 
 ### One spelling per ceiling
 
-* `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; the generated `device_limits.hh` value (49,152) is wrong here and is on no decision path ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
+* `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; every decision re-reads the device ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
 * `getrf_cta_fits` is admission, occupancy-scaled; `getrf_leaf_fits` is residency, at the whole budget.
 * `getrf_tiny_max_n<T>()` is the one spelling of the tiny ceiling (compile-time, {4, 8, 16, 32} ladder).
 * `getrf_tiny_buffer_size` is not zero: a short caller `info` draws pool scratch.

@@ -19,8 +19,8 @@
 #include <optional>
 #include <vector>
 
-#include <batchlas/blas/device.hh>
 #include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/kernels/common/dla_v2_partition.hh>
 #include <src/kernels/common/dla_v2_potf2.hh>
@@ -47,6 +47,21 @@ namespace {
 
 template <class T> using real_of = typename v2::Arith<T>::real_t;
 template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+
+// Hand-reference conj and work-group sum (the legacy latrd forms), independent of v2.
+template <class T> T hand_conj(const T& a) {
+    if constexpr (is_cplx<T>) return std::conj(a);
+    else return a;
+}
+template <class G, class T> T hand_group_sum(const G& g, const T& v) {
+    if constexpr (is_cplx<T>) {
+        using R = real_of<T>;
+        return T(batchlas::portable::reduce_over_group(g, v.real(), sycl::plus<R>()),
+                 batchlas::portable::reduce_over_group(g, v.imag(), sycl::plus<R>()));
+    } else {
+        return batchlas::portable::reduce_over_group(g, v, sycl::plus<T>());
+    }
+}
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -645,7 +660,6 @@ template <int WG, class T> void strict_port_case(Dev& dev) {
     const KernelMatrixView<T, MatrixFormat::Dense> kv(a, n, n, ld, ld * n, kPeriod);
     const T tau = val<T>(84);
     dev.template run<WG>(kBatch, sizeof(T) * 2 * n, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        namespace dd = batchlas::device::detail;
         const int b = static_cast<int>(it.get_group_linear_id());
         const int lid = static_cast<int>(it.get_local_linear_id());
         const v2::WorkGroup<WG> ex{it};
@@ -681,11 +695,11 @@ template <int WG, class T> void strict_port_case(Dev& dev) {
             T gp = T(0), dp = T(0);
             for (int c = k0 + lid; c < n; c += WG) {
                 const T vc = lv[c];
-                gp += dd::conj(W(c, p)) * vc;
+                gp += hand_conj(W(c, p)) * vc;
                 const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                dp += dd::conj(vcp) * vc;
+                dp += hand_conj(vcp) * vc;
             }
-            const T g0 = dd::reduce_sum_group(it.get_group(), gp), d0 = dd::reduce_sum_group(it.get_group(), dp);
+            const T g0 = hand_group_sum(it.get_group(), gp), d0 = hand_group_sum(it.get_group(), dp);
             const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, W.col(p).tail(k0), v2::unit_head(A.col(p), p + 1).tail(k0));
             if (ex.leader()) ob[6 * n + 4 * p] = g0, ob[6 * n + 4 * p + 1] = gd[0], ob[6 * n + 4 * p + 2] = d0, ob[6 * n + 4 * p + 3] = gd[1];
         }
@@ -693,8 +707,8 @@ template <int WG, class T> void strict_port_case(Dev& dev) {
         for (int r = k0 + lid; r < n; r += WG) lw[r] = ob[r];
         const auto wv = v2::vec<Mem::Local>(lw, n).tail(k0);
         T hand_dot_p = T(0);
-        for (int r = k0 + lid; r < n; r += WG) hand_dot_p += dd::conj(lv[r]) * (ob[r] * tau);
-        const T hand_dot = dd::reduce_sum_group(it.get_group(), hand_dot_p);
+        for (int r = k0 + lid; r < n; r += WG) hand_dot_p += hand_conj(lv[r]) * (ob[r] * tau);
+        const T hand_dot = hand_group_sum(it.get_group(), hand_dot_p);
         v2::scal<Native>(ex, tau, wv);
         const T dot = v2::dotc<Scope::Group, Native>(ex, v, wv);
         v2::axpy<Native>(ex, T(-0.5) * tau * dot, v, wv);

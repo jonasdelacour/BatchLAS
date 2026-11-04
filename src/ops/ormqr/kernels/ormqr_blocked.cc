@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device.hh>
 #include <src/select/grid_chunk.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/functions.hh>
@@ -33,14 +32,6 @@ struct OrmqrWyTag;
 namespace {
 
 using ops::ormqr::wy_trmm_applicable;
-
-inline bool use_device_ormqr() {
-    static const bool result = []() {
-        const char* v = batchlas::settings().selection.ormqr_impl.get();
-        return v && std::string(v) == "device";
-    }();
-    return result;
-}
 
 template <typename T>
 inline void validate_ormqr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
@@ -193,8 +184,7 @@ Event ormqr_blocked_impl(Queue& ctx,
                 (void)wy::larft_forward_columnwise_batched<OrmqrWyTag, T>(
                     q, Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
                     Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), m, ib,
-                    tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch,
-                    /*use_device=*/use_device_ormqr(), mask_p);
+                    tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch, mask_p);
             }
 
             if (side == Side::Left) {

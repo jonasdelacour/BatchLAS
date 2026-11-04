@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>

@@ -44,8 +44,8 @@ template <bool Nrm, class Name, class T, int N, int V, int WG> sycl::event w_dot
             const int lid = static_cast<int>(it.get_local_linear_id());
             T acc = T(0);
             for (int i = lid; i < n; i += WG) acc += x[i] * y[i];
-            if constexpr (WG == 32) r = batchlas::device::detail::reduce_sum_group(it.get_sub_group(), acc);
-            else r = batchlas::device::detail::reduce_sum_group(it.get_group(), acc);
+            if constexpr (WG == 32) r = lab::group_sum(it.get_sub_group(), acc);
+            else r = lab::group_sum(it.get_group(), acc);
             if constexpr (Nrm) r = sycl::sqrt(r);
         } else if constexpr (V == kLean) {
             if constexpr (WG == 32) r = lean::dot(SgExec<32>{it.get_sub_group()}, LVec<T>{x, n}, LVec<T>{y, n});
@@ -85,8 +85,8 @@ template <class T, int N, int V, int WG> sycl::event w_dotn2(sycl::queue& q, Dat
                 a0 += x[i] * yi;
                 a1 += y[i] * yi;
             }
-            r0 = batchlas::device::detail::reduce_sum_group(it.get_group(), a0);
-            r1 = batchlas::device::detail::reduce_sum_group(it.get_group(), a1);
+            r0 = lab::group_sum(it.get_group(), a0);
+            r1 = lab::group_sum(it.get_group(), a1);
         } else {
             const dv2::WorkGroup<WG> ex{it};
             const auto xs = std::array<decltype(dv2::vec(x, n)), 2>{dv2::vec(x, n), dv2::vec(y, n)};
@@ -125,7 +125,7 @@ template <Transpose TR, class Name, class T, int N, int V, int WG> sycl::event w
                 for (int c = 0; c < n; ++c) {
                     T partial = T(0);
                     for (int r = lid; r < n; r += WG) partial += a[r + c * ld] * x[r];
-                    const T s = batchlas::device::detail::reduce_sum_group(it.get_group(), partial);
+                    const T s = lab::group_sum(it.get_group(), partial);
                     if (lid == 0) y[c] = s;
                 }
             }

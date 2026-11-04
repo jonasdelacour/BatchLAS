@@ -285,7 +285,7 @@ void two_sided_update_lower(Queue& ctx,
     const MV M2 = MV(s.m2.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
 
     (void)wy::pack_v_panel_batched<Sy2sbWyTag, T>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
-    (void)wy::larft_forward_columnwise_batched_t<Sy2sbWyTag, T, false>(
+    (void)wy::larft_forward_columnwise_batched<Sy2sbWyTag, T>(
         ctx, Tf.data_ptr(), Tf.ld(), Tf.stride(), V.data_ptr(), V.ld(), V.stride(), pn, pk,
         tau_panel.data(), /*tau_stride=*/pk, /*tau_offset=*/0, batch);
     (void)gemm<B>(ctx, V, Tf, P, GemmOptions<T>{});

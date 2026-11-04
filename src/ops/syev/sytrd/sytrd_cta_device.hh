@@ -12,7 +12,6 @@
 #include <src/ops/syev/sytrd/sytrd_v2.hh>
 
 #include <cstdint>
-#include <batchlas/blas/device/detail/group_blas_common.hh>
 
 namespace batchlas {
 

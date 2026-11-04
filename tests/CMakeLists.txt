@@ -27,7 +27,6 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
-    device_blas_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
@@ -73,6 +72,7 @@ set(TEST_TARGETS
     getri_candidates_tests
     getrs_candidates_tests
     getrs_mask_tests
+    group_collectives_tests
     hemm_tests
     her2k_tests
     herk_tests
@@ -239,7 +239,7 @@ set(BATCHLAS_TEST_LABELS_util
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
     cond_tests
-    device_blas_tests
+    group_collectives_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests

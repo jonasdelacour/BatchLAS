@@ -305,13 +305,13 @@ TYPED_TEST(DeviceBlasV2LarftTest, LarfFragLeftOnRegisterColumn) {
     larf_frag_case<v2::arith::Explicit, T>(this->dev, "Explicit");
 }
 
-// ---- the larft kernel: v2 (use_device = true) and legacy against LAPACK's recurrence ---------
+// ---- the larft kernel (v2, the only larft) against LAPACK's recurrence ------------------------
 
 // V is materialised unit-lower (as pack_v writes it) with ld_v = m + 3 and poisoned rows past
 // the panel; T has ld_t = ib + 2 and a stride with slack, all NaN on entry; tau has stride ib + 5
 // and offset 2, with tau_3 == 0. Items 5 and 1000 are masked: their T stays NaN.
-template <bool UseDevice, class T> void larft_case(Dev& dev, int m, int ib) {
-    SCOPED_TRACE(::testing::Message() << (UseDevice ? "v2" : "legacy") << " m " << m << " ib " << ib);
+template <class T> void larft_case(Dev& dev, int m, int ib) {
+    SCOPED_TRACE(::testing::Message() << "m " << m << " ib " << ib);
     const int ld_v = m + 3, sv = ld_v * ib, ld_t = ib + 2, st = ld_t * ib + 3, ts = ib + 5, toff = 2;
     auto hv = batched<T>(sv, 71, [&](T* v) {
         for (int c = 0; c < ib; ++c)
@@ -329,8 +329,8 @@ template <bool UseDevice, class T> void larft_case(Dev& dev, int m, int ib) {
     const T* tau = dev.up(ht);
     T* t = dev.up(hT);
     const std::uint8_t* mask = dev.up(hm);
-    (void)wy::larft_forward_columnwise_batched_t<V2LarftTestTag, T, UseDevice>(*dev.ctx, t, ld_t, st, v, ld_v, sv, m, ib,
-                                                                                tau, ts, toff, kBatch, mask);
+    (void)wy::larft_forward_columnwise_batched<V2LarftTestTag, T>(*dev.ctx, t, ld_t, st, v, ld_v, sv, m, ib,
+                                                                 tau, ts, toff, kBatch, mask);
     dev.ctx->wait();
     const auto got = dev.down(t, hT.size());
     EXPECT_EQ(items_differing(got, st, {5, 1000}), 0);
@@ -377,12 +377,11 @@ template <bool UseDevice, class T> void larft_case(Dev& dev, int m, int ib) {
 
 // One shape per WG rung (32, 64, 128, 256), plus m = 64 / 65 at ib = 8: both sides of the first
 // rung's m bound.
-TYPED_TEST(DeviceBlasV2LarftTest, LarftV2AndLegacyMatchLapackOnEveryRung) {
+TYPED_TEST(DeviceBlasV2LarftTest, LarftMatchesLapackOnEveryRung) {
     using T = TypeParam;
     for (const auto [m, ib] : {std::pair{40, 8}, std::pair{64, 8}, std::pair{65, 8}, std::pair{100, 16}, std::pair{200, 29},
                                std::pair{300, 40}}) {
-        larft_case<true, T>(this->dev, m, ib);
-        larft_case<false, T>(this->dev, m, ib);
+        larft_case<T>(this->dev, m, ib);
     }
 }
 

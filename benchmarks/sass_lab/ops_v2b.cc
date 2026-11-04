@@ -102,14 +102,14 @@ template <class T, int N, int V, int WG> sycl::event w_latrd(sycl::queue& q, Dat
                     gamma_partial += wp[c + p * ld] * vc;
                     delta_partial += vp[c + p * ld] * vc;
                 }
-                const T gamma = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                const T delta = batchlas::device::detail::reduce_sum_group(g, delta_partial);
+                const T gamma = lab::group_sum(g, gamma_partial);
+                const T delta = lab::group_sum(g, delta_partial);
                 for (int r = lid; r < n; r += WG) w_local[r] -= vp[r + p * ld] * gamma + wp[r + p * ld] * delta;
             }
             for (int r = lid; r < n; r += WG) w_local[r] *= tau;
             T dot_partial = T(0);
             for (int r = lid; r < n; r += WG) dot_partial += v_local[r] * w_local[r];
-            const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
+            const T dot = lab::group_sum(g, dot_partial);
             const T alpha2 = T(-0.5) * tau * dot;
             for (int r = lid; r < n; r += WG) w_local[r] += alpha2 * v_local[r];
             for (int r = lid; r < n; r += WG) y[r] = w_local[r];

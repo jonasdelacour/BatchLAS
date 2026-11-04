@@ -4,8 +4,7 @@
 
 `batchlas::v2` (`#include <batchlas/blas/device/v2/dla.hh>`) is the in-kernel linear-algebra layer the
 LAPACK-like kernels are written in. Executor, layout and algorithm are compile-time types and the caller
-owns every barrier, so a v2 call compiles to the SASS of the hand-written code it replaces. The older
-runtime-shaped API is @ref design_device_group_blas.
+owns every barrier, so a v2 call compiles to the SASS of the hand-written code it replaces.
 
 ## Device LA v2: why the v1 layer cost performance
 

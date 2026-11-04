@@ -284,7 +284,7 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
                                       Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
                                       a, i0, ib, nq, mask);
 
-        (void)wy::larft_forward_columnwise_batched_t<OrmbrPWyTag, T, false>(ctx,
+        (void)wy::larft_forward_columnwise_batched<OrmbrPWyTag, T>(ctx,
                                                                          Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
                                                                          Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
                                                                          m, ib,

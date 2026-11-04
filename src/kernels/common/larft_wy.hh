@@ -1,22 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include <type_traits>
-
-// The WY block-reflector machinery (larft, pack_v), shared by ormqr_blocked.cc and
-// geqrf_blocked.cc. sytrd_sy2sb.cc's private copy is unreachable, not a third user.
+// The WY block-reflector machinery (larft, pack_v), shared by four callers.
 // evidence: docs/perf/qr.md#larft_wyhh-why-the-wy-helpers-are-shared
-//
-// KERNEL NAMES ARE TAGGED BY CALLER, and that is not decoration: the callers sit in
-// DIFFERENT device-code clusters (src/ops/CMakeLists.txt), so an untagged
-// closure type would be emitted into two device images of one shared library.
-//
-// `use_device` is a PARAMETER, never a getenv here: ormqr reads BATCHLAS_ORMQR_IMPL
-// itself, and a getenv here would tie geqrf's kernel choice to ormqr's variable.
+// Kernel names are tagged by caller: the callers sit in different device-code clusters
+// (src/ops/CMakeLists.txt), so an untagged name would land in two images of one library.
 
-#include <batchlas/blas/device.hh>
-#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 
 #include <src/kernels/common/dla_v2_larft.hh>
 #include <src/math-helpers.hh>
@@ -27,114 +18,29 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::wy {
 
-// Kernel name tags. `Tag` is supplied by the caller (an incomplete struct is
-// enough); WG and Device make the four work-group ladders and the two
-// implementations distinct.
-template <typename Tag, typename T, int WG, bool Device> class LarftKernelName;
+template <typename Tag, typename T, int WG> class LarftKernelName;
 template <typename Tag, typename T> class PackVKernelName;
 
 namespace detail {
 
-// ---------------------------------------------------------------------------
-// LARFT -- form T for a block of Householder vectors V (Forward, Columnwise).
-// V is (m x ib) unit-lower (diag = 1, upper = 0). T is (ib x ib) upper
-// triangular. ONE WORK-GROUP PER MATRIX; the inner reductions are work-group
-// collectives, so this is not the batch-only-parallelism shape.
-// ---------------------------------------------------------------------------
-
-// Legacy implementation: manual group-reduction inner loops. This is the DEFAULT
-// path in ormqr today and the only one geqrf uses.
+// LARFT (Forward, Columnwise): T (ib x ib, upper) from unit-lower V (m x ib); one work-group per
+// matrix on v2::larft_forward_colwise, the only larft.
 template <typename Tag, typename T, int WG>
-sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
-                                               T* t_data, int ld_t, int stride_t,
-                                               const T* v_data, int ld_v, int stride_v,
-                                               int m, int ib,
-                                               const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch,
-                                               const std::uint8_t* mask) {
-    static_assert(WG > 0, "WG must be positive");
-
-    return q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, false>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
-                              sycl::range<1>(static_cast<size_t>(WG))),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
-
-                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
-                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
-                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
-
-                const sycl::group<1> g = it.get_group();
-                const int lid = static_cast<int>(it.get_local_linear_id());
-
-                if (lid == 0) {
-                    for (int j = 0; j < ib; ++j) {
-                        for (int i = 0; i < ib; ++i) {
-                            t_b[i + j * ld_t] = T(0);
-                        }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::global_space);
-
-                for (int j = 0; j < ib; ++j) {
-                    const T tauj = tau_b[j];
-                    if (tauj == T(0)) {
-                        if (lid == 0) {
-                            t_b[j + j * ld_t] = T(0);
-                        }
-                        it.barrier(sycl::access::fence_space::global_space);
-                        continue;
-                    }
-
-                    for (int col = 0; col < j; ++col) {
-                        T partial = T(0);
-                        for (int r = j + 1 + lid; r < m; r += WG) {
-                            const T v_rc = v_b[r + col * ld_v];
-                            const T v_rj = v_b[r + j * ld_v];
-                            partial += batchlas::device::detail::conj(v_rc) * v_rj;
-                        }
-                        const T sum_r = batchlas::device::detail::reduce_sum_group(g, partial);
-                        if (lid == 0) {
-                            const T sum = batchlas::device::detail::conj(v_b[j + col * ld_v]) + sum_r;
-                            t_b[col + j * ld_t] = -tauj * sum;
-                        }
-                        it.barrier(sycl::access::fence_space::global_space);
-                    }
-
-                    if (lid == 0) {
-                        for (int row = 0; row < j; ++row) {
-                            T acc = T(0);
-                            for (int col = row; col < j; ++col) {
-                                acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
-                            }
-                            t_b[row + j * ld_t] = acc;
-                        }
-                        t_b[j + j * ld_t] = tauj;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-            });
-    });
-}
-
-// Device LA v2 algo port (v2::larft_forward_colwise); reached only with use_device = true.
-template <typename Tag, typename T, int WG>
-sycl::event larft_forward_columnwise_wg_device(Queue& q,
-                                               T* t_data, int ld_t, int stride_t,
-                                               const T* v_data, int ld_v, int stride_v,
-                                               int m, int ib,
-                                               const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch,
-                                               const std::uint8_t* mask) {
+sycl::event larft_forward_columnwise_wg(Queue& q,
+                                        T* t_data, int ld_t, int stride_t,
+                                        const T* v_data, int ld_v, int stride_v,
+                                        int m, int ib,
+                                        const T* tau_data, int tau_stride,
+                                        int tau_offset, int batch,
+                                        const std::uint8_t* mask) {
     static_assert(WG % 32 == 0, "WG must be a whole number of 32-wide sub-groups");
 
     return q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, true>>(h,
+        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -153,26 +59,20 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
 
 }  // namespace detail
 
-// Dispatcher over the work-group ladder. UseDevice is a TEMPLATE parameter, not a runtime
-// bool, because a runtime bool device-links both implementations for every rung even
-// where the caller passes a literal. evidence: docs/perf/qr.md#larft_wyhh-usedevice-is-a-template-parameter
-template <typename Tag, typename T, bool UseDevice>
-sycl::event larft_forward_columnwise_batched_t(Queue& q,
-                                               T* t_data, int ld_t, int stride_t,
-                                               const T* v_data, int ld_v, int stride_v,
-                                               int m, int ib,
-                                               const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch,
-                                               const std::uint8_t* mask = nullptr) {
+// Dispatcher over the work-group ladder. v2's gemv needs 32-wide sub-groups: a launch-time
+// check, never an in-kernel test.
+template <typename Tag, typename T>
+sycl::event larft_forward_columnwise_batched(Queue& q,
+                                             T* t_data, int ld_t, int stride_t,
+                                             const T* v_data, int ld_v, int stride_v,
+                                             int m, int ib,
+                                             const T* tau_data, int tau_stride,
+                                             int tau_offset, int batch,
+                                             const std::uint8_t* mask = nullptr) {
+    if (!q.device().supports_sub_group_size(32))
+        throw batchlas::unsupported("larft: the device has no 32-wide sub-groups");
     const auto pick = [&]<int WG>(std::integral_constant<int, WG>) {
-        // v2's gemv needs 32-wide sub-groups: a launch-time choice, never an in-kernel test.
-        if constexpr (UseDevice) {
-            if (q.device().supports_sub_group_size(32))
-                return detail::larft_forward_columnwise_wg_device<Tag, T, WG>(
-                    q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                    tau_data, tau_stride, tau_offset, batch, mask);
-        }
-        return detail::larft_forward_columnwise_wg_legacy<Tag, T, WG>(
+        return detail::larft_forward_columnwise_wg<Tag, T, WG>(
             q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
             tau_data, tau_stride, tau_offset, batch, mask);
     };
@@ -181,26 +81,6 @@ sycl::event larft_forward_columnwise_batched_t(Queue& q,
     if (ib <= 16 && m <= 128)  return pick(std::integral_constant<int, 64>{});
     if (ib <= 32 && m <= 256)  return pick(std::integral_constant<int, 128>{});
     return pick(std::integral_constant<int, 256>{});
-}
-
-// Runtime-selecting wrapper, ONLY for a caller whose choice is not a compile-time fact
-// (today ormqr alone, via BATCHLAS_ORMQR_IMPL). A caller with a literal calls the _t form.
-template <typename Tag, typename T>
-sycl::event larft_forward_columnwise_batched(Queue& q,
-                                             T* t_data, int ld_t, int stride_t,
-                                             const T* v_data, int ld_v, int stride_v,
-                                             int m, int ib,
-                                             const T* tau_data, int tau_stride,
-                                             int tau_offset, int batch,
-                                             bool use_device,
-                                             const std::uint8_t* mask = nullptr) {
-    return use_device
-               ? larft_forward_columnwise_batched_t<Tag, T, true>(
-                     q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                     tau_data, tau_stride, tau_offset, batch, mask)
-               : larft_forward_columnwise_batched_t<Tag, T, false>(
-                     q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                     tau_data, tau_stride, tau_offset, batch, mask);
 }
 
 // ---------------------------------------------------------------------------

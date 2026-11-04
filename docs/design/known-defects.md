@@ -141,7 +141,7 @@ per kernel (the tiny-solver tables were tuned unbounded) and re-pinned kernel ha
 Open outside the capped part loops. A `parallel_for` over a plain `sycl::range<3>` with the batch in
 dimension 0 is rounded up by DPC++ (`__pf_kernel_wrapper`), here to 65536, past CUDA's 65535 grid:
 pinned blocked gesvd (float, \f$n = 40\f$) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:170`,
-`src/kernels/common/larft_wy.hh:262`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
+`src/kernels/common/larft_wy.hh:117`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
 `src/ops/syev/kernels/uplo_mirror.cc:29`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
 `src/ops/syev/sytrd/sytrd_sy2sb.cc:126`. **Workaround:** the blocked geqrf, orgqr, ormqr, gesvd and
 syev (cta, blocked) part loops keep every part at `max_groups_yz / 2`; test
@@ -232,7 +232,6 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:355`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
-- Matrix containers, the environment parser and the 3-D tile-group race are tracked on their pages:
+- Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
-  [environment](environment.md#environment-parser-defects-recorded-not-fixed),
-  [device-group BLAS](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
+  [environment](environment.md#environment-parser-defects-recorded-not-fixed).

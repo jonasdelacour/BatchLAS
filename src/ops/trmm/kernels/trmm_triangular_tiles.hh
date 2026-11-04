@@ -176,11 +176,11 @@ BATCHLAS_UNROLL_FULL
                                         value = unit
                                             ? T(1)
                                             : conjugated
-                                                ? batchlas::device::detail::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
+                                                ? batchlas::device::v2::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
                                                 : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
                                     } else if (lower_eff ? (p < i) : (p > i)) {
                                         const T raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
-                                        value = conjugated ? batchlas::device::detail::conj(raw) : raw;
+                                        value = conjugated ? batchlas::device::v2::conj(raw) : raw;
                                     }
                                 }
                                 sa[(pp0 + e) * SA + phys] = value;

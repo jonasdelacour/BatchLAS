@@ -25,9 +25,7 @@ CFLAGS=(-O2 -DNDEBUG -std=c++20 -fPIC -gline-tables-only -fno-omit-frame-pointer
 LFLAGS=(-O2 -fsycl -fsycl-targets=nvidia_gpu_sm_89 "--cuda-path=$CUDA"
         -Xsycl-target-backend=nvptx64-nvidia-cuda --ftz=false -mllvm -enable-global-offset=false)
 
-# LAB_ONLY_V2=1 builds only the v2 parity set (hand / lean / v2, ops_v2*.cc).
-if [ "${LAB_ONLY_V2:-0}" = 1 ]; then SRCS="main ops_v2a ops_v2b"; CFLAGS+=(-DLAB_ONLY_V2)
-else SRCS="main ops_l1 ops_l2a ops_l2b ops_l3 ops_v2a ops_v2b"; fi
+SRCS="main ops_v2a ops_v2b"
 
 build() {
     local pids=() rc=0 src

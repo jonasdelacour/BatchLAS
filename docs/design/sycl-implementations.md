@@ -86,7 +86,7 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
 - **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the CUDA
   and HIP device passes too (`kExactWgReducePass`) only because acpp's multipass reduce, exact in
   probes, reads as racy (static scratch returned after the last barrier,
-  `generic/hiplike/group_functions.hpp:36-71`); `DeviceBlasTest.PortableWorkGroupDoubleSumIsExact`
+  `generic/hiplike/group_functions.hpp:36-71`); `GroupCollectivesTest.PortableWorkGroupDoubleSumIsExact`
   guards the replacement.
 - **Contraction:** `BATCHLAS_FP_CONTRACT` (default `on`) over the driver's `fast`
   ([build guide](../guide/build.md#guide_build_fp_contract)).
@@ -168,7 +168,7 @@ using-declaration of the `sycl::` function (md5-identical objects); under acpp i
 | Host `joint_reduce` without `init` on `const T*` does not compile | — | overload keeping SYCL's item-to-element mapping |
 
 Every floating `reduce_over_group`/`joint_reduce`/`joint_exclusive_scan` in `src/` goes through
-`portable::`. Guards: `DeviceBlasTest.PortableGroupReductionsAreExact`,
+`portable::`. Guards: `GroupCollectivesTest.PortableGroupReductionsAreExact`,
 `StedcDeflationScan.PortableJointExclusiveScanInPlaceAcrossChunks`.
 
 ## Compile-level differences: portable spellings {#sycl-impl-compile-differences}

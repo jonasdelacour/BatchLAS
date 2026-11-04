@@ -29,7 +29,7 @@ HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp")
 QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 # Generated headers live in <build>/include and are installed alongside; they
 # are never reachable from the source tree, so do not try to resolve them.
-GENERATED = re.compile(r"^batchlas/(backend_config\.h|device_limits\.hh)$")
+GENERATED = re.compile(r"^batchlas/backend_config\.h$")
 # The build puts the repository root on -I for in-tree code (<src/...>), so a public header that
 # spells one compiles in-tree and fails for every consumer, like the quoted form above.
 SOURCE_TREE_INCLUDE = re.compile(

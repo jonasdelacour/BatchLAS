@@ -5,7 +5,6 @@
 #include <batchlas/util/group-collectives.hh>
 
 #include <batchlas/blas/enums.hh>
-#include <batchlas/blas/device.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/blas/device/v2/scalar.hh>
 
@@ -285,15 +284,6 @@ namespace batchlas {
             T scale;
         };
 
-        template <typename T>
-        inline constexpr base_float_t<T> dotc_norm_sq_real(const T& value) {
-            if constexpr (is_complex<T>::value) {
-                return value.real();
-            } else {
-                return value;
-            }
-        }
-
         // Device LA v2 scalar lartg; complex<float> works in double except on Metal (no fp64,
         // chosen at JIT time) to cut rounding noise in the downstream bulge chase.
         template <typename T>
@@ -313,49 +303,6 @@ namespace batchlas {
         {
             const auto s = ::batchlas::device::v2::larfg_scalars<::batchlas::device::v2::conv::Phase>(alpha, xnorm, len);
             return {s.tau, s.beta, s.scale};
-        }
-
-        template <typename Exec, typename T>
-        inline T larfg(const Exec& exec, T& alpha, const VectorView<T>& x)
-        {
-            using R = base_float_t<T>;
-
-            const int len = static_cast<int>(x.size()) + 1;
-            if (len <= 1) {
-                return T(0);
-            }
-
-            // By value: nd_item::get_group() returns a temporary (C3: a reference to it dangled).
-            const auto group = [&]() {
-                if constexpr (requires { exec.get_group(); }) {
-                    return exec.get_group();
-                } else {
-                    return exec;
-                }
-            }();
-
-            const R xnorm = (x.size() > 0)
-                ? sycl::sqrt(dotc_norm_sq_real(batchlas::device::dotc(group, x, x)))
-                : R(0);
-
-            const auto scalars = [&]() {
-                if constexpr (requires { exec.get_group(); }) {
-                    return invoke_one_broadcast(exec.get_group(), [&]() {
-                        return larfg(alpha, xnorm, len);
-                    });
-                } else {
-                    return invoke_one_broadcast(exec, [&]() {
-                        return larfg(alpha, xnorm, len);
-                    });
-                }
-            }();
-            alpha = scalars.beta;
-
-            if (scalars.tau != T(0) && x.size() > 0) {
-                batchlas::device::scal(group, x, scalars.scale);
-            }
-
-            return scalars.tau;
         }
 
         template <typename T>

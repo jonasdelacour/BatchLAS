@@ -350,6 +350,14 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> abs1(T a) {
     else return sycl::fabs(a);
 }
 
+// Conjugate, the identity on a real T. arith::Native is std::conj, plain inline by reference: the
+// legacy kernels' form (always_inline / by value moves their complex SASS).
+template <class Ops = arith::Native, class T> BATCHLAS_DLA_HELPER constexpr T conj(const T& a) {
+    if constexpr (!std::is_same_v<Ops, arith::Native>) return arith_t<Ops, T>::conj(a);
+    else if constexpr (Arith<std::remove_cv_t<T>>::is_complex) return std::conj(a);
+    else return a;
+}
+
 // cond ? a : b component by component: LLVM builds no `select` of a complex aggregate, and
 // a register array read through one stops being promotable. The components are read before
 // the ternaries: a call inside a `?:` arm leaves a branchier CFG (complex<float> SASS moves).
