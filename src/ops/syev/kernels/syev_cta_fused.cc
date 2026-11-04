@@ -300,7 +300,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // The identity on the leading n x n block, zero elsewhere; this lane's row.
                     const Real q_diag = lane < nn ? Real(1) : Real(0);
                     for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                        v2::laset(sv::ElemAt{lane, c}, v2::Zero{}, q_diag, qtile);
+                        v2::laset(v2::ElemAt{lane, c}, v2::Zero{}, q_diag, qtile);
                     }
                     group_barrier(part);
 

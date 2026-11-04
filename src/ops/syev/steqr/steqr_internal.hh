@@ -19,8 +19,8 @@ inline std::array<T, 2> givens_rotation(const T& a, const T& b) {
     return std::array<T, 2>{c_l, -s_l};
 }
 
-// The bulge-chase similarity (formerly apply_givens_rotation) is steqr_v2::tridiag_rot
-// (src/ops/syev/steqr/steqr_v2.hh).
+// The bulge-chase similarity (formerly apply_givens_rotation) is device::steqr_detail::tridiag_rot
+// (include/batchlas/device/lapack/steqr.hh).
 
 } // namespace detail
 

@@ -7,9 +7,9 @@ duplicate include/batchlas/device/arith.hh scale_real/src/ops/sygst/sygst_v2.hh
 duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand.hh
 duplicate include/batchlas/device/core.hh static_for/src/ops/gemm/gemm-components_v2.hh
 duplicate include/batchlas/device/exec.hh butterfly/include/batchlas/device/reduce.hh
-duplicate include/batchlas/device/level1.hh dotc/src/ops/syev/sytrd/sytrd_v2.hh
+duplicate include/batchlas/device/lapack/sytrd.hh dotc/include/batchlas/device/level1.hh
+duplicate include/batchlas/device/level1.hh dotc/include/batchlas/device/lapack/sytrd.hh
 duplicate include/batchlas/device/level1.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
-duplicate include/batchlas/device/level1.hh for_each_owned/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/device/level1.hh for_each_owned_2d/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate include/batchlas/device/level2.hh her2/src/ops/syev/sytrd/sb2st_v2.hh
 duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
@@ -30,7 +30,6 @@ duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh item_n/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh slice/include/batchlas/device/view.hh
 duplicate src/ops/gesvd/gebrd/gebrd_v2.hh conj_view/include/batchlas/device/view.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/include/batchlas/device/level1.hh
-duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned_2d/include/batchlas/device/level1.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh item_n/src/ops/gesvd/bdsdc/bdsdc_v2.hh
 duplicate src/ops/getrs/getrs_v2.hh conj_if/include/batchlas/device/view.hh
@@ -41,9 +40,6 @@ duplicate src/ops/syev/stedc/stedc_v2.hh group_sync/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh uniform/src/ops/sytrf/sytrf_v2.hh
 duplicate src/ops/syev/sytrd/sb2st_v2.hh fn_vec/include/batchlas/device/view.hh
 duplicate src/ops/syev/sytrd/sb2st_v2.hh her2/include/batchlas/device/level2.hh
-duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/device/level1.hh
-duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/include/batchlas/device/level1.hh
-duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/sygst/sygst_v2.hh div_real/include/batchlas/device/arith.hh
 duplicate src/ops/sygst/sygst_v2.hh real_only/src/kernels/common/elementwise_glue_v2.hh
 duplicate src/ops/sygst/sygst_v2.hh scale_real/include/batchlas/device/arith.hh
