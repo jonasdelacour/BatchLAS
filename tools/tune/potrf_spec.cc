@@ -110,8 +110,8 @@ public:
         // common "src/ops/potrf/potrf.cc"
         // family: tiny "src/kernels/common/tiny_device.hh"
         // family: blocked "src/ops/potrf/kernels/symmetric_product_fold.hh" "src/ops/trsm/trsm_native.hh"
-        // family: cta "src/ops/potrf/potrf_cta_lpanel_v2.hh" "src/kernels/common/dla_v2_scalar.hh"
-        // family: lpanel "src/ops/potrf/potrf_cta_lpanel_v2.hh" "src/kernels/common/dla_v2_scalar.hh"
+        // family: cta "src/ops/potrf/potrf_cta_lpanel_v2.hh" "src/kernels/common/dla_v2_scalar.hh" "src/sycl/inv_sqrt.hh"
+        // family: lpanel "src/ops/potrf/potrf_cta_lpanel_v2.hh" "src/kernels/common/dla_v2_scalar.hh" "src/sycl/inv_sqrt.hh"
         // blocked's batch chunk comes from tuning_params.hh (blocked_chunk_items).
         // family: blocked "include/batchlas/tuning_params.hh"
         // kernel-deps-end

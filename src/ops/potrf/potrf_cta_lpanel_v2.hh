@@ -19,6 +19,7 @@
 //   frag_load_row_herm_lower / frag_store_row_herm_lower / gemv_n_slm_bcast   LPANEL row ops
 
 #include <src/kernels/common/dla_v2_scalar.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/blas/device/v2/level1.hh>
@@ -36,24 +37,6 @@ namespace v2 = batchlas::device::v2;
 // The arithmetic of both kernels: explicit fma chains, bit-equal to device_scalar.hh.
 template <class D> using Ar = v2::arith_t<v2::arith::Fma, D>;
 
-// 1 / sqrt(a), with d = sqrt(a). A plain `1 / d` lets NVPTX fold some float columns into a bare
-// rsqrt.approx, depending on code shape. The float NVPTX path is ONE fixed sequence: rsqrt.approx
-// from asm, then one Newton step in FMA form, r = y + (y/2)(1 - (a y) y). `(a y) y`, not
-// `a (y y)`: y*y overflows for denormal a. a = inf keeps LAPACK's 1/inf = 0, not NaN.
-template <typename R>
-inline R potrf_inv_sqrt(R a, R d) {
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<R, float>) {
-        float y;
-        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
-        const float e = sycl::fma(-(a * y), y, 1.0f);
-        const float r = sycl::fma(0.5f * y, e, y);
-        return sycl::isinf(a) ? 0.0f : r;
-    }
-#endif
-    (void)a;
-    return R(1) / d;
-}
 
 // ---- executor ---------------------------------------------------------------------------------
 // Item `id` of a slot of `n` items, n a launch value. A packed LPANEL work-group holds G matrices
@@ -158,7 +141,7 @@ BATCHLAS_DLA_HELPER void potf2_sg_slm_body(v2::SubGroup<SG> ex, MA a, int ib, DV
             alive = false;
         }
         const R dkk = active ? sycl::sqrt(akk) : R(1);
-        const R r = potrf_inv_sqrt(active ? akk : R(1), dkk);
+        const R r = ::batchlas::sycl_device::inv_sqrt(active ? akk : R(1), dkk);
         if (active) {
             if (lane == k) d[k] = A::make(dkk, R(0));
             else if (lane > k && lane < ib) d[k] = A::scale_real(r, d[k]);
@@ -208,7 +191,7 @@ BATCHLAS_DLA_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int
         bar();  // WAR: every item read the pivot cell above, item c0 + i overwrites it below
         if (ok) {
             const R dkk = sycl::sqrt(d);
-            const R rs = potrf_inv_sqrt(d, dkk);  // `ok`: d > 0, not NaN
+            const R rs = ::batchlas::sycl_device::inv_sqrt(d, dkk);  // `ok`: d > 0, not NaN
             if (row == c0 + i) p(row, i) = A::make(dkk, R(0));
             else if (row > c0 + i && row < n) p(row, i) = A::scale_real(rs, p(row, i));
         }
