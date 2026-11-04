@@ -29,6 +29,7 @@ Each tunable quantity has five constants, one per size bucket of \f$n\f$, and a 
 | `SY2SB_ORMQR_NB_*` | WY width of the sy2sb panel back-transform | keep the shape gate in `sytrd_sy2sb.cc` |
 | `SYTRD_BLOCK_SIZE_*` | `sytrd` panel width | n/a |
 | `LATRD_LOWER_PANEL_WG_HINT_*` | latrd lower-panel work-group size | no hint |
+| `LATRD_LOWER_PANEL_SLM_FLOOR_*` (+ `_MIN_ROWS_*`, `_MIN_BATCH`) | local-memory floor in bytes per work-item: an occupancy cap for the latrd lower panel, applied to panels of at least `MIN_ROWS` rows at batch >= `MIN_BATCH` | no floor |
 | `SYTRD_FUSE_PANEL_UPDATE_*` | fused panel update on/off | off |
 | `STEDC_RECURSION_THRESHOLD_*` | stedc leaf size | n/a; 32 is the CTA invariant, not a tuning result |
 | `STEDC_MERGE_VARIANT_*` | `StedcMergeVariant` (1 Fused, 2 FusedCta) | `Auto`, never returned (see below) |
