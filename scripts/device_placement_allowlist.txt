@@ -84,9 +84,6 @@ src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sub_mul
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sumsq_owned
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sym_schur2
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::unpack_pair
-src-device src/kernels/common/dla_v2_larft.hh batchlas::device::v2::larf_frag
-src-device src/kernels/common/dla_v2_larft.hh batchlas::device::v2::larft_forward_colwise
-src-device src/kernels/common/dla_v2_larft.hh batchlas::device::v2::trmv_upper_row_owner
 src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::OrderGuard
 src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::Shuffle
 src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::Slm

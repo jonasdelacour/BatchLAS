@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// geqrf's private device LA v2 ops (src/ops/geqrf/geqrf_v2.hh) against host references; the core
-// ops the leaves also use (RtGroup, mat_wide, for_each_owned, FmaArith, larfg_scalars) are covered
-// by device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): non-natural ld,
+// The geqr2 leaves' helpers (include/batchlas/device/lapack/geqrf.hh geqrf_detail, plus the core
+// abs_inf / op::FMax / butterfly forms they call) against host references; the other core ops the
+// leaves use (RtGroup, mat_wide, for_each_owned, FmaArith, larfg_scalars) are covered by
+// device_blas_v2_tests and device_core_*. Guards (docs/developer/agent-guide.md section 8): non-natural ld,
 // complex data with nonzero imaginary parts, finite poison (1e18) where v's unit head and the rows
 // above it sit, values past sqrt(max), NaN dropped by the max butterflies, bit-exact butterfly
 // orders against a host simulation, batch 1024 with period-4 data where every item must match its
@@ -22,14 +23,14 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/geqrf/geqrf_v2.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace q2 = batchlas::geqrf_v2;
+namespace gd = batchlas::device::geqrf_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -165,8 +166,8 @@ TEST(DeviceBlasV2GeqrfCx, ArithPredicatesMatchDeviceScalar) {
 }
 
 // ---- xLARFG's two-pass scalars ----------------------------------------------------------------
-// absmax_ri = max(|re|, |im|) and abs2_scaled = |a / s|^2 on values past sqrt(max) (|a|^2 would
-// overflow), and Fmax dropping a NaN on either side.
+// abs_inf = max(|re|, |im|) and abs2_scaled = |a / s|^2 on values past sqrt(max) (|a|^2 would
+// overflow), and op::FMax dropping a NaN on either side.
 TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -180,11 +181,11 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
     this->dev.template run<32>(kBatch / 32, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_global_linear_id());
         const T a = in[std::ptrdiff_t(b) * 2];
-        const R s = q2::absmax_ri(a);
+        const R s = v2::abs_inf(a);
         o[b * 4 + 0] = s;
-        o[b * 4 + 1] = q2::abs2_scaled(a, s);
-        o[b * 4 + 2] = q2::Fmax()(std::numeric_limits<R>::quiet_NaN(), s);
-        o[b * 4 + 3] = q2::Fmax()(s, std::numeric_limits<R>::quiet_NaN());
+        o[b * 4 + 1] = gd::abs2_scaled(a, s);
+        o[b * 4 + 2] = v2::op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
+        o[b * 4 + 3] = v2::op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
     });
     const auto got = this->dev.down(o, ho.size());
     EXPECT_EQ(period_bitdiff(got, 4), 0);
@@ -201,8 +202,8 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
 }
 
 // ---- butterfly orders, bit-exact ------------------------------------------------------------
-// xor_down_rt (masks 16 .. 1 over the run-time sub-group range) and asc_reduce<8> on SgpPartition<8>
-// (masks 1, 2, 4), each against a host simulation in the same precision: an order change flips
+// The run-time butterfly (masks 16 .. 1 over the sub-group range) and butterfly<1, 8, bfly::Asc> on
+// SgpPartition<8> (masks 1, 2, 4), each against a host simulation in the same precision: an order change flips
 // bits. Lane 5 of every item is NaN in the max inputs: the Fmax butterflies must drop it.
 TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
     using T = TypeParam;
@@ -219,13 +220,15 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
         const int l = static_cast<int>(it.get_local_linear_id());
         const T v = in[b * 32 + l];
         T* out = o + std::ptrdiff_t(b * 32 + l) * K;
-        out[0] = q2::xor_down_rt(it.get_sub_group(), v, sycl::plus<T>());
+        const auto sg = it.get_sub_group();
+        const int lanes = static_cast<int>(sg.get_local_linear_range());
+        out[0] = v2::butterfly(sg, v, [](const T& p, const T& q) { return A::add(p, q); }, 1, lanes);
         if constexpr (!is_cplx<T>) {
             const T vm = l == 5 ? std::numeric_limits<T>::quiet_NaN() : v;
             const v2::SgpPartition<8> part{it.get_sub_group()};
-            out[1] = q2::xor_down_rt(it.get_sub_group(), vm, q2::Fmax());
-            out[2] = q2::asc_reduce<8>(part, v, sycl::plus<R>());
-            out[3] = q2::asc_reduce<8>(part, vm, q2::Fmax());
+            out[1] = v2::butterfly(sg, vm, v2::op::FMax{}, 1, lanes);
+            out[2] = v2::butterfly<1, 8, v2::bfly::Asc>(part, v, sycl::plus<R>());
+            out[3] = v2::butterfly<1, 8, v2::bfly::Asc>(part, vm, v2::op::FMax{});
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -274,7 +277,7 @@ template <class T, int WG, v2::Scope S> void larf_case(Dev& dev, const char* wha
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         T* p = d + std::ptrdiff_t(it.get_group_linear_id()) * per;
         const v2::RtGroup<S> ex{it};
-        q2::larf_left_head(ex, ex.team_size(), p[ld * nc], v2::mat_wide(p, m, nc, ld), j, m, nc);
+        gd::larf_left_head(ex, ex.team_size(), p[ld * nc], v2::mat_wide(p, m, nc, ld), j, m, nc);
     });
     const auto got = dev.down(d, h.size());
     EXPECT_EQ(period_bitdiff(got, per), 0) << what;
@@ -313,7 +316,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, LarfLeftHead) {
 }
 
 // ---- team slots --------------------------------------------------------------------------------
-// WG 1024 (32 teams): each team's xor_down_rt sum (and Fmax for real types) put in a slot, a
+// WG 1024 (32 teams): each team's run-time butterfly sum (and Fmax for real types) put in a slot, a
 // barrier, then folded in slot order; bit-exact against the host simulation.
 TYPED_TEST(DeviceBlasV2GeqrfTest, TeamSlotFolds) {
     using T = TypeParam;
@@ -328,12 +331,13 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, TeamSlotFolds) {
         const int b = static_cast<int>(it.get_group_linear_id());
         T* slots = reinterpret_cast<T*>(lm);
         const T v = in[std::ptrdiff_t(b) * WG + ex.lid()];
-        q2::team_slot_put(ex, slots, 0, q2::xor_down_rt(ex.sub(), v, sycl::plus<T>()));
-        if constexpr (!is_cplx<T>) q2::team_slot_put(ex, slots, NT, q2::xor_down_rt(ex.sub(), sycl::fabs(v), q2::Fmax()));
+        const auto add = [](const T& p, const T& q) { return A::add(p, q); };
+        gd::team_slot_put(ex, slots, 0, v2::butterfly(ex.sub(), v, add, 1, ex.team_size()));
+        if constexpr (!is_cplx<T>) gd::team_slot_put(ex, slots, NT, v2::butterfly(ex.sub(), sycl::fabs(v), v2::op::FMax{}, 1, ex.team_size()));
         ex.barrier();
         if (ex.leader()) {
-            o[b * 2] = q2::slot_fold_sum(slots, 0, ex.nteams());
-            if constexpr (!is_cplx<T>) o[b * 2 + 1] = q2::slot_fold_max(slots, NT, ex.nteams());
+            o[b * 2] = gd::slot_fold_sum(slots, 0, ex.nteams());
+            if constexpr (!is_cplx<T>) o[b * 2 + 1] = gd::slot_fold_max(slots, NT, ex.nteams());
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -398,9 +402,9 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c) rA[c] = (live && c < n) ? p[c * m + r] : A::zero();
             const T v = (!live || r < j) ? A::zero() : (r == j ? A::one() : rA[j]);
-            q2::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
+            gd::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
             ex.barrier();
-            q2::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
+            gd::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)
                 if (live && c < n) p[c * m + r] = rA[c];
@@ -435,11 +439,11 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int k0 = 0; k0 < N; k0 += C) {
                 if (k0 + C <= j + 1 || k0 >= n) continue;
-                q2::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
+                gd::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
                 sycl::group_barrier(sg);
-                q2::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
+                gd::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
                 sycl::group_barrier(sg);
-                q2::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                gd::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
             }
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)

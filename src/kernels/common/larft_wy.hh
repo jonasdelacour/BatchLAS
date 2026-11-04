@@ -9,7 +9,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/error.hh>
 
-#include <src/kernels/common/dla_v2_larft.hh>
+#include <batchlas/device/lapack/larft.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -28,7 +28,7 @@ template <typename Tag, typename T> class PackVKernelName;
 namespace detail {
 
 // LARFT (Forward, Columnwise): T (ib x ib, upper) from unit-lower V (m x ib); one work-group per
-// matrix on v2::larft_forward_colwise, the only larft.
+// matrix on device::larft (include/batchlas/device/lapack/larft.hh), the only larft.
 template <typename Tag, typename T, int WG>
 sycl::event larft_forward_columnwise_wg(Queue& q,
                                         T* t_data, int ld_t, int stride_t,
@@ -49,7 +49,7 @@ sycl::event larft_forward_columnwise_wg(Queue& q,
 
                 namespace v2 = batchlas::device;
                 const v2::WorkGroup<WG, 32> ex{it};
-                v2::larft_forward_colwise(
+                v2::larft(
                     ex, v2::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v),
                     v2::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t),
                     v2::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib));

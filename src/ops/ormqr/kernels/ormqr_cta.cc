@@ -11,7 +11,7 @@
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 
-#include <src/kernels/common/dla_v2_larft.hh>
+#include <batchlas/device.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -248,7 +248,7 @@ BATCHLAS_UNROLL_FULL
                     // vh(r) == V_local[base_v + r], formed here as the hand loop's address was (hoisted
                     // above the loop it holds one more register: complex P = 32 spilled 8 B more).
                     const auto vh = v2::assume_published(VLocal{V_local, {}, {}, base_v});
-                    if (active_col && tau_eff != T(0)) v2::larf_frag<v2::arith::Native>(v2::Thread{}, tau_eff, vh, C_col);  // C(:, j) := H C(:, j)
+                    if (active_col && tau_eff != T(0)) v2::larf<Side::Left, v2::arith::Native>(C_col, vh, tau_eff);  // C(:, j) := H C(:, j)
                     // Ensure all lanes have finished consuming v before overwrite.
                     group_barrier(part);
                 }
