@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// All of the native batched GEQRF panel's device code: LAPACK ?GEQR2 over a `Tile`,
-// instantiated on a local_accessor (CTA tier) and a raw pointer (blocked panel leaf), as a
-// strict device LA v2 port. The scalars are v2::larfg_scalars<conv::Lapack> -- NOT
-// detail::larfg, which preserves alpha's phase where clarfg/zlarfg and the vendors return a
-// REAL beta, and tau is a contract ormqr/orgqr/ormbr/sy2sb read.
+// The native batched GEQRF panel's device code: ?GEQR2 over a `Tile` (local_accessor or raw
+// pointer). Scalars are v2::larfg_scalars<conv::Lapack>, NOT detail::larfg (keeps alpha's phase;
+// clarfg/zlarfg and the vendors return a REAL beta, and tau is read by ormqr/orgqr/ormbr/sy2sb).
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 
 #include <src/sycl/device_scalar.hh>
@@ -45,16 +43,12 @@ struct GeqrfGlobalTile {
     }
 };
 
-// The resident leaf addresses its tile through a raw pointer too: G panels share one
-// local_accessor, so each needs its own base. Unpadded ld is deliberate -- both hot
-// patterns walk consecutive rows within a column, conflict-free at any ld.
+// Raw-pointer tile: G panels share one local_accessor, so each needs its own base; ld unpadded.
 template <typename D> using GeqrfRawTile = GeqrfGlobalTile<D>;
 
-// Which group the phase barriers synchronise, and where the two column reductions are
-// taken. SubGroup is what makes G-packing legal -- every barrier becomes a sub-group
-// barrier and both reductions butterflies, so the G sub-groups never synchronise with
-// each other. It also removes the reduce_over_group calls, and with them the static
-// shared allocation that makes this kernel, alone of the three, trip the 48 KB hole.
+// Which group the barriers synchronise and the two column reductions use. SubGroup makes
+// G-packing legal (sub-group barriers, butterfly reductions, no cross-sub-group sync) and drops
+// reduce_over_group's static shared allocation, which trips the 48 KB hole.
 // evidence: docs/perf/qr.md#the-48-kib-launch-hole
 enum class GeqrfScope { SubGroup, WorkGroup };
 

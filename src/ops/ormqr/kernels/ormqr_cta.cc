@@ -27,17 +27,9 @@
 
 namespace batchlas {
 
-// Small-matrix CTA implementations of ORMQR/ORMQL/UNMQR/UNMQL semantics.
-//
-// These apply the implicit orthogonal/unitary matrix Q represented by Householder
-// reflectors (A, TAU) from a QR factorization (GEQRF) or QL factorization (GEQLF)
-// to a matrix C.
-//
-// Notes:
-// - This file is intended for very small sizes (n <= 32).
-// - Current implementation focuses on the n-by-n case (C is square), which is
-//   exactly what we need to post-process tridiagonal eigenvectors in SYEVD.
-// - Order/storage match LAPACK's DORMQR/ZUNMQR and DORMQL/ZUNMQL contracts.
+// Small-matrix CTA ORMQR/ORMQL/UNMQR/UNMQL: apply the implicit Q of a GEQRF/GEQLF
+// factorization (A, TAU) to C. Very small sizes only (n <= 32), square C (SYEVD's
+// tridiagonal eigenvector post-processing). Order/storage match LAPACK's ORMQx/UNMQx.
 
 namespace detail {
 
@@ -129,11 +121,9 @@ inline void ormqx_cta_impl_m(Queue& ctx,
             // LEFT specialization: lane->column and keep that column in registers.
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            // Coalescing: lane j owns column j, and a column is contiguous in memory.
-            // Consecutive lanes are therefore `ld` elements apart, so a scalar per-row
-            // load/store issues one 32-sector request per instruction (8x more L1<->L2
-            // traffic than the data requires). Moving 16 bytes per lane per access cuts
-            // the request count - and the resulting L2 traffic - by a factor of VW.
+            // Coalescing: lane j owns column j, so consecutive lanes are `ld` apart and a scalar
+            // per-row access issues one 32-sector request (8x the needed L1<->L2 traffic).
+            // 16 bytes per lane per access cuts the request count by VW.
             constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
             const bool vec_ok =
                 !detail::is_complex<T>::value && VW > 1 && (n % VW) == 0 &&

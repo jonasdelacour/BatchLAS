@@ -312,9 +312,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
 // ---------------------------------------------------------------------------
 // Q2 back-transform:  Z := Q2 Z  with  Q2 = H_1 H_2 ... H_m, so the reflectors are
-// applied in REVERSE generation order: H_m first, H_1 last.
-//
-// Streaming form: columns of Z are independent, so each work-group takes one (batch
+// applied in REVERSE generation order: H_m first, H_1 last. Streaming form: columns of Z are independent, so each work-group takes one (batch
 // item, column chunk) and walks the whole reflector list; lanes map to reflector
 // rows (contiguous in column-major Z) and the dot is a sub-group reduction.
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design

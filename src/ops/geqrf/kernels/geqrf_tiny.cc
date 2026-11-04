@@ -36,9 +36,8 @@ namespace tn = ::batchlas::tiny_native;
 namespace v2 = ::batchlas::device::v2;
 namespace q2 = ::batchlas::geqrf_v2;
 
-// THE LAUNCH GATES. The register table itself lives next to the chunk rule that reads it;
-// a second copy here is how a MODEL came to choose the chunk width while a PROBE gated the
-// launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
+// THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
+// copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
 template <typename T> using TinyDev = typename sycl_device::DevMap<T>::type;
 
 constexpr int geqrf_tiny_worst_regs() {
@@ -60,9 +59,8 @@ static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
               "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "
               "scripts/register_probe.sh before raising either operand");
 
-// GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM, so a
-// regression fails to COMPILE rather than quietly costing occupancy. GATE 3, in the same
-// breath: the chunk width each row was probed at still re-derives from that row.
+// GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM (a regression
+// fails to COMPILE). GATE 3: each row's probed chunk width still re-derives from that row.
 #define BATCHLAS_GEQRF_TINY_CELL_ASSERT(D, N)                                               \
     static_assert(gn::geqrf_tiny_cell_is_resident<D, N>(),                                  \
                   "geqrf tiny: this cell falls below R1's four-blocks-per-SM floor");       \
@@ -99,8 +97,7 @@ constexpr std::size_t geqrf_tiny_wg_bytes() {
            gn::geqrf_tiny_slm_elems(N, C) * sizeof(T);
 }
 
-// No request lands near the (47104, 49664] launch hole, so none of geqrf_cta.cc's
-// hole-padding machinery is carried here; these keep that true.
+// No request lands near the (47104, 49664] launch hole, so geqrf_cta.cc's padding is not carried.
 static_assert(geqrf_tiny_wg_bytes<std::complex<double>, 8>() < 47104,
               "tiny tile approaching the 48 KB launch hole");
 static_assert(geqrf_tiny_wg_bytes<double, 32>() < 47104,
@@ -174,8 +171,8 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 // evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
 #pragma clang loop unroll(full)
                 for (int j = 0; j < N; ++j) {
-                    // n is one scalar for the whole batch (can_run refuses a heterogeneous
-                    // view), so every predicate below is uniform and so is the barrier sequence.
+                    // n is one scalar per batch (can_run refuses a heterogeneous view): every
+                    // predicate below, and the barrier sequence, is uniform.
                     if (j >= n) continue;
 
                     const D alpha = ex.bcast(rA[j], static_cast<uint32_t>(j));

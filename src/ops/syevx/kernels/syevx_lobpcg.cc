@@ -69,10 +69,8 @@ constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
     int steps = from_params < 0 ? kDefaultInitPowerIterations : from_params;
-    // std::optional, because 0 is a MEANINGFUL value here (no power iterations)
-    // and is distinct from unset; the default comes from the caller's params, so
-    // it cannot live on the field either. A negative value is rejected during the
-    // load and arrives as nullopt, exactly as the `>= 0` test did here.
+    // std::optional: 0 is MEANINGFUL (no power iterations) and distinct from unset; the default
+    // comes from the caller's params. A negative value is rejected at load and arrives as nullopt.
     if (const auto& v = batchlas::settings().geometry.syevx_init_power) steps = *v;
     // Powers of A amplify the *largest* eigendirections, so the steps are dropped
     // rather than applied backwards when the smallest are wanted.
@@ -294,10 +292,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_quality = pool.allocate<typename base_type<T>::type>(ctx, batch_size);
         auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
-        // Zeroed (= "not converged") because the residual kernel that fills it does
-        // not run at all on the params.iterations == 0 cold path, and pool memory is
-        // uninitialised. Without this, the status written at the end of the function
-        // would be whatever the workspace happened to hold.
+        // Zeroed (= "not converged"): the residual kernel that fills it does not run on the
+        // params.iterations == 0 cold path, and pool memory is uninitialised.
         ctx->memset(converged_flags.data(), 0, sizeof(int32_t) * static_cast<size_t>(batch_size));
         // Per-column convergence state for soft locking; 1 == column i of batch bid met
         // the tolerance on the *current* iterate. Consumed on-device only.
@@ -418,10 +414,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                           std::max(ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
                           ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
 
-        // Allocated last so the "does it fit?" test sees everything else already claimed.
-        // A caller that filled in params.instrumentation only *after* calling
-        // syevx_lobpcg_buffer_size then falls back to the host-read path (correct, but a
-        // pipeline drain per iteration) instead of failing to allocate.
+        // Allocated last so the "does it fit?" test sees everything else claimed. A caller that
+        // set params.instrumentation only *after* syevx_lobpcg_buffer_size falls back to the
+        // host-read path (correct, a drain per iteration) instead of failing to allocate.
         const auto instr_plan = lobpcg_instrumentation_plan(params, neigs, batch_size);
         Span<float_type> stage_best, stage_current, stage_ritz;
         bool stage_device_side = false;
@@ -563,10 +558,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         }
         trace_wait("syevx: syev XtAX done");
 
-        // The search block `X` is deliberately left in the ascending order `syev`
-        // produces, even when `find_largest`: nothing inside the iteration cares about
-        // the order of X's columns, they are a basis. The largest-first presentation is
-        // applied exactly once, in the `X_best` snapshot, via `reported_col()` below.
+        // `X` deliberately stays in `syev`'s ascending order even for `find_largest` (its columns
+        // are a basis); largest-first is applied once, in the `X_best` snapshot, via `reported_col()`.
         trace("syevx: gemm X*Z (update X)");
         (void)gemm<B>(ctx, X, XtAX, X_new, GemmOptions<T>{});
         trace_wait("syevx: update X done");
