@@ -52,6 +52,7 @@ set(TEST_TARGETS
     device_blas_v2_tridiag-stebz-stein_tests
     device_blas_v2_trsm_tests
     device_core_arith_tests
+    device_core_level3_tests
     device_core_reduce_tests
     device_core_scalar_tests
     device_core_view_tests
@@ -269,6 +270,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_v2_tridiag-stebz-stein_tests
     device_blas_v2_trsm_tests
     device_core_arith_tests
+    device_core_level3_tests
     device_core_reduce_tests
     device_core_scalar_tests
     device_core_view_tests
