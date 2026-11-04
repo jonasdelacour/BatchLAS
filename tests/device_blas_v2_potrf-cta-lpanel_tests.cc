@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-// The potrf CTA / LPANEL kernels' private device LA v2 ops (src/ops/potrf/potrf_cta_lpanel_v2.hh)
+// The potrf CTA / LPANEL kernels' family ops (src/ops/potrf/potrf_cta_lpanel_v2.hh) and their potf2
+// distributions (include/batchlas/device/lapack/potrf.hh)
 // against long-double host references; the core ops they compose with are device_blas_v2_tests'.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld for every operand, complex data
 // with nonzero imaginary parts and a poisoned Im(diag), a large finite poison in every unread
 // triangle and pad row that must survive bit-for-bit, both storage triangles, runtime executor
-// widths (RtGroup at both scopes, SlotItems narrower than the work-group), batch 1024 with
+// widths (RtGroup at both scopes, Slot<> narrower than the work-group), batch 1024 with
 // period-3 data where every item must be bit-identical to its representative (all SLM paths), info
 // at a negative and at a NaN pivot in the first and a later panel, a trsm whose L diagonal is
 // poisoned (the diagonal must come from the separate real vector), a herk through a rescaled prefix
@@ -26,6 +27,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <batchlas/device/lapack/potrf.hh>
 #include <src/ops/potrf/potrf_cta_lpanel_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
@@ -140,7 +142,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, ArithIsBitIdenticalToDeviceScalar) {
         const int g = static_cast<int>(it.get_global_linear_id());
         const D* x = reinterpret_cast<const D*>(in) + 4 * g;
         D* o = reinterpret_cast<D*>(out) + std::ptrdiff_t(g) * kArSlots * 3;
-        using A = dla::Ar<D>;
+        using A = v2::arith_t<v2::arith::Fma, D>;
         const R s = sycl_device::dev_real(x[3]) + R(2);
         D acc = x[2];
         A::mac(acc, x[0], x[1]);
@@ -158,7 +160,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, ArithIsBitIdenticalToDeviceScalar) {
         o[kArSlots + kScaleReal] = sycl_device::dev_mul_real(x[0], s);
         o[kArSlots + kDivReal] = sycl_device::dev_div_real(x[0], s);
         o[kArSlots + kRealify] = sycl_device::dev_from_real<D>(sycl_device::dev_real(x[1]));
-        using S = dla::Ar<T>;  // std::complex (or the real type itself)
+        using S = v2::arith_t<v2::arith::Fma, T>;  // std::complex (or the real type itself)
         const T* xs = reinterpret_cast<const T*>(x);
         T* os = reinterpret_cast<T*>(o + 2 * kArSlots);
         T sacc = xs[2];
@@ -310,7 +312,7 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
             const auto A11 = A.sub(j, j, ib, ib);
             const auto A21 = A.sub(j + ib, j, m2, ib);
             if (ok && it.get_sub_group().get_group_linear_id() == 0)
-                dla::potf2_sg_slm<NB>(v2::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
+                v2::potf2_sg_slm<NB, dla::InvSqrt>(v2::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
             bar();
             ok = (*fail == 0);
             if (ok && m2 > 0) dla::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, A11, dg, A21, ib);
@@ -380,7 +382,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, TrsmRowfragRightLowerConjTrans) {
             const int b = static_cast<int>(it.get_group_linear_id());
             const int lid = static_cast<int>(it.get_local_linear_id());
             if (lid >= items) return;
-            const dla::SlotItems ex{lid, items};
+            const v2::Slot<> ex{lid, items};
             const auto L = v2::mat(l + std::ptrdiff_t(b) * ldl * kb, kb, kb, ldl);
             const auto X = v2::mat(x + std::ptrdiff_t(b) * ldx * kb, m, kb, ldx);
             const v2::Vec<const R, v2::Ext<NB>> dv{d + std::ptrdiff_t(b) * NB, {}};
@@ -492,7 +494,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, HerkTilesLowerThroughRescaledPrefix) {
 }
 
 // ---- LPANEL: frag_load_row_herm_lower, lacpy_conj_pad, gemv_n_slm_bcast,
-// frag_store_row_herm_lower, potf2_panel_rows, composed as potrf_lpanel_body does on a SlotItems
+// frag_store_row_herm_lower, potf2_panel_rows, composed as potrf_lpanel_body does on a Slot<>
 // slot narrower than the work-group (the packed-G case) --------------------------------------
 
 template <class T, class D, int NB, int WG, int SLOT>
@@ -505,7 +507,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
     D* a = reinterpret_cast<D*>(dev.up(m.h));
     int* inf = dev.up(std::vector<int>(kBatch, -7));
     dev.template run<WG>(kBatch / G, per * G, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        using Ar = dla::Ar<D>;
+        using Ar = v2::arith_t<v2::arith::Fma, D>;
         const int lid = static_cast<int>(it.get_local_linear_id());
         const int slot = lid / SLOT, tid = lid % SLOT;
         const int b = static_cast<int>(it.get_group_linear_id()) * G + slot;
@@ -513,7 +515,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
         D* sB = reinterpret_cast<D*>(mine);
         D* sA = reinterpret_cast<D*>(mine + b_bytes);
         int* fail = reinterpret_cast<int*>(mine + b_bytes + std::size_t(slda) * NB * sizeof(D));
-        const dla::SlotItems ex{tid, SLOT};
+        const v2::Slot<> ex{tid, SLOT};
         const auto A = v2::mat_wide(a + std::ptrdiff_t(b) * ldg * n, n, n, ldg);
         const auto P = dla::slm_mat(sA, n, NB, slda);
         const auto B = dla::slm_tile<NB, NB>(sB);
@@ -541,7 +543,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
             }
             if (live) dla::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
             bar();
-            ok = dla::potf2_panel_rows(ex, P, j, ib, n, ok, fail, bar);
+            ok = v2::potf2_panel_rows<dla::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
             if (panel_ok) v2::lacpy<v2::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));
             bar();
         }

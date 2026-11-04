@@ -2031,10 +2031,10 @@ template <class T, bool UseSlm> void potf2_case(Dev& dev) {
         tiny_native::tiny_load_lower<D, N>(rA.v, Ab, ld, lane, lane < n, is_cplx<T>);
         std::int32_t r;
         if constexpr (UseSlm) {
-            r = v2::potf2_lower<D, N, N, v2::OrderGuard::Skip>(ex, rA, n, true,
-                                                                v2::Slm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
+            r = tiny_native::potf2_lower<D, N, N, tiny_native::OrderGuard::Skip>(
+                ex, rA, n, true, v2::bcast_policy::Slm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
         } else {
-            r = v2::potf2_lower<D, N, N>(ex, rA, n, true, v2::Shuffle{});
+            r = tiny_native::potf2_lower<D, N, N>(ex, rA, n, true, v2::bcast_policy::Shuffle{});
         }
         tiny_native::tiny_store_lower<D, N>(rA.v, Ab, ld, lane, lane < n);
         if (ex.leader()) info[b] = r;

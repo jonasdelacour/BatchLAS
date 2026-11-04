@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// potri-private device LA v2 ops (src/ops/potri/kernels/potri_cta.cc): register-tile BLAS on the
-// Thread executor (namespace reg), the 4-deep batched column-major walk, trttp / tpttr of a column
-// range and the row-packed triangle index. Everything shared comes from the v2.1 core
-// (include/batchlas/device.hh): RtGroup, for_each_owned(_2d), find_first, Tile,
-// Frag, load, fill, arith::Fma. Every op is DLA-inline and adds no barrier; register tiles are
-// indexed by unrolled constants only.
+// potri family ops (src/ops/potri/kernels/potri_cta.cc) core cannot express yet (v22 core
+// requests): register-tile BLAS on the Thread executor (namespace reg; core gemm_sub / trsm's
+// arith::FmaSplit is sub(c, Arith::mul), not the dev_mul form these keep), the 4-deep batched
+// column-major walk, trttp / tpttr of a column range and the row-packed triangle index. Everything
+// shared comes from core (include/batchlas/device.hh): RtGroup, for_each_owned(_2d), find_first,
+// Tile, Frag, load, fill, laset, arith::Fma. Every op is DLA-inline and adds no barrier; register
+// tiles are indexed by unrolled constants only.
 
 #include <cstddef>
 #include <type_traits>
@@ -91,19 +92,6 @@ BATCHLAS_DLA_INLINE RowCol tri_index(int t) {
 // Operands outside the tile are callables a(i, k) (local or global memory, or a masked view),
 // read in the loop order each op states. Ops default to arith::Fma (dev_mul / fma_acc bits).
 namespace reg {
-
-// ?laset of a tile at (i0, j0) of the global matrix: t(x, y) := beta where i0 + x == j0 + y, else alpha.
-template <class AS, class BS, class T, int R, int C>
-BATCHLAS_DLA_INLINE void laset(const dla::Thread&, AS alpha_, BS beta_, dla::Tile<T, R, C>& t, int i0, int j0) {
-    const T alpha = dla::tag_mul(dla::as_tag(alpha_), dla::Arith<T>::one());
-    const T beta = dla::tag_mul(dla::as_tag(beta_), dla::Arith<T>::one());
-    BATCHLAS_UNROLL_FULL
-    for (int x = 0; x < R; ++x) {
-        BATCHLAS_UNROLL_FULL
-        for (int y = 0; y < C; ++y)
-            t(x, y) = i0 + x == j0 + y ? beta : alpha;
-    }
-}
 
 // f(i, j, t(x, y)) at the global i = i0 + x, j = j0 + y, row by row.
 template <class T, int R, int C, class F>

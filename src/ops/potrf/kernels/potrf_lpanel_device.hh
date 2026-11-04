@@ -33,8 +33,8 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               D* __restrict Ag, int ldg,
                               int n) {
     namespace v2 = batchlas::device;
-    using Ar = dla::Ar<D>;
-    const dla::SlotItems ex{tid, L};  // this matrix's slot of the packed work-group
+    using Ar = v2::arith_t<v2::arith::Fma, D>;
+    const v2::Slot<> ex{tid, L};  // this matrix's slot of the packed work-group
     const auto A = v2::mat_wide(Ag, n, n, ldg);
     const auto P = dla::slm_mat(sA, n, NB, slda);  // local-space views: generic reads were LD.E
     const auto B = dla::slm_tile<NB, NB>(sB);
@@ -75,7 +75,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
         bar();  // B3
 
         // (4) potf2 with B3b / B4 / B5 per column. evidence: docs/perf/potrf.md#the-pivot-cell-war-race
-        ok = dla::potf2_panel_rows(ex, P, j, ib, n, ok, fail, bar);
+        ok = v2::potf2_panel_rows<dla::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
 
         if (store && panel_ok) v2::lacpy<v2::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));  // (5) ENTRY state: a failed panel is finite
         bar();  // B6 -- the next panel READS these columns

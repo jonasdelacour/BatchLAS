@@ -195,7 +195,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 // publishes P(K, j) at s(j, K); the tiles below take acc -= M(rows, K) P(K, cols).
                 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < NT; ++q)
-                    reg::laset(th, v2::Zero{}, v2::One{}, acc[q], ti[q], tj[q]);
+                    v2::laset(acc[q], v2::Zero{}, v2::One{}, tj[q] - ti[q]);  // 1 on the global diagonal
                 for (int kb = 0; kb < mpw; kb += TS) {
                     BATCHLAS_UNROLL_FULL
                     for (int q = 0; q < NT; ++q) {

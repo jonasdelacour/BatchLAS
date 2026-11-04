@@ -42,10 +42,6 @@ src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::set_unit_ow
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sub_mul
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sumsq_owned
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::v2::sym_schur2
-src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::OrderGuard
-src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::Shuffle
-src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::Slm
-src-device src/kernels/common/dla_v2_potf2.hh batchlas::device::v2::potf2_lower
 src-device src/kernels/common/dla_v2_sparse.hh batchlas::device::v2::BasedVec
 src-device src/kernels/common/dla_v2_sparse.hh batchlas::device::v2::ColMat64
 src-device src/kernels/common/dla_v2_sparse.hh batchlas::device::v2::InterleavedVec

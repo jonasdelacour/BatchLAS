@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // The potrf CTA (right-looking, SLM-resident) and LPANEL (left-looking, row-per-item) kernels'
-// private device LA v2 ops: the parts of the two Cholesky recurrences no other family uses.
-// Everything shared comes from v2 core (executors, Mat / Vec / Frag, load_row / store_row, scal,
-// lacpy, arith::Fma). Every op reproduces the expression tree of the hand-written code it
-// replaced: arith::Fma is bit-equal to the src/sycl/device_scalar.hh forms (fma_acc, dev_mul,
-// dev_sub, dev_mul_real, dev_div_real), and sub(mul()) stays two roundings, as dev_sub(dev_mul())
-// was under -ffp-contract=on (core msub fuses, which is why trsm_rowfrag is not core trsv).
+// family ops: the parts of the two Cholesky recurrences core cannot express yet (v22 core
+// requests). Their potf2 is the public one loop (include/batchlas/device/lapack/potrf.hh); the
+// executors, Mat / Vec / Frag, load_row / store_row, scal, lacpy and arith::Fma are core. Every op
+// reproduces the expression tree of the hand-written code it replaced: arith::Fma is bit-equal to
+// the src/sycl/device_scalar.hh forms (fma_acc, dev_mul, dev_sub, dev_mul_real, dev_div_real), and
+// sub(mul()) stays two roundings, as dev_sub(dev_mul()) was under -ffp-contract=on.
 //
-//   SlotItems                 runtime-sized slot of a packed work-group (LPANEL: G matrices x L)
+//   InvSqrt                   potf2's Rsqrt policy: sycl_device::inv_sqrt (no core inv_sqrt yet)
 //   HermLower                 a Hermitian matrix read through its lower triangle, uplo at run time
 //   slm_mat / slm_tile        core Mat over a local-space pointer (LDS/STS, not generic LD/ST)
 //   lacpy_herm_lower          Hermitian load, zero pad and real diagonal, every element once
 //   lacpy_conj_pad            conj copy zero-padded to a static NB x NB tile
-//   potf2_sg_slm / potf2_panel_rows     LAPACK potf2 (Lower) on a sub-group / on a row panel
 //   trsm_rowfrag              L21 := A21 L11^-H, one row per item in a Frag
 //   herk_tiles, TriTilePrefix C := C - A A^H on the lower triangle in register tiles
 //   frag_load_row_herm_lower / frag_store_row_herm_lower / gemv_n_slm_bcast   LPANEL row ops
@@ -22,6 +21,7 @@
 #include <src/sycl/inv_sqrt.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
+#include <batchlas/device/lapack/potrf.hh>
 #include <batchlas/device/level1.hh>
 
 #include <sycl/sycl.hpp>
@@ -34,21 +34,11 @@ namespace batchlas::potrf_native::dla {
 
 namespace v2 = batchlas::device;
 
-// The arithmetic of both kernels: explicit fma chains, bit-equal to device_scalar.hh.
-template <class D> using Ar = v2::arith_t<v2::arith::Fma, D>;
-
-
-// ---- executor ---------------------------------------------------------------------------------
-// Item `id` of a slot of `n` items, n a launch value. A packed LPANEL work-group holds G matrices
-// of L items each, so the slot is neither the work-group (RtGroup<Group>) nor a sub-group.
-struct SlotItems {
-    static constexpr bool runtime = true;
-    static constexpr bool sub_whole = true;
-    int id;
-    int n;
-    BATCHLAS_DLA_INLINE int lid() const { return id; }
-    BATCHLAS_DLA_INLINE int width() const { return n; }
-    BATCHLAS_DLA_INLINE bool leader() const { return id == 0; }
+// rsqrt.approx + one Newton step on NVPTX float (decision 10).
+struct InvSqrt {
+    template <class R> BATCHLAS_DLA_INLINE static R inv_sqrt(R a, R sqrt_a) {
+        return ::batchlas::sycl_device::inv_sqrt(a, sqrt_a);
+    }
 };
 
 // ---- operands ---------------------------------------------------------------------------------
@@ -60,7 +50,7 @@ template <class T> struct HermLower {
     int ld;
     bool upper;
     BATCHLAS_DLA_INLINE value_type operator()(int i, int c) const {
-        return upper ? Ar<value_type>::conj(p[c + static_cast<std::ptrdiff_t>(i) * ld]) : p[i + static_cast<std::ptrdiff_t>(c) * ld];
+        return upper ? v2::arith_t<v2::arith::Fma, value_type>::conj(p[c + static_cast<std::ptrdiff_t>(i) * ld]) : p[i + static_cast<std::ptrdiff_t>(c) * ld];
     }
 };
 
@@ -85,7 +75,7 @@ template <int M, int N, class T> BATCHLAS_DLA_INLINE SlmTile<M, N, T> slm_tile(T
 // other row i < dst.rows(): the whole dst.rows() x n block (pad rows too) is written once.
 template <class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_herm_lower(const Ex& ex, const MS& src, const MD& dst, int n) {
     using D = typename MD::value_type;
-    using A = Ar<D>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     for (int c = 0; c < n; ++c) {
         v2::for_each_owned(ex, dst.rows(), [&](int i) BATCHLAS_DLA_BODY {
             D v{};
@@ -107,105 +97,9 @@ template <int NB, class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_c
         const int i = e % NB;
         const int kk = e / NB;
         D v{};
-        if (i < r && kk < c) v = Ar<D>::conj(src(i, kk));
+        if (i < r && kk < c) v = v2::arith_t<v2::arith::Fma, D>::conj(src(i, kk));
         dst(i, kk) = v;
     });
-}
-
-// ---- LAPACK: potf2, Lower -----------------------------------------------------------------------
-// Right-looking unblocked Cholesky of the ib x ib block `a` (ib <= NB <= SG) on ONE sub-group:
-// lane r holds row r in a Frag; column k is published to `a` (local) and read back after one
-// sub-group barrier. diag(k) := L(k,k). At the first pivot that is not > 0 (NaN included):
-// *info := info_base + k + 1 and nothing further changes. The NB barriers are unconditional,
-// so the op may run under a branch uniform over the sub-group.
-namespace detail {
-template <int NB, int SG, class MA, class DV>
-BATCHLAS_DLA_HELPER void potf2_sg_slm_body(v2::SubGroup<SG> ex, MA a, int ib, DV diag, int* info, int info_base) {
-    using D = typename MA::value_type;
-    using A = Ar<D>;
-    using R = v2::real_t<D>;
-    static_assert(NB <= SG, "potf2_sg_slm: one lane per row");
-    const int lane = ex.lid();
-    v2::Frag<D, NB> d;
-    BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < NB; ++c) d[c] = (lane < ib && c < ib && c <= lane) ? a(lane, c) : D{};
-
-    bool alive = true;
-    BATCHLAS_UNROLL_FULL
-    for (int k = 0; k < NB; ++k) {
-        const R akk = sycl::select_from_group(ex.sg, A::re(d[k]), static_cast<std::uint32_t>(k));
-        bool active = alive && (k < ib);
-        if (active && !(akk > R(0))) {
-            if (lane == 0) *info = info_base + k + 1;
-            active = false;
-            alive = false;
-        }
-        const R dkk = active ? sycl::sqrt(akk) : R(1);
-        const R r = ::batchlas::sycl_device::inv_sqrt(active ? akk : R(1), dkk);
-        if (active) {
-            if (lane == k) d[k] = A::make(dkk, R(0));
-            else if (lane > k && lane < ib) d[k] = A::scale_real(r, d[k]);
-            if (lane < ib && lane >= k) a(lane, k) = d[k];
-            if (lane == 0) diag(k) = dkk;
-        }
-        sycl::group_barrier(ex.sg);
-        if (active) {
-            BATCHLAS_UNROLL_FULL
-            for (int c = k + 1; c < NB; ++c) {
-                if (c < ib && lane < ib && lane >= c) d[c] = A::sub(d[c], A::mul(d[k], A::conj(a(c, k))));
-            }
-        }
-    }
-}
-}  // namespace detail
-
-// Real T: the body is a by-value phase op the inliner takes after simplifying it alone, as the
-// hand-written potf2 helper was (its column-0..3 1/sqrt shapes depend on it). Complex T: inlined
-// at the call; out of line the by-value operands spill (STACK 64).
-template <int NB, int SG, class MA, class DV>
-BATCHLAS_DLA_INLINE void potf2_sg_slm(const v2::SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info, int info_base) {
-    if constexpr (Ar<typename MA::value_type>::is_complex) {
-        [[clang::always_inline]] detail::potf2_sg_slm_body<NB>(ex, a, ib, diag, info, info_base);
-    } else {
-        detail::potf2_sg_slm_body<NB>(ex, a, ib, diag, info, info_base);
-    }
-}
-
-// Right-looking unblocked Cholesky of the n x kb panel P whose diagonal block starts at row c0,
-// one item per row (row = ex.lid(); rows outside (c0, n) idle). `bar` is the caller's barrier over
-// every item reading P, called three times per column (pivot read / its overwrite, scale, rank-1
-// update). `ok` is sticky; the first bad pivot sets *info := c0 + i + 1 (leader). Returns ok.
-template <class Ex, class PM, class Bar>
-BATCHLAS_DLA_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info, Bar&& bar) {
-    using D = typename PM::value_type;
-    using A = Ar<D>;
-    using R = v2::real_t<D>;
-    const int row = ex.lid();
-    for (int i = 0; i < kb; ++i) {
-        const R d = A::re(p(c0 + i, i));
-        const bool bad = ok && !(d > R(0));
-        if (bad) {
-            ok = false;
-            if (ex.leader()) *info = c0 + i + 1;
-        }
-        bar();  // WAR: every item read the pivot cell above, item c0 + i overwrites it below
-        if (ok) {
-            const R dkk = sycl::sqrt(d);
-            const R rs = ::batchlas::sycl_device::inv_sqrt(d, dkk);  // `ok`: d > 0, not NaN
-            if (row == c0 + i) p(row, i) = A::make(dkk, R(0));
-            else if (row > c0 + i && row < n) p(row, i) = A::scale_real(rs, p(row, i));
-        }
-        bar();
-        if (ok && row > c0 + i && row < n) {
-            const D lri = p(row, i);
-            for (int c = i + 1; c < kb; ++c) {
-                const D ljc = p(c0 + c, i);
-                p(row, c) = A::sub(p(row, c), A::mul(lri, A::conj(ljc)));
-            }
-        }
-        bar();
-    }
-    return ok;
 }
 
 // ---- level 3 ----------------------------------------------------------------------------------
@@ -217,7 +111,7 @@ BATCHLAS_DLA_HELPER void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag
     static_assert(S == Side::Right && UL == Uplo::Lower && TR == Transpose::ConjTrans,
                   "trsm_rowfrag: only Right / Lower / ConjTrans is implemented");
     using D = typename MX::value_type;
-    using A = Ar<D>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     const int m = x.rows();
     for (int row = ex.lid(); row < m; row += v2::detail::size_of(ex)) {
         v2::Frag<D, NB> xr;
@@ -271,7 +165,7 @@ BATCHLAS_DLA_HELPER void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC&
     static_assert(UL == Uplo::Lower, "herk_tiles: only Uplo::Lower is implemented");
     static_assert(std::is_same_v<AS, v2::NegOne> && std::is_same_v<BS, v2::One>, "herk_tiles: alpha = NegOne, beta = One");
     using D = typename MC::value_type;
-    using A = Ar<D>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     const int m = a.rows(), k = a.cols();
     const int ntiles = map.count();
     for (int t = ex.lid(); t < ntiles; t += v2::detail::size_of(ex)) {
@@ -319,7 +213,7 @@ BATCHLAS_DLA_HELPER void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC&
 // diagonal made real; 0 elsewhere (the strict upper triangle is never read).
 template <int NB, class MA, class F> BATCHLAS_DLA_INLINE void frag_load_row_herm_lower(F& f, const MA& a, int row, int c0, int kb, bool live) {
     using D = typename MA::value_type;
-    using A = Ar<D>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     BATCHLAS_UNROLL_FULL
     for (int i = 0; i < NB; ++i) {
         D v{};
@@ -335,7 +229,7 @@ template <int NB, class MA, class F> BATCHLAS_DLA_INLINE void frag_load_row_herm
 // column i of p is global column c0 + i of a lower-stored Hermitian block.
 template <int NB, class PM, class G> BATCHLAS_DLA_INLINE void frag_store_row_herm_lower(const PM& p, int row, int c0, int kb, G&& g) {
     using D = typename PM::value_type;
-    using A = Ar<D>;
+    using A = v2::arith_t<v2::arith::Fma, D>;
     BATCHLAS_UNROLL_FULL
     for (int i = 0; i < NB; ++i) {
         if (i < kb) {
@@ -365,7 +259,7 @@ template <int NB, class D, class FY, class FX> BATCHLAS_DLA_INLINE void gemv_n_s
             __builtin_memcpy(&col[v * VW], &t, 16);
         }
         BATCHLAS_UNROLL_FULL
-        for (int i = 0; i < NB; ++i) Ar<D>::mac(y[i], x[kk], col[i]);
+        for (int i = 0; i < NB; ++i) v2::arith_t<v2::arith::Fma, D>::mac(y[i], x[kk], col[i]);
     }
 }
 
