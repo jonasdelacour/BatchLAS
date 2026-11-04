@@ -15,14 +15,11 @@ duplicate include/batchlas/device/level2.hh her2/src/ops/syev/sytrd/sb2st_v2.hh
 duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
 duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
 duplicate include/batchlas/device/reduce.hh butterfly/include/batchlas/device/exec.hh
-duplicate include/batchlas/device/view.hh conj_if/src/kernels/common/elementwise_glue_v2.hh
 duplicate include/batchlas/device/view.hh conj_if/src/ops/gemv/gemv_native_v2.hh
 duplicate include/batchlas/device/view.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate include/batchlas/device/view.hh conj_view/src/ops/gesvd/gebrd/gebrd_v2.hh
 duplicate include/batchlas/device/view.hh fn_vec/src/ops/syev/sytrd/sb2st_v2.hh
 duplicate include/batchlas/device/view.hh slice/src/ops/gesvd/bdsdc/bdsdc_v2.hh
-duplicate src/kernels/common/elementwise_glue_v2.hh conj_if/include/batchlas/device/view.hh
-duplicate src/kernels/common/elementwise_glue_v2.hh real_only/src/ops/sygst/sygst_v2.hh
 duplicate src/ops/gemm/gemm-components_v2.hh static_for/include/batchlas/device/core.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/include/batchlas/device/view.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/src/ops/getrs/getrs_v2.hh
@@ -45,7 +42,6 @@ duplicate src/ops/syev/sytrd/sytrd_v2.hh dotc/include/batchlas/device/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/include/batchlas/device/level1.hh
 duplicate src/ops/syev/sytrd/sytrd_v2.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/sygst/sygst_v2.hh div_real/include/batchlas/device/arith.hh
-duplicate src/ops/sygst/sygst_v2.hh real_only/src/kernels/common/elementwise_glue_v2.hh
 duplicate src/ops/sygst/sygst_v2.hh scale_real/include/batchlas/device/arith.hh
 duplicate src/ops/sytrf/sytrf_v2.hh group_sync/src/ops/syev/stedc/stedc_v2.hh
 duplicate src/ops/sytrf/sytrf_v2.hh uniform/src/ops/syev/stedc/stedc_v2.hh
@@ -110,10 +106,8 @@ src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue:
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::UploC
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::UpperC
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::geam
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::impl::conj_if
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::impl::is_lower
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::impl::is_unit
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::impl::real_only
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::impl::tile_cols
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::map2d
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::tile_load

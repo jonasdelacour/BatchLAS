@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The elementwise-glue family's private Device LA v2 ops (src/kernels/common/elementwise_glue_v2.hh:
-// map2d, trimask, tri_expand, geam, the SLM tile moves, lange) against host references. The
-// core ops they build on (Grid2D, for_each_owned_2d, mat_wide, item) are covered by
+// map2d, trimask, tri_expand, geam, the SLM tile moves) and the core lange norm.cc calls, against
+// host references. The core ops they build on (Grid2D, for_each_owned_2d, mat_wide, item) are covered by
 // device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): ld != rows on every
 // operand with sentinels in the pad, rectangular shapes, complex data with nonzero imaginary
 // parts, unreferenced storage poisoned with a large finite value the ops would accept (the other
@@ -242,8 +242,8 @@ template <class T, int WG> void lange_case(Dev& dev, int m, int n, int ld, real_
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<WG> ex{it};
         const auto a = v2::mat(A + std::ptrdiff_t(b) * per, m, n, ld);
-        const R r0 = glue::lange<NormType::Max>(ex, a), r1 = glue::lange<NormType::One>(ex, a), r2 = glue::lange<NormType::Inf>(ex, a);
-        const R r3 = glue::lange<NormType::Frobenius>(ex, a), r4 = glue::lange<NormType::Frobenius, v2::alg::Scaled>(ex, a);
+        const R r0 = v2::lange<NormType::Max>(ex, a), r1 = v2::lange<NormType::One>(ex, a), r2 = v2::lange<NormType::Inf>(ex, a);
+        const R r3 = v2::lange<NormType::Frobenius>(ex, a), r4 = v2::lange<NormType::Frobenius, v2::alg::Scaled>(ex, a);
         glue::map2d(ex, v2::mat(w + std::ptrdiff_t(b) * per, m, n, ld), [](T v) { return v2::Arith<T>::add(v, v); }, a);
         T* ob = o + std::ptrdiff_t(b) * kSlotsL;
         if (ex.leader()) ob[kMax] = T(r0), ob[kOne] = T(r1), ob[kInf] = T(r2), ob[kFro] = T(r3), ob[kFroS] = T(r4);

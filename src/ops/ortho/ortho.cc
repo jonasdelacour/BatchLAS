@@ -289,7 +289,7 @@ namespace batchlas {
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
                     const float_t fro2 = ex.group_reduce(dla::Arith<T>::re(d(ex.lid())));
-                    const float_t eps = std::numeric_limits<float_t>::epsilon();
+                    const float_t eps = dla::lamch<'P', float_t>();
                     const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
                     dla::for_each_owned_exact(ex, k, [&](int i) { d(i) = dla::Arith<T>::add(d(i), T(shift)); });  // C + shift I
                 });
@@ -325,7 +325,7 @@ namespace batchlas {
                 const auto d_out = dla::vec(diags.data() + bid * k, k);
                 dla::for_each_owned_exact(ex, k, [&](int i) {
                     const float_t diag = sycl::fmax(float_t(0), dla::Arith<T>::re(c_diag(i)));
-                    d_out(i) = (diag <= std::numeric_limits<float_t>::min()) ? float_t(0) : sycl::rsqrt(diag);
+                    d_out(i) = (diag <= dla::lamch<'U', float_t>()) ? float_t(0) : sycl::rsqrt(diag);
                 });
                 });
             });
@@ -358,8 +358,8 @@ namespace batchlas {
                 dla::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
                 const auto D = ex.publish(d_slm);
                 const float_t* lam = lambdas.data() + bid * k;
-                const float_t tau = std::numeric_limits<float_t>::epsilon() * std::abs(lam[k - 1]);
-                const auto lam_rsqrt = krylov_v2::generated(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
+                const float_t tau = dla::lamch<'P', float_t>() * std::abs(lam[k - 1]);
+                const auto lam_rsqrt = dla::fn_vec(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
                 krylov_v2::laqge(ex, D, lam_rsqrt, dla::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });

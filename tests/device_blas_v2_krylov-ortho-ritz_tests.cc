@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Device LA v2 ops private to the krylov-ortho-ritz family (src/ops/ortho/krylov-ortho-ritz_v2.hh:
-// Generated, laqge) against exact host references; the core ops those kernels also call are
-// covered by device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): a WG that
+// laqge) against exact host references; the core ops those kernels also call (fn_vec for the
+// generated c included) are covered by device_blas_v2_tests. Guards (agent-guide section 8): a WG that
 // is not a power of two and a launch at the device ceiling (laqge's contract: WG == rows);
 // non-natural ld and inc; complex data with nonzero imaginary parts; padding poisoned with a
 // large finite value the op must not touch; batch 1024 with period-3 data where every item must
@@ -109,9 +109,9 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceBlasV2KrylovTest, Types);
 
-// ---- laqge on RtGroup (WG = rows), c Generated or Published ----------------------------------
+// ---- laqge on RtGroup (WG = rows), c a generated fn_vec or Published -------------------------
 
-// E := diag(r) E diag(c) with r a strided global vector (inc 2) and c Generated; F := D F D with
+// E := diag(r) E diag(c) with r a strided global vector (inc 2) and c a generated fn_vec; F := D F D with
 // D staged in SLM and published (the SVQB D C D kernel). k = 37 at batch 1024, and k = the device
 // ceiling (capped at 1024) at a small batch. ld = k + 2, padding poisoned. Every scale r(i) c(j)
 // is one rounding in R and the scaling one more, both reproduced on the host, so the comparison
@@ -139,7 +139,7 @@ TYPED_TEST(DeviceBlasV2KrylovTest, LaqgeGeneratedAndPublished) {
             const int b = static_cast<int>(it.get_group_linear_id());
             const v2::RtGroup<> ex{it};
             const auto r = v2::vec(dg + std::ptrdiff_t(b) * k * rinc, k, rinc);
-            krylov_v2::laqge(ex, r, krylov_v2::generated(k, cgen), v2::mat(E + std::ptrdiff_t(b) * per, k, k, ld));
+            krylov_v2::laqge(ex, r, v2::fn_vec(k, cgen), v2::mat(E + std::ptrdiff_t(b) * per, k, k, ld));
             const auto d_slm = v2::vec<v2::Mem::Local>(reinterpret_cast<R*>(lm), k);
             v2::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = r(i); });
             const auto D = ex.publish(d_slm);
