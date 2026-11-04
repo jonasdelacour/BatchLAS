@@ -91,7 +91,7 @@ OPENER = re.compile(r"^(\s*namespace\s+(?:::)?batchlas::device::)v2\b(?!\s*=)")
 CLOSE_COMMENT = re.compile(r"(//\s*namespace\s+(?:::)?batchlas::device)::v2\b")
 ALIAS_V2 = re.compile(r"\bnamespace\s+v2\s*=\s*((?:::)?(?:batchlas::)?device)::v2\s*;")
 ALIAS_ANY = re.compile(r"(\bnamespace\s+\w+\s*=\s*(?:::)?(?:batchlas::)?device)::v2\b")
-QUAL_V2 = re.compile(r"(?<![\w:])v2::")
+QUAL_V2 = re.compile(r"(?<![\w:])(?<!inline )v2::")
 USING_V2 = re.compile(r"\busing\s+namespace\s+v2\s*;")
 DEVICE_V2 = re.compile(r"\bdevice::v2(::|\b)")
 
@@ -156,6 +156,8 @@ def main():
         new = text
         for rx, rep in rules:
             new = rx.sub(rep, new)
+        if f.endswith(".md"):
+            new = DEVICE_V2.sub(lambda m: "device" + (m.group(1) if m.group(1) == "::" else ""), new)
         if f.endswith(CXX_EXT):
             new = rewrite_cxx(new)
             if QUAL_V2.search(STRING.sub('""', new)):
