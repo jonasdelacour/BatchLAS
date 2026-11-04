@@ -34,7 +34,7 @@
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syevx/syevx_v2.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
 
@@ -360,7 +360,7 @@ Event syevx_direct_subset(Queue& ctx,
                     // of W are left untouched, as are the matching columns of V.
                     const int write = static_cast<int>((count < capacity) ? count : capacity);
 
-                    v2::copy(ex, v2::syevx::flipped(v2::vec(w_in + bid * w_in_stride, write), reverse),
+                    v2::copy(ex, v2::flip(v2::vec(w_in + bid * w_in_stride, write), reverse),
                              v2::vec(w_out + bid * capacity, write));
 
                     if (v_ptr != nullptr && reverse) {

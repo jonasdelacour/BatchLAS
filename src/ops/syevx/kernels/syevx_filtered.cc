@@ -40,7 +40,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/ops/syevx/syevx.hh>
 #include <batchlas/settings.hh>
-#include <src/ops/syevx/syevx_v2.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
 
@@ -559,13 +559,13 @@ Event syevx_filtered(Queue& ctx,
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
-                        using batchlas::device::syevx::sub_scaled;
+                        using batchlas::device::sub_scale_real;
                         using Ar = batchlas::device::Arith<T>;
                         // D := ca (A S - c S) - cb P, every scalar real (complex: algo mode,
                         // no Annex-G multiply; real: the legacy expressions).
-                        const T av = sub_scaled(Tk(r, c, b), cvals[b], Sk(r, c, b));
+                        const T av = sub_scale_real(Tk(r, c, b), cvals[b], Sk(r, c, b));
                         T out = Ar::scale_real(ca[b], av);
-                        if (!is_first) out = sub_scaled(out, cb[b], Pk(r, c, b));
+                        if (!is_first) out = sub_scale_real(out, cb[b], Pk(r, c, b));
                         Dk(r, c, b) = out;
                     });
             });
@@ -669,12 +669,12 @@ Event syevx_filtered(Queue& ctx,
                     const int n_ = static_cast<int>(nn), m_ = static_cast<int>(mm), k_ = static_cast<int>(kk);
                     // theta is ascending: the wanted block is its head, or its tail reversed.
                     const auto th_b = v2::vec(th + b * mm, m_);
-                    v2::copy(ex, v2::syevx::flipped(large ? th_b.tail(m_ - k_) : th_b.head(k_), large),
+                    v2::copy(ex, v2::flip(large ? th_b.tail(m_ - k_) : th_b.head(k_), large),
                              v2::vec(w_out + b * kk, k_));
                     if (v_ptr != nullptr) {
                         const auto Xb = v2::mat(Xk.data() + static_cast<int64_t>(b) * Xk.stride(), n_, m_, Xk.ld());
                         v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(
-                            ex, v2::syevx::cols_flipped(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
+                            ex, v2::flip<v2::axis::Cols>(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
                             v2::mat(v_ptr + b * v_stride, n_, k_, static_cast<int>(v_ld)));
                     }
                 });

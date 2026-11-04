@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-// syevx-private device LA v2 ops (src/ops/syevx/syevx_v2.hh) against host references; the core
-// ops they feed (copy, lacpy) are covered by device_blas_v2_tests. Guards (agent guide section
+// The core ops syevx uses (flip, upper_bound, sub_scale_real; once syevx-private, now core) in its
+// call shapes, against host references; copy, lacpy are covered by device_blas_v2_tests. Guards (section
 // 8): run-time widths 40 (a partial sub-group), 96 and the 1024 ceiling; the flip direction read
 // per item at run time; non-natural inc and ld; a view at an offset; complex data; NaN-poisoned
-// outputs whose padding must stay poisoned; batch 1024; count_le ties (x == v counts), queries one
-// ulp below a tie, NaN, +-Inf and an empty array; sub_scaled with an Inf imaginary part that a
-// cross-term product would turn into NaN. Deliberate breaks: Flipped reading v(n - i);
-// ColsFlipped ignoring rev; count_le with `<`; sub_scaled scaling conj(x).
+// outputs whose padding must stay poisoned; batch 1024; upper_bound ties (x == v counts), queries one
+// ulp below a tie, NaN, +-Inf and an empty array; sub_scale_real with an Inf imaginary part that a
+// cross-term product would turn into NaN. Deliberate breaks (made on the syevx-private copies):
+// Flipped reading v(n - i); ColsFlipped ignoring rev; count_le with `<`; sub_scaled scaling conj(x).
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -19,13 +19,12 @@
 #include <optional>
 #include <vector>
 
-#include <src/ops/syevx/syevx_v2.hh>
+#include <batchlas/device.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace sx = batchlas::device::syevx;
 using batchlas::verify::Check;
 
 namespace {
@@ -96,8 +95,8 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceBlasV2SyevxTest, Types);
 
-// Item b reverses iff b is odd. Columns: lacpy(cols_flipped(A, rev)) into an ld-padded block;
-// vector: copy(flipped(x.tail(off).head(len), rev)) from a stride-inc source, as DirectSelect.
+// Item b reverses iff b is odd. Columns: lacpy(flip<axis::Cols>(A, rev)) into an ld-padded block;
+// vector: copy(flip(x.tail(off).head(len), rev)) from a stride-inc source, as syevx_select.
 template <class T> void run_flips(Dev& dev, int wg) {
     constexpr int m = 37, n = 9, lda = m + 3, ldo = m + 5, nx = 23, inc = 2, off = 3, len = nx - 5;
     const auto ha = filled<T>(std::size_t(kBatch) * n * lda, 11), hx = filled<T>(std::size_t(kBatch) * nx * inc, 12);
@@ -112,10 +111,10 @@ template <class T> void run_flips(Dev& dev, int wg) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const bool rev = (b & 1) != 0;
         const auto A = v2::mat(a + std::ptrdiff_t(b) * n * lda, m, n, lda);
-        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(ex, sx::cols_flipped(A, rev),
+        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(ex, v2::flip<v2::axis::Cols>(A, rev),
                                                                      v2::mat(o + std::ptrdiff_t(b) * n * ldo, m, n, ldo));
         const auto xv = v2::vec(x + std::ptrdiff_t(b) * nx * inc, nx, inc);
-        v2::copy(ex, sx::flipped(xv.tail(off).head(len), rev), v2::vec(v + std::ptrdiff_t(b) * nx, len));
+        v2::copy(ex, v2::flip(xv.tail(off).head(len), rev), v2::vec(v + std::ptrdiff_t(b) * nx, len));
     });
     const auto go = dev.down(o, ho.size()), gv = dev.down(v, hv.size());
     int bad = 0, poison = 0;
@@ -141,7 +140,7 @@ TYPED_TEST(DeviceBlasV2SyevxTest, FlippedOperandsOnRunTimeWidths) {
     for (int wg : {40, 96, 1024}) run_flips<TypeParam>(this->dev, wg);
 }
 
-// D := sub_scaled(A, s_b, X) elementwise over a batch, s_b real per item; long-double reference.
+// D := sub_scale_real(A, s_b, X) elementwise over a batch, s_b real per item; long-double reference.
 TYPED_TEST(DeviceBlasV2SyevxTest, SubScaledBatch) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -159,7 +158,7 @@ TYPED_TEST(DeviceBlasV2SyevxTest, SubScaledBatch) {
         const auto A = v2::mat(a + std::ptrdiff_t(b) * n * ld, m, n, ld);
         const auto X = v2::mat(x + std::ptrdiff_t(b) * n * ld, m, n, ld);
         const auto D = v2::mat(d + std::ptrdiff_t(b) * n * ldd, m, n, ldd);
-        v2::for_each_owned_2d(ex, m, n, [&](int r, int c) { D(r, c) = sx::sub_scaled(A(r, c), s[b], X(r, c)); });
+        v2::for_each_owned_2d(ex, m, n, [&](int r, int c) { D(r, c) = v2::sub_scale_real(A(r, c), s[b], X(r, c)); });
     });
     const auto gd = this->dev.down(d, hd.size());
     double worst = 0;
@@ -179,14 +178,15 @@ TYPED_TEST(DeviceBlasV2SyevxTest, SubScaledBatch) {
     EXPECT_VERIFY(R, Check::blas, 2, worst);
 }
 
-TYPED_TEST(DeviceBlasV2SyevxTest, CountLeAndSubScaledSpecials) {
+TYPED_TEST(DeviceBlasV2SyevxTest, UpperBoundAndSubScaleRealSpecials) {
     using T = TypeParam;
     using R = real_of<T>;
     const R inf = std::numeric_limits<R>::infinity(), qnan = std::numeric_limits<R>::quiet_NaN();
     const R below_m1 = std::nextafter(R(-1), -inf), below_2 = std::nextafter(R(2), -inf);
     const std::vector<R> hx = {R(-3), R(-1), R(-1), R(0), R(2), R(2), R(2), R(5)};
     const std::vector<R> hq = {R(-4), R(-1), below_m1, R(2), below_2, R(5), R(1), qnan, inf, -inf};
-    const std::vector<int> want = {0, 3, 1, 7, 4, 8, 4, 0, 8, 0};
+    // A NaN query counts every element (!(v < x) holds); the syevx host rejects a NaN vl / vu.
+    const std::vector<int> want = {0, 3, 1, 7, 4, 8, 4, 8, 8, 0};
     const R* x = this->dev.up(hx);
     const R* qv = this->dev.up(hq);
     int* cnt = this->dev.up(std::vector<int>(hq.size() + 1, -7));
@@ -198,10 +198,10 @@ TYPED_TEST(DeviceBlasV2SyevxTest, CountLeAndSubScaledSpecials) {
     this->dev.run(1, 32, [=](sycl::nd_item<1> it) {
         if (it.get_local_linear_id() != 0) return;
         const auto xv = v2::vec(x, nx);
-        for (int q = 0; q < nq; ++q) cnt[q] = sx::count_le(xv, qv[q]);
-        cnt[nq] = sx::count_le(v2::vec(x, 0), R(0));
-        sc[0] = sx::sub_scaled(z, R(2), hinf);
-        sc[1] = sx::sub_scaled(z, R(-0.5), z);
+        for (int q = 0; q < nq; ++q) cnt[q] = v2::upper_bound(v2::Thread{}, xv, qv[q]);
+        cnt[nq] = v2::upper_bound(v2::Thread{}, v2::vec(x, 0), R(0));
+        sc[0] = v2::sub_scale_real(z, R(2), hinf);
+        sc[1] = v2::sub_scale_real(z, R(-0.5), z);
     });
     const auto gc = this->dev.down(cnt, hq.size() + 1);
     for (int q = 0; q < nq; ++q) EXPECT_EQ(gc[q], want[q]) << "query " << q;

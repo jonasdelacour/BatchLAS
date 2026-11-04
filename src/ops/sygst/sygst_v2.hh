@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// sygst's private device LA v2 ops (core: include/batchlas/device):
+// sygst's private device LA v2 ops (core: include/batchlas/device), each waiting on a core form:
 //   - trsv_packed / trmv_packed: op(A)^-1 x and op(A) x, op = A^T or A^H, on one work-item with x
 //     in a register Frag; A's columns are read as aligned 16-byte packs into W split
 //     accumulators and its diagonal as real (a Cholesky factor). Core trsv / trmv are the row
 //     form with one accumulator and a complex divide, another rounding order;
-//   - herm(A, uplo) / conj_vec(v): read-only views of the Hermitian matrix one triangle stores
-//     (uplo at run time, real diagonal) and of a conjugated vector, for v2::load;
-//   - for_each_tile_col / lacpy_at: the group's coalesced sweep over m x m tiles, and B(i, j) =
-//     A(i, j) for a range-launched kernel (kernel bodies call no view operator() directly).
+//   - herm(A, uplo): the Hermitian matrix one triangle stores with uplo at run time (core
+//     herm_view takes it at compile time), real diagonal, one load; .col(j) feeds v2::load;
+//   - for_each_tile_col: the group's coalesced sweep over m x m tiles, an item per tile row;
+//   - Pack16: the 16-byte-aligned SLM element (core Packet carries no alignment).
 // Arithmetic is arith::Fma, bit-equal to the hand kernel's four-fma helpers.
 
 #include <type_traits>
@@ -27,25 +27,7 @@ template <class T> struct alignas(16) Pack16 {
 };
 template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(Pack16<T>::e) / sizeof(T));
 
-// K for v2::Ext<K>, 0 for a run-time extent.
-template <class E> inline constexpr int static_extent_v = 0;
-template <int K> inline constexpr int static_extent_v<v2::Ext<K>> = K;
-
 BATCHLAS_DLA_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
-
-template <class T> BATCHLAS_DLA_INLINE T real_only(T x) {
-    using A = v2::Arith<T>;
-    if constexpr (A::is_complex) return A::make(A::re(x), typename A::real_t(0));
-    else return x;
-}
-
-template <class V> struct ConjVec {
-    V v;
-    using value_type = typename V::value_type;
-    BATCHLAS_DLA_INLINE value_type operator()(int i) const { return v2::Arith<value_type>::conj(v(i)); }
-    BATCHLAS_DLA_INLINE int size() const { return v.size(); }
-};
-template <class V> BATCHLAS_DLA_INLINE ConjVec<V> conj_vec(V v) { return {v}; }
 
 template <class H> struct HermCol {
     H h;
@@ -64,16 +46,13 @@ template <class M> struct HermView {
     BATCHLAS_DLA_INLINE value_type operator()(int i, int j) const {
         const bool own = in_triangle(uplo, i, j);  // one load, its address selected
         const value_type x = a(own ? i : j, own ? j : i);
-        return i == j ? real_only<value_type>(x) : own ? x : v2::Arith<value_type>::conj(x);
+        return i == j ? v2::force_real(x) : own ? x : v2::Arith<value_type>::conj(x);
     }
     BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
     BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
     BATCHLAS_DLA_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
 };
 template <class M> BATCHLAS_DLA_INLINE HermView<M> herm(M a, Uplo uplo) { return {a, uplo}; }
-
-// B(i, j) = A(i, j), one element of a range-launched copy.
-template <class MB, class MA> BATCHLAS_DLA_INLINE void lacpy_at(const MB& b, const MA& a, int i, int j) { b(i, j) = a(i, j); }
 
 // A group of `size` items over `tiles` m x m tiles, column by column: item lid owns row lid % m
 // of tile columns lid / m, lid / m + size / m, ...; f(tile, row, col). When m does not divide
@@ -87,17 +66,6 @@ template <class F> BATCHLAS_DLA_INLINE void for_each_tile_col(int lid, int size,
 }
 
 namespace detail {
-template <class T> BATCHLAS_DLA_INLINE T div_real(T x, typename v2::Arith<T>::real_t d) {
-    using A = v2::Arith<T>;
-    if constexpr (A::is_complex) return A::make(A::re(x) / d, A::im(x) / d);
-    else return x / d;
-}
-template <class T> BATCHLAS_DLA_INLINE T scale_real(T x, typename v2::Arith<T>::real_t d) {
-    using A = v2::Arith<T>;
-    if constexpr (A::is_complex) return A::make(A::re(x) * d, A::im(x) * d);
-    else return x * d;
-}
-
 // x_i combines column i of A with the other entries of x (Below: p < i, else p > i); term p
 // goes to accumulator p mod W, summed as a tree. Solve: x_i = (x_i - sum) / a_ii, else
 // x_i = a_ii x_i + sum. In place, so i is visited before every entry whose sum still needs it.
@@ -107,7 +75,8 @@ BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, v2::Frag<T, N, L>& x) {
     using A = v2::Arith<T>;
     using Ar = v2::arith_t<v2::arith::Fma, T>;
     constexpr int V = pack16_elems<T>;
-    constexpr int Trip = static_extent_v<std::remove_cv_t<decltype(a.n)>> ? static_extent_v<std::remove_cv_t<decltype(a.n)>> : N;
+    constexpr int K = v2::static_extent_v<std::remove_cv_t<decltype(a.n)>>;  // -1: a run-time extent
+    constexpr int Trip = K > 0 ? K : N;
     static_assert(Trip <= N, "sygst trsv_packed/trmv_packed: the extent exceeds the fragment");
     constexpr bool ascending = Below == Solve;
     const int n = a.cols();
@@ -148,8 +117,8 @@ BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, v2::Frag<T, N, L>& x) {
                 for (int k = 0; k < w; ++k) acc[k] = A::add(acc[2 * k], acc[2 * k + 1]);
             }
             const auto d = A::re(line[i]);
-            if constexpr (Solve) x[i] = div_real(A::add(x[i], acc[0]), d);
-            else x[i] = A::add(scale_real(x[i], d), acc[0]);
+            if constexpr (Solve) x[i] = v2::div_real(A::add(x[i], acc[0]), d);
+            else x[i] = A::add(v2::scale_real(d, x[i]), acc[0]);
         }
     }
 }

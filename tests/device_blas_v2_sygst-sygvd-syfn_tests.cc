@@ -137,7 +137,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 }
 
 template <class NE> NE make_ne(int n) {
-    if constexpr (dla::static_extent_v<NE> > 0) return NE{};
+    if constexpr (v2::static_extent_v<NE> > 0) return NE{};
     else return NE{n};
 }
 
@@ -241,11 +241,11 @@ TYPED_TEST(DeviceBlasV2SygstTest, TrmvPackedEveryUploAndTranspose) {
     check_tri_extents<T, Uplo::Lower, Transpose::ConjTrans, false>(this->dev, "trmv L C");  // sygst itype 2, 3
 }
 
-// ---- herm / conj_vec through v2::load, and lacpy_at -------------------------------------------
+// ---- herm / v2::conj_view through v2::load, and v2::lacpy on an ElemAt ------------------------
 
 // S stores one triangle (the other 1e6, Im(diag) 1e3). Per column j: O1(:, j) = column j of the
 // Hermitian S, O2(:, j) = conj(row j of S), loaded into a Frag and stored; O3 = herm(S) by
-// lacpy_at element by element. Rows n.. of O1, O2, O3 (ld n + 2) stay NaN.
+// v2::lacpy element by element. Rows n.. of O1, O2, O3 (ld n + 2) stay NaN.
 template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
     const int lds = n + 3, ldo = n + 2, per_s = lds * n, per_o = ldo * n;
     auto hs = batched<T>(per_s, 21, [&](T* s) {
@@ -271,9 +271,9 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
             v2::Frag<T, N> x{};
             v2::load(x, dla::herm(s, ul).col(j), n);
             v2::store(x, o1.col(j), n);
-            v2::load(x, dla::conj_vec(s.row(j)), n);
+            v2::load(x, v2::conj_view(s.row(j)), n);
             v2::store(x, o2.col(j), n);
-            for (int i = 0; i < n; ++i) dla::lacpy_at(o3, dla::herm(s, ul), i, j);
+            for (int i = 0; i < n; ++i) v2::lacpy(v2::ElemAt<true>{i, j}, dla::herm(s, ul), o3);
         }
     });
     const auto g1 = dev.down(O1, ho.size()), g2 = dev.down(O2, ho.size()), g3 = dev.down(O3, ho.size());

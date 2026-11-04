@@ -112,7 +112,7 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                 if (active) v2::store(col, s.col(j), live);
                 it.barrier(sycl::access::fence_space::local_space);
                 // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
-                if (active) v2::load(col, dla::conj_vec(s.row(j)), live);
+                if (active) v2::load(col, v2::conj_view(s.row(j)), live);
                 it.barrier(sycl::access::fence_space::local_space);
                 if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
                 if (active) v2::store(col, s.col(j), live);
@@ -171,7 +171,8 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             if (mask && !mask[itm]) return;  // I3
             const int r = static_cast<int>(e % per), i = r % kb, c = r / kb;
             // H = the Hermitian A, real diagonal.
-            dla::lacpy_at(v2::mat(hp + itm * stride_f, kb, kb, ldf), dla::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo), i, c);
+            v2::lacpy(v2::ElemAt<true>{i, c}, dla::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo),
+                      v2::mat(hp + itm * stride_f, kb, kb, ldf));
         });
     });
     return ctx.get_event();
