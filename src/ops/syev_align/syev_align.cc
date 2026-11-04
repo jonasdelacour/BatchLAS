@@ -8,6 +8,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/syev_align.hh>
 #include <batchlas/util/mempool.hh>
+#include <batchlas/device/arith.hh>
 
 #include <src/util/batch_mask.hh>
 #include <src/queue.hh>
@@ -33,18 +34,6 @@ struct ClusterApplyKernel {};
 
 template <class T>
 inline constexpr bool complex_v = is_std_complex_v<T>;
-
-template <class T>
-inline T conj_of(const T& x) {
-    if constexpr (complex_v<T>) return T(x.real(), -x.imag());
-    else return x;
-}
-
-template <class T>
-inline float_t<T> abs2_of(const T& x) {
-    if constexpr (complex_v<T>) return x.real() * x.real() + x.imag() * x.imag();
-    else return x * x;
-}
 
 template <class T>
 struct Workspace {
@@ -85,15 +74,15 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
                 Real a = 0, b = 0;
                 T gam = T(0);
                 for (int r = 0; r < p; ++r) {
-                    a += abs2_of(g(r, i));
-                    b += abs2_of(g(r, k));
-                    gam += conj_of(g(r, i)) * g(r, k);
+                    a += device::abs2(g(r, i));
+                    b += device::abs2(g(r, k));
+                    gam += device::conj_if<true>(g(r, i)) * g(r, k);
                 }
-                const Real ag = sycl::sqrt(abs2_of(gam));
+                const Real ag = sycl::sqrt(device::abs2(gam));
                 if (ag == Real(0) || ag <= eps * sycl::sqrt(a) * sycl::sqrt(b)) continue;
                 rotated = true;
                 // Column k is first scaled by conj(gam / |gam|) so the pair's inner product is real.
-                const T ph = conj_of(gam) / ag;
+                const T ph = device::conj_if<true>(gam) / ag;
                 const Real zeta = (b - a) / (Real(2) * ag);
                 const Real t = (zeta >= Real(0) ? Real(1) : Real(-1)) /
                                (sycl::fabs(zeta) + sycl::sqrt(Real(1) + zeta * zeta));
@@ -113,13 +102,13 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
     Real smax = 0;
     for (int c = 0; c < p; ++c) {
         Real s2 = 0;
-        for (int r = 0; r < p; ++r) s2 += abs2_of(g(r, c));
+        for (int r = 0; r < p; ++r) s2 += device::abs2(g(r, c));
         flag[c] = T(sycl::sqrt(s2));
         smax = sycl::fmax(smax, sycl::sqrt(s2));
     }
     const Real thresh = smax * Real(p) * eps;
     for (int c = 0; c < p; ++c) {
-        const Real s = float_t<T>(sycl::sqrt(abs2_of(flag[c])));
+        const Real s = float_t<T>(sycl::sqrt(device::abs2(flag[c])));
         if (s > thresh) {
             for (int r = 0; r < p; ++r) g(r, c) /= s;
             flag[c] = T(1);
@@ -137,12 +126,12 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
                 for (int q = 0; q < p; ++q) {
                     if (q == c || flag[q] == T(0)) continue;
                     T dot = T(0);
-                    for (int r = 0; r < p; ++r) dot += conj_of(g(r, q)) * g(r, c);
+                    for (int r = 0; r < p; ++r) dot += device::conj_if<true>(g(r, q)) * g(r, c);
                     for (int r = 0; r < p; ++r) g(r, c) -= dot * g(r, q);
                 }
             }
             Real s2 = 0;
-            for (int r = 0; r < p; ++r) s2 += abs2_of(g(r, c));
+            for (int r = 0; r < p; ++r) s2 += device::abs2(g(r, c));
             if (s2 * Real(2 * p) >= Real(1)) {
                 const Real s = sycl::sqrt(s2);
                 for (int r = 0; r < p; ++r) g(r, c) /= s;
@@ -156,7 +145,7 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
         for (int k = 0; k < p; ++k) flag[k] = g(i, k);
         for (int j = 0; j < p; ++j) {
             T acc = T(0);
-            for (int k = 0; k < p; ++k) acc += flag[k] * conj_of(w(j, k));
+            for (int k = 0; k < p; ++k) acc += flag[k] * device::conj_if<true>(w(j, k));
             g(i, j) = acc;
         }
     }
@@ -211,7 +200,7 @@ Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const
         const T* vc = Wp + b * n * m;
         const T* rh = Mp + b * m * m;
         T acc = T(0);
-        for (int64_t q = s; q < t; ++q) acc += vc[q * n + i] * conj_of(rh[q * m + j]);
+        for (int64_t q = s; q < t; ++q) acc += vc[q * n + i] * device::conj_if<true>(rh[q * m + j]);
         Vp[b * sv + j * ldv + i] = acc;
     });
     return ctx.get_event();

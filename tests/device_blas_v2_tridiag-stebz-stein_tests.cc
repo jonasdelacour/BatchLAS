@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
-// Device LA v2 ops private to the tridiagonal eigen kernels (src/ops/syev/tridiag/tridiag_v2.hh)
-// against host references. Core ops (RtGroup, for_each_owned, allreduce, map, laset, dot, axpy,
-// sumsq, scal) are covered by device_blas_v2_tests.
+// The tridiagonal eigen kernels' device ops against host references: lapack/stebz.hh
+// (stebz_gershgorin, laebz_count, laebz_bisect), core lanst<Inf> and rot<rot_conv::Reflector2> as
+// those kernels call them, and house2 (src/ops/syev/tridiag/tridiag_v2.hh). Other core ops
+// (RtGroup, for_each_owned, allreduce, map, laset, dot, axpy, sumsq, scal) are covered by
+// device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): non-natural inc with a poisoned pad, batch
 // 1024 at period 3 bit-identical to its representative, RtGroup at local ranges 1, 7, 100, 256
 // and the device ceiling, graded eigenvalue inputs with analytic references, Sturm counts
 // straddling an eigenvalue by one ulp, ld = m + 3 pad rows left untouched.
 // Deliberate breaks to run when this first builds (one per axis, expected red set):
-//   gershgorin drops |e_{i-1}|                 -> Reductions, SturmBisect
-//   gershgorin reduces lo with maximum         -> Reductions
-//   lanst_inf reads e(i) at i = n - 1          -> Reductions (poisoned pad)
-//   sturm_count counts q < 0 instead of q <= 0 -> SturmBisect (straddle)
-//   bisect_eig returns left, not the midpoint  -> SturmBisect (kind 2)
-//   refl2 drops the factor 2                   -> House2Refl2
-//   refl2(Thread, Refs) skips element N - 1    -> House2Refl2 (stripe)
+//   stebz_gershgorin drops |e_{i-1}|           -> Reductions, SturmBisect
+//   stebz_gershgorin reduces lo with maximum   -> Reductions
+//   lanst<Inf> reads e(i) at i = n - 1         -> Reductions (poisoned pad)
+//   laebz_count counts q < 0 instead of q <= 0 -> SturmBisect (straddle)
+//   laebz_bisect returns left, not the midpoint -> SturmBisect (kind 2)
+//   rot<Reflector2> drops the factor 2         -> House2Refl2
+//   the stripe's static_for stops at N - 1     -> House2Refl2 (stripe)
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -28,6 +30,7 @@
 #include <vector>
 
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/stebz.hh>
 #include <src/ops/syev/tridiag/tridiag_v2.hh>
 #include <src/queue.hh>
 
@@ -111,7 +114,7 @@ TYPED_TEST_SUITE(TridiagV2, RealTypes);
 
 // ---- tridiagonal reductions on a runtime-width group ---------------------------------------
 
-// lanst_inf and gershgorin are exact (min / max of the same T expressions as the host), so the
+// lanst<Inf> and stebz_gershgorin are exact (min / max of the same T expressions as the host), so the
 // device must match the host bit for bit at every local range.
 TYPED_TEST(TridiagV2, ReductionsAtEveryRuntimeRange) {
     using T = TypeParam;
@@ -131,8 +134,8 @@ TYPED_TEST(TridiagV2, ReductionsAtEveryRuntimeRange) {
             const v2::RtGroup<> ex{it};
             const auto dv = v2::vec(d + std::ptrdiff_t(b) * n * incd, n, incd);
             const auto ev = v2::vec(e + std::ptrdiff_t(b) * n * ince, n - 1, ince);
-            const T ln = tdv2::lanst_inf(ex, dv, ev);
-            const auto g = tdv2::gershgorin(ex, dv, ev);
+            const T ln = v2::lanst<NormType::Inf>(ex, dv, ev);
+            const auto g = v2::stebz_gershgorin(ex, dv, ev);
             if (ex.leader()) {
                 T* ob = o + std::ptrdiff_t(b) * slots;
                 ob[0] = ln, ob[1] = g.lo, ob[2] = g.hi, ob[3] = g.e2max;
@@ -208,15 +211,15 @@ TYPED_TEST(TridiagV2, SturmBisectGradedAndStraddled) {
         const v2::Thread th{};
         const auto dv = v2::vec(d + std::ptrdiff_t(b) * n, n);
         const auto ev = v2::vec(e + std::ptrdiff_t(b) * n, n - 1);
-        const auto g = tdv2::gershgorin(ex, dv, ev);
+        const auto g = v2::stebz_gershgorin(ex, dv, ev);
         const T norm = sycl::max(sycl::fabs(g.lo), sycl::fabs(g.hi));
         const T pad = std::numeric_limits<T>::epsilon() * norm * T(2) + std::numeric_limits<T>::min();
         const T pivmin = std::numeric_limits<T>::min() * sycl::max(T(1), g.e2max);
         v2::for_each_owned(ex, n, [&](int j) {
-            lam[std::ptrdiff_t(b) * n + j] = tdv2::bisect_eig(th, dv, ev, j, g.lo - pad, g.hi + pad, T(0), pivmin, 400);
+            lam[std::ptrdiff_t(b) * n + j] = v2::laebz_bisect(th, dv, ev, j, g.lo - pad, g.hi + pad, T(0), pivmin, 400);
             const T xj = x[std::ptrdiff_t(b) * n + j];
-            cnt[(std::ptrdiff_t(b) * n + j) * 2] = tdv2::sturm_count(th, dv, ev, xj, pivmin);
-            cnt[(std::ptrdiff_t(b) * n + j) * 2 + 1] = tdv2::sturm_count(th, dv, ev, sycl::nextafter(xj, -std::numeric_limits<T>::infinity()), pivmin);
+            cnt[(std::ptrdiff_t(b) * n + j) * 2] = v2::laebz_count(th, dv, ev, xj, pivmin);
+            cnt[(std::ptrdiff_t(b) * n + j) * 2 + 1] = v2::laebz_count(th, dv, ev, sycl::nextafter(xj, -std::numeric_limits<T>::infinity()), pivmin);
         });
     });
     const auto gl = this->dev.down(lam, hl.size());
@@ -239,9 +242,9 @@ TYPED_TEST(TridiagV2, SturmBisectGradedAndStraddled) {
 
 // ---- 2-element reflectors ---------------------------------------------------------------------
 
-// house2 maps (a0, a1) to (-sign(a0) ||a||, 0) with unit v; refl2 on scattered stripes (Thread,
-// Refs of 1 and of 3) and on a column pair of a matrix with ld = m + 3 (RtGroup at 100) against
-// long double.
+// house2 maps (a0, a1) to (-sign(a0) ||a||, 0) with unit v; rot<Reflector2> on a scalar pair, on
+// a Refs<T, 3> stripe unrolled with static_for (tridiag_solver's T_QTQ form) and on a column pair
+// of a matrix with ld = m + 3 (RtGroup at 100) against long double.
 TYPED_TEST(TridiagV2, House2Refl2) {
     using T = TypeParam;
     constexpr int m = 150, ld = m + 3, npair = 6, wg = 100, nstripe = 3;
@@ -261,17 +264,21 @@ TYPED_TEST(TridiagV2, House2Refl2) {
             for (int p = 0; p < npair; ++p) {
                 T x0 = pr[2 * p], x1 = pr[2 * p + 1];
                 const auto v = tdv2::house2(x0, x1);
-                tdv2::refl2(v2::Thread{}, v, tdv2::refs(x0), tdv2::refs(x1));
+                v2::rot<v2::rot_conv::Reflector2>(v2::Givens<T>{v[0], v[1]}, x0, x1);
                 ob[4 * p] = v[0], ob[4 * p + 1] = v[1], ob[4 * p + 2] = x0, ob[4 * p + 3] = x1;
             }
             // A 3-stripe: x = pairs 1..3 first halves, y = their second halves.
             T s[2 * nstripe];
             for (int i = 0; i < nstripe; ++i) s[i] = pr[2 * (i + 1)], s[nstripe + i] = pr[2 * (i + 1) + 1];
-            tdv2::refl2(v2::Thread{}, tdv2::house2(pr[0], pr[1]), tdv2::refs(s[0], s[1], s[2]), tdv2::refs(s[3], s[4], s[5]));
+            const auto v = tdv2::house2(pr[0], pr[1]);
+            const v2::Givens<T> g{v[0], v[1]};
+            const auto x = v2::refs(s[0], s[1], s[2]), y = v2::refs(s[3], s[4], s[5]);
+            v2::static_for<nstripe>([&](auto i) { v2::rot<v2::rot_conv::Reflector2>(g, x(i), y(i)); });
             for (int i = 0; i < 2 * nstripe; ++i) so[std::ptrdiff_t(b) * 2 * nstripe + i] = s[i];
         }
         const auto A = v2::mat(a + std::ptrdiff_t(b) * 2 * ld, m, 2, ld);
-        tdv2::refl2(ex, tdv2::house2(pr[0], pr[1]), A.col(0), A.col(1));
+        const auto v = tdv2::house2(pr[0], pr[1]);
+        v2::rot<v2::rot_conv::Reflector2>(ex, v2::Givens<T>{v[0], v[1]}, A.col(0), A.col(1));
     });
     const auto gv = this->dev.down(vo, hv.size());
     const auto ga = this->dev.down(a, ha.size());
@@ -311,7 +318,7 @@ TYPED_TEST(TridiagV2, House2Refl2) {
             }
 }
 
-static_assert(tdv2::Refs<double, 3>{}.size() == 3);
-static_assert(std::is_same_v<v2::elem_t<tdv2::Refs<float, 2>>, float>);
+static_assert(v2::Refs<double, 3>{}.size() == 3);
+static_assert(std::is_same_v<v2::elem_t<v2::Refs<float, 2>>, float>);
 
 }  // namespace

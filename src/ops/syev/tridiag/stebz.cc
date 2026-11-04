@@ -23,7 +23,8 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syev/tridiag/tridiag_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/stebz.hh>
 
 namespace batchlas {
 
@@ -31,7 +32,6 @@ template <Backend B, typename T>
 struct StebzKernel;
 
 namespace v2 = device;
-namespace tdv2 = device::tridiag;
 
 template <Backend B, typename T>
 Event stebz(Queue& ctx,
@@ -99,7 +99,7 @@ Event stebz(Queue& ctx,
                 const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
 
-                const auto g = tdv2::gershgorin(ex, dv, ev);
+                const auto g = v2::stebz_gershgorin(ex, dv, ev);
                 if (ex.leader()) {
                     const T eps = std::numeric_limits<T>::epsilon();
                     const T norm = sycl::max(sycl::fabs(g.lo), sycl::fabs(g.hi));
@@ -126,8 +126,8 @@ Event stebz(Queue& ctx,
                 int64_t last = iu;
                 if (value_range) {
                     if (ex.leader()) {
-                        const int c_lo = tdv2::sturm_count(th, dv, ev, vl, pivmin);
-                        const int c_hi = tdv2::sturm_count(th, dv, ev, vu, pivmin);
+                        const int c_lo = v2::laebz_count(th, dv, ev, vl, pivmin);
+                        const int c_hi = v2::laebz_count(th, dv, ev, vu, pivmin);
                         found[0] = c_hi - c_lo;
                         found[1] = c_lo;
                     }
@@ -141,7 +141,7 @@ Event stebz(Queue& ctx,
                 // One work-item per wanted eigenvalue; no interaction between them.
                 const int count_wanted = static_cast<int>(last - first + 1);
                 v2::for_each_owned(ex, count_wanted, [&](int slot) {
-                    const T lambda = tdv2::bisect_eig(th, dv, ev, int(first) + slot, glo, ghi, tol, pivmin, max_iter);
+                    const T lambda = v2::laebz_bisect(th, dv, ev, int(first) + slot, glo, ghi, tol, pivmin, max_iter);
                     w(descending ? (count_wanted - 1 - slot) : slot, bid) = lambda;
                 });
 

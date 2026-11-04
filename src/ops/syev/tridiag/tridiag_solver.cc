@@ -43,7 +43,7 @@ using TridiagEx = v2::RtGroup<>;
 template <typename T>
 void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, const int m, const int ld, T* Q) {
     const auto q = v2::mat(Q, m, n + 1, ld);
-    for (int k = 0; k < n; k++) tdv2::refl2(ex, std::array<T, 2>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
+    for (int k = 0; k < n; k++) v2::rot<v2::rot_conv::Reflector2>(ex, v2::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
 }
 
 // One explicit shifted QR step on the leading n x n block: T - shift = Q R, T := R Q + shift, Q
@@ -51,9 +51,12 @@ void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, co
 // the diagonal, sub- and super-diagonal; U[n+1:] is the second super-diagonal R fills in.
 template <typename T>
 void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, const Span<T> U, const Span<T> Vout, T shift=0) {
-    const v2::Thread th{};
     const auto d = v2::vec(D.data(), n);
     auto U2 = [&](int k) -> T& { return U[(n + 1) + k]; };
+    // (I - 2 v v^T) on three scattered pairs, unrolled at compile time: the pointers stay in registers.
+    auto refl3 = [](const v2::Givens<T>& g, const auto& x, const auto& y) BATCHLAS_DLA_BODY {
+        v2::static_for<3>([&](auto i) BATCHLAS_DLA_BODY { v2::rot<v2::rot_conv::Reflector2>(g, x(i), y(i)); });
+    };
 
     // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
     const T l_nm1 = L[n-1];
@@ -78,7 +81,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
                 const auto v = tdv2::house2(D[k], L[k]);
                 Vout[2 * k] = v[0];
                 Vout[2 * k + 1] = v[1];
-                tdv2::refl2(th, v, tdv2::refs(D[k], U[k], U2(k)), tdv2::refs(L[k], D[k + 1], U[k + 1]));
+                refl3(v2::Givens<T>{v[0], v[1]}, v2::refs(D[k], U[k], U2(k)), v2::refs(L[k], D[k + 1], U[k + 1]));
             }
         }
     }
@@ -87,7 +90,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         const std::array<T, 2> v{Vout[0], Vout[1]};
         const T t1 = T(0) + D[1] * v[1];
-        tdv2::refl2(th, v, tdv2::refs(D[0]), tdv2::refs(U[0]));
+        v2::rot<v2::rot_conv::Reflector2>(v2::Givens<T>{v[0], v[1]}, D[0], U[0]);
         L[0] -= T(2) * v[0] * t1;
         D[1] -= T(2) * v[1] * t1;
     }
@@ -98,7 +101,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         for (int k = 1; k < n - 1; k++) {
             const std::array<T, 2> v{Vout[2 * k], Vout[2 * k + 1]};
-            tdv2::refl2(th, v, tdv2::refs(U[k - 1], D[k], L[k]), tdv2::refs(U2(k - 1), U[k], D[k + 1]));
+            refl3(v2::Givens<T>{v[0], v[1]}, v2::refs(U[k - 1], D[k], L[k]), v2::refs(U2(k - 1), U[k], D[k + 1]));
         }
     }
 
@@ -190,7 +193,7 @@ Event tridiagonal_solver(Queue& ctx,
                     int it = 0;
                     while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
                         if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                        const auto [l0, l1] = detail::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
+                        const auto [l0, l1] = v2::lae2(D[k-1], L[k-1], D[k]);
                         const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(ex, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {
@@ -201,7 +204,7 @@ Event tridiagonal_solver(Queue& ctx,
                 if (ex.leader()) status_ptr[bid] = failed ? 1 : 0;
 
                 v2::map(ex, v2::vec(W.data() + bid * n, nn), [](T x) -> real_t {
-                    if constexpr (detail::is_complex<T>::value) return x.real();
+                    if constexpr (v2::Arith<T>::is_complex) return x.real();
                     else return x;
                 }, d);
             };
