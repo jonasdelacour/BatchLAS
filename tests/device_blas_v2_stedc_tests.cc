@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// stedc-private v2 helpers (src/ops/syev/stedc/stedc_v2.hh: group_sync, uniform, fold,
-// prod_scaled, sqrt_scaled) against host references. The shared ops the stedc kernels use
+// stedc-private v2 helpers (src/ops/syev/stedc/stedc_v2.hh: uniform, fold) and the core ops that
+// replaced its copies (prod_scaled, sqrt_scaled, the work-group sync<scope::Group>(ex, Mem::Global)
+// stedc uses as its barrier) against host references. The shared ops the stedc kernels use
 // (RtGroup, nrm2<alg::Blue>, rot, allreduce, for_each_owned_2d, ...) are covered by
 // device_blas_v2_tests. Executors: RtGroup at a non-power-of-two width (96) and at the 1024
 // ceiling, WorkGroup<128>, Partition<8> (lockstep), SgpPartition<8, Masked>, Thread.
@@ -8,8 +9,8 @@
 // bit-identical to its representative, folds over sub-views with an offset (tail, then head),
 // an all-negative max fold (the identity), the owner mapping fold relies on (no barrier after
 // an owned write), scaled products leaving the floating range where the naive product must
-// fail, uniform on a bool and on a lane-dependent value, group_sync ordering local and global
-// memory, output slots pre-poisoned.
+// fail, uniform on a bool and on a lane-dependent value, the work-group barrier ordering local
+// and global memory, output slots pre-poisoned.
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -189,13 +190,13 @@ TYPED_TEST(DeviceBlasV2StedcTest, ScaledProductLeavesTheFloatingRange) {
         int* expo = dev.up(std::vector<int>(kBatch, -7777));
         launch<Spec>(dev, kBatch, 0, [=](const auto& ex, int b, unsigned char*) {
             const T* fb = f + std::ptrdiff_t(b % ncase) * n;
-            const auto q = sv::prod_scaled(ex, nn[b], [&](int i) { return fb[i]; });
+            const auto q = v2::prod_scaled(ex, nn[b], [&](int i) { return fb[i]; });
             T acc = T(1);
             v2::for_each_owned(ex, nn[b], [&](int i) { acc *= fb[i]; });
             const T naive = v2::allreduce(ex, acc, sycl::multiplies<T>());
             if (ex.leader()) {
                 T* o = out + std::ptrdiff_t(b) * nslot;
-                o[0] = q.mant, o[1] = sv::sqrt_scaled(q), o[2] = naive, o[3] = T(v2::detail::size_of(ex));
+                o[0] = q.mant, o[1] = v2::sqrt_scaled(q), o[2] = naive, o[3] = T(v2::detail::size_of(ex));
                 expo[b] = q.expo;
             }
         });
@@ -297,7 +298,7 @@ TYPED_TEST(DeviceBlasV2StedcTest, FoldMatchesHost) {
     });
 }
 
-// ---- uniform, group_sync ---------------------------------------------------------------------
+// ---- uniform, the stedc barrier ----------------------------------------------------------------
 
 TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
     Dev dev;
@@ -321,7 +322,7 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
                 const int src = (lid + 33) % L;
                 buf[lid] = lid + 1 + b;
                 gbuf[std::ptrdiff_t(b) * L + lid] = 2 * lid + b;
-                sv::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 syn[std::ptrdiff_t(b) * L + lid] = buf[src];
                 gsyn[std::ptrdiff_t(b) * L + lid] = gbuf[std::ptrdiff_t(b) * L + src];
             }
@@ -339,17 +340,17 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
                     bad_s += gs[k] != ((l + 33) % L) + 1 + b;
                     bad_g += gg[k] != 2 * ((l + 33) % L) + b;
                 } else {
-                    bad_s += gs[k] != -7, bad_g += gg[k] != -7;  // no group_sync branch on a team
+                    bad_s += gs[k] != -7, bad_g += gg[k] != -7;  // no barrier branch on a team
                 }
             }
         EXPECT_EQ(bad_u, 0) << Spec::name << " uniform is the leader's value";
         EXPECT_EQ(bad_f, 0) << Spec::name << " uniform(bool) is the leader's flag";
-        EXPECT_EQ(bad_s, 0) << Spec::name << " group_sync orders the group's local memory";
-        EXPECT_EQ(bad_g, 0) << Spec::name << " group_sync orders the group's global memory";
+        EXPECT_EQ(bad_s, 0) << Spec::name << " sync<Group> orders the group's local memory";
+        EXPECT_EQ(bad_g, 0) << Spec::name << " sync<Group> orders the group's global memory";
     });
 }
 
-// Which executors group_sync and fold treat as a work-group.
+// Which executors stedc barriers and folds on as a work-group.
 static_assert(sv::is_group_v<v2::RtGroup<>> && sv::is_group_v<v2::WorkGroup<64>>);
 static_assert(!sv::is_group_v<v2::RtGroup<v2::Scope::Sub>> && !sv::is_group_v<v2::Partition<8>> &&
               !sv::is_group_v<v2::SgpPartition<8, true>> && !sv::is_group_v<v2::Thread>);

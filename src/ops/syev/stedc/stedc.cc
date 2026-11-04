@@ -217,7 +217,7 @@ void stedc_merge_step(Queue& ctx,
             perm_local[k] = perm_map(k, bid);
         });
 
-        stedc_v2::group_sync(ex);
+        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
         // LAPACK-style ABSOLUTE tolerance 8 eps max(|D|_inf, |z|_inf), before the Givens loop so proximity
         // deflation uses it too; a relative one under-deflates clustered small eigenvalues.
@@ -231,8 +231,8 @@ void stedc_merge_step(Queue& ctx,
         for (int j = 0; j < n - 1; j++) {
             if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
                 const T f = z(j + 1), g = z(j);
-                auto [c, s, r] = detail::lartg(f, g);
-                stedc_v2::group_sync(ex);
+                auto [c, s, r] = v2::lartg(f, g);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 if (ex.leader()) {
                     z(j) = T(0.0);
                     z(j + 1) = r;
@@ -243,11 +243,11 @@ void stedc_merge_step(Queue& ctx,
                     v2::rot(ex, v2::Givens<T>{c, s}, Qb.col(pj1), Qb.col(pj));
                 }
                 // The leader's z(j), z(j+1) must be visible before the next Givens pair reads z(j+1).
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
             }
         }
 
-        stedc_v2::group_sync(ex);
+        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
         //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
 
         v2::map(ex, absx, abs_of, d);
@@ -266,7 +266,7 @@ void stedc_merge_step(Queue& ctx,
             }
         });
 
-        stedc_v2::group_sync(ex);
+        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
         //Exclusive scan to determine the indices to keep
         batchlas::portable::joint_exclusive_scan(cta,
@@ -330,7 +330,7 @@ void stedc_merge_step(Queue& ctx,
                 const auto poles = v2::vec(eigenvalues.batch_item(bid));
                 const auto Qn = v2::mat(Q_bid);
                 v2::for_each_owned_2d<v2::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 v2::for_each_owned(ex, n, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // info_report is an atomic fetch_max: exactly the "did ANY root
@@ -347,7 +347,7 @@ void stedc_merge_step(Queue& ctx,
                                             1);
                     }
                 });
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
             });
         });
 
