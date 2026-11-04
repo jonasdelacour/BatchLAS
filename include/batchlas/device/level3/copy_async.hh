@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 global -> local copies that skip the registers (v22 design B.1): float 128x128 (4 B) and
-// wide v2 128x128 (8, 16 B). cp.async on sm_80+, a plain copy elsewhere.
+// Level 3 global -> local copies that skip the registers (v22 design B.1): 4, 8 or 16 B each.
 
 #include <sycl/sycl.hpp>
 
