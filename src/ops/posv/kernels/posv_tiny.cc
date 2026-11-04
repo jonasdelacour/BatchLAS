@@ -97,7 +97,7 @@ struct PosvTinyBody {
     const std::uint8_t* mask;          // the batch mask, null when unmasked
     sycl::local_accessor<R4, 1> slm;   // 2 phases x 2 parities x Mpw; one element when !Slm
 
-    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
+    BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks) BATCHLAS_REQD_SG_SIZE(32)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();

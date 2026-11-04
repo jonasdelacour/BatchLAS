@@ -186,7 +186,7 @@ struct Gemm128x128Body {
     sycl::local_accessor<T, 1> tile_a, tile_b;
     const std::uint8_t* mask;  // the batch mask; null unmasked
 
-    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Threads, kMinGroupsPerCu)
     BATCHLAS_GEMM_REQD_WG(Threads)
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
@@ -576,7 +576,7 @@ template <typename Body>
 struct Gemm128x128Inlined {
     Body body;
 
-    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Body::Threads, Body::kMinGroupsPerCu)
     BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);
@@ -587,7 +587,7 @@ template <typename Body>
 struct Gemm128x128Pipelined {
     Body body;
 
-    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Body::Threads, Body::kMinGroupsPerCu)
     BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);

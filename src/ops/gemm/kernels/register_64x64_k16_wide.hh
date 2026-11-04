@@ -881,7 +881,7 @@ struct GemmWide64Body {
     }
 
     // always_inline: left out of line (complex<float>), the body spilled behind a call.
-    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS_WITH_REQD_WG(Threads, kMinGroupsPerCu)
     BATCHLAS_WIDE_V2_REQD_WG
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;
