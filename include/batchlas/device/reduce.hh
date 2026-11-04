@@ -17,7 +17,6 @@
 
 namespace batchlas::device::inline v2 {
 
-// argmax ties, NaN handling (level1.hh argmax and argmax_merge share them).
 namespace tie {
 struct Lowest {};
 struct Highest {};
@@ -62,7 +61,7 @@ template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_xor(const Part& par
     }
 }
 
-// v of lane (lane + d); lanes past the end read an unspecified value.
+// v of lane (lane + d); past the end: unspecified.
 template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_down(const Part& part, T v, std::uint32_t d) {
     if constexpr (Arith<T>::is_complex) {
         using A = Arith<T>;
@@ -90,8 +89,7 @@ BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
     }
     return v;
 }
-// The same over a run-time width hi (a power of two, uniform): masks hi/2 .. lo (Down) or lo ..
-// hi/2 (Asc); the loop is not unrolled past what the compiler can prove.
+// The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2).
 template <class Order = bfly::Down, class Part, class T, class Op>
 BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op, int lo, int hi) {
     if constexpr (std::is_same_v<Order, bfly::Down>) {
@@ -140,7 +138,6 @@ BATCHLAS_DLA_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& 
     else return a.index >= b.index ? a : b;
 }
 
-// The merge as an op for butterfly / allreduce.
 template <class Tie = tie::Lowest, class NaN = nan::First> struct ArgMaxMerge {
     template <class R> BATCHLAS_DLA_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
         return argmax_merge<Tie, NaN>(a, b);

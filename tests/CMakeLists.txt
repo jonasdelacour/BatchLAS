@@ -55,6 +55,7 @@ set(TEST_TARGETS
     device_core_level3_tests
     device_core_reduce_tests
     device_core_scalar_tests
+    device_core_tier_tests
     device_core_view_tests
     error_model_tests
     gemm_candidates_tests
@@ -273,6 +274,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_core_level3_tests
     device_core_reduce_tests
     device_core_scalar_tests
+    device_core_tier_tests
     device_core_view_tests
     gemm_candidates_tests
     gemm_mask_tests

@@ -60,8 +60,8 @@ or single headers; kernels are compiled with `-fsycl`.
 | Header (`include/batchlas/device/`) | Provides |
 | --- | --- |
 | `../device.hh` | umbrella (every header below except `sg_partition.hh` and `detail/`) |
-| `core.hh` | inline macros, extents, `Scope`, layout tags, `unroll::*`, `Range`, `alg::*`, scalar tags, `Scratch` |
-| `arith.hh` | `Arith<T>` (real, `std::complex`, any POD `{re, im}` such as `Cx<R>`), `arith::*` policies, `arith_t`, `abs1`, `abs2`, `conj`, `select`, `tag_mul`, `store` |
+| `core.hh` | inline macros, extents, `Scope`, layout tags (`OnePerItem`), `unroll::*`, `Range`, `alg::*`, scalar tags, `MaybeZero`, `None` / `NoOp`, `static_for`, `static_extent_v`, `op::FMax` / `FMin`, `Scratch` |
+| `arith.hh` | `Arith<T>` (real, `std::complex`, any POD `{re, im}` such as `Cx<R>`), `arith::*` policies, `arith_t`, `arith::FmaSplit` (`ops_arith_t`), `abs1`, `abs2`, `abs_inf`, `conj`, `conj_if`, `force_real`, `lift`, `by_parts`, `scale_real`, `div_real`, `sub_scale_real`, `select`, `tag_mul`, `tag_mac`, `store<Shape, Ops>` (`epi::Sum` default, `MacChain`, `MulMac`, `Linear`, `LinearNegZero`) |
 | `exec.hh` | `WorkGroup`, `Teams`, `SubGroup`, `Partition`, `Thread`, `RtGroup`, `sync` |
 | `grid.hh` | `Grid2D`, `batched2d_shape`, `batched2d` host launcher |
 | `operand.hh` | `Vec`, `Mat`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill` |
@@ -69,13 +69,18 @@ or single headers; kernels are compiled with `-fsycl`.
 | `level1.hh` | `for_each_owned[_2d]`, `axpy`, `scal`, `copy`, `swap`, `dot[c]`, `dotN<K>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax`, `argmax`, `find_first` |
 | `level2.hh` | `gemv`, `symv` / `hemv`, `ger[u,c]`, `trsv` / `trmv` (Thread) |
 | `lapack_aux.hh` | `lacpy`, `laset`, `mirror`, `laswp`, `rot`, `lasr`, `larfg`, `larf` |
-| `scalar.hh` | `Givens`, `lartg`, `lae2`, `laev2`, `las2`, `wilkinson_shift`, `larfg_scalars` |
+| `scalar.hh` | `Givens`, `lartg`, `lae2`, `laev2`, `las2`, `wilkinson_shift`, `eig2x2_nearest`, `larfg_scalars`, `lamch<C>`, `qnan`, `phase`, `sign_nonzero_real`, `SafeRecip` |
+| `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>`, `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `allreduce(ex, Scratch, v, op)`, `tie::*`, `nan::*` |
+| `view.hh` | `row` / `col` / `window`, `flip<axis::*>`, `conj_view`, `conj_if`, `op_view<TR>`, `herm_view<UL>`, `sym_view<UL>`, `PackedTri<UL, order::*>`, `packed`, `Packet<T, Bytes>`, `fn_vec`, `mapped`, `slice`, `gathered` |
+| `level3.hh` | register tier: `gemm<TA, TB, Shape, Ops>`, `gemm_sub<Ops>`, `trsm<SD, UL, TR, DG, Ops>` on `Tile` operands |
+| `tier.hh` | `tier::Reg` / `Cta` / `Blocked` / `upto` / `list`, `tier_info`, `tiers_t`, `resolve_tier_t`, `DeviceLimits`, `with_tier` (host) |
+| `workspace.hh` | `WorkspaceSize`, `Workspace`, `Plan` (constexpr bump carve), `carve_local`, `carve_global`, `global_slice` |
 | `sg_partition.hh` | `SgpPartition`, `wrap`: `Partition` over `detail/sg_partition/` (`SubGroupPartition`) |
 | `detail/` | `sg_partition/` (per-backend sub-group partitions), `kernel_attrs.hh` (`BATCHLAS_REQD_SG_SIZE`, `BATCHLAS_LAUNCH_BOUNDS`, `BATCHLAS_UNROLL_FULL`), `sscp_target.hh` (`sycl_impl::on_ptx()`) |
 
 Shared private ops in `src/kernels/common/`: `dla_v2_potf2.hh` (`potf2_lower`), `dla_v2_jacobi.hh` (`sym_schur2`), `dla_v2_larft.hh`,
 `dla_v2_sparse.hh`. Tests: `tests/device_blas_v2_tests.cc` and one `device_blas_v2_<unit>_tests.cc` per
-migrated family.
+migrated family; `tests/device_core_<header>_tests.cc` for the v2.2 core additions.
 
 ## Device LA v2: the SASS-parity gate
 

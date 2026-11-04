@@ -124,9 +124,7 @@ template <int K> struct ReduceN {};
 using Reduce = ReduceN<1>;
 }  // namespace op
 
-// ---- v2.2 vocabulary (design A.2 core.hh) ---------------------------------------------------
-// A scalar whose zero-ness was decided on the host (alpha == 0, beta == 0 from the BLAS value):
-// an epilogue never reads y when beta's flag is set, without comparing a value in the kernel.
+// A scalar with a host-decided zero flag: an epilogue never reads y when beta's flag is set.
 template <class T> struct MaybeZero {
     T v;
     bool zero;
@@ -134,8 +132,7 @@ template <class T> struct MaybeZero {
 template <class T> MaybeZero(T, bool) -> MaybeZero<T>;
 template <class T> inline constexpr bool is_scalar_tag_v<MaybeZero<T>> = true;
 
-// The absent operand / callback: an op taking an optional tau, phase or per-step hook takes
-// None and compiles the step out (if constexpr (is_none_v<X>)).
+// The absent operand / callback: an op compiles the step out (if constexpr (is_none_v<X>)).
 struct None {};
 struct NoOp {
     template <class... A> BATCHLAS_DLA_INLINE constexpr void operator()(A&&...) const {}
@@ -145,8 +142,7 @@ template <class X> inline constexpr bool is_none_v = std::is_same_v<std::remove_
 // Element (row) i owned by work-item i: no stride, one element per item (i < size).
 struct OnePerItem {};
 
-// f(std::integral_constant<int, I>{}) for I = 0 .. N-1, unrolled by construction (every I is a
-// constant expression inside f, so register arrays indexed by it stay in registers).
+// f(std::integral_constant<int, I>{}) for I = 0 .. N-1: every I a constant expression in f.
 template <int N, class F> BATCHLAS_DLA_INLINE constexpr void static_for(F&& f) {
     [&]<int... I>(std::integer_sequence<int, I...>) { (f(std::integral_constant<int, I>{}), ...); }(std::make_integer_sequence<int, N>{});
 }

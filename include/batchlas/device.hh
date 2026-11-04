@@ -12,3 +12,8 @@
 #include <batchlas/device/lapack_aux.hh>
 #include <batchlas/device/interop.hh>
 #include <batchlas/device/grid.hh>
+#include <batchlas/device/reduce.hh>
+#include <batchlas/device/view.hh>
+#include <batchlas/device/level3.hh>
+#include <batchlas/device/workspace.hh>
+#include <batchlas/device/tier.hh>
