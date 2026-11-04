@@ -24,7 +24,7 @@
 #include <src/ops/syev/vendor.hh>
 #include <src/ops/syev/choice.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syevx/syevx_v2.hh>
+#include <batchlas/device.hh>
 #include <optional>
 #include <string>
 
@@ -659,7 +659,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const auto x = Xb.col(c), ax = AXb.col(c), r = Rb.col(c);
                             float_type pr = 0, px = 0, pax = 0;
                             v2::for_each_owned(tm, nn, [&](int i) {
-                                const T rv = v2::syevx::sub_scaled(ax(i), lam, x(i));
+                                const T rv = v2::sub_scale_real(ax(i), lam, x(i));
                                 r(i) = rv;
                                 pr += v2::abs2(rv);
                                 px += v2::abs2(x(i));
@@ -773,7 +773,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     if (want_eigenvectors && update_best[0] != 0) {
                         // Where the largest-first presentation happens: slot i of the snapshot
                         // takes column block_vectors-1-i of X, folded into this copy.
-                        // A flat loop, not lacpy(cols_flipped(...)): that costs f64 REG 48 -> 52,
+                        // A flat loop, not lacpy(flip<axis::Cols>(...)): that costs f64 REG 48 -> 52,
                         // at WG 256 one resident group fewer per SM (5 -> 4).
                         auto* blockXbest = Xbest_data + bid * (n * neigs);
                         for (int i = int(ex.lid()); i < int(n * neigs); i += ex.width()) {
@@ -1215,7 +1215,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             if (masked && !mk[bid]) return;  // I1
                             const auto Xb = v2::mat(Xptr + bid * X_stride, int(nn), int(k), int(X_ld));
                             v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(
-                                ex, v2::syevx::cols_flipped(Xb.sub(0, int(k - ncols), int(nn), int(ncols)), true),
+                                ex, v2::flip<v2::axis::Cols>(Xb.sub(0, int(k - ncols), int(nn), int(ncols)), true),
                                 v2::mat(Vptr + bid * V_stride, int(nn), int(ncols), int(V_ld)));
                         });
                 });

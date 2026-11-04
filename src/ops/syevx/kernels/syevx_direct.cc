@@ -19,7 +19,8 @@
 #include <batchlas/blas/functions/syev.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syevx/syevx_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/syevx.hh>
 
 namespace batchlas {
 
@@ -148,47 +149,17 @@ Event syevx_direct(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
                     namespace v2 = batchlas::device;
-                    namespace sx = batchlas::device::syevx;
                     const v2::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
                     const int nn = static_cast<int>(n);
-                    const auto lam = v2::vec(lam_ptr + bid * n, nn);
-
-                    int64_t first = range_il;
-                    int64_t count = range_count;
-                    if (value_range) {
-                        // count_le is upper_bound (`<=`, stebz's Sturm count): see syevx_v2.hh.
-                        if (ex.leader()) {
-                            const int64_t c_lo = sx::count_le(lam, vl);
-                            const int64_t c_hi = sx::count_le(lam, vu);
-                            block[0] = c_lo;
-                            // Clamped anyway: m[b] is a loop bound downstream.
-                            block[1] = (c_hi > c_lo) ? (c_hi - c_lo) : int64_t(0);
-                        }
-                        v2::sync(ex, v2::Mem::Global);  // as sycl::group_barrier: every space
-                        first = block[0];
-                        count = block[1];
-                    }
-
-                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept.
-                    const int write = static_cast<int>((count < capacity) ? count : capacity);
-                    const int f0 = static_cast<int>(first);
-                    v2::copy(ex, sx::flipped(lam.tail(f0).head(write), reverse),
-                             v2::vec(w_ptr + bid * capacity, write));
-
-                    if (dst_ptr != nullptr) {
-                        const auto Q = v2::mat(src_ptr + bid * n * n, nn, nn, nn);
-                        const auto Vb = v2::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols),
-                                                static_cast<int>(dst_ld));
-                        // alg::Flat: one int32 division per element (legacy: int64 % and /).
-                        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(
-                            ex, sx::cols_flipped(Q.sub(0, f0, nn, write), reverse), Vb.sub(0, 0, nn, write));
-                        // Columns [write, dst_cols) are EXACTLY zero, as on the
-                        // DirectSubset path; unused W slots are deliberately untouched.
-                        // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
-                        v2::laset<v2::Part::Full, v2::alg::Flat>(ex, v2::Zero{}, v2::Zero{}, Vb.sub(0, write, nn, static_cast<int>(dst_cols) - write));
-                    }
+                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;
+                    // V's columns [write, dst_cols) are exactly zero, as on the DirectSubset path.
+                    const int64_t count = v2::syevx_select(
+                        ex, v2::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
+                        reverse, block, v2::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
+                        v2::mat(src_ptr + bid * n * n, nn, nn, nn),
+                        v2::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols), static_cast<int>(dst_ld)));
 
                     if (m_ptr != nullptr && ex.leader()) {
                         // The TRUE count: m[b] > capacity is the truncation signal.

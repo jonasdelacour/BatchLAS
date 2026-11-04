@@ -2,6 +2,7 @@
 
 #include <src/ops/sygvd/sygvd_native.hh>
 
+#include <batchlas/device/arith.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
 
@@ -44,7 +45,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
             const int c = static_cast<int>(e / static_cast<std::size_t>(n));
             if (lower ? r < c : r > c) return;
             bp[static_cast<std::ptrdiff_t>(b) * stride + static_cast<std::ptrdiff_t>(c) * ldb + r] =
-                sycl_device::dev_from_real<D>(R(r == c ? 1 : 0));
+                batchlas::device::lift<D>(R(r == c ? 1 : 0));
         });
     });
     return ctx.get_event();
