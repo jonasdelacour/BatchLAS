@@ -14,12 +14,14 @@
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
 #include <src/sycl/device_scalar.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::potrf_native {
 
@@ -152,7 +154,7 @@ BATCHLAS_UNROLL_FULL
 
             if (ok) {
                 const R dkk = sycl::sqrt(d);
-                const R rs = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
+                const R rs = ::batchlas::sycl_device::inv_sqrt(d);  // `ok`: d > 0, not NaN
                 if (row == j + i) {
                     sAl[row + static_cast<std::ptrdiff_t>(i) * slda] =
                         sycl_device::dev_from_real<D>(dkk);

@@ -17,12 +17,14 @@
 //   evidence: docs/perf/potrf.md#register-gate
 
 #include <src/sycl/device_scalar.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas::potrf_native {
 
@@ -75,7 +77,7 @@ BATCHLAS_UNROLL_FULL
         }
 
         const R dkk = active ? sycl::sqrt(akk) : R(1);
-        const R r = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
+        const R r = ::batchlas::sycl_device::inv_sqrt(active ? akk : R(1), dkk);
 
         if (active) {
             if (lane == k) {

@@ -13,11 +13,13 @@
 #include <src/queue.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 #include <complex>
 #include <limits>
 #include <numeric>
+#include <type_traits>
 
 namespace batchlas {
 
@@ -334,7 +336,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                     tt = sycl::copysign(Real(1), tau)
                                        / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
                                 }
-                                c_rot = Real(1) / sycl::sqrt(Real(1) + tt * tt);
+                                // a = 1 + t^2, |t| <= 1 or NaN: never 0, denormal or inf, so no inf guard.
+                                c_rot = ::batchlas::sycl_device::inv_sqrt<::batchlas::sycl_device::InvSqrtEdge::FiniteGeOne>(Real(1) + tt * tt);
                                 s_rot = tt * c_rot;
                                 // A rotation that rounds to the identity would
                                 // never annihilate a_pq, so counting it would

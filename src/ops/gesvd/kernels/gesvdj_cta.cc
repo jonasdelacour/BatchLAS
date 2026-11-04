@@ -14,6 +14,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
@@ -21,6 +22,7 @@
 #include <complex>
 #include <limits>
 #include <numeric>
+#include <type_traits>
 
 namespace batchlas {
 
@@ -501,7 +503,7 @@ BATCHLAS_UNROLL_FULL
                                     tt = sycl::copysign(Real(1), tau)
                                        / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
                                 }
-                                c_rot = Real(1) / sycl::sqrt(Real(1) + tt * tt);
+                                c_rot = ::batchlas::sycl_device::inv_sqrt(Real(1) + tt * tt);
                                 s_rot = tt * c_rot;
                                 // An identity rotation must not count, or every
                                 // problem burns all max_sweeps.
@@ -730,7 +732,7 @@ BATCHLAS_UNROLL_FULL
                                 }
                                 const Real nrm2 = part_sum_g(part, part_n2);
                                 if (nrm2 > accept_tol) {
-                                    const Real inv_nr = Real(1) / sycl::sqrt(nrm2);
+                                    const Real inv_nr = ::batchlas::sycl_device::inv_sqrt(nrm2);
 BATCHLAS_UNROLL_FULL
                                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                         const int32_t row = lane + rr * static_cast<int32_t>(P);

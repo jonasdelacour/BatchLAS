@@ -94,9 +94,11 @@ public:
             // family: cta
             "src/ops/potrf/kernels/potrf_cta.cc",
             "src/ops/potrf/kernels/potrf_cta_device.hh",
+            "src/sycl/inv_sqrt.hh",
             // family: lpanel
             "src/ops/potrf/kernels/potrf_lpanel.cc",
             "src/ops/potrf/kernels/potrf_lpanel_device.hh",
+            "src/sycl/inv_sqrt.hh",
             // family: blocked
             "src/ops/potrf/kernels/potrf_blocked.cc",
             // common
