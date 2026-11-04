@@ -18,6 +18,7 @@
 #include <type_traits>
 
 #include <batchlas/device/operand.hh>
+#include <batchlas/device/reduce.hh>
 #include <batchlas/device/scalar.hh>
 #include <batchlas/device/sg_partition.hh>
 
@@ -48,13 +49,6 @@ struct FMax {
 struct FMin {
     template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
 };
-
-// Value of lane (lid ^ m) on a Partition / SubGroup; complex moves as two real shuffles.
-template <class Ex, class T> BATCHLAS_DLA_INLINE T shuffle_xor(const Ex& ex, T v, std::uint32_t m) {
-    using A = Arith<T>;
-    if constexpr (A::is_complex) return A::make(detail::xor_shuffle(ex.part, A::re(v), m), detail::xor_shuffle(ex.part, A::im(v), m));
-    else return detail::xor_shuffle(ex.part, v, m);
-}
 
 // Reduce-scatter of K values over the P = Ex::size lanes (K | P, both powers of two): lane l
 // returns the sum over all lanes of x[l / (P / K)]. log2(K) halving steps over xor masks

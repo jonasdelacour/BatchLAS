@@ -12,6 +12,7 @@
 #include <utility>
 
 #include <batchlas/device/operand.hh>
+#include <batchlas/device/reduce.hh>
 #include <batchlas/device/scalar.hh>
 
 namespace batchlas::device::inline v2 {
@@ -604,28 +605,15 @@ BATCHLAS_DLA_INLINE int find_first(const Ex& ex, const X& x, P&& pred) {
     return find_first<S>(ex, x.size(), [&](int i) { return pred(x(i)); });
 }
 
-// argmax over i of key(x(i)): {index, key}. Tie: tie::Lowest | tie::Highest index among equal
+// argmax over i of key(x(i)): {index, key} (ArgMax, tie::, nan::: reduce.hh). Tie: tie::Lowest | tie::Highest index among equal
 // keys. NaN: nan::First (the lowest index holding a NaN key wins, as iamax), nan::Skip (NaN keys
 // never win; all NaN -> {-1, -inf-like}). Key: key::Abs1 (|re| + |im|, BLAS), key::Abs (hypot),
 // key::Real (re). Uniform result; n <= 0 -> index -1.
-namespace tie {
-struct Lowest {};
-struct Highest {};
-}  // namespace tie
-namespace nan {
-struct First {};
-struct Skip {};
-struct Propagate {};
-}  // namespace nan
 namespace key {
 struct Abs1 {};
 struct Abs {};
 struct Real {};
 }  // namespace key
-template <class R> struct ArgMax {
-    int index;
-    R value;
-};
 template <class Tie = tie::Lowest, class NaN = nan::First, class Key = key::Abs1, Scope S = Scope::Auto, class Ex, class X>
 BATCHLAS_DLA_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x) {
     using T = elem_t<X>;

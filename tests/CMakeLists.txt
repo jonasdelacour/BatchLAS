@@ -52,6 +52,7 @@ set(TEST_TARGETS
     device_blas_v2_tridiag-stebz-stein_tests
     device_blas_v2_trsm_tests
     device_core_arith_tests
+    device_core_reduce_tests
     device_core_scalar_tests
     error_model_tests
     gemm_candidates_tests
@@ -267,6 +268,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_blas_v2_tridiag-stebz-stein_tests
     device_blas_v2_trsm_tests
     device_core_arith_tests
+    device_core_reduce_tests
     device_core_scalar_tests
     gemm_candidates_tests
     gemm_mask_tests
