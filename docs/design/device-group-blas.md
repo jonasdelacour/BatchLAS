@@ -7,6 +7,9 @@ Function templates in `namespace batchlas::device` (`#include <batchlas/blas/dev
 There is no queue, event or batching here: the kernel picks the batch item (`view.batch_item(b)`) and
 synchronises. The API reference is the @ref api_device_blas group.
 
+> **Note:** the LAPACK-like kernels are written in the compile-time v2 layer, @ref design_device_la_v2,
+> which says why this API costs performance in hot loops. New in-kernel code uses v2.
+
 ## Device group BLAS: what is provided
 
 Levels 1-3 except `hemm`, triangular solves, banded and packed formats (list: @ref api_device_blas).
