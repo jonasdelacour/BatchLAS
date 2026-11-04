@@ -10,9 +10,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
-#include <src/ops/gemm/kernels/register_tiled_common.hh>
+#include <src/ops/gemm/kernels/register_tiled_common.hh>  // level3/{copy_async,packet}.hh
 
 #include <src/linalg-impl.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -29,6 +27,11 @@
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::Vec4;
 
 namespace wide_scalar {
 

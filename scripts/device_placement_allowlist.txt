@@ -5,7 +5,6 @@ duplicate include/batchlas/device/arith.hh div_real/src/ops/sygst/sygst_v2.hh
 duplicate include/batchlas/device/arith.hh lift/src/ops/syev/kernels/syev_drivers_v2.hh
 duplicate include/batchlas/device/arith.hh scale_real/src/ops/sygst/sygst_v2.hh
 duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand.hh
-duplicate include/batchlas/device/core.hh static_for/src/ops/gemm/gemm-components_v2.hh
 duplicate include/batchlas/device/exec.hh butterfly/include/batchlas/device/reduce.hh
 duplicate include/batchlas/device/level1.hh dotc/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate include/batchlas/device/level1.hh for_each_owned/src/ops/gesvd/gesvd-ormbr_v2.hh
@@ -23,7 +22,6 @@ duplicate include/batchlas/device/view.hh fn_vec/src/ops/syev/sytrd/sb2st_v2.hh
 duplicate include/batchlas/device/view.hh slice/src/ops/gesvd/bdsdc/bdsdc_v2.hh
 duplicate src/kernels/common/elementwise_glue_v2.hh conj_if/include/batchlas/device/view.hh
 duplicate src/kernels/common/elementwise_glue_v2.hh real_only/src/ops/sygst/sygst_v2.hh
-duplicate src/ops/gemm/gemm-components_v2.hh static_for/include/batchlas/device/core.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/include/batchlas/device/view.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh item_n/src/ops/gesvd/gesvd-ormbr_v2.hh

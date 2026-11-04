@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-
-// Global -> local copies that skip the registers: float 128x128 (4 B) and wide v2 128x128 (8, 16 B).
+// Level 3 global -> local copies that skip the registers (v22 design B.1): float 128x128 (4 B) and
+// wide v2 128x128 (8, 16 B). cp.async on sm_80+, a plain copy elsewhere.
 
 #include <sycl/sycl.hpp>
 
 #include <cstdint>
-
-namespace batchlas::sycl_gemm {
 
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__) && defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
 #define BATCHLAS_GEMM_CP_ASYNC 1
 #else
 #define BATCHLAS_GEMM_CP_ASYNC 0
 #endif
+
+namespace batchlas::device::inline v2::l3 {
 
 // One Bytes-wide copy (4, 8 or 16; src and dst aligned to Bytes): the first src_bytes are read and
 // the rest zero-filled (0: nothing is read, src may be out of bounds). cp.async on sm_80+
@@ -53,4 +53,4 @@ inline void copy_async_wait() {
 #endif
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::device::inline v2::l3

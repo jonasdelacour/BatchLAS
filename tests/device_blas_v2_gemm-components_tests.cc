@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The gemm-private components (src/ops/gemm/gemm-components_v2.hh) against host references: each
+// The level 3 components (include/batchlas/device/level3/) against host references: each
 // test composes them into the kernel shape a tuned gemm uses. Core ops (Tile, Frag, fill, load,
 // arith policies, executors) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld (m + 3, k + 5, 16-aligned
@@ -21,14 +21,18 @@
 #include <vector>
 
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/ops/gemm/gemm-components_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/pipeline.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
 using batchlas::verify::Check;
 
 namespace {
@@ -365,14 +369,14 @@ void run_tiled_general(Dev& dev, const Shape& s, T alpha, T beta, const char* wh
         T sum = T(0);
         for (int kk0 = 0; kk0 < k; kk0 += Tile) {
             ta[local_row * Tile + local_col] =
-                (row < m && kk0 + local_col < k) ? sycl_gemm::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
+                (row < m && kk0 + local_col < k) ? gc::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
             tb[local_row * Tile + local_col] =
-                (col < n && kk0 + local_row < k) ? sycl_gemm::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
+                (col < n && kk0 + local_row < k) ? gc::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
             ex.barrier();
-            gc::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
+            v2::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
             ex.barrier();
         }
-        if (row < m && col < n) sycl_gemm::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
+        if (row < m && col < n) gc::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
     });
     check_gemm(s, OpA, OpB, alpha, beta, hA, hB, hC, dev.down(C, hC.size()), sa, sb, sc, where);
 }

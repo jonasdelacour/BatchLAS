@@ -22,14 +22,17 @@
 #include <type_traits>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/gemm-components_v2.hh>
 
 namespace batchlas::sycl_gemm_small {
 
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
 
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
@@ -178,7 +181,7 @@ Event launch_small_tiled(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
-    using V4 = sycl_gemm::Vec4<T>;
+    using V4 = gc::Vec4<T>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned

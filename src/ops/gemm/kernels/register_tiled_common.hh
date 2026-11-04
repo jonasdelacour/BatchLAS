@@ -2,22 +2,27 @@
 #pragma once
 #include <cstddef>
 
-#include <src/ops/gemm/kernels/accessors.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
-#include <src/ops/gemm/kernels/load_policies.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/copy_async.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/pipeline.hh>
+#include <batchlas/device/level3/stage.hh>
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
 
-#include <src/ops/gemm/gemm-components_v2.hh>
 #include <sycl/sycl.hpp>
 #include <utility>
 
 namespace batchlas::sycl_gemm {
 
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
+using batchlas::device::l3::supports_aligned_packet_loads;
+using batchlas::device::l3::supports_packet_v;
 
 template <int Count, typename Fn, std::size_t... I>
 inline void static_for_impl(Fn&& fn, std::index_sequence<I...>) {

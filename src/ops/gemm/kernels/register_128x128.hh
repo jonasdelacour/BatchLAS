@@ -19,23 +19,29 @@
 // evidence: docs/perf/gemm.md#the-128x128-float-kernel
 // evidence: docs/perf/gemm.md#gemm-the-128x128-kernel-in-every-real-transpose-form
 
-#include <src/ops/gemm/kernels/accessors.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/copy_async.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/pipeline.hh>
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <src/ops/gemm/gemm-components_v2.hh>
 #include <sycl/sycl.hpp>
 
 namespace batchlas::sycl_gemm {
 
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::Vec4;
 
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 class GemmRegister128x128Kernel;
