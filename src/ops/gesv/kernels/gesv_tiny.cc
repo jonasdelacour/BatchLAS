@@ -25,7 +25,7 @@
 #include <src/util/template-instantiations.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/ops/gesv/gesv_v2.hh>
 
 #include <batchlas/error.hh>

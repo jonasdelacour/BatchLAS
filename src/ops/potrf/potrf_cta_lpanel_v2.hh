@@ -18,7 +18,7 @@
 //   herk_tiles, TriTilePrefix C := C - A A^H on the lower triangle in register tiles
 //   frag_load_row_herm_lower / frag_store_row_herm_lower / gemv_n_slm_bcast   LPANEL row ops
 
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <src/sycl/inv_sqrt.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 

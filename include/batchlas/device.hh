@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2: zero-overhead in-kernel linear algebra.
+// Device LA (batchlas::device, inline namespace v2): zero-overhead in-kernel linear algebra.
 
 #include <batchlas/device/core.hh>
+#include <batchlas/device/arith.hh>
 #include <batchlas/device/scalar.hh>
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/operand.hh>

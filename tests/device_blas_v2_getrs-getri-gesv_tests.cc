@@ -24,8 +24,8 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/arith.hh>
 #include <src/ops/gesv/gesv_v2.hh>
 #include <src/ops/getri/getri_v2.hh>
 #include <src/ops/getrs/getrs_v2.hh>

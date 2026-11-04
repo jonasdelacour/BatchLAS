@@ -6,7 +6,7 @@
 #include <src/ops/geqrf/geqrf_native.hh>
 #include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
 #include <src/kernels/common/tiny_device.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>

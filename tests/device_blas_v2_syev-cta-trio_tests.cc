@@ -26,7 +26,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/ops/syev/kernels/syev_drivers_v2.hh>
 #include <src/ops/syev/steqr/steqr_v2.hh>
 #include <src/ops/syev/sytrd/sytrd_v2.hh>

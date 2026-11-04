@@ -19,7 +19,7 @@
 #include <vector>
 
 #include <batchlas/device.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <src/kernels/common/dla_v2_sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>

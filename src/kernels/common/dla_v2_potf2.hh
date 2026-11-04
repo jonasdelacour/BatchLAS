@@ -5,8 +5,8 @@
 // update is sycl_device::dev_mul's explicit fma (bit-identity with both kernels' history).
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 
-#include <src/kernels/common/dla_v2_partition.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/arith.hh>
 #include <src/kernels/common/tiny_device.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>

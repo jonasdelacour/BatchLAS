@@ -2,7 +2,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/device.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
 #include <src/math-helpers.hh>

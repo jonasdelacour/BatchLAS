@@ -18,7 +18,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <batchlas/device.hh>
 #include <src/ops/syev/kernels/syev_drivers_v2.hh>
 

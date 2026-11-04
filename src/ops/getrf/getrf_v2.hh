@@ -9,7 +9,7 @@
 // is_zero / isfinite for arith::Fma). evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
 
 #include <src/ops/getrf/getrf_cta_device.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 

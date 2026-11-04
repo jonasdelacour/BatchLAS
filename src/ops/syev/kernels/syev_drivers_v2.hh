@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include <batchlas/device.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 
 namespace batchlas::syev_v2 {
 

@@ -19,7 +19,7 @@
 #include <sycl/sycl.hpp>
 
 #include <batchlas/device.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 
 namespace batchlas::sycl_gemv::dla {
 

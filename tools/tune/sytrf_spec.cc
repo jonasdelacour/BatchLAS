@@ -96,6 +96,7 @@ public:
         // kernel-sources-begin
         return {
             "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "src/sycl/device_scalar.hh",
             "include/batchlas/util/group-collectives.hh",
             // family: vendor

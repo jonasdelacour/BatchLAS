@@ -98,6 +98,7 @@ public:
         // kernel-sources-begin
         return {
             "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "src/ops/sygvd/choice.hh",
             // family: compose
             "src/ops/sygvd/kernels/sygvd_native.cc",

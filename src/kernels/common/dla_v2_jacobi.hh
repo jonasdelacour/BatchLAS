@@ -19,7 +19,7 @@
 
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/scalar.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 
 namespace batchlas::device::inline v2 {
 

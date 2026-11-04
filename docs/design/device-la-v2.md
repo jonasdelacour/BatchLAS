@@ -53,21 +53,27 @@ library CALLs), address-space loss (0 generic LD/ST), spills (LMEM 0) and `reqd_
 
 ## Device LA v2: API map
 
+Namespace `batchlas::device` (`inline namespace v2`: the mangled names of `batchlas::device::v2`, so a
+kernel's symbols and SASS do not depend on the spelling). Include the umbrella `<batchlas/device.hh>`
+or single headers; kernels are compiled with `-fsycl`.
+
 | Header (`include/batchlas/device/`) | Provides |
 | --- | --- |
-| `dla.hh` | umbrella |
-| `core.hh` | inline macros, extents, `Scope`, layout tags, `unroll::*`, `Range`, `alg::*`, `arith::*`, scalar tags, `Scratch` |
+| `../device.hh` | umbrella (every header below except `sg_partition.hh` and `detail/`) |
+| `core.hh` | inline macros, extents, `Scope`, layout tags, `unroll::*`, `Range`, `alg::*`, scalar tags, `Scratch` |
+| `arith.hh` | `Arith<T>` (real, `std::complex`, any POD `{re, im}` such as `Cx<R>`), `arith::*` policies, `arith_t`, `abs1`, `abs2`, `conj`, `select`, `tag_mul`, `store` |
 | `exec.hh` | `WorkGroup`, `Teams`, `SubGroup`, `Partition`, `Thread`, `RtGroup`, `sync` |
 | `grid.hh` | `Grid2D`, `batched2d_shape`, `batched2d` host launcher |
 | `operand.hh` | `Vec`, `Mat`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill` |
 | `interop.hh` | `vec(VectorView)`, `mat(KernelMatrixView)`, `item(view, b)` |
 | `level1.hh` | `for_each_owned[_2d]`, `axpy`, `scal`, `copy`, `swap`, `dot[c]`, `dotN<K>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax`, `argmax`, `find_first` |
 | `level2.hh` | `gemv`, `symv` / `hemv`, `ger[u,c]`, `trsv` / `trmv` (Thread) |
-| `lapack.hh` | `lacpy`, `laset`, `mirror`, `laswp`, `rot`, `lasr`, `larfg`, `larf` |
+| `lapack_aux.hh` | `lacpy`, `laset`, `mirror`, `laswp`, `rot`, `lasr`, `larfg`, `larf` |
 | `scalar.hh` | `Givens`, `lartg`, `lae2`, `laev2`, `las2`, `wilkinson_shift`, `larfg_scalars` |
+| `sg_partition.hh` | `SgpPartition`, `wrap`: `Partition` over `detail/sg_partition/` (`SubGroupPartition`) |
+| `detail/` | `sg_partition/` (per-backend sub-group partitions), `kernel_attrs.hh` (`BATCHLAS_REQD_SG_SIZE`, `BATCHLAS_LAUNCH_BOUNDS`, `BATCHLAS_UNROLL_FULL`), `sscp_target.hh` (`sycl_impl::on_ptx()`) |
 
-Shared private ops in `src/kernels/common/`: `dla_v2_partition.hh` (`SgpPartition`), `dla_v2_scalar.hh`
-(`Arith<Cx>`), `dla_v2_potf2.hh` (`potf2_lower`), `dla_v2_jacobi.hh` (`sym_schur2`), `dla_v2_larft.hh`,
+Shared private ops in `src/kernels/common/`: `dla_v2_potf2.hh` (`potf2_lower`), `dla_v2_jacobi.hh` (`sym_schur2`), `dla_v2_larft.hh`,
 `dla_v2_sparse.hh`. Tests: `tests/device_blas_v2_tests.cc` and one `device_blas_v2_<unit>_tests.cc` per
 migrated family.
 

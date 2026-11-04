@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// v2::Partition over SubGroupPartition (all backends, Masked chunks); include/ cannot name src/.
+// v2::Partition over SubGroupPartition (detail/sg_partition/: all backends, Masked chunks).
 
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>

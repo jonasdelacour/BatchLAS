@@ -108,6 +108,7 @@ public:
             "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
             "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
             "include/batchlas/device/detail/sg_partition/sg_partition.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: tiny
             "src/ops/gesv/kernels/gesv_tiny.cc",
             // common

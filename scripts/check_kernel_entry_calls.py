@@ -21,7 +21,8 @@ inlines the callee whatever SemaSYCL picks as the body).
 
 What is scanned: src/ and include/ sources that include a v2 header DIRECTLY: batchlas/blas/
 device/v2/, the public tree batchlas/device/ or batchlas/device.hh, src/kernels/common/dla_v2_*,
-or a family's private <src/...*_v2.hh>; and every file under include/batchlas/device/ (v22
+or a family's private <src/...*_v2.hh> (batchlas/device/detail/ alone does not count: it holds the
+toolchain shims every kernel includes, kernel_attrs.hh and sg_partition/); and every file under include/batchlas/device/ (v22
 design A.0: the lapack/<routine>.hh bodies are public, so they are scanned like users). A file
 that only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
 Tests are not scanned: their codegen is not gated.
@@ -36,7 +37,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/|batchlas/device\.hh[>\"]|"
+V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/(?!detail/)|batchlas/device\.hh[>\"]|"
                         r"src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
 BODY_ATTR = "BATCHLAS_DLA_BODY"
 PUBLIC_TREE = os.path.join("include", "batchlas", "device") + os.sep
@@ -234,6 +235,7 @@ SCOPE_TEST = {
     "src/x/public_user.cc": "#include <batchlas/device/lapack/potrf.hh>\n",
     "src/x/umbrella_user.cc": "#include <batchlas/device.hh>\n",
     "src/x/not_device.cc": "#include <batchlas/device_info.hh>\n",
+    "src/x/attrs_only.cc": "#include <batchlas/device/detail/kernel_attrs.hh>\n",
     "include/batchlas/device/lapack/potrf.hh": "#include <batchlas/device/core.hh>\n",
     "include/batchlas/device/detail/no_include.hh": "int x;\n",
     "include/batchlas/blas/device/v2/core.hh": "#include <batchlas/blas/device/v2/scalar.hh>\n",

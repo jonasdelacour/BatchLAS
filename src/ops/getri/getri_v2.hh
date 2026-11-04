@@ -10,7 +10,7 @@
 #include <sycl/sycl.hpp>
 
 #include <batchlas/device.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 
 namespace batchlas::device::inline v2::lu {
 

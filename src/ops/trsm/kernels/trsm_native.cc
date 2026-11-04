@@ -15,7 +15,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 
 #include <sycl/sycl.hpp>
 

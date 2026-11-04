@@ -12,7 +12,7 @@
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/ops/getrf/getrf_v2.hh>
 #include <src/kernels/common/tiny_device.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>

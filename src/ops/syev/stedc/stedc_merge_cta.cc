@@ -9,7 +9,7 @@
 
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
-#include <src/kernels/common/dla_v2_partition.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/ops/syev/stedc/stedc_v2.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 

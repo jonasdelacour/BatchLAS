@@ -15,7 +15,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/impl.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <src/ops/potri/potri_v2.hh>
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>

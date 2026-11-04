@@ -21,7 +21,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sytrf_v2 {

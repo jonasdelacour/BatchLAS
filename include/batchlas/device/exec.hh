@@ -37,7 +37,7 @@ template <class T, class G, class Op> BATCHLAS_DLA_INLINE T sycl_reduce(const G&
 
 template <class Impl, class R> BATCHLAS_DLA_INLINE R xor_shuffle(const Impl& part, R v, std::uint32_t m) {
     if constexpr (sycl::is_group_v<Impl>) return batchlas::portable::permute_group_by_xor(part, v, m);
-    else return permute_group_by_xor(part, v, m);  // ADL: SubGroupPartition (src/kernels/common)
+    else return permute_group_by_xor(part, v, m);  // ADL: SubGroupPartition (detail/sg_partition/)
 }
 
 // xor butterfly over P lanes; every lane ends with the same value. O = bfly::Down: masks
@@ -173,9 +173,8 @@ template <int SG = 32> struct SubGroup {
 };
 
 // P consecutive lanes of a sub-group. Impl = sycl::sub_group is the built-in lockstep form
-// (all lanes of the sub-group reach every collective); for Masked chunks pass the src-side
-// SubGroupPartition<P, true> (src/kernels/common/dla_v2_partition.hh), which include/ cannot
-// name: sg_partition lives under src/ and pulls include/batchlas/device/detail/kernel_attrs.hh.
+// (all lanes of the sub-group reach every collective); for Masked chunks pass a
+// SubGroupPartition<P, true> (detail/sg_partition/; SgpPartition in sg_partition.hh).
 template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Partition {
     static_assert(detail::is_pow2(P), "v2::Partition: P must be a power of two");
     static_assert(!(Masked && std::is_same_v<Impl, sycl::sub_group>),
@@ -226,7 +225,7 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
             const auto base = static_cast<std::uint32_t>(part.get_local_linear_id()) & ~std::uint32_t(P - 1);
             return sycl::select_from_group(part, v, base + src);
         } else {
-            return select_from_group(part, v, src);  // ADL: SubGroupPartition (src/kernels/common)
+            return select_from_group(part, v, src);  // ADL: SubGroupPartition (detail/sg_partition/)
         }
     }
 };

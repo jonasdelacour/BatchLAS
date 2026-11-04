@@ -24,7 +24,8 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
+#include <src/sycl/device_scalar.hh>
 #include <src/ops/trsm/trsm_canonical.hh>
 #include <src/ops/trsm/trsm_v2.hh>
 #include <src/queue.hh>

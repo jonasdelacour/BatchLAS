@@ -6,7 +6,7 @@
 // is the tuned code moved behind a signature: same loops, pragmas, predicate order, helpers
 // (OperandAccessor, packet_load_aligned, LinearEpilogue, sycl_device) and arithmetic, so a kernel
 // built from them keeps its SASS. Shared vocabulary comes from v2 core: Tile, Frag, fill, load,
-// the arith policies (Ops tags; dla_v2_scalar.hh covers the POD Cx) and any executor with barrier().
+// the arith policies (Ops tags; arith.hh covers the POD Cx) and any executor with barrier().
 //   epilogue_store_fused    C := alpha acc + beta C with a host beta_zero flag
 //   outer_mac, mma_slab, dot_slab, gemv_t_frag   register micro-kernels
 //   stage_block, stage_block_packet, stage_block_packet_aligned, stage_storage   stagers
@@ -23,7 +23,7 @@
 #include <src/ops/gemm/kernels/accessors.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/ops/gemm/kernels/load_policies.hh>
-#include <src/kernels/common/dla_v2_scalar.hh>
+#include <batchlas/device/arith.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::sycl_gemm::components {

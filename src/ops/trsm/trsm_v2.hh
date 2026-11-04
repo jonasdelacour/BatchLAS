@@ -15,7 +15,7 @@ namespace batchlas::sycl_trsm::dla {
 
 namespace v2 = batchlas::device;
 
-// isfinite under Ar: core's Arith<sycl_device::Cx> (dla_v2_scalar.hh) has no isfinite.
+// isfinite under Ar: the POD-complex Arith (arith.hh) had no isfinite.
 template <class Ar, class T> BATCHLAS_DLA_INLINE bool finite(T a) {
     if constexpr (Ar::is_complex) return sycl::isfinite(Ar::re(a)) && sycl::isfinite(Ar::im(a));
     else return sycl::isfinite(a);
