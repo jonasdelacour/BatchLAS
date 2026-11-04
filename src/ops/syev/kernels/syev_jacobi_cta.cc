@@ -13,6 +13,7 @@
 #include <src/queue.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 #include <complex>
@@ -64,22 +65,6 @@ inline typename base_type<U>::type real_part_j(const U& x) {
     } else {
         return x;
     }
-}
-
-// 1 / sqrt(a): NVPTX folds a plain float `1 / sqrt(a)` into a bare rsqrt.approx, so float runs
-// rsqrt.approx from asm plus one Newton step, r = y + (y/2)(1 - a y^2). The caller's a = 1 + t^2
-// with |t| <= 1 (or NaN) is never 0, denormal or inf, so there is no edge-case guard.
-template <typename R>
-inline R syev_jacobi_inv_sqrt(R a) {
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<R, float>) {
-        float y;
-        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
-        const float e = sycl::fma(-(a * y), y, 1.0f);
-        return sycl::fma(0.5f * y, e, y);
-    }
-#endif
-    return R(1) / sycl::sqrt(a);
 }
 
 // Butterfly reduction over a chunked partition. Mirrors the pattern used by
@@ -351,7 +336,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                     tt = sycl::copysign(Real(1), tau)
                                        / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
                                 }
-                                c_rot = syev_jacobi_inv_sqrt(Real(1) + tt * tt);
+                                // a = 1 + t^2, |t| <= 1 or NaN: never 0, denormal or inf, so no inf guard.
+                                c_rot = ::batchlas::sycl_device::inv_sqrt<::batchlas::sycl_device::InvSqrtEdge::FiniteGeOne>(Real(1) + tt * tt);
                                 s_rot = tt * c_rot;
                                 // A rotation that rounds to the identity would
                                 // never annihilate a_pq, so counting it would

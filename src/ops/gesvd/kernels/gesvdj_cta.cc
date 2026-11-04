@@ -14,6 +14,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
+#include <src/sycl/inv_sqrt.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
@@ -97,24 +98,6 @@ inline Real part_min_g(const Group& g, Real v) {
         v = sycl::fmin(v, permute_group_by_xor(g, v, offset));
     }
     return v;
-}
-
-// 1 / sqrt(a). A plain `1 / sqrt(a)` lets NVPTX fold the float case into a bare rsqrt.approx
-// (depending on inlining); the float NVPTX path is ONE fixed sequence: rsqrt.approx from asm,
-// then one Newton step in FMA form, r = y + (y/2)(1 - a y^2). For finite input both callers
-// pass a in [1/(2m), 2]; a = +inf (non-finite input) keeps the old 1/sqrt(inf) = 0.
-template <typename R>
-inline R gesvdj_inv_sqrt(R a) {
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<R, float>) {
-        float y;
-        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
-        const float e = sycl::fma(-(a * y), y, 1.0f);  // not a*(y*y): overflows for denormal a
-        const float r = sycl::fma(0.5f * y, e, y);
-        return sycl::isinf(a) ? 0.0f : r;
-    }
-#endif
-    return R(1) / sycl::sqrt(a);
 }
 
 // Round-robin pairing, identical to syev_jacobi_cta's: for even mp the mp-1
@@ -520,7 +503,7 @@ BATCHLAS_UNROLL_FULL
                                     tt = sycl::copysign(Real(1), tau)
                                        / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
                                 }
-                                c_rot = gesvdj_inv_sqrt(Real(1) + tt * tt);
+                                c_rot = ::batchlas::sycl_device::inv_sqrt(Real(1) + tt * tt);
                                 s_rot = tt * c_rot;
                                 // An identity rotation must not count, or every
                                 // problem burns all max_sweeps.
@@ -749,7 +732,7 @@ BATCHLAS_UNROLL_FULL
                                 }
                                 const Real nrm2 = part_sum_g(part, part_n2);
                                 if (nrm2 > accept_tol) {
-                                    const Real inv_nr = gesvdj_inv_sqrt(nrm2);
+                                    const Real inv_nr = ::batchlas::sycl_device::inv_sqrt(nrm2);
 BATCHLAS_UNROLL_FULL
                                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                         const int32_t row = lane + rr * static_cast<int32_t>(P);
