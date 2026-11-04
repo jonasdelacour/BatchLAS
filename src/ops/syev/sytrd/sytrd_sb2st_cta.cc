@@ -12,7 +12,7 @@
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/syev/sytrd/sb2st_v2.hh>
+#include <batchlas/device/lapack/sb2st.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -33,7 +33,6 @@ namespace batchlas::detail {
 namespace {
 
 namespace v2 = batchlas::device;
-namespace sbv = batchlas::sb2st_v2;
 
 template <typename T, int32_t P>
 class BtrdLowerSubgroupKernel;
@@ -174,178 +173,10 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     group_barrier(partition);
                 };
 
-                // The bulge chase proper, on whichever storage AB/C/WORK point at; indexing is identical.
+                // The bulge chase proper (device::sb2st_givens_chase), on whichever storage AB/C/WORK
+                // point at; indexing is identical.
                 auto chase = [&](T* AB, const int ldab, Real* C, T* WORK) BATCHLAS_DLA_BODY {
-                    const int kd1 = kd + 1;
-                    const int kdm1 = kd - 1;
-                    const int incx = ldab - 1;
-                    const int kdn = (n - 1 < kd) ? (n - 1) : kd;
-
-                    auto idx = [&](int r, int c) -> int { return r + c * ldab; };
-
-                    // Unified accessor for AB that works whether AB points to global or local storage.
-                    auto AB_at = [&](int r, int c) -> T& { return AB[idx(r, c)]; };
-
-                    int nr = 0;
-                    int j1 = kdn + 1;
-                    int j2 = 0;
-
-                    // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and
-                    // the band entries AB(r, j + dc), addressed as the scalar loops address them.
-                    auto rseq = [&](int cnt, auto at) {
-                        return sbv::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
-                            return at(j1 + t * kd1);
-                        });
-                    };
-                    auto Cj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return C[j]; };
-                    auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
-                    auto band = [&](int r, int dc) {
-                        return [&AB_at, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB_at(r, j + dc); };
-                    };
-
-                    // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
-                    if constexpr (detail::is_complex<T>::value) {
-                        v2::for_each_owned(pex, n, [&](int j) BATCHLAS_DLA_BODY {
-                            AB_at(0, j) = real_as_T(AB_at(0, j));
-                        });
-                        group_barrier(partition);
-                    }
-
-                    for (int i = 0; i < n - 2; ++i) {
-                        for (int k = kdn; k >= 1; --k) {
-                            // All lanes share the same scalar state for the partition's problem.
-                            j1 += kdn;
-                            j2 += kdn;
-
-                            if (nr > 0) {
-                                // xLARGV over the rotations.
-                                sbv::largv<Ops>(pex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
-                                group_barrier(partition);
-
-                                if (nr > 2 * kd - 1) {
-                                    // xLARTV per band diagonal l (l sequential, rotations parallel);
-                                    // the rotations are independent, so one barrier after all l.
-                                    for (int l = 0; l < kd - 1; ++l) {
-                                        sbv::lartv<Ops>(pex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
-                                                       rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj),
-                                                       rseq(nr, Wj));
-                                    }
-                                    group_barrier(partition);
-                                } else {
-                                    // Each lane applies its own rotations along the band diagonal (xROT).
-                                    if (kdm1 > 0) {
-                                        v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
-                                            const int j = j1 + t * kd1;
-                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, j - kd), kdm1, incx),
-                                                         v2::vec(AB + idx(kd, j - kd), kdm1, incx), C[j], WORK[j]);
-                                        });
-                                    }
-                                    group_barrier(partition);
-                                }
-                            }
-
-                            // Scalar bulge creation and scalar-state update; broadcast updated (nr, j1).
-                            const auto nr_j1 = invoke_one_broadcast(partition, [&]() {
-                                int nr_out = nr;
-                                int j1_out = j1;
-                                if (k > 1) {
-                                    if (k <= n - i - 1) {
-                                        const T f = AB_at(k - 1, i);
-                                        const T g = AB_at(k, i);
-                                        Real ct = Real(0);
-                                        T st = T(0);
-                                        T rt = T(0);
-                                        Ops::lartg(f, g, ct, st, rt);
-                                        C[i + k] = ct;
-                                        WORK[i + k] = st;
-                                        AB_at(k - 1, i) = rt;
-
-                                        if (k > 2) {
-                                            const Real ct2 = C[i + k];
-                                            const T st2 = WORK[i + k];
-                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
-                                                         v2::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct2, st2);
-                                        }
-                                    }
-                                    nr_out += 1;
-                                    j1_out = j1_out - kdn - 1;
-                                }
-                                return std::array<int, 2>{nr_out, j1_out};
-                            });
-                            nr = nr_j1[0];
-                            j1 = nr_j1[1];
-
-                            if (nr > 0) {
-                                // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                                sbv::lar2v<Ops>(pex, rseq(nr, band(0, -1)), rseq(nr, band(0, 0)), rseq(nr, band(1, -1)),
-                                               rseq(nr, Cj), rseq(nr, Wj));
-                                group_barrier(partition);
-
-                                // ZHBTRD requirement: conjugate WORK(J1) before right-application.
-                                if constexpr (detail::is_complex<T>::value) {
-                                    const auto ws = rseq(nr, Wj);
-                                    v2::map(pex, ws, [](const T& w) { return sbv::native_t<T>::conj(w); }, ws);
-                                    group_barrier(partition);
-                                }
-
-                                if (nr > 2 * kd - 1) {
-                                    for (int l = 0; l < kd - 1; ++l) {
-                                        const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
-                                        if (nrt > 0) {
-                                            sbv::lartv<Ops>(pex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
-                                                           rseq(nrt, Cj), rseq(nrt, Wj));
-                                        }
-                                    }
-                                    group_barrier(partition);
-                                } else {
-                                    // Each lane applies its own rotations (0..nr-2) from the right (xROT).
-                                    const int main_nrot = nr - 1;
-                                    if (kdm1 > 0 && main_nrot > 0) {
-                                        v2::for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DLA_BODY {
-                                            const int j = j1 + t * kd1;
-                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j - 1), kdm1),
-                                                         v2::vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
-                                        });
-                                    }
-
-                                    // Tail rotation ("last") has different length (lend). Do it once.
-                                    if (pex.leader()) {
-                                        const int j1end = j1 + kd1 * (nr - 2);
-                                        const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
-                                        const int last = j1end + kd1;
-                                        if (lend > 0) {
-                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
-                                                         v2::vec(AB + idx(1, last), lend), C[last], WORK[last]);
-                                        }
-                                    }
-                                    group_barrier(partition);
-                                }
-                            }
-
-                                // Scalar-state update based on j2; broadcast updated (nr, j2).
-                                const auto nr_j2 = invoke_one_broadcast(partition, [&]() {
-                                    int nr_out = nr;
-                                    int j2_out = j2;
-                                    if (j2_out + kdn >= n) {
-                                        nr_out -= 1;
-                                        j2_out = j2_out - kdn - 1;
-                                    }
-                                    return std::array<int, 2>{nr_out, j2_out};
-                                });
-                                nr = nr_j2[0];
-                                j2 = nr_j2[1];
-
-                            if (nr > 0) {
-                                // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
-                                v2::for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
-                                    const int j = j1 + t * kd1;
-                                    WORK[j + kd] = WORK[j] * AB_at(kd, j);
-                                    AB_at(kd, j) = T(C[j]) * AB_at(kd, j);
-                                });
-                                group_barrier(partition);
-                            }
-                        }
-                    }
+                    v2::sb2st_givens_chase<Ops>(pex, n, kd, AB, ldab, C, WORK);
                 };
 
                 // TRAP (Metal): no generic address space, so a pointer chosen between local and global

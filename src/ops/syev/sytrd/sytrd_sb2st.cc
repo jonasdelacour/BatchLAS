@@ -13,7 +13,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 
-#include <src/ops/syev/sytrd/sb2st_v2.hh>
+#include <batchlas/device/lapack/sb2st.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta.hh>
 
 #include <algorithm>
@@ -31,7 +31,7 @@ namespace batchlas {
 namespace {
 
 namespace v2 = batchlas::device;
-namespace sbv = batchlas::sb2st_v2;
+namespace sbd = batchlas::device::sb2st_detail;
 
 template <typename T>
 inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
@@ -141,21 +141,13 @@ Event kd1_extract_lower(Queue& q,
                 Db[i] = detail::real_part(AB(0, i));
             }
 
-            // Make off-diagonal real via chained phase, as in LAPACK KD=1 special-case.
-            T phase = T(1);
+            // The off-diagonal is |AB(1, i)|: LAPACK's KD = 1 case (the chained phase only matters
+            // for Q, which this path never forms).
             for (int i = 0; i < n - 1; ++i) {
                 const T t = AB(1, i);
                 const Real a = detail::abs(t);
                 Eb[i] = a;
                 Taub[i] = T(0);
-                if constexpr (detail::is_complex<T>::value) {
-                    if (a != Real(0)) {
-                        const T u = t / T(a);
-                        phase *= u;
-                    }
-                } else {
-                    (void)phase;
-                }
             }
         });
     });
@@ -233,7 +225,7 @@ Event btrd_lower_inplace(Queue& q,
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
             auto rseq = [&](int cnt, auto at) BATCHLAS_DLA_BODY {
-                return sbv::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+                return sbd::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
             };
@@ -259,7 +251,7 @@ Event btrd_lower_inplace(Queue& q,
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (detail::is_complex<T>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
-                v2::for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { diag[j] = detail::real_as_T(diag[j]); });
+                v2::for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { diag[j] = v2::force_real(diag[j]); });
                 v2::sync(ex, v2::Mem::Global);
             }
 
@@ -282,7 +274,7 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLARGV: the rotations annihilating the fill WORK(j) against AB(kd, j - kd1).
-                        sbv::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
+                        v2::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                         v2::sync(ex, v2::Mem::Global);
 
                         if (nr > 2 * kd - 1) {
@@ -291,7 +283,7 @@ Event btrd_lower_inplace(Queue& q,
                             // columns and rotations are kd1 columns apart: one barrier for the nest
                             // (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
-                                sbv::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                v2::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
                                                rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj), rseq(nr, Wj));
                             }
                             v2::sync(ex, v2::Mem::Global);
@@ -300,7 +292,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
+                                        sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
                                                      v2::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
                                     }
                                 }
@@ -325,7 +317,7 @@ Event btrd_lower_inplace(Queue& q,
                                 if (k > 2) {
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
-                                    sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                    sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
                                                  v2::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
                                 }
                             }
@@ -344,14 +336,14 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                        sbv::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
+                        v2::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
                                        rseq(nr, Cpj), rseq(nr, Wpj));
                         v2::sync(ex, v2::Mem::Global);
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                         if constexpr (detail::is_complex<T>::value) {
                             const auto ws = rseq(nr, Wj);
-                            v2::map(ex, ws, [](const T& w) { return sbv::native_t<T>::conj(w); }, ws);
+                            v2::map(ex, ws, [](const T& w) { return v2::arith_t<v2::arith::Native, T>::conj(w); }, ws);
                             v2::sync(ex, v2::Mem::Global);
                         }
 
@@ -362,7 +354,7 @@ Event btrd_lower_inplace(Queue& q,
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
-                                    sbv::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                    v2::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
                                                    rseq(nrt, Cj), rseq(nrt, Wj));
                                 }
                             }
@@ -373,7 +365,7 @@ Event btrd_lower_inplace(Queue& q,
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j1inc - 1), kdm1),
+                                            sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j1inc - 1), kdm1),
                                                          v2::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
                                         }
                                     }
@@ -381,7 +373,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    sbv::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
+                                    sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
                                                  v2::vec(AB + idx(1, last), lend), C[last], WORK[last]);
                                 }
                             }

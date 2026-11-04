@@ -20,7 +20,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <src/ops/syev/sytrd/sb2st_v2.hh>
+#include <batchlas/device/lapack/sb2st.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
@@ -41,16 +41,7 @@ namespace detail {
 namespace {
 
 namespace v2 = batchlas::device;
-namespace sbv = batchlas::sb2st_v2;
-
-template <typename T>
-inline T real_part_as_T(const T& x) {
-    if constexpr (detail::is_complex<T>::value) {
-        return T(x.real(), typename base_type<T>::type(0));
-    } else {
-        return x;
-    }
-}
+namespace sbd = batchlas::device::sb2st_detail;
 
 template <Backend B, typename T>
 class Sb2stHhChaseKernel;
@@ -160,7 +151,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 auto ABs = ABsrc.batch_item(b);
                 auto ABt = ABtri.batch_item(b);
                 auto Vb = Vout.batch_item(b);
-                const sbv::HermBandLower<T> A{AB, ldw, kdw};
+                const sbd::HermBandLower<T> A{AB, ldw, kdw};
 
                 // --- Load the input band into the expanded working band (rows past kd read 0).
                 v2::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DLA_BODY {
@@ -173,125 +164,21 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 // Hermitian input: force a real diagonal before we start.
                 if constexpr (detail::is_complex<T>::value) {
                     v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
-                        AB[j * ldw] = real_part_as_T(AB[j * ldw]);
+                        AB[j * ldw] = v2::force_real(AB[j * ldw]);
                     });
                     v2::sync(ex, v2::Mem::Global);
                 }
 
-                // W <- H W H^H on the principal block [a..bb], H = I - tau v v^H, v in vloc
-                // (zhetd2's update): p = W v, kappa = v^H p, w = conj(tau) p - (|tau|^2 kappa / 2) v,
-                // W -= w v^H + v w^H on the lower triangle (diagonal kept real).
-                auto two_sided = [&](int32_t a, int32_t bb, T tau) {
-                    const int32_t m = bb - a + 1;
-                    if (m <= 0) return;
-                    const auto W = A.sub(a, a, m, m);
-                    const auto v = v2::vec(vloc, m);
-                    const auto w = v2::vec(wloc, m);
-                    sbv::hemv_band<Uplo::Lower>(rows, v2::One{}, W, v2::assume_published(v), v2::Zero{}, w);
-                    v2::sync(ex, v2::Mem::Global);
-
-                    const T kappa = v2::dotc<v2::Scope::Auto, v2::arith::Native>(ex, v, w);
-                    const T coef = tau * batchlas::device::conj(tau) * kappa * T(Real(0.5));
-                    // The loop is written out: through for_each_owned ptxas unrolls it 4x (latch layout).
-                    for (int i = ex.lid(); i < m; i += decltype(ex)::size)
-                        w(i) = batchlas::device::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
-                    v2::sync(ex, v2::Mem::Global);
-
-                    sbv::her2<Uplo::Lower>(rows, v2::NegOne{}, v2::assume_published(w), v2::assume_published(v), W);
-                    v2::sync(ex, v2::Mem::Global);
-                };
-
-                // B <- B (I - tau v v^H) on rows [r0..r1] x columns [c0..c1].
-                auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
-                    if (r0 > r1 || c0 > c1) return;
-                    const auto v = v2::assume_published(v2::vec(vloc, c1 - c0 + 1));
-                    sbv::larf_native<Side::Right>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
-                    v2::sync(ex, v2::Mem::Global);
-                };
-
-                // C <- (I - tau v v^H) C on rows [r0..r1] x columns [c0..c1].
-                auto left_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
-                    if (r0 > r1 || c0 > c1) return;
-                    const auto v = v2::assume_published(v2::vec(vloc, r1 - r0 + 1));
-                    sbv::larf_native<Side::Left>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
-                    v2::sync(ex, v2::Mem::Global);
-                };
-
-                // larfg on A(r0:r1, col): v -> vloc and V(:, slot); the column becomes (beta, 0...).
-                auto make_reflector_body = [&](int32_t col, int32_t r0, int32_t r1,
-                                               int32_t slot) -> T {
-                    const int32_t m = r1 - r0 + 1;
-                    const auto y = A.col(col, r0, m);  // (alpha; x)
-                    const auto v = v2::vec(vloc, m);
-                    // xLARFG scalars from alpha and an unscaled ||x|| (abs2 per element, one reduction).
-                    const auto x = sbv::fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DLA_BODY { return A.get(r0 + 1 + k, col); });
-                    const Real xnorm = sycl::sqrt(v2::sumsq<v2::alg::Unfused>(ex, x));
-                    const T alpha = y(0);
-                    const auto h = v2::larfg_scalars<v2::conv::Phase>(alpha, xnorm, m);
-
-                    // v = (1; scale x), read before the column is overwritten below.
-                    if (ex.leader()) v(0) = T(1);
-                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY {
-                        v(k + 1) = (h.tau == T(0)) ? T(0) : static_cast<T>(y(k + 1)) * h.scale;
-                    });
-                    v2::sync(ex, v2::Mem::Global);
-
-                    if (ex.leader()) y(0) = h.beta;
-                    v2::for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY { y(k + 1) = T(0); });
-                    const auto vs = v2::mat(Vb).col(slot).head(kd_i);  // V(:, slot) = (v; 0)
-                    v2::for_each_owned(ex, kd_i, [&](int i) BATCHLAS_DLA_BODY { vs(i) = (i < m) ? static_cast<T>(v(i)) : T(0); });
-                    if (ex.leader()) TAUv(slot, b) = h.tau;
-                    v2::sync(ex, v2::Mem::Global);
-                    return h.tau;
-                };
-                // Complex: out of line, as the legacy inliner left it; inlined at both sites it cost REG 70->119.
-                auto make_reflector_ool = [&](int32_t col, int32_t r0, int32_t r1, int32_t slot)
-                                              __attribute__((noinline)) -> T { return make_reflector_body(col, r0, r1, slot); };
-                auto make_reflector = [&](int32_t col, int32_t r0, int32_t r1, int32_t slot) -> T {
-                    if constexpr (detail::is_complex<T>::value) return make_reflector_ool(col, r0, r1, slot);
-                    else return make_reflector_body(col, r0, r1, slot);
-                };
-
-                // --- Sequential chase schedule. The reflector counter must match
-                // build_sb2st_hh_schedule() exactly, since the back-transform
-                // indexes V by the host-side schedule.
-                int32_t slot = 0;
-                // An always_inline IIFE keeps the chase lambdas off the kernel's direct calls and their
-                // inlining as it was: real SASS-identical, complex +2-3 instructions (a marked kernel
-                // lambda is the reverse; no form was neutral for both).
-                [&]() BATCHLAS_DLA_BODY {
-                    if (kd_i > 1) {
-                        for (int32_t st = 0; st + 2 < n; ++st) {
-                            int32_t r0 = st + 1;
-                            int32_t r1 = (st + kd_i < n - 1) ? (st + kd_i) : (n - 1);
-                            if (r1 <= r0) continue;
-
-                            T tau = make_reflector(st, r0, r1, slot++);
-                            two_sided(r0, r1, tau);
-
-                            while (true) {
-                                const int32_t p0 = r1 + 1;
-                                const int32_t p1 = (r1 + kd_i < n - 1) ? (r1 + kd_i) : (n - 1);
-                                if (p0 > p1) break;
-
-                                right_apply(p0, p1, r0, r1, tau);
-                                tau = make_reflector(r0, p0, p1, slot++);
-                                left_apply(p0, p1, r0 + 1, r1, tau);
-                                two_sided(p0, p1, tau);
-
-                                r0 = p0;
-                                r1 = p1;
-                            }
-                        }
-                    }
-                }();
-                (void)nrefl;
+                // device::sb2st_hh_chase in an always_inline IIFE keeps the chase off the kernel's direct
+                // calls and its inlining as it was (a marked kernel lambda moves complex SASS).
+                const auto tau_slot = sbd::fn_vec(nrefl, [&](int32_t s) BATCHLAS_DLA_BODY -> T& { return TAUv(s, b); });
+                [&]() BATCHLAS_DLA_BODY { v2::sb2st_hh_chase(ex, rows, A, n, kd_i, vloc, wloc, Vb, tau_slot); }();
                 (void)ldv;
 
                 // --- Extract the tridiagonal.
                 v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
                     const T diag = A.get(j, j);
-                    ABt(0, j) = real_part_as_T(diag);
+                    ABt(0, j) = v2::force_real(diag);
                     if constexpr (detail::is_complex<T>::value) {
                         Dv(j, b) = static_cast<Real>(diag.real());
                     } else {
@@ -378,7 +265,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
 
                 // cols: tile column lane % C is owned by the G = 32 / C lanes lane / C.
                 const v2::WorkGroup<kWg> ex{it};
-                const sbv::StridedTeams<C, kWg> cols{it};
+                const sbd::StridedTeams<C, kWg> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
@@ -405,9 +292,9 @@ Event unmqr_hb2st_wave(Queue& ctx,
                         if (tau == T(0)) continue;
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
-                        sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
                             cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
-                            sbv::win_of(sbv::row_major_tile<C>(Zl, n), s, 0, L, C));
+                            sbd::win_of(v2::StridedMat<T, v2::Ext<C>, v2::Unit>{Zl, n, C}, s, 0, L, C));
                     }
                     v2::sync(ex, v2::Mem::Global);
                 }
@@ -428,12 +315,8 @@ Event unmqr_hb2st_wave(Queue& ctx,
 // writes it back once. Reordering into larft/larfb blocks is not possible here: the
 // row-sharing reflectors are never contiguous in the product.
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
-//
-// Lane mapping: lane -> (column, row-group), col = lane % C, grp = lane / C,
-// with G = 32/C lanes cooperating per column. Lanes with the same column differ
-// by multiples of C, so the dot product reduces with XOR masks C, 2C, ... < 32.
-// Zs is row-major with C columns, so consecutive lanes touch consecutive
-// addresses.
+// Lane mapping: device::sb2st_detail::StridedTeams<C> (xor masks C, 2C, ... < 32); Zs is
+// row-major with C columns, so consecutive lanes touch consecutive addresses.
 template <Backend B, typename T, int C>
 Event unmqr_hb2st_tiled(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& v_in,
@@ -472,7 +355,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
 
                 // One sub-group: ex for the tile load/store, cols for the column-per-team larf.
                 const v2::WorkGroup<kSg> ex{it};
-                const sbv::StridedTeams<C> cols{it};
+                const sbd::StridedTeams<C> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
@@ -493,9 +376,9 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     if (tau == T(0)) continue;
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
-                    sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                    v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
                         cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
-                        sbv::win_of(sbv::row_major_tile<C>(Zl, n), s, 0, L, C));
+                        sbd::win_of(v2::StridedMat<T, v2::Ext<C>, v2::Unit>{Zl, n, C}, s, 0, L, C));
                     v2::sync(cols);
                 }
 
@@ -711,7 +594,7 @@ streaming:
                     const int32_t L = lens_p[k];
 
                     // L may exceed the 32 lanes (kd > 32): the lanes stride the reflector.
-                    sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(
+                    v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
                         ex, tau, v2::assume_published(v2::mat(V).col(k).head(L)), v2::mat(Z).sub(s, c0, L, c1 - c0));
                 }
             });
