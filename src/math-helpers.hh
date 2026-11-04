@@ -166,7 +166,12 @@ namespace batchlas {
         }
 
         using ::batchlas::device::las2;
-        using ::batchlas::device::laev2;
+        // Binds core laev2's operands by reference: a using-declaration (by value) costs the steqr
+        // legacy / wg Francis kernels 3 LDG and 4 REG on sm_89. Goes when core laev2 takes const R&.
+        template <typename T>
+        __attribute__((always_inline)) inline auto laev2(const T& a, const T& b, const T& c) {
+            return ::batchlas::device::laev2(a, b, c);
+        }
 
     }
 
