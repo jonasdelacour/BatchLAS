@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Native gemv's private device LA v2 ops (src/ops/gemv/gemv_native_v2.hh: store_fma / RtScalar,
-// conj_if, Member, fold_down, leader_sum) in the five body shapes they serve, against host
-// references; the core ops they compose with are covered by device_blas_v2_tests. Every result is
+// Native gemv's five body shapes as the kernels write them: core MaybeZero + store<MacChain, Fma>,
+// conj_if view, Slot, dot_partial and shift_reduce, plus gemv's last private op fold_down
+// (src/ops/gemv/gemv_native_v2.hh), against host references. Every result is
 // checked twice: bit for bit against a host emulation of the documented rounding (std::fma chain,
 // shift-down tree) and with EXPECT_VERIFY against a long-double reference, so a rounding slip and
 // a wrong formula fail separately. Guards (agent-guide section 8): ld = rows + 5, batch strides
@@ -41,6 +41,10 @@ namespace {
 template <class T> using real_of = typename v2::Arith<T>::real_t;
 template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
 template <class T> using Dv = typename sycl_device::DevMap<T>::type;
+// The kernels' shift_reduce op: Arith add (sycl::plus has no Cx operator+).
+struct AddOf {
+    template <class D> D operator()(D u, D w) const { return v2::Arith<D>::add(u, w); }
+};
 
 constexpr int kItems = 1029;  // 11 * 1029 is not a multiple of 4: the W = 4 partition shape has a tail
 constexpr int kPeriod = 3;
@@ -197,7 +201,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
     const D* a = reinterpret_cast<const D*>(dev.up(ha));
     const D* x = reinterpret_cast<const D*>(dev.up(hx));
     D* y = reinterpret_cast<D*>(dev.up(hy));
-    const auto al = dla::rt_scalar(to_dev(alpha), alpha_zero), be = dla::rt_scalar(to_dev(beta), beta_zero);
+    const auto al = v2::MaybeZero{to_dev(alpha), alpha_zero}, be = v2::MaybeZero{to_dev(beta), beta_zero};
     const std::int64_t total = std::int64_t(out) * kItems;
     auto A = [=](std::int64_t b) { return v2::mat_wide(a + b * sa, m, n, ld); };
     auto X = [=](std::int64_t b) { return v2::vec_wide(x + b * sx, red, xinc); };
@@ -212,9 +216,9 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             if constexpr (S == Shape::RowThread) {
                 if (!al.zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, A(b).row(i), X(b));
             } else {
-                if (!al.zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, dla::conj_if(A(b).col(i), conj), X(b));
+                if (!al.zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, v2::conj_if(A(b).col(i), conj), X(b));
             }
-            dla::store_fma(al, acc, be, Y(b)(i));
+            v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::RowSegment) {
         dev.template run<true>(kItems, [=](sycl::nd_item<1> it, std::int64_t b) {
@@ -223,9 +227,9 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int lane = int(sg.get_local_linear_id());
             const int i = lane % m, jsub = lane / m;
             D acc{};
-            if (!al.zero && jsub < P) acc = v2::detail::dot_partial<false, Fma>(dla::Member<P>{jsub}, A(b).row(i), X(b));
+            if (!al.zero && jsub < P) acc = v2::dot_partial<false, Fma>(v2::Slot<P>{jsub}, A(b).row(i), X(b));
             acc = dla::fold_down<P>(sg, acc, v2::Dyn{m});
-            if (lane < m) dla::store_fma(al, acc, be, Y(b)(i));
+            if (lane < m) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::ColSubGroup) {
         dev.template run<true>(total, [=](sycl::nd_item<1> it, std::int64_t g) {
@@ -234,9 +238,9 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const std::int64_t b = g / out;
             const int j = int(g - b * out);
             D acc{};
-            if (!al.zero) acc = v2::detail::dot_partial<false, Fma>(team, dla::conj_if(A(b).col(j), conj), X(b));
-            acc = dla::leader_sum(team, acc);
-            if (team.leader()) dla::store_fma(al, acc, be, Y(b)(j));
+            if (!al.zero) acc = v2::dot_partial<false, Fma>(team, v2::conj_if(A(b).col(j), conj), X(b));
+            acc = v2::shift_reduce<32>(team.sg, acc, AddOf{});
+            if (team.leader()) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     } else {
         constexpr int W = kSg / P;
@@ -251,9 +255,9 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const std::int64_t b = gc / out;
             const int j = int(gc - b * out);
             D acc{};
-            if (!al.zero && active) acc = v2::detail::dot_partial<false, Fma>(team, dla::conj_if(A(b).col(j), conj), X(b));
-            acc = dla::leader_sum(team, acc);
-            if (team.leader() && active) dla::store_fma(al, acc, be, Y(b)(j));
+            if (!al.zero && active) acc = v2::dot_partial<false, Fma>(team, v2::conj_if(A(b).col(j), conj), X(b));
+            acc = v2::shift_reduce<P>(team.part, acc, AddOf{});
+            if (team.leader() && active) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     }
 
@@ -315,7 +319,8 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, GemvBodiesComposeBitExact) {
     body_case<T, Shape::ColPartition>(d, C, false, true, "ColPartition C beta=0");
 }
 
-// fold_down over runtime strides the bodies do not use, and leader_sum on both team kinds.
+// fold_down over runtime strides the bodies do not use, and core shift_reduce (the leader fold of
+// bodies 3 and 5) on both team kinds.
 TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
     using T = TypeParam;
     using D = Dv<T>;
@@ -335,8 +340,8 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
         ob[2 * kSg] = dla::fold_down<8>(sg, x, v2::Dyn{3});
         ob[3 * kSg] = dla::fold_down<16>(sg, x, v2::Dyn{2});
         ob[4 * kSg] = dla::fold_down<32>(sg, x);
-        ob[5 * kSg] = dla::leader_sum(v2::Partition<4>{sg}, x);
-        ob[6 * kSg] = dla::leader_sum(v2::SubGroup<32>{sg}, x);
+        ob[5 * kSg] = v2::shift_reduce<4>(v2::Partition<4>{sg}.part, x, AddOf{});
+        ob[6 * kSg] = v2::shift_reduce<32>(v2::SubGroup<32>{sg}.sg, x, AddOf{});
     });
     const auto got = this->dev.down(reinterpret_cast<const T*>(o), hout.size());
     const int count[kCases] = {2, 4, 8, 16, 32, 4, 32}, stride[kCases] = {13, 7, 3, 2, 1, 1, 1};
@@ -353,7 +358,7 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
             }
         }
     EXPECT_EQ(checked, kItemsF * (13 + 7 + 3 + 2 + 1 + 8 + 1));
-    EXPECT_EQ(diff, 0) << "fold_down / leader_sum is not the shift-down tree bit for bit";
+    EXPECT_EQ(diff, 0) << "fold_down / shift_reduce is not the shift-down tree bit for bit";
     // The tree is a sum: every head equals its members' total to the blas bound.
     double worst = 0;
     for (int l = 0; l < 13; ++l) {
@@ -364,8 +369,8 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
     EXPECT_VERIFY(T, Check::blas, 2, worst);
 }
 
-// store_fma with v2 tags: Zero never reads y (NaN), One adds y exactly, NegOne subtracts it.
-TYPED_TEST(DeviceBlasV2GemvNativeTest, StoreFmaTags) {
+// store<MacChain, Fma> with v2 tags: Zero never reads y (NaN), One adds y exactly, NegOne subtracts it.
+TYPED_TEST(DeviceBlasV2GemvNativeTest, StoreMacChainTags) {
     using T = TypeParam;
     using D = Dv<T>;
     constexpr int n = 97;
@@ -379,9 +384,9 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, StoreFmaTags) {
     const D ad = to_dev(alpha);
     this->dev.template run<false>(n, [=](sycl::nd_item<1>, std::int64_t i) {
         if (i >= n) return;
-        dla::store_fma(v2::Scalar<D>{ad}, a[i], v2::Zero{}, z[i]);
-        dla::store_fma(v2::Scalar<D>{ad}, a[i], v2::One{}, y1[i]);
-        dla::store_fma(v2::One{}, a[i], v2::NegOne{}, y2[i]);
+        v2::store<v2::epi::MacChain, Fma>(v2::Scalar<D>{ad}, a[i], v2::Zero{}, z[i]);
+        v2::store<v2::epi::MacChain, Fma>(v2::Scalar<D>{ad}, a[i], v2::One{}, y1[i]);
+        v2::store<v2::epi::MacChain, Fma>(v2::One{}, a[i], v2::NegOne{}, y2[i]);
     });
     const auto gz = this->dev.down(reinterpret_cast<const T*>(z), n);
     const auto g1 = this->dev.down(reinterpret_cast<const T*>(y1), n);

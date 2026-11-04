@@ -197,7 +197,7 @@ template <class T, bool Pair> void check_usmm(Dev& dev, Transpose trans, bool be
         v2::Frag<D, NC> acc;
         v2::fill(acc, D{});
         v2::usmm_row<Ar>(v2::Thread{}, arow, opB, c0, width, acc);
-        v2::store_cols<Ar>(v2::Thread{}, alpha_d, acc, beta_d, beta_zero, C, i, c0, width);
+        v2::store_cols<v2::arith::Fma>(v2::Thread{}, alpha_d, acc, v2::MaybeZero{beta_d, beta_zero}, C, i, c0, width);
     });
     const auto got = dev.down(cp_t, hc.size());
     auto opb = [&](int b, int j, int c) {

@@ -3,13 +3,12 @@
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts; NaN-poisoned y for
 // every "never reads y" claim (Zero beta, a set MaybeZero flag) and the one shape that reads it
 // anyway (LinearNegZero); signed-zero cases that tell MacChain (0 + acc) from Sum (acc); the
-// FmaSplit rounding on inputs where one fma and two roundings differ; gemv's store_fma bit-identical
-// to store<MacChain, Fma>; batch 1024 items, every item compared.
+// FmaSplit rounding on inputs where one fma and two roundings differ (gemv and native spmm call
+// store<MacChain, Fma> directly); batch 1024 items, every item compared.
 // Red set (each break was made once, 2026-11-04, and this suite failed): MacChain started from acc
 // instead of 0. During bring-up the MaybeZero case also caught a real defect (tag_mac read the
 // flag through a const type and ignored it).
 #include <tests/device_core_common.hh>
-#include <src/ops/gemv/gemv_native_v2.hh>
 
 #include <cmath>
 #include <limits>
@@ -27,7 +26,7 @@ template <class T> T nan_of() { return dv::qnan<T>(); }
 
 // One y per item and case; out[c * kBatch + b] = y after case c.
 enum Case : int { kSumZero, kSumMaybeZeroSet, kSumMaybeZeroClear, kSumOne, kSumValue, kMacChain, kMacChainMaybeZero, kMulMac,
-                  kLinear, kLinearBetaZero, kLinearNegZeroBetaZero, kStoreFma, kNumCases };
+                  kLinear, kLinearBetaZero, kLinearNegZeroBetaZero, kNumCases };
 
 TYPED_TEST(DeviceCoreArithTest, StoreShapesMatchTheirSourceExpressions) {
     using T = TypeParam;
@@ -60,7 +59,6 @@ TYPED_TEST(DeviceCoreArithTest, StoreShapesMatchTheirSourceExpressions) {
         put(kLinear, [&](T& y) { dv::store<dv::epi::Linear>(alpha, a, beta, y); });
         put(kLinearBetaZero, [&](T& y) { dv::store<dv::epi::Linear>(alpha, a, T(0), y); });
         put(kLinearNegZeroBetaZero, [&](T& y) { dv::store<dv::epi::LinearNegZero>(alpha, a, T(0), y); });
-        put(kStoreFma, [&](T& y) { batchlas::sycl_gemv::dla::store_fma(alpha, a, beta, y); });  // gemv's own
     });
     const auto got = d.down(out, std::size_t(kNumCases) * kBatch);
     for (int b = 0; b < kBatch; ++b) {
@@ -74,16 +72,14 @@ TYPED_TEST(DeviceCoreArithTest, StoreShapesMatchTheirSourceExpressions) {
         EXPECT_LE(err(at(kLinearBetaZero), AL * A), tol<T>()) << b;
         if (poisoned) {
             // The shapes that read y carry the NaN; LinearNegZero reads y even at beta == 0.
-            for (int c : {kSumMaybeZeroClear, kSumOne, kSumValue, kMacChain, kMulMac, kLinear, kLinearNegZeroBetaZero, kStoreFma})
+            for (int c : {kSumMaybeZeroClear, kSumOne, kSumValue, kMacChain, kMulMac, kLinear, kLinearNegZeroBetaZero})
                 EXPECT_TRUE(std::isnan(std::real(wide(at(c))))) << "case " << c << " item " << b;
             continue;
         }
         const LD<T> ref = AL * A + BE * Y;
-        for (int c : {kSumMaybeZeroClear, kSumValue, kMacChain, kMulMac, kLinear, kStoreFma}) EXPECT_LE(err(at(c), ref), tol<T>(2)) << c << " " << b;
+        for (int c : {kSumMaybeZeroClear, kSumValue, kMacChain, kMulMac, kLinear}) EXPECT_LE(err(at(c), ref), tol<T>(2)) << c << " " << b;
         EXPECT_LE(err(at(kSumOne), A + Y), tol<T>()) << b;
         EXPECT_LE(err(at(kLinearNegZeroBetaZero), AL * A), tol<T>()) << b;
-        // gemv's store_fma (src/ops/gemv) IS store<MacChain, Fma>: the same bits, so M4 can switch.
-        EXPECT_TRUE(same_bits(at(kStoreFma), at(kMacChain))) << b;
     }
 }
 
