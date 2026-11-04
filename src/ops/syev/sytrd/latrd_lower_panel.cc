@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/device.hh>
+#include <batchlas/blas/device/v2/dla.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -29,6 +30,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 enum class LatrdImpl { Legacy, Device, Grid };
 
@@ -253,9 +256,21 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                using Ex = v2::WorkGroup<WG>;
+                using Real = typename base_type<T>::type;
+                using v2::Mem;
+                using v2::Scope;
+                using v2::arith::Native;
+                const Ex ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
+                const auto A = v2::mat(Ab.data(), n, n, Ab.ld());
+                const auto W = v2::mat(Wb.data(), n, ib, Wb.ld());
+                T* const v_ptr = util::get_raw_ptr(v_local);
+                T* const wcol_ptr = util::get_raw_ptr(wcol_local);
+                const auto vfull = v2::vec<Mem::Local>(v_ptr, n);
+                const auto wfull = v2::vec<Mem::Local>(wcol_ptr, n);
 
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
@@ -265,8 +280,10 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
                         wip_local[p] = Wb(i, p);
                     }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    ex.barrier(Mem::Local);
 
+                    // S13-10/11: A(i:, i) -= V(i:, :i) W(i, :i)^H + W(i:, :i) V(i, :i)^H, each
+                    // term subtracted from the running value (not a gemv: beta=1 sums first).
                     if (lid == 0) {
                         T aii = Ab(i, i);
                         for (int p = 0; p < i; ++p) {
@@ -276,36 +293,23 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         }
                         Ab(i, i) = aii;
                     }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
+                    for (int r = i + 1 + lid; r < n; r += WG) {
                         T val = Ab(r, i);
                         for (int p = 0; p < i; ++p) {
                             const T wip = wip_local[p];
                             const T vip = vip_local[p];
-
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-
+                            const T vrp = v2::unit_head(A.col(p), p + 1)(r);
                             const T wrp = Wb(r, p);
                             val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
-                    it.barrier(sycl::access::fence_space::global_space);
+                    ex.barrier(Mem::Global);
 
-                    using Real = typename base_type<T>::type;
-
-                    const int x0 = i + 2;
-                    Real sumsq = Real(0);
-                    for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += detail::abs2_if_complex(Ab(r, i));
-                    }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
-
+                    // S13-12/13: Householder reflector of A(i+1:, i).
+                    const auto x = A.col(i).tail(i + 2);
+                    const Real sumsq = v2::reduce<Scope::Group>(ex, x.size(),
+                        [&](int k) { return detail::abs2_if_complex(x(k)); });
                     T alpha = T(0);
                     if (lid == 0 && i + 1 < n) {
                         alpha = Ab(i + 1, i);
@@ -351,94 +355,29 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     tau_i = batchlas::portable::group_broadcast(g, tau_i);
                     scale = batchlas::portable::group_broadcast(g, scale);
 
-                    if (tau_i != T(0)) {
-                        for (int r = x0 + lid; r < n; r += wg) {
-                            Ab(r, i) *= scale;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
+                    if (tau_i != T(0)) v2::scal<Native>(ex, scale, x);
+                    ex.barrier(Mem::Global);
 
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        v_local[r] = (r == i + 1) ? T(1) : Ab(r, i);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const int col = i;
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        // Symmetric mat-vec: acc = sum_c Ah(r,c) * v(c), where
-                        // Ah(r,c) is Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r.
-                        // Ascending c crosses c == r once, so splitting the loop there
-                        // keeps the accumulation order (bit-identical) and removes the
-                        // per-element branch. Memory-latency bound: keep loads in flight.
-                        // evidence: docs/perf/sytrd.md#sytrd-rejected-latrd-symv-loop-shapes
-                        const int c_split = sycl::min(r, n - 1);
-
-                        T acc = T(0);
-
-                        // c in [i+1, r]: walk row r of the lower triangle.
-                        // Consecutive threads hold consecutive r, so each step is a
-                        // coalesced access across the warp.
-                        #pragma unroll 4
-                        for (int c = i + 1; c <= c_split; ++c) {
-                            mac(acc, Ab(r, c), v_local[c]);
-                        }
-
-                        // c in (r, n): walk column r of the lower triangle.
-                        // Contiguous per thread, so successive iterations reuse the
-                        // same cache lines.
-                        #pragma unroll 4
-                        for (int c = c_split + 1; c < n; ++c) {
-                            mac_conj(acc, Ab(c, r), v_local[c]);
-                        }
-
-                        wcol_local[r] = acc;
-                    }
+                    // S13-14..16: w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
+                    const auto v = vfull.tail(i + 1);
+                    const auto w = wfull.tail(i + 1);
+                    v2::for_each_owned(ex, i + 1, n, [&](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
+                    v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(ex, v2::One{},
+                        v2::trailing(Ab, i + 1, n), ex.publish(v2::trailing(vfull, i + 1)), v2::Zero{}, v2::trailing(wfull, i + 1));
 
                     for (int p = 0; p < i; ++p) {
-                        const int pc = p;
-
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
-                        for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = v_local[c];
-
-                            gamma_partial += batchlas::device::detail::conj(Wb(c, pc)) * vc;
-
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
-                        }
-                        const T gamma = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                        const T delta = batchlas::device::detail::reduce_sum_group(g, delta_partial);
-
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
-                            const T wrp = Wb(r, pc);
-                            wcol_local[r] -= vrp * gamma + wrp * delta;
-                        }
+                        const auto vcol = v2::unit_head(A.col(p), p + 1).tail(i + 1);
+                        const auto wcol = W.col(p).tail(i + 1);
+                        const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
+                        const T gamma = gd[0], delta = gd[1];
+                        v2::map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
                     }
 
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        wcol_local[r] *= tau_i;
-                    }
-
-                    T dot_partial = T(0);
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        dot_partial += batchlas::device::detail::conj(vr) * wcol_local[r];
-                    }
-                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
-
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        wcol_local[r] += alpha2 * vr;
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wb(r, col) = wcol_local[r];
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
+                    v2::scal<Native>(ex, tau_i, w);
+                    const T dot = v2::dotc<Scope::Group, Native>(ex, v, w);
+                    v2::axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
+                    v2::copy(ex, w, W.col(i).tail(i + 1));
+                    ex.barrier(Mem::Global);
                 }
 
                 if constexpr (FuseTrailingUpdate) {
