@@ -2,10 +2,10 @@
 #pragma once
 
 // The register-resident GETRF panel leaf: item `tid` owns row `tid` in registers, pivoting by
-// LAZY RELABEL (getf2_relabel, getrf_v2.hh, keeps its three load-bearing spellings);
+// LAZY RELABEL (getf2_relabel, lapack/getrf.hh, keeps its three load-bearing spellings);
 // getf2_panel_device's contract. evidence: docs/perf/lu.md#the-register-panel-leaf
 
-#include <src/ops/getrf/getrf_v2.hh>
+#include <batchlas/device/lapack/getrf.hh>
 
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -17,6 +17,8 @@
 
 namespace batchlas::getrf_native {
 
+namespace v2 = ::batchlas::device;
+
 // `kmax` must be KERNEL-UNIFORM (skipped steps skip barriers). `always_inline` is NOT a hint:
 // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
 template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
@@ -27,7 +29,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
                                                           int32_t* info_item,
                                                           SxAcc sx, ValAcc rval,
                                                           IdxAcc ridx) {
-    const LuExec<LuScope::WorkGroup> ex{it};
+    const v2::RtGroup<v2::Scope::Group> ex{it};
     const int tid = ex.lid();
 
     // CLAMP, never return: a pad item is still in every shuffle mask and every barrier.
@@ -37,7 +39,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
     v2::Frag<D, NB> rA;  // top level, never a parameter: tiny_device.hh invariant 1
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) {
-        D v = lu_zero<D>();   // a STATEMENT, not `?:`: see spelling 3
+        D v = v2::Arith<D>::zero();   // a STATEMENT, not `?:`: see spelling 3
         if (live && c < ncols) v = a[tid + static_cast<std::ptrdiff_t>(c) * ldp];
         rA[c] = v;
     }
@@ -46,9 +48,9 @@ BATCHLAS_UNROLL_FULL
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
     // iamax (B1), relabel, pivot row through sx (B2), rscl, ger: docs/perf/lu.md#two-barriers-per-column
-    auto piv = pivot_rows_group(ex, rval, ridx, m, Ipiv{piv_item, piv_base}, info_local);
-    auto bc = bcast_row_local(ex, sx);
-    getf2_relabel(rA, rowid, kmax, ncols, piv, bc);
+    auto piv = v2::getf2_detail::pivot_rows_group(ex, rval, ridx, m, v2::IpivSink{piv_item, piv_base}, info_local);
+    auto bc = v2::getf2_detail::bcast_row_local(ex, sx);
+    v2::getf2_relabel(rA, rowid, kmax, ncols, piv, bc);
 
     if (live) {  // to the RELABELLED row: rowid is where this data belongs in P A
 BATCHLAS_UNROLL_FULL

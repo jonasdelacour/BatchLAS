@@ -198,29 +198,6 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
 // there and cost ~3%. PotrsFused stays hand-written: as gemm_nr its backward axpy loop was
 // runtime-unrolled (NR = 2: LDS 29 -> 47, +13..20%).
 
-// The hand potrs body's sub-group sum: shift_group_left rather than sycl::reduce_over_group,
-// which puts static shared into the kernel and reopens the 48 KB hole. Only LANE 0 holds the total.
-template <typename SG, typename D>
-inline D sg_sum(const SG& sg, D v) {
-    if constexpr (dev_is_complex_v<D>) {
-        auto re = v.re, im = v.im;
-        for (int off = 16; off > 0; off >>= 1) {
-            re += sycl::shift_group_left(sg, re, off);
-            im += sycl::shift_group_left(sg, im, off);
-        }
-        return D{re, im};
-    } else {
-        for (int off = 16; off > 0; off >>= 1) v += sycl::shift_group_left(sg, v, off);
-        return v;
-    }
-}
-
-template <typename D>
-inline D dev_zero_of() {
-    if constexpr (dev_is_complex_v<D>) return D{0, 0};
-    else return D(0);
-}
-
 // Every staging copy (B <-> y, A's diagonal block -> blk): core lacpy on the hand loops'
 // (e % m, e / m) walk.
 template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void stage(const Ex& ex, const MA& a, const MB& b) {
@@ -230,202 +207,10 @@ template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void stage(const Ex&
 template <typename T, int NR> class GetrsFusedNKernel;
 template <typename T, int NR> class GetrsFusedTKernel;
 
-// complex<float> NoTrans: the pre-v2 hand body. On the v2 body GetrsFusedNKernel<cf, 8> lost
-// 6.2% at saturation (1.062, 14 reps) although its registers fell 52 -> 48; FusedN<float, *>
-// stays on v2 (0.962). Same kernel name: only one body is instantiated per T.
+// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every T: the
+// complex<float> hand body it replaced won 1.062x only because gemm_nr's r loop stayed rolled.
 template <typename T, int NR>
-Event fused_launch_notrans_legacy(Queue& ctx,
-                           const T* A, int lda, int strideA,
-                           T* B, int ldb, int strideB,
-                           const int* piv, int pstride,
-                           int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    using DM = DevMap<T>;
-    using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-
-    const D* const Ap = reinterpret_cast<const D*>(A);
-    D* const Bp = reinterpret_cast<D*>(B);
-
-    const int bld = getrs_fused_blk_ld(nb);
-    const std::size_t rhs_elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
-    const std::size_t slm_elems =
-        getrs_fused_slm(rhs_elems, nb, sizeof(D)) / sizeof(D);
-
-    ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<GetrsFusedNKernel<T, NR>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
-                                             static_cast<std::size_t>(wg)),
-                              sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const int tid = static_cast<int>(it.get_local_id(0));
-                const std::size_t b = it.get_group(0);
-                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
-                const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
-                const int sgid = static_cast<int>(sg.get_group_linear_id());
-                const int nsg = static_cast<int>(sg.get_group_linear_range());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
-                const bool c_active = (NR != 1) || sgid == 0;
-                const int c0 = (NR == 1) ? 0 : sgid;
-                const int cs = (NR == 1) ? 1 : nsg;
-
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                const int* const pv = piv + b * static_cast<std::size_t>(pstride);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
-
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // F: the interchange list, walked FORWARDS, in LOCAL memory
-                if (tid < nrhs) {
-                    D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
-                    for (int k = 0; k < n; ++k) {
-                        const int p = pv[k] - 1;          // 1-BASED on the wire
-                        if (p != k) { const D t = yc[k]; yc[k] = yc[p]; yc[p] = t; }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // L y = F b, unit lower, forward
-                for (int j = 0; j < n; j += nb) {
-                    const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j + i) +
-                               static_cast<std::size_t>(j + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // The block solve runs inside ONE sub-group: lane i owns row j+i in
-                    // a register and the recurrence takes no work-group barrier.
-                    // group_broadcast is a collective and must not be called under
-                    // divergence -- the lane guards are INSIDE it, not around.
-                    if (c_active && jb > 1) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
-                            for (int kk = 0; kk < jb - 1; ++kk) {
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane > kk && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // Parallel over rows, so the read of A[i, j+kk] is coalesced.
-                    for (int i = j + jb + tid; i < n; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-
-                // U x = y, non-unit upper, backward
-                for (int jend = n; jend > 0; jend -= nb) {
-                    const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
-                    const int jb = jend - j0;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j0 + i) +
-                               static_cast<std::size_t>(j0 + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
-                            for (int kk = jb - 1; kk >= 0; --kk) {
-                                if (lane == kk)
-                                    v = dev_div(v, blk[static_cast<std::size_t>(kk) +
-                                                       static_cast<std::size_t>(kk) *
-                                                       static_cast<std::size_t>(bld)]);
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane < kk)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j0 + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    for (int i = tid; i < j0; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j0 + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j0 + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
-            });
-    });
-    return ctx.get_event();
-}
-
-// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y.
-template <typename T, int NR>
-Event fused_launch_notrans_v2(Queue& ctx,
+Event fused_launch_notrans(Queue& ctx,
                            const T* A, int lda, int strideA,
                            T* B, int ldb, int strideB,
                            const int* piv, int pstride,
@@ -507,21 +292,6 @@ Event fused_launch_notrans_v2(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T, int NR>
-Event fused_launch_notrans(Queue& ctx,
-                           const T* A, int lda, int strideA,
-                           T* B, int ldb, int strideB,
-                           const int* piv, int pstride,
-                           int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    if constexpr (std::is_same_v<T, std::complex<float>>) {
-        return fused_launch_notrans_legacy<T, NR>(ctx, A, lda, strideA, B, ldb, strideB, piv, pstride,
-                                                  n, nrhs, batch, wg, nb, mask);
-    } else {
-        return fused_launch_notrans_v2<T, NR>(ctx, A, lda, strideA, B, ldb, strideB, piv, pstride,
-                                              n, nrhs, batch, wg, nb, mask);
-    }
-}
-
 // Trans / ConjTrans: solve op(U) z = b, solve op(L) w = z, then w = F^{-1} w -- the SAME
 // interchange list walked BACKWARDS, because A^T = U^T L^T F moves the permutation to
 // the OUTPUT and reverses it; getting that wrong is the classic silently-wrong getrs.
@@ -571,7 +341,6 @@ Event fused_launch_trans(Queue& ctx,
                 const auto ipiv = v2::vec(piv + b * static_cast<std::size_t>(pstride), n);
                 // op(A) = conj(A) when conj, read straight from A; blk holds op(A) and the block
                 // solves read it transposed, blk[s + t*bld], stride bld across lanes (the pad).
-                const auto op_a = v2::lu::conj_if(a, conj);
 
                 stage(ex, bm, y);
                 ex.barrier();
@@ -581,12 +350,12 @@ Event fused_launch_trans(Queue& ctx,
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
                     const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
-                    stage(ex, op_a.sub(j, j, jb, jb), blk);
-                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, op_a.sub(0, j, j, jb), y.sub(0, 0, j, nrhs),
+                    stage(ex, v2::conj_if(a.sub(j, j, jb, jb), conj), blk);
+                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
                                                           v2::One{}, y.sub(j, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active)
-                        v2::lu::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::lu::trans(blk), y.sub(j, 0, jb, nrhs), c0,
+                        v2::lu::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
                                                                       cs);
                     ex.barrier();
                 }
@@ -596,13 +365,13 @@ Event fused_launch_trans(Queue& ctx,
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
                     const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
-                    stage(ex, op_a.sub(j0, j0, jb, jb), blk);
-                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, op_a.sub(jend, j0, n - jend, jb),
+                    stage(ex, v2::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
+                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(jend, j0, n - jend, jb), conj),
                                                           y.sub(jend, 0, n - jend, nrhs), v2::One{},
                                                           y.sub(j0, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active && jb > 1)
-                        v2::lu::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::lu::trans(blk), y.sub(j0, 0, jb, nrhs), c0,
+                        v2::lu::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
                                                                    cs);
                     ex.barrier();
                 }
@@ -683,6 +452,7 @@ Event potrs_fused_launch(Queue& ctx,
                 };
                 // The adjoint's element, op(A)[i, c] = conj(A[c, i]), read at A[i, c].
                 auto ld_h = [&](int i, int c) BATCHLAS_DLA_BODY { return dev_conj(ld_a(i, c)); };
+                const auto add = [](D u, D v) { return v2::Arith<D>::add(u, v); };
 
                 for (int e = tid; e < n * nrhs; e += wg) {
                     const int i = e % n, c = e / n;
@@ -706,7 +476,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
                             for (int i = lane; i < j; i += 32) {
                                 const D a = ld_h(i, j + t);
                                 BATCHLAS_UNROLL_FULL
@@ -716,7 +486,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
+                                    const D s = v2::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j + t] = dev_sub(y[c * nz + j + t], s);
                                 }
                         }
@@ -734,7 +504,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j + l] : dev_zero_of<D>();
+                            D v = on ? yc[j + l] : v2::Arith<D>::zero();
                             for (int s = 0; s < jb; ++s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -751,7 +521,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = j + jb + tid; i < n; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j + kk);
                                 BATCHLAS_UNROLL_FULL
@@ -782,7 +552,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
                             for (int i = jend + lane; i < n; i += 32) {
                                 const D a = ld_h(i, j0 + t);
                                 BATCHLAS_UNROLL_FULL
@@ -792,7 +562,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
+                                    const D s = v2::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j0 + t] = dev_sub(y[c * nz + j0 + t], s);
                                 }
                         }
@@ -806,7 +576,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j0 + l] : dev_zero_of<D>();
+                            D v = on ? yc[j0 + l] : v2::Arith<D>::zero();
                             for (int s = jb - 1; s >= 0; --s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -822,7 +592,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = tid; i < j0; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j0 + kk);
                                 BATCHLAS_UNROLL_FULL

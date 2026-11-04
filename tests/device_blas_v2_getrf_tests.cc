@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Device LA v2, the LU-private ops (src/ops/getrf/getrf_v2.hh) against host references; the
+// Device LA v2, ?GETF2 and its pivot steps (include/batchlas/device/lapack/getrf.hh) against host references; the
 // shared ops they use (RtGroup, for_each_owned, swap, lacpy, laswp, Partition::bcast) are covered
 // by device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): non-natural ld with
 // poisoned pad rows, rectangular m > n and m < n, complex data through the POD device scalar (as
@@ -25,13 +25,13 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/arith.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/ops/getrf/getrf_v2.hh>
+#include <batchlas/device/lapack/getrf.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace gn = batchlas::getrf_native;
+namespace g2 = batchlas::device::getf2_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -270,23 +270,23 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2ExplicitSwapEveryExecutor) {
         if (v == 0) {
             this->dev.template run<128>(kBatch, slot_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                const gn::LuExec<gn::LuScope::WorkGroup> ex{it};
+                const v2::RtGroup<v2::Scope::Group> ex{it};
                 R* vs = reinterpret_cast<R*>(lm);
                 int* is = reinterpret_cast<int*>(lm + 32 * sizeof(R));
-                gn::getf2_panel_device<gn::LuScope::WorkGroup>(ex, v2::mat_wide(ad + per * b, m, n, ld), kmax,
+                v2::getf2_panel_device(ex, v2::mat_wide(ad + per * b, m, n, ld), kmax,
                                                                piv + std::size_t(b) * kmax, base, inf + b, vs, is);
             });
         } else if (v == 1) {
             const int ldt = 21;  // odd, below ld: the tile has its own layout
             this->dev.template run<64>(kBatch / 2, 2 * std::size_t(ldt) * n * sizeof(D), [=](sycl::nd_item<1> it, unsigned char* lm) {
-                const gn::LuExec<gn::LuScope::SubGroup> ex{it};
+                const v2::RtGroup<v2::Scope::Sub> ex{it};
                 const int slot = static_cast<int>(it.get_sub_group().get_group_linear_id());
                 const int b = static_cast<int>(it.get_group_linear_id()) * 2 + slot;
                 const auto At = v2::mat_wide<v2::Mem::Local>(reinterpret_cast<D*>(lm) + std::size_t(slot) * ldt * n, m, n, ldt);
                 const auto Ag = v2::mat_wide(ad + per * b, m, n, ld);
                 v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, Ag, At);
                 ex.barrier();
-                gn::getf2_panel_device<gn::LuScope::SubGroup>(ex, At, kmax, piv + std::size_t(b) * kmax, base, inf + b,
+                v2::getf2_panel_device(ex, At, kmax, piv + std::size_t(b) * kmax, base, inf + b,
                                                               static_cast<R*>(nullptr), static_cast<int*>(nullptr));
                 ex.barrier();
                 v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, At, Ag);
@@ -298,7 +298,7 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2ExplicitSwapEveryExecutor) {
                 R* vs = reinterpret_cast<R*>(lm);
                 int* is = reinterpret_cast<int*>(lm + 32 * sizeof(R));
                 std::int32_t info = ex.leader() ? inf[b] : 0;
-                info = gn::getf2(ex, v2::mat(ad + per * b, m, n, ld), kmax, gn::Ipiv{piv + std::size_t(b) * kmax, base}, info, vs, is);
+                info = v2::getf2(ex, v2::mat(ad + per * b, m, n, ld), kmax, v2::IpivSink{piv + std::size_t(b) * kmax, base}, info, vs, is);
                 if (ex.leader()) inf[b] = info;
             });
         }
@@ -317,13 +317,13 @@ template <int N, class Px> struct KeyPivot {
     int n, lane, base;
     int* ipiv;
     std::int32_t& info;
-    template <class R> gn::PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class R> g2::PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = rowid >= j && rowid < n;
-        gn::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), ((cand ? rowid : rowid + N) << 8) | lane};
-        gn::maxloc_bfly_up(px, a);
+        g2::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), ((cand ? rowid : rowid + N) << 8) | lane};
+        g2::maxloc_bfly_up(px, a);
         return {a.i >> 8, a.i & 0xff};
     }
-    void record(int j, gn::PivotWinner w) const {
+    void record(int j, g2::PivotWinner w) const {
         if (lane == 0) ipiv[j] = base + w.row + 1;
     }
     void on_zero(bool zero, int j) const {
@@ -333,7 +333,7 @@ template <int N, class Px> struct KeyPivot {
 
 // (a) the register panel's shape: RtGroup<Group> of 64 items over m = 45 rows (19 pad items),
 // pivot_rows_group + bcast_row_local; (b) the tiny tier's shape: Partition<16> per matrix, key
-// pivot + bcast_shuffle. Both must equal the host AND, bit for bit, gn::getf2 on the same data
+// pivot + bcast_shuffle. Both must equal the host AND, bit for bit, v2::getf2 on the same data
 // (the same arithmetic in the same order).
 TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
     using T = TypeParam;
@@ -357,7 +357,7 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
         if (v == 0) {
             this->dev.template run<64>(kBatch, lbytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                const gn::LuExec<gn::LuScope::WorkGroup> ex{it};
+                const v2::RtGroup<v2::Scope::Group> ex{it};
                 D* sx = reinterpret_cast<D*>(lm);
                 R* vs = reinterpret_cast<R*>(lm + NC * sizeof(D));
                 int* is = reinterpret_cast<int*>(lm + NC * sizeof(D) + 32 * sizeof(R));
@@ -372,9 +372,9 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
                 }
                 int rowid = live ? tid : -1;
                 std::int32_t info = ex.leader() ? inf[b] : 0;
-                auto pv = gn::pivot_rows_group(ex, vs, is, m, gn::Ipiv{piv + std::size_t(b) * kmax, base}, info);
-                auto bc = gn::bcast_row_local(ex, sx);
-                gn::getf2_relabel(rA, rowid, kmax, n, pv, bc);
+                auto pv = g2::pivot_rows_group(ex, vs, is, m, v2::IpivSink{piv + std::size_t(b) * kmax, base}, info);
+                auto bc = g2::bcast_row_local(ex, sx);
+                v2::getf2_relabel(rA, rowid, kmax, n, pv, bc);
                 ex.barrier();  // every item has read A before rows land at their relabelled place
                 if (live)
                     for (int c = 0; c < n; ++c) A[rowid + std::size_t(c) * ld] = rA[c];
@@ -397,8 +397,8 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
                 int rowid = lane;
                 std::int32_t info = inf[b];  // partition-uniform
                 const KeyPivot<16, decltype(px)> pv{px, n, lane, base, piv + std::size_t(b) * kmax, info};
-                const auto bc = gn::bcast_shuffle(px);
-                gn::getf2_relabel(rA, rowid, kmax, n, pv, bc);
+                const auto bc = g2::bcast_shuffle(px);
+                v2::getf2_relabel(rA, rowid, kmax, n, pv, bc);
                 sycl::group_barrier(sg);
                 if (lane < n)
                     for (int c = 0; c < n; ++c) A[rowid + std::size_t(c) * ld] = rA[c];
@@ -408,9 +408,9 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
         // The explicit-swap twin on the same data.
         this->dev.template run<64>(kBatch, 32 * (sizeof(R) + sizeof(int)), [=](sycl::nd_item<1> it, unsigned char* lm) {
             const int b = static_cast<int>(it.get_group_linear_id());
-            const gn::LuExec<gn::LuScope::WorkGroup> ex{it};
+            const v2::RtGroup<v2::Scope::Group> ex{it};
             std::int32_t info = ex.leader() ? inf2[b] : 0;
-            info = gn::getf2(ex, v2::mat_wide(ad2 + per * b, m, n, ld), kmax, gn::Ipiv{piv2 + std::size_t(b) * kmax, base}, info,
+            info = v2::getf2(ex, v2::mat_wide(ad2 + per * b, m, n, ld), kmax, v2::IpivSink{piv2 + std::size_t(b) * kmax, base}, info,
                              reinterpret_cast<R*>(lm), reinterpret_cast<int*>(lm + 32 * sizeof(R)));
             if (ex.leader()) inf2[b] = info;
         });
@@ -423,7 +423,7 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
         for (std::size_t e = 0; e < g.size(); ++e) twin += !same_bits(g[e], g2[e]);
         for (std::size_t e = 0; e < p.size(); ++e) twin += p[e] != p2[e];
         for (int b = 0; b < kBatch; ++b) twin += i1[b] != i2[b];
-        EXPECT_EQ(twin, 0) << what << ": differs from gn::getf2 on the same data";
+        EXPECT_EQ(twin, 0) << what << ": differs from v2::getf2 on the same data";
     }
 }
 
@@ -457,11 +457,11 @@ TYPED_TEST(DeviceBlasV2GetrfTest, IamaxColTiesNanEveryExecutor) {
         int* is = reinterpret_cast<int*>(lm + 64 * sizeof(R));  // 64 slots
         const auto xv = v2::mat_wide(xd + std::size_t(c) * n, c == 3 ? 0 : n, 1, n);
         const int r0 = c == 4 ? 78 : 0;
-        const gn::LuExec<gn::LuScope::WorkGroup> eg{it};
-        const int ig = gn::iamax_col(eg, xv, r0, 0, 32, vs, is);
+        const v2::RtGroup<v2::Scope::Group> eg{it};
+        const int ig = g2::iamax_col(eg, xv, r0, 0, 32, vs, is);
         eg.barrier();
-        const int isub = gn::iamax_col(gn::LuExec<gn::LuScope::SubGroup>{it}, xv, r0, 0, 32, vs, is);
-        const int iwg = gn::iamax_col(v2::WorkGroup<96>{it}, xv, r0, 0, 32, vs + 32, is + 32);
+        const int isub = g2::iamax_col(v2::RtGroup<v2::Scope::Sub>{it}, xv, r0, 0, 32, vs, is);
+        const int iwg = g2::iamax_col(v2::WorkGroup<96>{it}, xv, r0, 0, 32, vs + 32, is + 32);
         if (eg.leader()) o[c * nexec] = ig, o[c * nexec + 1] = isub, o[c * nexec + 2] = iwg;
     });
     const auto g = this->dev.down(o, ho.size());
@@ -497,11 +497,11 @@ TYPED_TEST(DeviceBlasV2GetrfTest, RsclColArmsSmithAndGerTrailing) {
     D *xd = dv(x), *ddd = dv(dd), *aad = dv(a);
     this->dev.template run<96>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         namespace sd = ::batchlas::sycl_device;
-        const gn::LuExec<gn::LuScope::WorkGroup> eg{it};
-        for (int s = 0; s < 3; ++s) gn::rscl_col(eg, ddd[s], v2::mat_wide(xd + s * n, n, 1, n), r0, 0);
+        const v2::RtGroup<v2::Scope::Group> eg{it};
+        for (int s = 0; s < 3; ++s) g2::rscl_col(eg, ddd[s], v2::mat_wide(xd + s * n, n, 1, n), r0, 0);
         if (eg.leader()) flag[0] = sd::dev_is_zero(ddd[1]) ? 1 : 0, flag[1] = sd::dev_isfinite(sd::dev_recip(ddd[1])) ? 1 : 0;
-        gn::ger_trailing(eg, v2::mat_wide(aad, m, nc, ld), k);
-        gn::ger_trailing(v2::WorkGroup<96>{it}, v2::mat(aad + std::size_t(ld) * nc, m, nc, ld), k);
+        g2::ger_trailing(eg, v2::mat_wide(aad, m, nc, ld), k);
+        g2::ger_trailing(v2::WorkGroup<96>{it}, v2::mat(aad + std::size_t(ld) * nc, m, nc, ld), k);
     });
     const auto gx = this->dev.down(x, hx.size());
     const auto gf = this->dev.down(flag, 2);

@@ -12,7 +12,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <src/ops/getri/getri_v2.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <sycl/sycl.hpp>
@@ -90,7 +90,7 @@ Event getri_perm_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const v2::RtGroup<> ex(it);
-                const v2::lu::LocalMinSlot info{&slot[0]};
+                const auto info = v2::atomic_min_slot(&slot[0]);
 
                 info.reset(ex);
                 ex.barrier(v2::Mem::Global);
@@ -102,15 +102,15 @@ Event getri_perm_launch(Queue& ctx,
                 v2::for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
                     // F[i, perm[i]] = 1: i walked back through the interchanges from the LAST to
                     // the first; each is its own inverse, so only the ORDER reverses.
-                    c(i, v2::lu::perm_index<v2::dir::Backward>(ipiv, 0, n, i)) = v2::Arith<D>::one();
+                    c(i, v2::laswp_index<v2::dir::Backward>(ipiv, 0, n, i)) = v2::Arith<D>::one();
                     // EXACT zero, no epsilon: ?GETRI reports the first U(i,i) that is a true
                     // binary zero, not |u| < eps. 1-BASED, LAPACK info.
-                    if (want_info && sycl_device::dev_is_zero(a(i, i))) info.offer(i + 1);
+                    if (want_info && v2::Arith<D>::is_zero(a(i, i))) info.offer(i + 1);
                 });
 
                 if (want_info) {
                     ex.barrier(v2::Mem::Global);
-                    if (ex.leader()) info_ptr[b] = static_cast<int32_t>(info.info());
+                    if (ex.leader()) info_ptr[b] = static_cast<int32_t>(info.or_zero());
                 }
             });
     });

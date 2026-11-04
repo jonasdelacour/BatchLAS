@@ -3,10 +3,11 @@
 // a tier -- same ipiv contract, same read-modify-written `info`, same cabs1 pivot metric,
 // so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm; the default is
 // this leaf (getrf_blocked.cc, evidence: docs/perf/lu.md#lu-the-register-leaf-ab). Same device-code cluster
-// as getrf_cta.cc (EXTENSIONS_CTA_SOURCES), which is where lu_cabs1 and lu_zero live.
+// as getrf_cta.cc (EXTENSIONS_CTA_SOURCES); both call the public ?GETF2 (lapack/getrf.hh).
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
 #include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/getrf_cta_device.hh>
 #include <src/ops/getrf/kernels/getrf_panel_reg_device.hh>
 
 #include <src/queue.hh>

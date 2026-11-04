@@ -10,7 +10,8 @@
 // oracle; ipiv is 1-based and GLOBAL, int32 in the public int64 span.
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_v2.hh>
+#include <batchlas/device/lapack/getrf.hh>
+#include <src/sycl/device_scalar.hh>
 #include <src/kernels/common/tiny_device.hh>
 #include <batchlas/device/sg_partition.hh>
 
@@ -41,6 +42,7 @@ namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
 namespace v2 = ::batchlas::device;
+namespace g2 = ::batchlas::device::getf2_detail;
 
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
@@ -83,13 +85,13 @@ struct TinyPivot {
     int& my_piv;
     int32_t& linfo;
     template <typename R>
-    BATCHLAS_DLA_INLINE gn::PivotWinner argmax(int j, R mag, int rowid) const {
+    BATCHLAS_DLA_INLINE g2::PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j) && (rowid < n);
-        gn::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), tn::tiny_key(cand ? rowid : (rowid + N), lane)};
-        gn::maxloc_bfly_up(px, a);
-        return {tn::tiny_key_order(a.i), static_cast<int>(tn::tiny_key_lane(a.i))};
+        g2::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), g2::pivot_key(cand ? rowid : (rowid + N), lane)};
+        g2::maxloc_bfly_up(px, a);
+        return {g2::pivot_key_order(a.i), static_cast<int>(g2::pivot_key_lane(a.i))};
     }
-    BATCHLAS_DLA_INLINE void record(int j, gn::PivotWinner w) const {
+    BATCHLAS_DLA_INLINE void record(int j, g2::PivotWinner w) const {
         if (lane == j) my_piv = w.row;
     }
     BATCHLAS_DLA_INLINE void on_zero(bool zero, int j) const {
@@ -102,7 +104,7 @@ struct TinyPivot {
 // orders this store after every lane's reads two steps back. evidence: docs/perf/lu.md#the-local-memory-broadcast
 template <typename D, int NC, int Mpw>
 struct TinySlmBcast {
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     using R4 = tn::tiny_r4<R>;
     static constexpr int kW = tn::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;
@@ -111,7 +113,7 @@ struct TinySlmBcast {
     int pidx;
     int lane;
     mutable R4* sp = nullptr;
-    BATCHLAS_DLA_INLINE void publish(int j, const v2::Frag<D, NC>& rA, int, gn::PivotWinner w) const {
+    BATCHLAS_DLA_INLINE void publish(int j, const v2::Frag<D, NC>& rA, int, g2::PivotWinner w) const {
         sp = &slm[((j & 1) * Mpw + pidx) * kNCV];
         if (lane == w.src) {
 BATCHLAS_UNROLL_FULL
@@ -122,11 +124,11 @@ BATCHLAS_UNROLL_FULL
         }
         sycl::group_barrier(sg);
     }
-    BATCHLAS_DLA_INLINE D pivot(int j, const v2::Frag<D, NC>&, gn::PivotWinner) const {
+    BATCHLAS_DLA_INLINE D pivot(int j, const v2::Frag<D, NC>&, g2::PivotWinner) const {
         return tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
     }
     template <typename F>
-    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const v2::Frag<D, NC>&, gn::PivotWinner, F&& f) const {
+    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const v2::Frag<D, NC>&, g2::PivotWinner, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int v = 0; v < kNCV; ++v) {
             if (v < j / kW || v * kW >= ncols) continue;
@@ -148,7 +150,7 @@ BATCHLAS_UNROLL_FULL
 // one shuffle per element (two per complex). evidence: docs/perf/lu.md#the-local-memory-broadcast
 template <typename D, int N, int NC, int Mpw, int MinBlocks, bool Slm>
 struct GetrfTinyBody {
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     using R4 = tn::tiny_r4<R>;
     static constexpr int kW = tn::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;   // vectors per published row
@@ -197,10 +199,10 @@ BATCHLAS_UNROLL_FULL
         const TinyPivot<N, decltype(px)> piv{px, n, lane, my_piv, linfo};
         if constexpr (Slm) {
             const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
-            gn::getf2_relabel(rA, rowid, n, n, piv, bc);
+            v2::getf2_relabel(rA, rowid, n, n, piv, bc);
         } else {
-            const auto bc = gn::bcast_shuffle(px);  // one select per element, two per complex
-            gn::getf2_relabel(rA, rowid, n, n, piv, bc);
+            const auto bc = g2::bcast_shuffle(px);  // one select per element, two per complex
+            v2::getf2_relabel(rA, rowid, n, n, piv, bc);
         }
 
         if (live) {

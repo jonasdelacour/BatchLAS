@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-// The family-private device LA v2 ops of getrs / getri / gesv (src/ops/getrs/getrs_v2.hh,
-// src/ops/getri/getri_v2.hh, src/ops/gesv/gesv_v2.hh) against host references; the shared ops
-// they compose with (RtGroup, lacpy, laswp, arith::Fma, select, Partition::bcast) are covered by
-// device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): RecipOrDiv bit for bit
-// against getf2's open-coded sycl_device scaling at zero, -0, denormal, inf and both sides of
-// Smith's branch; sum_to_lane0 bit for bit against a host replay of the shift-down order;
+// The device LA ops getrs / getri / gesv run on (the private ones in src/ops/getrs/getrs_v2.hh
+// and src/ops/gesv/gesv_v2.hh, and the core ones they took over: SafeRecip, laswp_index,
+// AtomicMinSlot, shift_reduce, conj_if, op_view) against host references, as the LU kernels call
+// them; RtGroup, lacpy, laswp, select and Partition::bcast are covered by device_blas_v2_tests.
+// Guards (docs/developer/agent-guide.md section 8): SafeRecip bit for bit against getf2's
+// open-coded sycl_device scaling at zero, -0, denormal, inf and both sides of Smith's branch;
+// shift_reduce bit for bit against a host replay of the shift-down order;
 // non-natural ld and sub-view offsets; complex data with nonzero imaginary parts and conjugated
 // views; the unread triangle (and a Unit diagonal) poisoned with NaN; ld pads and a column past
 // nrhs poisoned and checked untouched; batch 1024 with period-3 data where every item must match
@@ -27,7 +28,6 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/arith.hh>
 #include <src/ops/gesv/gesv_v2.hh>
-#include <src/ops/getri/getri_v2.hh>
 #include <src/ops/getrs/getrs_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
@@ -146,10 +146,10 @@ template <class T> bool device_flushes(Dev& dev) {
 
 // ---- getf2 pivot scaling (gesv) ------------------------------------------------------------
 
-// RecipOrDiv against gesv_tiny's legacy open-coded scaling (sycl_device), bit for bit: the
+// SafeRecip against gesv_tiny's legacy open-coded scaling (sycl_device), bit for bit: the
 // multiply arm, the divide arm (denormal, huge) and the singular arm (0, -0), both sides of
 // Smith's branch for complex.
-TYPED_TEST(DeviceBlasV2LuTest, RecipOrDivIsGetf2ScalingBitForBit) {
+TYPED_TEST(DeviceBlasV2LuTest, SafeRecipIsGetf2ScalingBitForBit) {
     using T = TypeParam;
     using D = DevT<T>;
     using R = real_of<T>;
@@ -177,9 +177,9 @@ TYPED_TEST(DeviceBlasV2LuTest, RecipOrDivIsGetf2ScalingBitForBit) {
         D* ref = got + n * kSlots;
         for (int i = static_cast<int>(it.get_local_linear_id()); i < n; i += 32) {
             const D x = ad[i], y = bd[i];
-            const auto sr = lu::RecipOrDiv<D>::make(y);
-            got[i * kSlots + 0] = sr.solve(x, x);                    // gesv step 4: keep x if singular
-            got[i * kSlots + 1] = sr.solve(x, v2::Arith<D>::zero()); // gesv step 6: zero if singular
+            const auto sr = v2::SafeRecip<D>::make(y);
+            got[i * kSlots + 0] = sr.apply(x, x);                    // gesv step 4: keep x if singular
+            got[i * kSlots + 1] = sr.apply(x, v2::Arith<D>::zero()); // gesv step 6: zero if singular
             f[2 * i] = sr.zero;
             const bool zero = sd::dev_is_zero(y);
             const D rc = sd::dev_recip(y);
@@ -196,8 +196,8 @@ TYPED_TEST(DeviceBlasV2LuTest, RecipOrDivIsGetf2ScalingBitForBit) {
     int diff = 0, fdiff = 0;
     for (int i = 0; i < n * kSlots; ++i) diff += !same_bits(h[i], h[n * kSlots + i]);
     for (int i = 0; i < n; ++i) fdiff += fl[2 * i] != fl[2 * i + 1];
-    EXPECT_EQ(diff, 0) << "RecipOrDiv differs from the sycl_device getf2 scaling";
-    EXPECT_EQ(fdiff, 0) << "RecipOrDiv::zero";
+    EXPECT_EQ(diff, 0) << "SafeRecip differs from the sycl_device getf2 scaling";
+    EXPECT_EQ(fdiff, 0) << "SafeRecip::zero";
     EXPECT_TRUE(fl[0] == 1 && fl[2 * 7] == 1) << "0 and -0 are exact zeros";
 }
 
@@ -220,7 +220,7 @@ template <class T, int WG> void gather_case(Dev& dev) {
         const auto src = v2::mat_wide(reinterpret_cast<const D*>(s) + std::size_t(b) * kSrc, m + i0, NA, ldA).sub(i0, j0, m, n);
         D* ob = reinterpret_cast<D*>(o) + std::size_t(b) * kOut;
         lu::lapmr_copy(ex, src, perm, v2::mat_wide(ob, m, n, ldB));
-        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, lu::conj_if(lu::trans(src), true),
+        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, v2::conj_if(v2::op_view<Transpose::Trans>(src), true),
                                                                      v2::mat_wide(ob + ldB * n, n, m, ldT));
     });
     const auto h = dev.down(o, ho.size());
@@ -271,9 +271,9 @@ void host_laswp(std::vector<int>& x, const std::vector<int>& p, int k0, int k1, 
         for (int k = k1 - 1; k >= k0; --k) step(k);
 }
 
-// perm_index, both orders on the full list and Forward on a sub-range, for every i against
+// laswp_index, both orders on the full list and Forward on a sub-range, for every i against
 // laswp applied to the identity on the host (another walk: it moves values, not one index).
-TEST(DeviceBlasV2LuPerm, PermIndexIsLaswpOfTheIdentity) {
+TEST(DeviceBlasV2LuPerm, LaswpIndexIsLaswpOfTheIdentity) {
     Dev dev;
     if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
     constexpr int WG = 64, n = 45, k0 = 3, k1 = n - 4, kOut = 3 * n;
@@ -291,9 +291,9 @@ TEST(DeviceBlasV2LuPerm, PermIndexIsLaswpOfTheIdentity) {
         const auto ipiv = v2::vec(pv + std::size_t(b) * n, n);
         int* ob = o + std::size_t(b) * kOut;
         v2::for_each_owned(ex, n, [&](int i) {
-            ob[i] = lu::perm_index<v2::dir::Forward>(ipiv, 0, n, i);
-            ob[n + i] = lu::perm_index<v2::dir::Backward>(ipiv, 0, n, i);
-            ob[2 * n + i] = lu::perm_index<v2::dir::Forward>(ipiv, k0, k1, i);
+            ob[i] = v2::laswp_index<v2::dir::Forward>(ipiv, 0, n, i);
+            ob[n + i] = v2::laswp_index<v2::dir::Backward>(ipiv, 0, n, i);
+            ob[2 * n + i] = v2::laswp_index<v2::dir::Forward>(ipiv, k0, k1, i);
         });
     });
     const auto h = dev.down(o, ho.size());
@@ -316,7 +316,7 @@ TEST(DeviceBlasV2LuPerm, PermIndexIsLaswpOfTheIdentity) {
 
 // Pattern b % 4: no zero (a complex item carries (0, 1), which is not zero), zero at 0, zeros at
 // 77 and 200 (the second a -0), zero at n - 1. n > WG, so every item strides twice.
-TYPED_TEST(DeviceBlasV2LuTest, LocalMinSlotFirstExactZero) {
+TYPED_TEST(DeviceBlasV2LuTest, AtomicMinSlotFirstExactZero) {
     using T = TypeParam;
     using D = DevT<T>;
     using R = real_of<T>;
@@ -339,7 +339,7 @@ TYPED_TEST(DeviceBlasV2LuTest, LocalMinSlotFirstExactZero) {
     this->dev.template run<WG>(kBatch, sizeof(int), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::RtGroup<> ex(it);
-        const lu::LocalMinSlot slot{reinterpret_cast<int*>(lm)};
+        const auto slot = v2::atomic_min_slot(reinterpret_cast<int*>(lm));
         // ld 0 makes element (i, i) dg[i]: the diagonal alone is stored.
         const auto a = v2::mat_wide(reinterpret_cast<const D*>(dg) + std::size_t(b) * n, n, n, 0);
         slot.reset(ex);
@@ -348,7 +348,7 @@ TYPED_TEST(DeviceBlasV2LuTest, LocalMinSlotFirstExactZero) {
             if (sd::dev_is_zero(a(i, i))) slot.offer(i + 1);
         });
         ex.barrier(v2::Mem::Global);
-        if (ex.leader()) info[b] = slot.info();
+        if (ex.leader()) info[b] = slot.or_zero();
     });
     const auto h = this->dev.down(info, hi.size());
     const int want[kPat] = {0, 1, 78, n};
@@ -361,7 +361,7 @@ TYPED_TEST(DeviceBlasV2LuTest, LocalMinSlotFirstExactZero) {
 
 // Lane 0's total against a host replay of the shift-down order (off = 16, 8, .., 1), bit for bit:
 // another order (a butterfly, reduce_over_group) rounds differently on these inputs.
-TYPED_TEST(DeviceBlasV2LuTest, SumToLane0IsTheShiftDownOrderBitForBit) {
+TYPED_TEST(DeviceBlasV2LuTest, ShiftReduceIsTheShiftDownOrderBitForBit) {
     using T = TypeParam;
     using D = DevT<T>;
     using R = real_of<T>;
@@ -373,7 +373,8 @@ TYPED_TEST(DeviceBlasV2LuTest, SumToLane0IsTheShiftDownOrderBitForBit) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto sg = it.get_sub_group();
         const int lane = static_cast<int>(sg.get_local_linear_id());
-        const D s = lu::sum_to_lane0<32>(sg, reinterpret_cast<const D*>(x)[std::size_t(b) * 32 + lane]);
+        const auto add = [](D u, D v) { return v2::Arith<D>::add(u, v); };
+        const D s = v2::shift_reduce<32>(sg, reinterpret_cast<const D*>(x)[std::size_t(b) * 32 + lane], add);
         if (lane == 0) reinterpret_cast<D*>(o)[b] = s;
     });
     const auto h = this->dev.down(o, ho.size());
@@ -441,7 +442,7 @@ template <class T, Uplo UL, Diag DG, bool Tr> void trsm_lane_case(Dev& dev, int 
         const auto am = v2::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * ld * jb, jb, jb, ld);
         const auto ym = v2::mat_wide(reinterpret_cast<D*>(y) + std::size_t(b) * ldy * nrhs, jb, nrhs, ldy);
         const int c0 = static_cast<int>(sg.get_group_linear_id());
-        if constexpr (Tr) lu::trsm_lane<UL, DG>(sx, lu::conj_if(lu::trans(am), true), ym, c0, 2);
+        if constexpr (Tr) lu::trsm_lane<UL, DG>(sx, v2::conj_if(v2::op_view<Transpose::Trans>(am), true), ym, c0, 2);
         else lu::trsm_lane<UL, DG>(sx, am, ym, c0, 2);
     });
     const auto h = dev.down(y, hy.size());
@@ -493,7 +494,7 @@ template <class T, int WG> void gemm_nr_case(Dev& dev) {
         // A view (1, 2) of m x k; X rows (3, k) for NoTrans; the full m rows for Trans.
         lu::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, am.sub(1, 2, m, k), xm.sub(3, 0, k, nrhs), v2::One{},
                                             v2::mat_wide(cb, m, nrhs, ldC));
-        lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, lu::conj_if(am.sub(1, 2, m, k), true), xm, v2::One{},
+        lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(am.sub(1, 2, m, k), true), xm, v2::One{},
                                           v2::mat_wide(cb + kC, k, nrhs, ldC));
     });
     const auto h = dev.down(c, hc.size());
@@ -585,8 +586,5 @@ TYPED_TEST(DeviceBlasV2LuTest, GerFragBcastRowUpdate) {
     EXPECT_EQ(bad, 0) << "unchanged bits (inactive lanes, source lane, columns outside [k0, kend))";
     EXPECT_VERIFY(T, Check::blas, NC, worst);
 }
-
-// The family's arithmetic is core arith::Fma, not a private policy.
-static_assert(std::is_same_v<lu::lu_arith<sd::Cx<float>>, v2::FmaArith<sd::Cx<float>>>);
 
 }  // namespace

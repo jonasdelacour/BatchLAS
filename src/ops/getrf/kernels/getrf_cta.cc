@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Native batched GETRF: the CTA tier and the panel leaf both tiers share -- stage the tile into
 // local memory, factor by ?GETF2's right-looking rank-1 recurrence with partial pivoting, store
-// back. The device body lives in getrf_v2.hh because getrf_blocked.cc's panel step runs
-// the SAME code from global memory, so a fix must not miss one residency. Whether Auto picks
+// back. The device body is the public ?GETF2 (lapack/getrf.hh) because getrf_blocked.cc's panel
+// step runs the SAME code from global memory, so a fix must not miss one residency. Whether Auto picks
 // THIS arm is the tuned/getrf.* table's call; BATCHLAS_GETRF_ROUTE=cta pins it.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_v2.hh>
+#include <src/ops/getrf/getrf_cta_device.hh>
+#include <src/sycl/device_scalar.hh>
+#include <batchlas/device/lapack/getrf.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
@@ -162,7 +164,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const gn::LuExec<SC> ex{it};
+                const v2::RtGroup<SC == gn::LuScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group> ex{it};
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
                 int b, slot;
@@ -184,7 +186,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 const auto Ag = v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
                 v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, Ag, At);   // stage into the padded ld
                 ex.barrier();                                 // B0
-                gn::getf2_panel_device<SC>(
+                v2::getf2_panel_device(
                     ex, At, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);
@@ -225,8 +227,8 @@ Event getrf_panel_global_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
                 // Always WorkGroup: a full column block is far too tall for one sub-group.
-                gn::getf2_panel_device<gn::LuScope::WorkGroup>(
-                    gn::LuExec<gn::LuScope::WorkGroup>{it},
+                v2::getf2_panel_device(
+                    v2::RtGroup<v2::Scope::Group>{it},
                     v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);

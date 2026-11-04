@@ -16,7 +16,8 @@
 #include <src/kernels/common/solve_native.hh>
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_cta_device.hh>
+#include <src/sycl/device_scalar.hh>
+#include <batchlas/device/lapack/getrf.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
@@ -51,6 +52,7 @@ namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
 namespace v2 = ::batchlas::device;
+namespace g2 = ::batchlas::device::getf2_detail;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSize");
@@ -89,7 +91,7 @@ constexpr int tiny_rhs_bucket(int nrhs) {
 // it was (the runtime fold measured 1.4-2.3% on float n = 32 and complex<float> n = 16, batch 8192).
 template <typename D, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
 struct GesvTinyBody {
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     using R4 = tn::tiny_r4<R>;
     static constexpr int kW = tn::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;
@@ -120,11 +122,11 @@ BATCHLAS_UNROLL_FULL
         for (int i = NC - 1; i >= 0; --i) {
             if (i >= n) continue;
             const auto il = static_cast<uint32_t>(px.bcast(row_lane, static_cast<uint32_t>(i)));
-            const auto sr = v2::lu::RecipOrDiv<D>::make(px.bcast(rA[i], il));
+            const auto sr = v2::SafeRecip<D>::make(px.bcast(rA[i], il));
 BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
-                const D xi = sr.solve(px.bcast(rB[k], il), Ar::zero());
+                const D xi = sr.apply(px.bcast(rB[k], il), Ar::zero());
                 // Lane `il` writes rX, never rB: it is this step's shuffle source and a
                 // self-update would race every read above it.
                 rX[k] = v2::select(rowid == i, xi, rX[k]);
@@ -136,6 +138,7 @@ BATCHLAS_UNROLL_FULL
 
     BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
+        using Ar = v2::arith_t<v2::arith::Fma, D>;
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
         const auto part = make_partition<N>(sg);
@@ -194,13 +197,12 @@ BATCHLAS_UNROLL_FULL
 
             // --- 1. argmax over live rows, exactly getrf_tiny's: the `mag == mag`
             // map is load-bearing, an unmapped NaN leaves lanes disagreeing.
-            const R mag = gn::lu_cabs1<D>(rA[j]);
+            const R mag = v2::abs1<D>(rA[j]);
             const bool cand = (rowid >= j) && (rowid < n);
-            R a = (cand && (mag == mag)) ? mag : R(-1);
-            int key = tn::tiny_key(cand ? rowid : (rowid + N), lane);
-            tn::tiny_argmax_pair<N>(part, a, key);
-            const int p = tn::tiny_key_order(key);
-            const uint32_t pl = tn::tiny_key_lane(key);
+            g2::MaxLoc<R> best{(cand && (mag == mag)) ? mag : R(-1), g2::pivot_key(cand ? rowid : (rowid + N), lane)};
+            g2::maxloc_bfly_up(px, best);
+            const int p = g2::pivot_key_order(best.i);
+            const uint32_t pl = g2::pivot_key_lane(best.i);
 
             // THE INVERSE PERMUTATION, FOR FREE. The winner sets rowid = j below
             // and no later step touches a rowid < j, so lane `pl` holds row j for
@@ -236,10 +238,10 @@ BATCHLAS_UNROLL_FULL
             } else {
                 piv = px.bcast(rA[j], pl);
             }
-            const auto sr = v2::lu::RecipOrDiv<D>::make(piv);
+            const auto sr = v2::SafeRecip<D>::make(piv);
             if (sr.zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);   // EXACT zero, no epsilon
             const bool act = (rowid > j);   // NEW rowid: the pivot row is excluded
-            if (act) rA[j] = sr.solve(rA[j], rA[j]);
+            if (act) rA[j] = sr.apply(rA[j], rA[j]);
 
             // --- 5. rank-1 update and, THE FUSION, forward substitution: the same
             // update applied to the RHS with the multiplier step 4 just produced, so
@@ -254,7 +256,7 @@ BATCHLAS_UNROLL_FULL
                         const int k = v * kW + e;
                         if (k <= j || k >= NC || k >= n) continue;
                         const D u = tn::tiny_r4_get<D, R>(x, e);
-                        if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
+                        if (act) rA[k] = Ar::sub(rA[k], Ar::mul(rA[j], u));
                     }
                 }
 BATCHLAS_UNROLL_FULL
@@ -266,7 +268,7 @@ BATCHLAS_UNROLL_FULL
                         const int k = v * kW + e;
                         if (k >= NR || k >= nrhs) continue;
                         const D ub = tn::tiny_r4_get<D, R>(x, e);
-                        if (act) rB[k] = sd::dev_sub(rB[k], sd::dev_mul(rA[j], ub));
+                        if (act) rB[k] = Ar::sub(rB[k], Ar::mul(rA[j], ub));
                     }
                 }
             } else {

@@ -17,7 +17,6 @@ duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith
 duplicate include/batchlas/device/reduce.hh butterfly/include/batchlas/device/exec.hh
 duplicate include/batchlas/device/view.hh conj_if/src/kernels/common/elementwise_glue_v2.hh
 duplicate include/batchlas/device/view.hh conj_if/src/ops/gemv/gemv_native_v2.hh
-duplicate include/batchlas/device/view.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate include/batchlas/device/view.hh conj_view/src/ops/gesvd/gebrd/gebrd_v2.hh
 duplicate include/batchlas/device/view.hh fn_vec/src/ops/syev/sytrd/sb2st_v2.hh
 duplicate include/batchlas/device/view.hh slice/src/ops/gesvd/bdsdc/bdsdc_v2.hh
@@ -25,7 +24,6 @@ duplicate src/kernels/common/elementwise_glue_v2.hh conj_if/include/batchlas/dev
 duplicate src/kernels/common/elementwise_glue_v2.hh real_only/src/ops/sygst/sygst_v2.hh
 duplicate src/ops/gemm/gemm-components_v2.hh static_for/include/batchlas/device/core.hh
 duplicate src/ops/gemv/gemv_native_v2.hh conj_if/include/batchlas/device/view.hh
-duplicate src/ops/gemv/gemv_native_v2.hh conj_if/src/ops/getrs/getrs_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh item_n/src/ops/gesvd/gesvd-ormbr_v2.hh
 duplicate src/ops/gesvd/bdsdc/bdsdc_v2.hh slice/include/batchlas/device/view.hh
 duplicate src/ops/gesvd/gebrd/gebrd_v2.hh conj_view/include/batchlas/device/view.hh
@@ -33,8 +31,6 @@ duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/include/batchlas/device
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned/src/ops/syev/sytrd/sytrd_v2.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh for_each_owned_2d/include/batchlas/device/level1.hh
 duplicate src/ops/gesvd/gesvd-ormbr_v2.hh item_n/src/ops/gesvd/bdsdc/bdsdc_v2.hh
-duplicate src/ops/getrs/getrs_v2.hh conj_if/include/batchlas/device/view.hh
-duplicate src/ops/getrs/getrs_v2.hh conj_if/src/ops/gemv/gemv_native_v2.hh
 duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
 duplicate src/ops/syev/kernels/syev_drivers_v2.hh lift/include/batchlas/device/arith.hh
 duplicate src/ops/syev/stedc/stedc_v2.hh group_sync/src/ops/sytrf/sytrf_v2.hh
@@ -124,7 +120,6 @@ src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue:
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::tri
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::tri_expand
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::trimask
-src-device src/ops/gesv/gesv_v2.hh batchlas::device::v2::lu::RecipOrDiv
 src-device src/ops/gesv/gesv_v2.hh batchlas::device::v2::lu::ger_frag_bcast
 src-device src/ops/gesvd/bdsdc/bdsdc_v2.hh batchlas::device::v2::bdsdc::Col
 src-device src/ops/gesvd/bdsdc/bdsdc_v2.hh batchlas::device::v2::bdsdc::DgmvIf
@@ -156,16 +151,8 @@ src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::rev
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::row_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::sub_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::tridiag_abs_offdiag
-src-device src/ops/getri/getri_v2.hh batchlas::device::v2::lu::LocalMinSlot
-src-device src/ops/getri/getri_v2.hh batchlas::device::v2::lu::perm_index
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::ConjIf
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::Trans
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::conj_if
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::gemm_nr
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::lapmr_copy
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::lu_arith
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::sum_to_lane0
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::trans
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::trsm_lane
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::Interval
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::bisect_eig
