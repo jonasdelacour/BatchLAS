@@ -22,20 +22,14 @@ namespace ormqr_detail {
 // QL: Q = H(k) ... H(1), the reverse. Compactly descending = (Left ^ QL) ? !TrConj : TrConj.
 template <bool QL, bool Left, bool TrConj> constexpr bool descending() { return (Left ^ QL) ? (!TrConj) : TrConj; }
 
-// Lane j's column of C into / out of registers. Every index into c is a compile-time constant:
-// a run-time subscript (offset + r, or a bound of n) moves the array to local memory.
-template <class T, int P, class MC> BATCHLAS_DLA_INLINE void col_load(Frag<T, P, ColPerLane>& c, const MC& C, int32_t j, int32_t n) {
-    BATCHLAS_UNROLL_FULL
-    for (int32_t r = 0; r < P; ++r) {
-        if (r < n) c[r] = C(r, j);
-    }
-}
-template <class T, int P, class MC> BATCHLAS_DLA_INLINE void col_store(const Frag<T, P, ColPerLane>& c, const MC& C, int32_t j, int32_t n) {
-    BATCHLAS_UNROLL_FULL
-    for (int32_t r = 0; r < P; ++r) {
-        if (r < n) C(r, j) = c[r];
-    }
-}
+// vec_ok's 16-byte column access. sycl::vec<std::complex> does not compile on AdaptiveCpp; complex
+// never takes the path (the host clears vec_ok), so it only needs a type that compiles.
+template <class T, int N> struct PlainVec {
+    T v[N];
+    T& operator[](int i) { return v[i]; }
+    const T& operator[](int i) const { return v[i]; }
+};
+template <class T, int N> using ColVec = std::conditional_t<Arith<T>::is_complex, PlainVec<T, N>, sycl::vec<T, N>>;
 
 // LEFT: lane j owns column j of the n x n C in a register Frag; reflector ii is staged per
 // absolute row in V (P scalars at base_v, zero outside its support) so the rank-1 update runs
@@ -44,36 +38,37 @@ template <class T, int P, class MC> BATCHLAS_DLA_INLINE void col_store(const Fra
 // (lane j's column is ld apart from its neighbour's, so scalar rows cost 32 sectors each).
 // NO EARLY RETURN: a dead partition (live = false) applies tau = 0 reflectors and stores nothing.
 template <int P, bool QL, bool TrConj, class Ops, class Ex, class MA, class VT, class MC, class VB>
-BATCHLAS_DLA_INLINE void orm2x_left(const Ex& ex, const MA& A_prob, const VT& TAU_prob, const MC& C_prob, const VB& V_local,
-                                    int32_t base_v, int32_t n, int32_t k, bool live, bool vec_ok) {
+BATCHLAS_DLA_INLINE void orm2x_left(const Ex& ex, int32_t lane, const MA& A_prob, const VT& TAU_prob, const MC& C_prob,
+                                    const VB& V_local, int32_t base_v, int32_t n, int32_t k, bool live, bool vec_ok) {
     using T = std::remove_cvref_t<decltype(C_prob(0, 0))>;
     using Ar = arith_t<Ops, T>;
-    const int32_t lane = static_cast<int32_t>(ex.lid());
     const bool active_col = live && (lane < n);
     const int32_t j = lane;
 
+    constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
+    using VecT = ColVec<T, VW>;
     Frag<T, P, ColPerLane> C_col;
     BATCHLAS_UNROLL_FULL
     for (int32_t r = 0; r < P; ++r) C_col[r] = Ar::zero();
-    if constexpr (!Ar::is_complex) {
-        constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
-        if (vec_ok && active_col) {
-            using VecT = sycl::vec<T, VW>;
-            auto* col_ptr = reinterpret_cast<const VecT*>(&C_prob(0, j));
-            BATCHLAS_UNROLL_FULL
-            for (int32_t r = 0; r < P; r += VW) {
-                if (r < n) {
-                    const VecT v = col_ptr[r / VW];
-                    BATCHLAS_UNROLL_FULL
-                    for (int32_t t = 0; t < VW; ++t) C_col[r + t] = v[t];
-                }
+    if (vec_ok && active_col) {
+        auto* col_ptr = reinterpret_cast<const VecT*>(&C_prob(0, j));
+        BATCHLAS_UNROLL_FULL
+        for (int32_t r = 0; r < P; r += VW) {
+            if (r < n) {
+                const VecT v = col_ptr[r / VW];
+                BATCHLAS_UNROLL_FULL
+                for (int32_t t = 0; t < VW; ++t) C_col[r + t] = v[t];
             }
-        } else if (active_col) {
-            col_load(C_col, C_prob, j, n);
         }
-    } else {
-        static_cast<void>(vec_ok);
-        if (active_col) col_load(C_col, C_prob, j, n);
+    } else if (active_col) {
+        // Every index into C_col is a compile-time constant: a run-time subscript (offset + r, or
+        // a bound of n) moves the array to local memory.
+        BATCHLAS_UNROLL_FULL
+        for (int32_t r = 0; r < P; ++r) {
+            if (r < n) {
+                C_col[r] = C_prob(r, j);
+            }
+        }
     }
 
     constexpr bool desc = descending<QL, true, TrConj>();
@@ -105,25 +100,24 @@ BATCHLAS_DLA_INLINE void orm2x_left(const Ex& ex, const MA& A_prob, const VT& TA
         group_barrier(ex.part);  // every lane has consumed v before it is overwritten
     }
 
-    if constexpr (!Ar::is_complex) {
-        constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
-        if (vec_ok && active_col) {
-            using VecT = sycl::vec<T, VW>;
-            auto* col_ptr = reinterpret_cast<VecT*>(&C_prob(0, j));
-            BATCHLAS_UNROLL_FULL
-            for (int32_t r = 0; r < P; r += VW) {
-                if (r < n) {
-                    VecT v{};
-                    BATCHLAS_UNROLL_FULL
-                    for (int32_t t = 0; t < VW; ++t) v[t] = C_col[r + t];
-                    col_ptr[r / VW] = v;
-                }
+    if (vec_ok && active_col) {
+        auto* col_ptr = reinterpret_cast<VecT*>(&C_prob(0, j));
+        BATCHLAS_UNROLL_FULL
+        for (int32_t r = 0; r < P; r += VW) {
+            if (r < n) {
+                VecT v{};
+                BATCHLAS_UNROLL_FULL
+                for (int32_t t = 0; t < VW; ++t) v[t] = C_col[r + t];
+                col_ptr[r / VW] = v;
             }
-        } else if (active_col) {
-            col_store(C_col, C_prob, j, n);
         }
-    } else {
-        if (active_col) col_store(C_col, C_prob, j, n);
+    } else if (active_col) {
+        BATCHLAS_UNROLL_FULL
+        for (int32_t r = 0; r < P; ++r) {
+            if (r < n) {
+                C_prob(r, j) = C_col[r];
+            }
+        }
     }
 }
 
@@ -131,12 +125,11 @@ BATCHLAS_DLA_INLINE void orm2x_left(const Ex& ex, const MA& A_prob, const VT& TA
 // memory; lane r owns row r (no work vector): C(r, offset:) := C(r, offset:) H by core larf on
 // the lane's own row. Explicit arithmetic. NO EARLY RETURN, as LEFT.
 template <int P, bool QL, bool TrConj, class Ex, class MA, class VT, class MC, class CB, class VB>
-BATCHLAS_DLA_INLINE void orm2x_right(const Ex& ex, const MA& A_prob, const VT& TAU_prob, const MC& C_prob, const CB& C_local,
-                                     int32_t base_c, const VB& V_local, int32_t base_v, int32_t n, int32_t k, bool live) {
+BATCHLAS_DLA_INLINE void orm2x_right(const Ex& ex, int32_t lane, bool row_live, const MA& A_prob, const VT& TAU_prob,
+                                     const MC& C_prob, const CB& C_local, int32_t base_c, const VB& V_local, int32_t base_v,
+                                     int32_t n, int32_t k, bool live) {
     using T = std::remove_cvref_t<decltype(C_prob(0, 0))>;
     using Ar = Arith<T>;
-    const int32_t lane = static_cast<int32_t>(ex.lid());
-    const bool row_live = live && (lane < n);
     const int32_t P_i = static_cast<int32_t>(P);
 
     if (row_live) {
@@ -243,10 +236,12 @@ BATCHLAS_DLA_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const VT& 
     constexpr bool tr = TR != Transpose::NoTrans;
     constexpr ormqr_detail::CtaPlan<SD, P, T> plan{};
     const int32_t n = C.rows();
+    const int32_t lane = static_cast<int32_t>(ex.lid());
     if constexpr (SD == Side::Left) {
-        ormqr_detail::orm2x_left<P, false, tr, Ops>(ex, A, tau, C, carve_local(ws, plan.v), 0, n, k, live, false);
+        ormqr_detail::orm2x_left<P, false, tr, Ops>(ex, lane, A, tau, C, carve_local(ws, plan.v), 0, n, k, live, false);
     } else {
-        ormqr_detail::orm2x_right<P, false, tr>(ex, A, tau, C, carve_local(ws, plan.c), 0, carve_local(ws, plan.v), 0, n, k, live);
+        ormqr_detail::orm2x_right<P, false, tr>(ex, lane, live && (lane < n), A, tau, C, carve_local(ws, plan.c), 0,
+                                                carve_local(ws, plan.v), 0, n, k, live);
     }
     return 0;
 }

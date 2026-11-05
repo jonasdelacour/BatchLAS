@@ -36,6 +36,7 @@ namespace {
 namespace gn = ::batchlas::geqrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace v2 = ::batchlas::device;
+namespace gd = ::batchlas::device::geqrf_detail;
 
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
 // copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
@@ -144,6 +145,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 const auto sg = it.get_sub_group();
                 const v2::SgpPartition<N> ex{sg};
                 const auto& part = ex.part;
+                const int lane = ex.lid();
                 const int slot = tn::tiny_partition_id(sg, part);
                 const int prob = static_cast<int>(it.get_group_linear_id()) * M + slot;
 
@@ -151,25 +153,19 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 // sub-group-uniform, so at N < 32 a later group_barrier(sg) is undefined. A
                 // dead partition carries the identity and suppresses its store. Guarded by
                 // source text (GeqrfTinySource.KernelBodyHasNoEarlyReturn), not numerically.
-                // First uses in this order (batch, mask, n, stride, ap, ld, scratch, tp): [=]
-                // orders the kernel arguments by them, as the inline body did.
                 bool live = prob < batch;
                 if constexpr (Masked) live = live && mask[prob] != 0;  // inactive: untouched A and tau
-                const int order = n;
+                const bool row_live = live && lane < n;
                 const std::ptrdiff_t off =
                     live ? static_cast<std::ptrdiff_t>(prob) * stride : std::ptrdiff_t(0);
-                D* const a0 = ap + off;
-                const int lda = ld;
 
-                // The body is the public device::geqrf<tier::Reg<N>> (lapack/geqrf.hh); the
-                // per-matrix slot of the work-group's local memory is its Workspace.
-                D* const sP = &scratch[0] + static_cast<std::ptrdiff_t>(slot) *
-                                                static_cast<std::ptrdiff_t>(kPerMatrix);
-                const v2::Workspace ws{
-                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
-                        reinterpret_cast<std::byte*>(sP))};
-                v2::geqrf<Tier, C>(ex, v2::mat_wide(a0, order, order, lda),
-                                   v2::vec_wide(tp + static_cast<std::ptrdiff_t>(prob) * order, order), ws, live);
+                // The body is device::geqrf<tier::Reg<N>>'s (lapack/geqrf.hh). This lambda's
+                // statements, and the slot / tau address formed where the body first needs them,
+                // are the inline body's: [=] orders the kernel arguments by first use (batch,
+                // mask, n, stride, ap, ld, scratch, tp) and the SASS is unchanged.
+                gd::geqrf_reg_body<N, C>(ex, lane, row_live, ap + off, ld, n,
+                                         gd::SlotAt<D, decltype(scratch)>{scratch, slot, kPerMatrix},
+                                         gd::RowAt<D>{tp, prob, n});
             });
     });
     return ctx.get_event();

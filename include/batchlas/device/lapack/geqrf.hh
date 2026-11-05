@@ -313,27 +313,51 @@ constexpr int cta_wg(int n) {
 }
 
 // Row r := identity row r (so the unrolled body needs no lane guard), then A(r, 0:n) where
-// row_live. Plain inline, as tiny_device.hh's helpers; `select`, never a complex `?:`.
-template <class D, int N, class MA> BATCHLAS_DLA_HELPER void reg_load_rows(D* rA, const MA& a, int lane, int n, bool row_live) {
+// row_live. Raw restrict pointers, as tiny_device.hh's tiny_load_full / tiny_store_full.
+template <class D, int N> BATCHLAS_DLA_HELPER void reg_pad_identity(D* rA, int lane) {
+    const D one = Arith<D>::one();
+    const D zero = D{};
     BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < N; ++c) rA[c] = select(c == lane, Arith<D>::one(), D{});
+    for (int c = 0; c < N; ++c) rA[c] = select(c == lane, one, zero);
+}
+template <class D, int N> BATCHLAS_DLA_HELPER void reg_load_rows(D* rA, const D* __restrict a, int ld, int lane, int n, bool row_live) {
+    reg_pad_identity<D, N>(rA, lane);
     BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
-        if (row_live && c < n) rA[c] = a(lane, c);
+        if (row_live && c < n) rA[c] = a[lane + static_cast<std::ptrdiff_t>(c) * ld];
     }
 }
-template <class D, int N, class MA> BATCHLAS_DLA_HELPER void reg_store_rows(const D* rA, const MA& a, int lane, int n, bool row_live) {
+template <class D, int N> BATCHLAS_DLA_HELPER void reg_store_rows(const D* rA, D* __restrict a, int ld, int lane, int n, bool row_live) {
     BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
-        if (row_live && c < n) a(lane, c) = rA[c];
+        if (row_live && c < n) a[lane + static_cast<std::ptrdiff_t>(c) * ld] = rA[c];
     }
 }
 
+// A host launcher's lazy slot / tau for geqrf_reg_body: the address is formed where the body
+// first needs it. SlotAt: matrix `slot`'s `per`-scalar slice of a local accessor; RowAt(r): p[b * n + r].
+template <class D, class Acc> struct SlotAt {
+    const Acc& acc;
+    int slot;
+    std::size_t per;
+    BATCHLAS_DLA_INLINE D* operator()() const {
+        return &acc[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(per);
+    }
+};
+template <class D> struct RowAt {
+    D* p;
+    int b, n;
+    BATCHLAS_DLA_INLINE D& operator()(int r) const { return p[static_cast<std::ptrdiff_t>(b) * n + r]; }
+};
+
 // The Reg<N> body (xGEQR2 in registers), the trailing update by C-column chunks with exactly two
 // sub-group barriers each. NO EARLY RETURN: a dead partition carries the identity, stores nothing.
+// a: column-major n x n at ld; row_live = live && lane < n. slot() -> this matrix's local tile
+// (N x (C + 1), then C y scalars) and tau_at(r) -> tau(r) run where first needed, so a launcher's
+// address arithmetic lands where its inline body had it (SASS identity).
 // evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
-template <int N, int C, class Ex, class MA, class VT, class D>
-BATCHLAS_DLA_INLINE void geqrf_reg_body(const Ex& ex, const MA& a, const VT& tau, D* sP, D* sy, bool live) {
+template <int N, int C, class Ex, class D, class SlotFn, class TauFn>
+BATCHLAS_DLA_INLINE void geqrf_reg_body(const Ex& ex, int lane, bool row_live, D* a, int ld, int n, SlotFn slot, TauFn tau_at) {
     using R = real_t<D>;
     using Ar = Arith<D>;
     using Fa = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
@@ -341,12 +365,12 @@ BATCHLAS_DLA_INLINE void geqrf_reg_body(const Ex& ex, const MA& a, const VT& tau
     static_assert(N == 8 || N == 16 || N == 32, "geqrf Reg<N>: N divides the 32-lane sub-group");
     static_assert(C >= 1 && C <= N, "geqrf Reg<N>: the chunk width C is in [1, N]");
     const sycl::sub_group sg = ex.sub();
-    const int lane = ex.lid();
-    const int n = a.cols();
-    const bool row_live = live && lane < n;
 
     D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
-    reg_load_rows<D, N>(rA, a, lane, n, row_live);
+    reg_load_rows<D, N>(rA, a, ld, lane, n, row_live);
+
+    D* const sP = slot();
+    D* const sy = sP + static_cast<std::ptrdiff_t>(N) * SLDA;
 
     D my_tau = D{};  // one register, stored once N-wide rather than N times
 
@@ -400,35 +424,37 @@ BATCHLAS_DLA_INLINE void geqrf_reg_body(const Ex& ex, const MA& a, const VT& tau
         // No barrier between columns: rA[j+1] is register-private.
     }
 
-    reg_store_rows<D, N>(rA, a, lane, n, row_live);
-    if (row_live) tau(lane) = my_tau;
-}
-
-// The executor's own barrier at its scope, in the spelling the panel kernels use.
-template <class Ex> BATCHLAS_DLA_INLINE void cta_sync(const Ex& ex) {
-    if constexpr (Ex::sub_whole) sycl::group_barrier(ex.sub());
-    else sycl::group_barrier(ex.it.get_group());
-}
-
-// The Cta<N> body: A (m x n, any memory) copied into `tile` (m * n scalars, ld = m), geqr2 there,
-// copied back. kmax = min(m, n) and elems = m * n are the caller's (a host launcher folds them).
-template <class Ex, class MA, class D>
-BATCHLAS_DLA_INLINE void geqrf_cta_body(const Ex& ex, const MA& a, D* tau, D* tile, int kmax, std::size_t elems) {
-    const int m = a.rows(), n = a.cols();
-    const int tid = ex.lid();
-    const int lwg = ex.width();
-    for (std::size_t e = static_cast<std::size_t>(tid); e < elems; e += static_cast<std::size_t>(lwg)) {
-        const int r = static_cast<int>(e % static_cast<std::size_t>(m));
-        const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-        tile[e] = a(r, c);
+    reg_store_rows<D, N>(rA, a, ld, lane, n, row_live);
+    if (row_live) {
+        tau_at(lane) = my_tau;
     }
-    cta_sync(ex);  // B0
-    geqr2(ex, mat_wide(tile, m, n, m), kmax, tau);
-    cta_sync(ex);  // B4
+}
+
+// Ex's own barrier at its scope (sub-group or work-group), in the spelling the panel kernels use.
+template <class Ex> BATCHLAS_DLA_INLINE void cta_sync(sycl::nd_item<1> it) {
+    if constexpr (Ex::sub_whole) sycl::group_barrier(it.get_sub_group());
+    else sycl::group_barrier(it.get_group());
+}
+
+// The Cta<N> body: A (column-major m x n at ld) copied into `tile` (elems = m * n scalars, ld = m),
+// geqr2 there on Ex{it}, copied back. tid / lwg: this item's index and the item count at Ex's
+// scope (int or std::size_t); kmax = min(m, n); tau() -> the unit-stride tau(0:kmax), evaluated after the copy-in (a
+// host launcher folds kmax and elems and reads tid / lwg before its early return; SASS identity).
+template <class Ex, class D, class I, class TauFn>
+BATCHLAS_DLA_INLINE void geqrf_cta_body(sycl::nd_item<1> it, I tid, I lwg, D* src, int m, int ld, int n, int kmax, D* tile,
+                                        std::size_t elems, TauFn tau) {
     for (std::size_t e = static_cast<std::size_t>(tid); e < elems; e += static_cast<std::size_t>(lwg)) {
         const int r = static_cast<int>(e % static_cast<std::size_t>(m));
         const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-        a(r, c) = tile[e];
+        tile[e] = src[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
+    }
+    cta_sync<Ex>(it);  // B0
+    geqr2(Ex{it}, mat_wide(tile, m, n, m), kmax, tau());
+    cta_sync<Ex>(it);  // B4
+    for (std::size_t e = static_cast<std::size_t>(tid); e < elems; e += static_cast<std::size_t>(lwg)) {
+        const int r = static_cast<int>(e % static_cast<std::size_t>(m));
+        const int c = static_cast<int>(e / static_cast<std::size_t>(m));
+        src[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld] = tile[e];
     }
 }
 
@@ -469,7 +495,7 @@ template <class Tier, class T, int C = Tier::n_max> constexpr WorkspaceSize geqr
 ///              local memory; ex = RtGroup<Scope::Group> or RtGroup<Scope::Sub>)
 /// @param ex    the executor; COLLECTIVE: every item calls with the same arguments (Reg: every
 ///              lane of the sub-group)
-/// @param A     the matrix operand (Mat, mat_wide, item(view, b)), overwritten
+/// @param A     the column-major matrix operand with an ld (Mat, mat_wide, item(view, b)), overwritten
 /// @param tau   tau(0:min(m, n)) receives the reflector scalars (zgeqr2's convention); Cta: a
 ///              unit-stride Vec
 /// @param ws    this matrix's slice, geqrf_buffer_size<Tier, T>(m, n) bytes
@@ -483,16 +509,22 @@ BATCHLAS_DLA_INLINE int geqrf(const Ex& ex, const MA& A, const VT& tau, const Wo
         constexpr int N = Tier::n_max;
         static_assert(Ex::size == N && Ex::sub_whole, "geqrf Reg<N>: ex is an N-lane Partition (SgpPartition<N>)");
         constexpr geqrf_detail::RegPlan<D, N, C> plan{};
-        geqrf_detail::geqrf_reg_body<N, C>(ex, A, tau, geqrf_detail::local_base<D>(ws, plan.tile.offset),
-                                           geqrf_detail::local_base<D>(ws, plan.y.offset), live);
+        static_assert(plan.y.offset == plan.tile.offset + static_cast<std::size_t>(N) * (C + 1) * sizeof(D),
+                      "geqrf Reg<N>: y follows the tile (the body derives it)");
+        const int lane = ex.lid();
+        const int n = A.cols();
+        geqrf_detail::geqrf_reg_body<N, C>(
+            ex, lane, live && lane < n, &A(0, 0), static_cast<int>(A.ld), n,
+            [&] { return geqrf_detail::local_base<D>(ws, plan.tile.offset); }, [&](int r) -> D& { return tau(r); });
     } else {
         static_assert(geqrf_detail::is_cta_v<Tier>, "geqrf: tiers are Reg<N> and Cta<N>");
         static_assert(is_runtime_v<Ex>, "geqrf Cta<N>: ex is an RtGroup<Scope::Group> or RtGroup<Scope::Sub>");
         static_assert(std::is_same_v<std::remove_cv_t<decltype(VT::inc)>, Unit>, "geqrf Cta<N>: tau is a unit-stride Vec");
         static_cast<void>(live);
         const int m = A.rows(), n = A.cols();
-        geqrf_detail::geqrf_cta_body(ex, A, &tau(0), geqrf_detail::local_base<D>(ws, 0), m < n ? m : n,
-                                     static_cast<std::size_t>(m) * static_cast<std::size_t>(n));
+        geqrf_detail::geqrf_cta_body<Ex>(ex.it, ex.lid(), ex.width(), &A(0, 0), m, static_cast<int>(A.ld), n, m < n ? m : n,
+                                         geqrf_detail::local_base<D>(ws, 0),
+                                         static_cast<std::size_t>(m) * static_cast<std::size_t>(n), [&] { return &tau(0); });
     }
     return 0;
 }

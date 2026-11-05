@@ -127,6 +127,8 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
+                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
@@ -142,6 +144,10 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 auto A_prob = A_view.batch_item(pid);
                 auto TAU_prob = TAU_view.batch_item(pid);
                 auto C_prob = C_view.batch_item(pid);
+                // A direct view call, as the inline body made first: SemaSYCL then force-inlines
+                // KernelMatrixView::operator() and not this lambda (check_kernel_entry_calls.py),
+                // the inlining the inline body had. It computes an unused address.
+                static_cast<void>(&C_prob(0, 0));
                 const int32_t order = n;
                 const bool vec = vec_ok;
                 const int32_t nref = k;
@@ -150,7 +156,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 // The body is device::ormqr's Left form (lapack/ormqr.hh), on the hand loop's
                 // arithmetic (strict port).
                 v2::ormqr_detail::orm2x_left<static_cast<int>(P), QL, TransposeOrConj, v2::arith::Native>(
-                    v2::wrap(part), A_prob, TAU_prob, C_prob, V_local, base_v, order, nref, live, vec);
+                    v2::wrap(part), lane, A_prob, TAU_prob, C_prob, V_local, base_v, order, nref, live, vec);
             });
         } else {
             // Per problem: the P x P tile of C (column-major) and v. Lane r owns row r: no work vector.
@@ -167,6 +173,8 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                     const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
+                    const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+
                     const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
@@ -175,11 +183,13 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                     if constexpr (Masked) live = live && mask[prob_id] != 0;
                     const int32_t pid = live ? prob_id : 0;
                     // First uses in the inline body's order (n, views, C_local, k, V_local).
+                    const bool row_live = live && (lane < n);
                     const int32_t order = n;
 
                     auto A_prob = A_view.batch_item(pid);
                     auto TAU_prob = TAU_view.batch_item(pid);
                     auto C_prob = C_view.batch_item(pid);
+                    static_cast<void>(&C_prob(0, 0));  // the inline body's first callee, as in Left
                     const auto& c_tile = C_local;
                     const int32_t nref = k;
 
@@ -188,7 +198,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
 
                     // The body is device::ormqr's Right form (lapack/ormqr.hh).
                     v2::ormqr_detail::orm2x_right<static_cast<int>(P), QL, TransposeOrConj>(
-                        v2::wrap(part), A_prob, TAU_prob, C_prob, c_tile, base_c, V_local, base_v, order, nref, live);
+                        v2::wrap(part), lane, row_live, A_prob, TAU_prob, C_prob, c_tile, base_c, V_local, base_v, order, nref, live);
                 });
         }
     });
