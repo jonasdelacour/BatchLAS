@@ -22,7 +22,8 @@ The allowlist (default scripts/device_placement_allowlist.txt) holds today's fin
 and so does an entry that no longer matches (delete the line, or --write-allowlist).
 The parser is a scan over comment- and string-stripped text: it tracks namespace and brace scopes and
 names each namespace-scope declaration (function, class, enum, alias, variable). Declarations without
-a body (`void f(int);`, `struct S;`) and using-declarations are not definitions.
+a body (`void f(int);`, `struct S;`), using-declarations and class template specializations
+(`struct tier_info<routine::gebrd, ..> {..}`: a routine's traits next to the routine) are not definitions.
 Exit codes: 0 clean, 1 findings or stale entries (or a failed self-test).
 """
 import argparse
@@ -156,6 +157,8 @@ def classify(head, has_body):
     m = re.match(r"(?:enum\s+(?:class\s+|struct\s+)?|(?:struct|class|union)\s+)(?:alignas\s*\([^)]*\)\s*|[A-Z_]+\s+)*"
                  r"([A-Za-z_]\w*)", head)
     if m:
+        if head[m.end():].lstrip().startswith("<"):
+            return None  # a specialization (tier_info<routine::x, ..>, tiers<..>) names no new type
         return ("type", m.group(1), None) if has_body else None
     eq = top_level(head, "=")
     if eq >= 0 and eq < (top_level(head, "(") if top_level(head, "(") >= 0 else len(head)) + 1:

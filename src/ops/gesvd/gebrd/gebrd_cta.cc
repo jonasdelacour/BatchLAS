@@ -80,8 +80,13 @@ inline void gebrd_cta_impl(Queue& ctx,
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
+        using Tier = v2::tier::Cta<static_cast<int>(P)>;
+        // One matrix's local slice (P x P of T); the accessor holds probs_per_wg of them.
+        constexpr int32_t kSlice = static_cast<int32_t>(v2::gebrd_buffer_size<Tier, T>(static_cast<int>(P)).local_bytes);
+        static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(T)), "gebrd_cta: the tile slice is P x P of T");
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
+        // A thin launcher over device::gebrd<tier::Cta<P>> (lapack/gebrd.hh).
         impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
@@ -101,17 +106,14 @@ inline void gebrd_cta_impl(Queue& ctx,
                                   (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(pid);
-                auto D_prob = D_view.batch_item(pid);
-                auto E_prob = E_view.batch_item(pid);
-                auto TAUQ_prob = TAUQ_view.batch_item(pid);
-                auto TAUP_prob = TAUP_view.batch_item(pid);
-
-                // The problem's P x P tile in local memory, addressed through the accessor
-                // (A_local[base + i + j * P], the shared address space kept).
-                const v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<static_cast<int>(P)>, v2::Mem::Local, v2::Cyclic, sycl::local_accessor<T, 1>> tile{
-                    A_local, {n}, {n}, {}, part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P)};
-                v2::gebd2_tile<T>(ex, it, tile, A_prob, D_prob, E_prob, TAUQ_prob, TAUP_prob, n, live);
+                // This partition's slice of the accessor, kept in the shared address space.
+                std::byte* const slm = reinterpret_cast<std::byte*>(
+                    A_local.template get_multi_ptr<sycl::access::decorated::no>().get());
+                const v2::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
+                                           slm + part_id * kSlice),
+                                       nullptr};
+                v2::gebrd<Tier>(ex, it, v2::item(A_view, pid, n, n), v2::item(D_view, pid), v2::item(E_view, pid),
+                                v2::item(TAUQ_view, pid), v2::item(TAUP_view, pid), ws, live);
             });
     });
 }

@@ -678,7 +678,8 @@ std::vector<std::string> code_lines(const std::string& path, const char* from, c
 // early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
 // this source scan, not a numerical case, holds the property: neither the packed kernel (from its
 // launch to the end of the TU's anonymous namespace) nor gebd2_tile (lapack/gebrd.hh, the body
-// holding the barriers) has a code line that returns, and `live` reads the mask.
+// holding the barriers) has a code line that returns, the public device::gebrd the kernel calls
+// returns only after gebd2_tile, and `live` reads the mask.
 TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
     const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
     const std::string tile_path = BATCHLAS_GEBRD_HH_PATH;
@@ -686,7 +687,17 @@ TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
     // Positive controls first: every assertion below is an absence.
     ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
     const char* body = "void gebd2_tile(";
-    ASSERT_FALSE(first_code_line(path, "gebd2_tile<", launch).empty()) << "the kernel does not call gebd2_tile";
+    const char* op = "int gebrd(";
+    ASSERT_FALSE(first_code_line(path, "v2::gebrd<", launch).empty()) << "the kernel does not call device::gebrd";
+    ASSERT_FALSE(first_code_line(tile_path, "gebd2_tile<T>(", op).empty()) << "device::gebrd does not call gebd2_tile";
+    const auto op_lines = code_lines(tile_path, op, "}");
+    ASSERT_GT(op_lines.size(), 3u) << "the device::gebrd scan window is empty";
+    bool past_body = false;
+    for (const auto& code : op_lines) {
+        if (code.find("return") != std::string::npos)
+            EXPECT_TRUE(past_body && code.find("return 0;") != std::string::npos) << "an early return in device::gebrd: " << code;
+        past_body = past_body || code.find("gebd2_tile<T>(") != std::string::npos;
+    }
     ASSERT_FALSE(first_code_line(tile_path, body).empty()) << tile_path << " does not define gebd2_tile";
     ASSERT_FALSE(first_code_line(tile_path, "it.barrier(", body).empty()) << "no work-group barrier in gebd2_tile";
     const std::string live = first_code_line(path, "const bool live", launch);

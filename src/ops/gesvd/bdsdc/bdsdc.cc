@@ -117,7 +117,7 @@ void bdsdc_build_gk(Queue& ctx,
             v2::map(th, glue::item_n(GD, b, N), [] { return T(0); });
             // off-diagonal f[2k] = d_k (couples v_k,u_k), f[2k+1] = e_k (couples u_k,v_{k+1})
             v2::interleave(th, glue::item_n(D, b, nn), glue::item_n(E, b, nn - 1), v2::item(GE, b));
-            glue::tridiag_abs_offdiag(th, glue::item_n(GE, b, N - 1), glue::item_n(GS, b, N));
+            v2::gesvd_detail::tridiag_abs_offdiag(th, glue::item_n(GE, b, N - 1), glue::item_n(GS, b, N));
         });
     });
 }

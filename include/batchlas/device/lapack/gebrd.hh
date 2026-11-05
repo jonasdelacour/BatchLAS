@@ -17,7 +17,9 @@
 #include <batchlas/device/level2.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/scalar.hh>
+#include <batchlas/device/tier.hh>
 #include <batchlas/device/view.hh>
+#include <batchlas/device/workspace.hh>
 
 namespace batchlas::device::inline v2 {
 
@@ -215,6 +217,68 @@ BATCHLAS_DLA_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, co
             A_prob(lane, c) = tile(lane, c);
         }
     }
+}
+
+// ---- the public op (v22 design C.4-C.7): device::gebrd<Tier> ---------------------------------
+namespace routine {
+struct gebrd {
+    static constexpr const char* name = "gebrd";
+};
+}  // namespace routine
+
+namespace gebrd_detail {
+template <class T> struct CtaPlan {
+    ws::Slot<T> tile;  // the matrix's P x P tile, ld = P
+    WorkspaceSize size;
+};
+template <int P, class T> constexpr CtaPlan<T> cta_plan() {
+    Plan p;
+    const ws::Slot<T> tile = p.take<T>(ws::Space::Local, std::size_t(P) * std::size_t(P));
+    return {tile, p.size()};
+}
+template <int P> inline constexpr bool cta_width_v = P == 4 || P == 8 || P == 16 || P == 32;
+}  // namespace gebrd_detail
+
+// tier::Cta<P>, P in {4, 8, 16, 32}: one matrix per P-lane partition (SgpPartition<P>) of a
+// sub-group-32 launch, its P x P tile in local memory; the work-group size is any multiple of 32
+// (32 / P matrices per sub-group). Real T only.
+template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
+    static_assert(gebrd_detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
+    static constexpr int wg_size = 32, sg_size = 32;
+    static constexpr int matrices_per_sub_group = 32 / P;
+    static constexpr bool admits(int n) { return !Arith<T>::is_complex && n >= 1 && n <= P; }
+    static constexpr WorkspaceSize buffer_size(int) { return gebrd_detail::cta_plan<P, T>().size; }
+};
+template <class T> struct tiers<routine::gebrd, T> {
+    using type = std::conditional_t<Arith<T>::is_complex, tier::list<>,
+                                    tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>>;
+};
+
+// Local / global bytes of ONE matrix for gebrd<Tier> at order n (local: per partition).
+template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int n) {
+    return tier_info<routine::gebrd, resolve_tier_t<routine::gebrd, T, Tier>, T>::buffer_size(n);
+}
+
+// xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
+// overwritten with the reflectors (xGEBD2's layout), d / e receive the bidiagonal, tauq / taup
+// the reflector scalars. ws.local is this matrix's gebrd_buffer_size<Tier, T>(n).local_bytes
+// (the caller offsets it by partition). Collective over the WORK-GROUP of `it`: the barriers are
+// work-group wide, so every partition calls it with the same n, and a partition without a
+// matrix passes live = false (a zero tile, nothing read or stored). Returns 0 (no info).
+template <class Tier, class Ex, class MA, class RV, class TV>
+BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
+                              const TV& taup, const Workspace& ws, bool live = true) {
+    using T = typename MA::value_type;
+    using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
+    static_assert(HasTier<routine::gebrd, Tr, T>, "gebrd: tier not implemented (tier::Cta<4|8|16|32>)");
+    constexpr int P = Tr::n_max;
+    static_assert(!Arith<T>::is_complex, "gebrd: tier::Cta is real only");
+    static_assert(Ex::size == P, "gebrd: tier::Cta<P> runs on a P-lane partition");
+    constexpr auto plan = gebrd_detail::cta_plan<P, T>();
+    const int n = A.rows();
+    const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, 0};
+    gebd2_tile<T>(ex, it, tile, A, d, e, tauq, taup, n, live);
+    return 0;
 }
 
 // zlabrd on panel columns j0 .. j0+ib-1 of item b (one work-group; ex a WorkGroup whose size is a

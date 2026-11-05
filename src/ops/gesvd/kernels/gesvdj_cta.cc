@@ -304,7 +304,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // Real T never names Rd_local, so the kernel does not capture it.
                         std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
                         if constexpr (kNeedPhase) rd = v2::vec(Rd_local, K, base_r + ch * K);
-                        const auto rnd = v2::rot_round<T>(v2::vec(Rcs_local, K, base_r + ch * K), rd,
+                        const auto rnd = jac::rot_round<T>(v2::vec(Rcs_local, K, base_r + ch * K), rd,
                                                           v2::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
                         // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
@@ -372,12 +372,12 @@ BATCHLAS_UNROLL_FULL
                             const sycl::vec<Real, 2> cs = rnd.coef(k);
                             // Warp-uniform skip: converged pairs are free.
                             if (cs[1] == Real(0)) continue;
-                            const v2::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
+                            const jac::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
                             v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
-                                const v2::Pair2<T> r = v2::rot_right(u, ap[k][rr], aq[k][rr]);
+                                const jac::Pair2<T> r = jac::rot_right(u, ap[k][rr], aq[k][rr]);
                                 A(row, pk[k]) = r.x;
                                 A(row, qk[k]) = r.y;
-                                if constexpr (ComputeV) v2::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
+                                if constexpr (ComputeV) jac::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
                             });
                         }
                         group_barrier(ex.part);
