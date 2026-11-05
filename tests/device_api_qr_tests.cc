@@ -270,13 +270,27 @@ template <class T, dv::Scope S> void cta_case(DeviceApiQr<T>& t, Dev& d, int m, 
     t.expect_identical(p, out, tau, "geqrf Cta m=" + std::to_string(m) + " n=" + std::to_string(n));
 }
 
-// Cta<N> is the resident leaf's body: the host packs m, n <= 32 panels one per sub-group and runs
-// larger ones on a work-group of 32 * min(8, pow2 >= n) items; the device call at the same scope
-// and width is bit-identical (tall, wide, and the n = 33 step out of the packed band).
+// The host packs an m, n <= 32 panel one per sub-group only when two fit the occupancy slice of
+// local memory (geqrf_cta.cc's geqrf_leaf_launch); on a 32 KiB device (Metal) a complex<float>
+// 27 x 20 or 12 x 31 panel runs on a work-group instead, so the comparison takes that scope.
+template <class T> void packed_cta_case(DeviceApiQr<T>& t, Dev& d, int m, int n) {
+    namespace rc = ::batchlas::resident;
+    const auto dev = d.ctx->device();
+    const std::size_t slice = rc::occupancy_budget(rc::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    if (rc::pack_matrices_per_wg(std::size_t(m) * std::size_t(n) * sizeof(T), 32, slice, max_wg) > 1)
+        cta_case<T, dv::Scope::Sub>(t, d, m, n, 64);
+    else
+        cta_case<T, dv::Scope::Group>(t, d, m, n, dv::geqrf_detail::cta_wg(n));
+}
+
+// Cta<N> is the resident leaf's body: the host packs m, n <= 32 panels one per sub-group (when
+// two fit) and runs larger ones on a work-group of 32 * min(8, pow2 >= n) items; the device call
+// at the same scope and width is bit-identical (tall, wide, and the n = 33 step out of the band).
 TYPED_TEST(DeviceApiQr, GeqrfCtaIsTheCtaRouteBitForBit) {
     using T = TypeParam;
-    cta_case<T, dv::Scope::Sub>(*this, this->dev, 27, 20, 64);
-    cta_case<T, dv::Scope::Sub>(*this, this->dev, 12, 31, 64);
+    packed_cta_case<T>(*this, this->dev, 27, 20);
+    packed_cta_case<T>(*this, this->dev, 12, 31);
     cta_case<T, dv::Scope::Group>(*this, this->dev, 37, 34, dv::geqrf_detail::cta_wg(34));
     cta_case<T, dv::Scope::Group>(*this, this->dev, 30, 33, dv::geqrf_detail::cta_wg(33));
 }
