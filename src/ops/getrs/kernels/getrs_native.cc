@@ -12,7 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <src/ops/getrs/getrs_v2.hh>
+#include <batchlas/device/lapack/getrs.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <complex>
@@ -152,7 +152,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
                     v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Stepped>(ex, bm.sub(0, cb, n, cw),
                                                                                  tv.sub(0, 0, n, cw));
                     ex.barrier(v2::Mem::Global);
-                    v2::lu::lapmr_copy<v2::alg::Stepped>(ex, tv, v2::vec<v2::Mem::Local>(idxs, n),
+                    v2::getrs_detail::lapmr_copy<v2::alg::Stepped>(ex, tv, v2::vec<v2::Mem::Local>(idxs, n),
                                                          bm.sub(0, cb, n, cw));
                     // The write-back must finish before the next chunk overwrites the tile.
                     ex.barrier(v2::Mem::Global);

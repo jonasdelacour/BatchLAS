@@ -16,7 +16,7 @@
 #include <src/util/resident_capacity.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-#include <src/ops/getrs/getrs_v2.hh>
+#include <batchlas/device/lapack/getrs.hh>
 #include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
@@ -190,9 +190,9 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                      static_cast<std::size_t>(getrs_fused_blk_ld(nb))) * scalar_bytes);
 }
 
-// The getrs bodies are device LA v2 ops (v2 core plus src/ops/getrs/getrs_v2.hh): the RHS y is
-// resident in local memory, the block solve is lu::trsm_lane (one sub-group, lane i owns row i,
-// shuffles only), the off-diagonal update lu::gemm_nr (NoTrans: row-parallel axpy form; Trans:
+// The getrs bodies are device LA v2 ops (v2 core plus lapack/getrs.hh): the RHS y is
+// resident in local memory, the block solve is getrs_detail::trsm_lane (one sub-group, lane i owns row i,
+// shuffles only), the off-diagonal update getrs_detail::gemm_nr (NoTrans: row-parallel axpy form; Trans:
 // one sub-group per column, a shift-down sum with no static local memory, which would reopen the
 // 48 KB hole). NR == 1 keeps the sub-group-0 form: the round-robin over sub-groups cannot help
 // there and cost ~3%. PotrsFused stays hand-written: as gemm_nr its backward axpy loop was
@@ -263,9 +263,9 @@ Event fused_launch_notrans(Queue& ctx,
                     stage(ex, a.sub(j, j, jb, jb), blk);
                     ex.barrier();
                     if (c_active && jb > 1)
-                        v2::lu::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
+                        v2::getrs_detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    v2::lu::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                    v2::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
                                                             y.sub(j, 0, jb, nrhs), v2::One{},
                                                             y.sub(j + jb, 0, n - j - jb, nrhs));
                     ex.barrier();
@@ -279,9 +279,9 @@ Event fused_launch_notrans(Queue& ctx,
                     stage(ex, a.sub(j0, j0, jb, jb), blk);
                     ex.barrier();
                     if (c_active)
-                        v2::lu::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
+                        v2::getrs_detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    v2::lu::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(0, j0, j0, jb),
+                    v2::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(0, j0, j0, jb),
                                                             y.sub(j0, 0, jb, nrhs), v2::One{}, y.sub(0, 0, j0, nrhs));
                     ex.barrier();
                 }
@@ -351,11 +351,11 @@ Event fused_launch_trans(Queue& ctx,
                     const int jb = (n - j < nb) ? (n - j) : nb;
                     const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, v2::conj_if(a.sub(j, j, jb, jb), conj), blk);
-                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
+                    v2::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
                                                           v2::One{}, y.sub(j, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active)
-                        v2::lu::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
+                        v2::getrs_detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
                                                                       cs);
                     ex.barrier();
                 }
@@ -366,12 +366,12 @@ Event fused_launch_trans(Queue& ctx,
                     const int jb = jend - j0;
                     const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, v2::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
-                    v2::lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(jend, j0, n - jend, jb), conj),
+                    v2::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(jend, j0, n - jend, jb), conj),
                                                           y.sub(jend, 0, n - jend, nrhs), v2::One{},
                                                           y.sub(j0, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active && jb > 1)
-                        v2::lu::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
+                        v2::getrs_detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
                                                                    cs);
                     ex.barrier();
                 }

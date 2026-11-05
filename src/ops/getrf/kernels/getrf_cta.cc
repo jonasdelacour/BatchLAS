@@ -184,14 +184,10 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 const auto At = v2::mat_wide<v2::Mem::Local>(
                     &tile[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(ldt) * n, m, n, ldt);
                 const auto Ag = v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
-                v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, Ag, At);   // stage into the padded ld
-                ex.barrier();                                 // B0
-                v2::getf2_panel_device(
-                    ex, At, kmax,
+                v2::getrf_detail::cta_run(  // the public Cta body: stage, ?GETF2, store
+                    ex, Ag, At, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);
-                ex.barrier();                                 // B5
-                v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, At, Ag);   // store
             });
     });
     return ctx.get_event();

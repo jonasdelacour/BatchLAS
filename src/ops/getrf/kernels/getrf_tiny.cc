@@ -70,30 +70,29 @@ constexpr int tiny_cap() {
     return std::is_same_v<T, std::complex<double>> ? 16 : 32;
 }
 
-// getf2_relabel's pivot policy for one matrix per partition: the (magnitude, key) pair
-// argmax, XorUp. A pad row is kept out by the tie-break DIRECTION (`rowid + N` sorts every
-// non-candidate below every candidate), not by the `rowid < n` mask; the `mag == mag` map IS
-// load-bearing -- an unmapped NaN leaves lanes disagreeing on the winner. Lane j keeps ipiv[j];
-// info is partition-uniform (the pivot is broadcast). evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
-template <int N, typename Px>
-struct TinyPivot {
-    const Px& px;
-    int n;
-    int lane;
-    int& my_piv;
-    int32_t& linfo;
-    template <typename R>
-    BATCHLAS_DLA_INLINE g2::PivotWinner argmax(int j, R mag, int rowid) const {
-        const bool cand = (rowid >= j) && (rowid < n);
-        g2::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), g2::pivot_key(cand ? rowid : (rowid + N), lane)};
-        g2::maxloc_bfly_up(px, a);
-        return {g2::pivot_key_order(a.i), static_cast<int>(g2::pivot_key_lane(a.i))};
+// The launcher's addressing of the public Reg body (lapack/getrf.hh getrf_detail::reg_run, whose
+// pivot policy is getf2_detail::PivotPartition): 64-bit index math with the functor's 64-bit
+// ld; ipiv and info at matrix b's slots.
+template <typename D>
+struct TinyMat {
+    using value_type = D;
+    D* p;
+    std::ptrdiff_t ld;
+    BATCHLAS_DLA_INLINE D& operator()(int r, int c) const {
+        return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
     }
-    BATCHLAS_DLA_INLINE void record(int j, g2::PivotWinner w) const {
-        if (lane == j) my_piv = w.row;
-    }
-    BATCHLAS_DLA_INLINE void on_zero(bool zero, int j) const {
-        if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
+};
+struct TinyPiv {
+    int* p;
+    std::ptrdiff_t off;
+    BATCHLAS_DLA_INLINE int& operator()(int i) const { return p[off + i]; }
+};
+struct TinyInfo {
+    int32_t* p;
+    int b;
+    template <typename Px>
+    BATCHLAS_DLA_INLINE void operator()(const Px& px, int32_t v) const {
+        if (px.leader()) p[b] = v;
     }
 };
 
@@ -168,7 +167,7 @@ struct GetrfTinyBody {
         const auto sg = it.get_sub_group();
         const v2::SgpPartition<N> px(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
-        const int lane = px.lid();
+        [[maybe_unused]] const int lane = px.lid();  // the Slm policy's; reg_run reads its own
         const int pidx = tn::tiny_partition_id(sg, px.part);
         const int prob_id = wg_id * kMpw + pidx;
 
@@ -177,47 +176,21 @@ struct GetrfTinyBody {
         // item is dead the same way (I2): it factors an identity pad and stores nothing.
         const bool live = (prob_id < batch) && (mask == nullptr || mask[prob_id] != 0);
         const int b = live ? prob_id : 0;
-        const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
+        const TinyMat<D> A{ap + static_cast<std::ptrdiff_t>(b) * strp, ldp};
+        const TinyPiv piv{piv_ptr, static_cast<std::ptrdiff_t>(b) * n};
+        const TinyInfo info{info_ptr, b};
 
-        v2::Frag<D, NC> rA;  // top level, never a parameter: tiny_device.hh invariant 1
-BATCHLAS_UNROLL_FULL
-        for (int c = 0; c < NC; ++c) {
-            rA[c] = tn::tiny_load_pad_identity<D>(src, lane, c, n, ldp, live);
-        }
-
-        int rowid = lane;    // WHICH matrix row this lane currently owns
-        int my_piv = lane;   // lane j accumulates ipiv[j]
-        int32_t linfo = 0;   // partition-uniform: from the broadcast pivot
-
-        // ?GETF2 by lazy relabel, kmax = ncols = n. The unroll is FULL only under the TU's raised
-        // -pragma-unroll-threshold (src/CMakeLists.txt): above LLVM's default it is declined
-        // silently and rA lands on the stack with zero spill. Skipping a collective for j >= n
-        // is legal ONLY because n is kernel-uniform (the entry point rejects a heterogeneous
-        // batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
-        const TinyPivot<N, decltype(px)> piv{px, n, lane, my_piv, linfo};
+        // The public Reg body: ?GETF2 by lazy relabel, kmax = ncols = n. The unroll is FULL only
+        // under the TU's raised -pragma-unroll-threshold (src/CMakeLists.txt): above LLVM's
+        // default it is declined silently and rA lands on the stack with zero spill. Skipping a
+        // collective for j >= n is legal ONLY because n is kernel-uniform (the entry point
+        // rejects a heterogeneous batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
         if constexpr (Slm) {
             const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
-            v2::getf2_relabel(rA, rowid, n, n, piv, bc);
+            v2::getrf_detail::reg_run<NC>(px, A, piv, n, live, bc, info);
         } else {
-            const auto bc = g2::bcast_shuffle(px);  // one select per element, two per complex
-            v2::getf2_relabel(rA, rowid, n, n, piv, bc);
-        }
-
-        if (live) {
-            D* const dst = ap + static_cast<std::ptrdiff_t>(b) * strp;
-BATCHLAS_UNROLL_FULL
-            for (int k = 0; k < NC; ++k) {
-                if (k >= n) continue;
-                if (lane < n) {  // not `rowid < n`: equivalent, and loop-invariant
-                    dst[static_cast<std::ptrdiff_t>(rowid) +
-                        static_cast<std::ptrdiff_t>(k) * ldp] = rA[k];
-                }
-            }
-            if (lane < n) {
-                // 1-BASED and GLOBAL, as LAPACK defines ipiv.
-                piv_ptr[static_cast<std::ptrdiff_t>(b) * n + lane] = my_piv + 1;
-            }
-            if (px.leader()) info_ptr[b] = linfo;
+            // one select per element, two per complex
+            v2::getrf_detail::reg_run<NC>(px, A, piv, n, live, g2::bcast_shuffle(px), info);
         }
     }
 };
