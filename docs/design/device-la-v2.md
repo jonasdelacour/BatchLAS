@@ -78,7 +78,7 @@ or single headers; kernels are compiled with `-fsycl`.
 | `sg_partition.hh` | `SgpPartition`, `wrap`: `Partition` over `detail/sg_partition/` (`SubGroupPartition`) |
 | `detail/` | `sg_partition/` (per-backend sub-group partitions), `kernel_attrs.hh` (`BATCHLAS_REQD_SG_SIZE`, `BATCHLAS_LAUNCH_BOUNDS`, `BATCHLAS_UNROLL_FULL`), `sscp_target.hh` (`sycl_impl::on_ptx()`) |
 
-Shared private ops in `src/kernels/common/`: `dla_v2_potf2.hh` (`potf2_lower`), `dla_v2_jacobi.hh` (`sym_schur2`), `dla_v2_larft.hh`,
+Shared private ops in `src/kernels/common/`: `dla_v2_jacobi.hh` (`sym_schur2`), `dla_v2_larft.hh`,
 `dla_v2_sparse.hh`. Tests: `tests/device_blas_v2_tests.cc` and one `device_blas_v2_<unit>_tests.cc` per
 migrated family; `tests/device_core_<header>_tests.cc` for the v2.2 core additions.
 

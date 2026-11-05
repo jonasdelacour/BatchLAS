@@ -9,7 +9,7 @@
 // (3) Every global read and store is guarded by `row >= column` (ortho.cc depends on it).
 // (4) rp, rS and rA stay in registers. evidence: docs/perf/potrf.md#the-lpanel-tier
 
-#include <src/ops/potrf/potrf_cta_lpanel_v2.hh>
+#include <batchlas/device/lapack/potrf.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
@@ -21,6 +21,8 @@
 #include <cstdint>
 
 namespace batchlas::potrf_native {
+
+namespace dla = ::batchlas::device::potrf_detail;  // the LPANEL recurrence's pieces (public header)
 
 // ONE matrix, Uplo::Lower. `L >= n`: lane `r` owns row `r` for the whole call. `store` is false for
 // a packed group's dead slots, which run the WHOLE body (uniform barrier count), stores suppressed.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The potrf CTA / LPANEL kernels' family ops (src/ops/potrf/potrf_cta_lpanel_v2.hh) and their potf2
-// distributions (include/batchlas/device/lapack/potrf.hh)
+// The potrf CTA / LPANEL kernels' pieces and their potf2 distributions (potrf_detail in
+// include/batchlas/device/lapack/potrf.hh)
 // against long-double host references; the core ops they compose with are device_blas_v2_tests'.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld for every operand, complex data
 // with nonzero imaginary parts and a poisoned Im(diag), a large finite poison in every unread
@@ -28,14 +28,13 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/lapack/potrf.hh>
-#include <src/ops/potrf/potrf_cta_lpanel_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace dla = batchlas::potrf_native::dla;
+namespace dla = batchlas::device::potrf_detail;
 using batchlas::verify::Check;
 
 namespace {

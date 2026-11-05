@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Native batched POTRF: the CTA kernel's launcher and capability surface; the
-// device code is in potrf_cta_device.hh. This TU must stay in EXTENSIONS_CTA_SOURCES
-// next to potrf_blocked.cc, whose diagonal leaf is potrf_cta_body -- splitting a
+// Native batched POTRF: the CTA kernel's launcher and capability surface, a thin launcher over
+// device::potrf's tier::Cta body (lapack/potrf.hh). This TU must stay in EXTENSIONS_CTA_SOURCES
+// next to potrf_blocked.cc, whose diagonal leaf is this kernel -- splitting a
 // device-code cluster across libraries is a `ptxas fatal: Unresolved extern function`.
 // evidence: docs/perf/potrf.md
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potrf/kernels/potrf_cta_device.hh>
+#include <src/sycl/device_scalar.hh>
 #include <src/ops/potrf/potrf_slm_hole.hh>
 
 #include <src/queue.hh>
@@ -36,22 +37,18 @@ namespace {
 
 using potrf_native::PotrfScope;
 
-// Per scalar type: NB is the panel width and the length of the d[]/x[] register
-// arrays, TS the thread tile. evidence: docs/perf/potrf.md#register-gate
+// NB / TS are device::potrf's tier::Cta constants (one source). evidence: docs/perf/potrf.md#register-gate
 template <typename T>
-struct PotrfCtaConst;
-template <> struct PotrfCtaConst<float>                { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<double>               { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<std::complex<float>>  { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<std::complex<double>> { static constexpr int NB = 8;  static constexpr int TS = 2; };
+struct PotrfCtaConst {
+    using C = ::batchlas::device::potrf_detail::CtaConst<typename sycl_device::DevMap<T>::type>;
+    static constexpr int NB = C::nb;
+    static constexpr int TS = C::ts;
+};
 
 // Convenience overloads only; every real decision re-reads the device. NOT device_limits.hh's
 // constant, which is hardcoded per architecture and never queried.
 // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 constexpr std::size_t kPotrfReferenceSlmBudget = 97280;
-
-constexpr int kPotrfMaxL = 256;
-constexpr int kPotrfElemsPerItem = 24;
 
 // Called by BOTH the capability query and the launcher, so the ceiling can_run() advertises
 // cannot disagree with what the kernel allocates: under-estimating here advertises an order whose
@@ -93,19 +90,10 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     p.lda = n | 1;
     const int m2_0 = (n > NB) ? (n - NB) : 0;
     p.Rt0 = (m2_0 + TS - 1) / TS;
-    const long long Ntiles_0 = static_cast<long long>(p.Rt0) * (p.Rt0 + 1) / 2;
 
     // L follows m2_0 = n - NB, the first trailing update, not n, and counts elements
-    // rather than tiles because TS varies. evidence: docs/perf/potrf.md#the-l-ladder
-    {
-        const long long work_elems = Ntiles_0 * static_cast<long long>(TS) * TS;
-        int want = 32;
-        while (want < kPotrfMaxL &&
-               static_cast<long long>(want) * kPotrfElemsPerItem < work_elems) {
-            want <<= 1;
-        }
-        p.L = want;
-    }
+    // rather than tiles because TS varies: the tier::Cta ladder. evidence: docs/perf/potrf.md#the-l-ladder
+    p.L = ::batchlas::device::potrf_detail::cta_items(n, NB, TS);
     while (p.L > 32 && p.L > max_wg) p.L >>= 1;
 
     p.slm_per_matrix = potrf_slm_per_matrix(n, NB, TS, sz_d, sz_r);
@@ -267,7 +255,8 @@ Event potrf_cta_launch(Queue& ctx,
                 // every batch item but the first reads the wrong matrix.
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(matrix_id) * stride_a;
 
-                potrf_native::potrf_cta_body<D, R, NB, TS, SC>(
+                // The public tier::Cta body, the triangle at run time.
+                ::batchlas::device::potrf_detail::cta_body<D, R, NB, TS, potrf_native::potrf_body_scope<SC>>(
                     it, sg, p1_active, S, lda, dg, fl, of, Ag, ldg, n, upper);
 
                 // One writer per matrix; `fail` is published by B3 of the last panel.

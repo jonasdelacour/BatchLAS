@@ -12,7 +12,8 @@
 #include <src/kernels/common/solve_native.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
-#include <src/kernels/common/dla_v2_potf2.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
@@ -142,9 +143,9 @@ BATCHLAS_UNROLL_FULL
         // "lane r holds row r of L" whichever triangle the caller owns.
         v2::Frag<D, NC> rA;
         if (upper) {
-            tn::tiny_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            v2::potrf_detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         } else {
-            tn::tiny_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            v2::potrf_detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         }
 
         D rB[NR];   // b, then y
@@ -156,11 +157,11 @@ BATCHLAS_UNROLL_FULL
         // batch). Slm: column j of L through local memory, double-buffered by parity.
         int32_t linfo;
         if constexpr (Slm) {
-            linfo = tn::potf2_lower<D, N, NC, tn::OrderGuard::Skip>(
+            linfo = v2::potrf_detail::potf2_reg<D, N, NC, v2::potrf_detail::OrderGuard::Skip>(
                 v2::wrap(part), rA, n, live, v2::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
         } else {
-            linfo = tn::potf2_lower<D, N, NC, tn::OrderGuard::Skip>(v2::wrap(part), rA, n, live,
-                                                                    v2::bcast_policy::Shuffle{});
+            linfo = v2::potrf_detail::potf2_reg<D, N, NC, v2::potrf_detail::OrderGuard::Skip>(v2::wrap(part), rA, n, live,
+                                                                                              v2::bcast_policy::Shuffle{});
         }
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,
@@ -256,9 +257,9 @@ BATCHLAS_UNROLL_FULL
 
         D* __restrict Aout = ap + static_cast<std::ptrdiff_t>(b) * stride_a;
         if (upper) {
-            tn::tiny_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
+            v2::potrf_detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
         } else {
-            tn::tiny_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
+            v2::potrf_detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
         }
 
         if (row_live) {
