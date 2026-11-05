@@ -159,7 +159,7 @@ template <class C> requires detail::PodComplex<C> struct Arith<C> {
         return T{r / den, R(-1) / den};
     }
     BATCHLAS_DLA_INLINE static T div_real(const T& a, const R& s) { return T{a.re / s, a.im / s}; }
-    BATCHLAS_DLA_INLINE static T scale_real(const R& s, const T& a) { return T{s * a.re, s * a.im}; }
+    BATCHLAS_DLA_INLINE static T scale_real(const R& s, const T& a) { return T{a.re * s, a.im * s}; }
     BATCHLAS_DLA_INLINE static bool is_zero(const T& a) { return a.re == R(0) && a.im == R(0); }
     BATCHLAS_DLA_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.re) && sycl::isfinite(a.im); }
 };
@@ -418,8 +418,9 @@ BATCHLAS_DLA_INLINE T conj_if(bool on, const T& a) {
     if constexpr (A::is_complex) return on ? A::conj(a) : a;
     else return a;
 }
-// s * x and x / s for a REAL s (componentwise; no complex multiply), and a - s * x.
-template <class T> BATCHLAS_DLA_INLINE T scale_real(real_t<T> s, const T& x) { return Arith<std::remove_cv_t<T>>::scale_real(s, x); }
+// s * x and x / s for a REAL s (componentwise; no complex multiply), and a - s * x. scale_real
+// takes x by value, as dev_mul_real: one load of an x in memory, not one per part.
+template <class T> BATCHLAS_DLA_INLINE T scale_real(real_t<T> s, T x) { return Arith<std::remove_cv_t<T>>::scale_real(s, x); }
 template <class T> BATCHLAS_DLA_INLINE T div_real(const T& x, real_t<T> s) { return Arith<std::remove_cv_t<T>>::div_real(x, s); }
 template <class T> BATCHLAS_DLA_INLINE T sub_scale_real(const T& a, real_t<T> s, const T& x) {
     using A = Arith<std::remove_cv_t<T>>;

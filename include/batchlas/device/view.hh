@@ -62,27 +62,32 @@ template <class Axis = axis::Rows, class X> BATCHLAS_DLA_INLINE auto flip(const 
 }
 
 // ---- conj views ---------------------------------------------------------------------------
-// conj(x(i)) (or conj(a(i, j))) when on, by value; the identity on real T.
-template <class X> struct ConjView {
+// conj(x(i)) (or conj(a(i, j))) when on, by value; the identity on real T. Always (conj_view,
+// conj_if<true>): no select, the form of the legacy views (the select costs the sygst diag kernel).
+template <class X, bool Always = false> struct ConjView {
     X x;
     bool on;
     template <class... I> BATCHLAS_DLA_INLINE auto operator()(I... i) const {
         using T = std::remove_cvref_t<decltype(x(i...))>;
-        const T v = x(i...);
-        if constexpr (Arith<T>::is_complex) return on ? Arith<T>::conj(v) : v;
-        else return v;
+        if constexpr (Always && Arith<T>::is_complex) {
+            return Arith<T>::conj(x(i...));
+        } else {
+            const T v = x(i...);
+            if constexpr (Arith<T>::is_complex) return on ? Arith<T>::conj(v) : v;
+            else return v;
+        }
     }
     BATCHLAS_DLA_INLINE int size() const requires detail::is_vec_like_v<X> { return x.size(); }
     BATCHLAS_DLA_INLINE int rows() const requires detail::is_mat_like_v<X> { return x.rows(); }
     BATCHLAS_DLA_INLINE int cols() const requires detail::is_mat_like_v<X> { return x.cols(); }
 };
-template <class X> BATCHLAS_DLA_INLINE ConjView<X> conj_view(const X& x) { return {x, true}; }
+template <class X> BATCHLAS_DLA_INLINE ConjView<X, true> conj_view(const X& x) { return {x, true}; }
 // Compile-time switch: the operand itself when !C (no view, no branch).
 template <class X> inline constexpr bool is_operand_v = detail::is_vec_like_v<X> || detail::is_mat_like_v<X>;
 template <bool C, class X>
     requires is_operand_v<X>
 BATCHLAS_DLA_INLINE auto conj_if(const X& x) {
-    if constexpr (C) return ConjView<X>{x, true};
+    if constexpr (C) return ConjView<X, true>{x, true};
     else return x;
 }
 // Run-time switch (uniform): one select per element.
