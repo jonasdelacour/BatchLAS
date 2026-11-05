@@ -40,7 +40,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API bool gemv_cta_available();
 
 template <typename T>
-Event gemv_native_direct(Queue& ctx,
+BATCHLAS_INTERNAL_API Event gemv_native_direct(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const VectorView<T>& X,
                          const VectorView<T>& Y,
@@ -50,7 +50,7 @@ Event gemv_native_direct(Queue& ctx,
 
 // transA MUST NOT be NoTrans; a direct caller that violates it gets a throw.
 template <typename T>
-Event gemv_native_cta(Queue& ctx,
+BATCHLAS_INTERNAL_API Event gemv_native_cta(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const VectorView<T>& X,
                       const VectorView<T>& Y,

@@ -83,7 +83,7 @@ BATCHLAS_DLA_INLINE void laset(const Ex& ex, AS alpha_, BS beta_, const MA& a) {
     for_each_owned_2d<Alg>(ex, a.rows(), a.cols(), [&](int i, int j) {
         if (!detail::in_part<P>(i, j)) return;
         if constexpr (std::is_same_v<tag_t<AS>, tag_t<BS>> && !std::is_same_v<tag_t<AS>, Scalar<T>>) a(i, j) = off;
-        else a(i, j) = i == j ? dia : off;
+        else a(i, j) = select(i == j, dia, off);
     });
 }
 // A block of a larger matrix: its diagonal (and P) in the parent's coordinates, element (i, j)
@@ -95,7 +95,7 @@ BATCHLAS_DLA_INLINE void laset(const Ex& ex, AS alpha_, BS beta_, const MA& a, i
     const T d = tag_mul(as_tag(beta_), Arith<T>::one());
     for_each_owned_2d<Alg>(ex, a.rows(), a.cols(), [&](int i, int j) {
         if (!detail::in_part<P>(i + off, j)) return;
-        a(i, j) = i + off == j ? d : o;
+        a(i, j) = select(i + off == j, d, o);
     });
 }
 // Register forms: f[r] := beta at r == j, alpha elsewhere (one column of xLASET); t(i, j) :=
@@ -104,7 +104,7 @@ template <class T, int N, class L, class AS, class BS> BATCHLAS_DLA_INLINE void 
     const T o = tag_mul(as_tag(alpha_), Arith<T>::one());
     const T d = tag_mul(as_tag(beta_), Arith<T>::one());
 #pragma unroll
-    for (int r = 0; r < N; ++r) f[r] = (r == j) ? d : o;
+    for (int r = 0; r < N; ++r) f[r] = select(r == j, d, o);
 }
 template <class T, int R, int C, class AS, class BS> BATCHLAS_DLA_INLINE void laset(Tile<T, R, C>& t, AS alpha_, BS beta_, int off = 0) {
     const T o = tag_mul(as_tag(alpha_), Arith<T>::one());
@@ -112,7 +112,7 @@ template <class T, int R, int C, class AS, class BS> BATCHLAS_DLA_INLINE void la
 #pragma unroll
     for (int j = 0; j < C; ++j)
 #pragma unroll
-        for (int i = 0; i < R; ++i) t(i, j) = (i - j == off) ? d : o;
+        for (int i = 0; i < R; ++i) t(i, j) = select(i - j == off, d, o);
 }
 
 // The strict triangle opposite FROM, from FROM: A(i, j) := A(j, i) (Herm: conj, and the
