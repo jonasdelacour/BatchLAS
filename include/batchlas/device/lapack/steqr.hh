@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSTEQR on a tridiagonal (d, e), e(i) coupling d(i) and d(i+1).
-//   steqr<J, tier::Cta<N>>(ex, d, e, z, ws, opts)  one problem per SgpPartition<N> (N in 4, 8, 16,
-//                                                  32) of a 32-wide sub-group: d(i), e(i) and row i
-//                                                  of Q on lane i, Q (vectors) in local memory
-// steqr_detail: the split test and the bulge-chase similarity (serial and lane-register forms);
-// the CTA solver (nested / flat / lockstep loop shapes over one implicit QL step), shared by the
-// host steqr_cta and syev_cta_fused kernels; and the forms core does not reproduce bit for bit
-// yet (serial dlanst 'M', LaneVec scal, the two-window reversal, the strict-tie 2x2 shift).
+// xSTEQR on a tridiagonal (d, e), e(i) coupling d(i) and d(i+1): steqr<J, tier::Cta<N>>, one
+// problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
+// steqr_detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
+// lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
+// the forms core does not reproduce bit for bit yet (serial dlanst 'M', LaneVec scal, the
+// two-window reversal, the strict-tie 2x2 shift).
 // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 
 #include <algorithm>
@@ -989,10 +987,9 @@ inline bool steqr_cta_solve(const Partition& partition,
                                         cta_shift_strategy, cta_update_scheme);
 }
 
-// The CTA tier's one body: Q (vectors) from z into the cache, d / e into lane registers, the
-// solve, then d, e and Q back. live == false (a dead chunk, a masked-off item) solves zeros, so
-// every lane reaches every collective, and writes nothing. True when a block did not converge
-// within max_sweeps. The host steqr_cta kernel and device::steqr<J, tier::Cta<N>> both run it.
+// The CTA tier's one body (the host steqr_cta kernel's too): load Q, d, e; solve; store. live ==
+// false (a dead chunk, a masked-off item) solves zeros, so every lane reaches every collective,
+// and writes nothing. True when a block did not converge within max_sweeps.
 template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache>
 BATCHLAS_DLA_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
                                        int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live) {
@@ -1054,12 +1051,11 @@ template <JobType J, class Tier, class T> constexpr WorkspaceSize steqr_buffer_s
 }
 
 // xSTEQR on one problem per SgpPartition<N>: d (n = d.size()), e (n - 1) and, for EigenVectors,
-// z (n x n: the matrix the rotations accumulate into, the identity for the tridiagonal's own
-// vectors, sytrd's Q for A's; ignored otherwise) are overwritten. The eigenvalues are left
-// UNSORTED in d (the host route sorts in a separate pass when SteqrParams::sort is set).
-// ws.local: steqr_buffer_size bytes for this problem. COLLECTIVE over the whole sub-group: every
-// lane calls with its partition's problem (an unmasked partition reaches every collective).
-// Returns 0; 1 when a block did not converge within opts.max_sweeps; -2 when n is outside [1, N].
+// z (n x n, the matrix the rotations accumulate into: the identity, or sytrd's Q) are
+// overwritten; eigenvalues UNSORTED in d (the host route sorts in a separate pass). ws.local:
+// steqr_buffer_size bytes. COLLECTIVE over the whole sub-group (every lane calls with its
+// partition's problem). Returns 0; 1 when a block did not converge within opts.max_sweeps
+// (uniform); -2 when n is outside [1, N].
 template <JobType J, class Tier, class Ex, class D, class E, class Z>
 BATCHLAS_DLA_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
                               const steqr_opts& opts = {}) {

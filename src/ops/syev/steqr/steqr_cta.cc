@@ -92,9 +92,7 @@ namespace batchlas {
                     // (dead chunks are clamped below, not returned), which lets it run
                     // maskless where the chunks share one instruction stream.
                     const auto partition = make_partition<P, false>(sg);
-                    // NOTE: make_partition<P>(sg) partitions *within a sub-group*.
-                    // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
-                    // repeats for each sub-group. Make part_id unique within the whole work-group.
+                    // Partitions are per sub-group: make part_id unique within the work-group.
                     const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                     const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
@@ -107,13 +105,11 @@ namespace batchlas {
                     const bool live = prob_id < static_cast<int32_t>(batch_size) && d.active(prob_id);
                     const int32_t b = live ? prob_id : 0;
 
-                    // Compile-time selectable eigenvector accumulation (shared-memory Q).
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     using QLocalAccT = decltype(Q_local);
                     device::steqr_detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
-                    // Thin launcher: the body of device::steqr<J, tier::Cta<P>> (load, solve, store;
-                    // a dead chunk solves zeros and stores nothing), on the accessor-based Q cache.
+                    // Thin launcher: device::steqr<J, tier::Cta<P>>'s body on the accessor-based Q cache.
                     const bool failed = device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
                         partition, d.batch_item(b), e.batch_item(b), Q_view.batch_item(b), qcache, n,
                         static_cast<int32_t>(max_sweeps), cta_shift_strategy, cta_update_scheme, live);

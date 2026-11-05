@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSYTRD / xHETRD.
-//   sytd2<UL>(ex, a, v, w, n)                  the unblocked reduction on a resident tile (one row
-//                                              per item), shared by sytrd_cta and the fused syev
-//   sytrd<UL, tier::Cta<N>>(ex, A, d, e, tau, ws)  one matrix per SgpPartition<N>, the tile in
-//                                              local memory (N in 4, 8, 16, 32)
-// Strict port: arith::Native and the replaced kernel's expression shapes, so fp-contract fuses
-// the same products. sytrd_detail holds the CTA body (sytrd_cta_run, run by the host sytrd_cta
-// kernel too) and the forms core does not reproduce bit for bit yet: dotc / gemv / her2 on a Fit
-// executor (one guarded row, product-only dot, subtracted rank-2 term) and the row-owner
-// Hermitian tile copy.
+// xSYTRD / xHETRD: sytd2 (the unblocked reduction on a resident tile, one row per item) and
+// sytrd<UL, tier::Cta<N>> (one matrix per SgpPartition<N>, the tile in local memory). Strict
+// port: arith::Native and the replaced kernels' expression shapes. sytrd_detail holds the CTA
+// body (sytrd_cta_run, the host sytrd_cta kernel's too) and the forms core does not reproduce
+// bit for bit yet: Fit dotc / gemv / her2 (product-only dot, subtracted rank-2 term), lacpy_herm.
 
 #include <cstddef>
 #include <cstdint>
