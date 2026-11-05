@@ -171,6 +171,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                           const std::uint8_t* mask) {
     constexpr int wg = WG;
     // Bytes per work-item, so the cap scales with WG (the panels shrink from WG 256 to 64).
+    // evidence: docs/perf/sytrd.md#sytrd-the-latrd-lower-panel-on-device-la-v2-an-accepted-miss
     const std::ptrdiff_t slm_floor =
         static_cast<std::ptrdiff_t>(tuning::latrd_lower_panel_slm_floor<T>(a.rows(), a.batch_size())) * wg;
 
