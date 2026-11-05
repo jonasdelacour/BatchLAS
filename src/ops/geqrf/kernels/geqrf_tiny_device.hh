@@ -4,8 +4,9 @@
 // Device helpers for the register-resident GEQRF ("tiny") tier. The tier shares the CTA
 // leaves' xLARFG (v2::larfg_scalars<conv::Lapack>) -- tau is a contract ormqr/orgqr/ormbr/sy2sb
 // consume, and a second LAPACK real-beta convention is a second thing to get wrong. Its
-// PARTITION-wide butterflies are geqrf_v2::asc_reduce: ALL-reduces on purpose, a WORK-GROUP
-// reduction would re-open the 48 KB hole. evidence:
+// PARTITION-wide butterflies are core's always_inline device::detail::butterfly<N, bfly::Asc>
+// (reduce.hh's plain-inline butterfly<1, N, Asc>: FP64 N = 8 +3.5% SASS), ALL-reduces on
+// purpose, a WORK-GROUP reduction would re-open the 48 KB hole. evidence:
 // docs/perf/qr.md#the-two-partition-butterflies, #a-residual-test-cannot-guard-a-convention
 
 #include <src/ops/geqrf/geqrf_cta_device.hh>

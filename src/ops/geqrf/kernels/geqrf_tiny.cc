@@ -7,6 +7,7 @@
 #include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
 #include <src/kernels/common/tiny_device.hh>
 #include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
@@ -34,7 +35,7 @@ namespace {
 namespace gn = ::batchlas::geqrf_native;
 namespace tn = ::batchlas::tiny_native;
 namespace v2 = ::batchlas::device;
-namespace q2 = ::batchlas::geqrf_v2;
+namespace gd = ::batchlas::device::geqrf_detail;
 
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
 // copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
@@ -111,7 +112,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     // Re-typed HERE: std::complex's Annex-G operator* is an isnan branch plus a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     using Ar = v2::Arith<D>;
     using Fa = v2::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -180,12 +181,13 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // Order-symmetric, so every lane leaves with a BIT-IDENTICAL smax and ssq
                     // and needs no publish/broadcast pair. Widening either leaks across
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
-                    R smax = (lane >= j) ? q2::absmax_ri(rA[j]) : R(0);
-                    smax = q2::asc_reduce<N>(ex, smax, q2::Fmax());
+                    R smax = (lane >= j) ? v2::abs_inf(rA[j]) : R(0);
+                    // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
+                    smax = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, smax, v2::op::FMax());
 
                     R ssq = R(0);
-                    if (lane > j && smax > R(0)) ssq = q2::abs2_scaled(rA[j], smax);
-                    ssq = q2::asc_reduce<N>(ex, ssq, sycl::plus<R>());
+                    if (lane > j && smax > R(0)) ssq = gd::abs2_scaled(rA[j], smax);
+                    ssq = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
 
                     const v2::ScaledSsq<R> nrm{smax, ssq};
                     const v2::LarfgScalars<D> hh = v2::larfg_scalars<v2::conv::Lapack>(alpha, nrm);
@@ -214,14 +216,14 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     for (int k0 = 0; k0 < N; k0 += C) {
                         if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
                         if (k0 >= n) continue;          // wholly past the runtime cap
-                        q2::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
+                        gd::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
                         sycl::group_barrier(sg);
-                        q2::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
+                        gd::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
                         sycl::group_barrier(sg);
                         // The two barriers above cover all three hazards ONLY because sy is a
                         // separate array; their count and placement are guarded by source text.
                         // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
-                        q2::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                        gd::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
                     }
                     // No barrier between columns: column j+1's butterflies read rA[j+1], which
                     // this lane updated itself in frag_rank1 -- a register-private dependence.

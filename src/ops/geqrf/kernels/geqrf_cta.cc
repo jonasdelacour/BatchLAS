@@ -30,6 +30,7 @@ namespace sycl_geqrf {
 namespace {
 
 namespace gn = ::batchlas::geqrf_native;
+namespace v2 = ::batchlas::device;
 
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
 // bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
@@ -38,7 +39,7 @@ constexpr std::size_t geqrf_slm_bytes(int64_t m, int64_t n) {
     return static_cast<std::size_t>(m) * static_cast<std::size_t>(n) * sizeof(T);
 }
 
-// Allocations in (kGeqrfHoleLo, kGeqrfHoleHi] fail to launch once geqr2_panel_device's
+// Allocations in (kGeqrfHoleLo, kGeqrfHoleHi] fail to launch once device::geqr2's
 // reduce_over_group calls add static shared, so such a request is padded past the band.
 // The attribute is sticky per CUfunction, so a suite can be green by launch order alone.
 // evidence: docs/perf/qr.md#the-48-kib-launch-hole
@@ -170,10 +171,11 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                     sycl::group_barrier(it.get_group());      // B0
                 }
 
-                gn::GeqrfRawTile<D> A{mine, m};
-                gn::geqr2_panel_device<D, SC>(
-                    it, A, m, n, kmax,
-                    tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
+                // Raw-pointer tile: G panels share one local_accessor, so each needs its own
+                // base; ld unpadded.
+                using Ex = v2::RtGroup<SC == gn::GeqrfScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group>;
+                v2::geqr2(Ex{it}, v2::mat_wide(mine, m, n, m), kmax,
+                          tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
 
                 if constexpr (SC == gn::GeqrfScope::SubGroup) {
                     sycl::group_barrier(sg);                  // B4
@@ -214,14 +216,16 @@ Event geqrf_panel_global_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+            // Listed captures: their order is the kernel's argument order, so ld stays before
+            // m, n (the [=] first-use order moves it: FP32 +2 REG, one VOTEU less).
+            [mask, ap, stride, ld, m, n, kmax, tp, tau_batch_stride, tau_offset](sycl::nd_item<1> it)
+                BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
-                gn::GeqrfGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
-                gn::geqr2_panel_device<D, gn::GeqrfScope::WorkGroup>(
-                    it, A, m, n, kmax,
-                    tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
+                v2::geqr2(v2::RtGroup<v2::Scope::Group>{it},
+                          v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
+                          tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
             });
     });
     return ctx.get_event();
@@ -244,7 +248,7 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                              const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     constexpr int N = gn::GeqrfPanelRegPlan<D>::cols;
 
@@ -276,8 +280,8 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                     const int b = static_cast<int>(it.get_group_linear_id());
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
-                    gn::geqr2_panel_reg_device<D, N, R>(
-                        it, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
+                    v2::geqr2_reg<N, D, R>(
+                        v2::RtGroup<v2::Scope::Group>{it}, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
                         tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset,
                         &sred[0], &sw[0]);
                 });
@@ -294,7 +298,7 @@ constexpr std::size_t geqrf_panel_reg_worst_slm() {
         return 0;
     } else {
         constexpr int wg = gn::geqrf_panel_reg_max_rows<D>();
-        return gn::geqrf_panel_reg_real_slots(wg) * sizeof(gn::real_of<D>) +
+        return gn::geqrf_panel_reg_real_slots(wg) * sizeof(v2::real_t<D>) +
                gn::geqrf_panel_reg_scalar_slots(wg, gn::GeqrfPanelRegPlan<D>::cols) * sizeof(D);
     }
 }

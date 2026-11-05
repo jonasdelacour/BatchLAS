@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// The family-private device LA v2 ops of larft / ormqr_cta (src/kernels/common/dla_v2_larft.hh:
-// larf_frag, trmv_upper_row_owner, larft_forward_colwise) and the larft kernels behind them
+// The public larft (include/batchlas/device/lapack/larft.hh: larft, larft_detail::trmv_upper_row_owner),
+// core larf's register-column form as ormqr_cta calls it, and the larft kernels behind them
 // (src/kernels/common/larft_wy.hh), against long-double host references. Shared ops (gemv, copy,
-// map, laset, core larf) are covered by device_blas_v2_tests.
+// map, laset, core larf's memory forms) are covered by device_blas_v2_tests and device_core_*.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld / inc / stride / offset,
 // complex data with nonzero imaginary parts, the unread triangle and the rows past the panel
 // poisoned with a large finite value, batch 1024 with period-3 data where every item must be
@@ -24,7 +24,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_larft.hh>
+#include <batchlas/device/lapack/larft.hh>
 #include <src/kernels/common/larft_wy.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -150,7 +150,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
     return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
 }
 
-// ---- trmv_upper_row_owner ------------------------------------------------------------------
+// ---- larft_detail::trmv_upper_row_owner ---------------------------------------------------------
 
 // y := A x, A n x n upper with ld = n + 5 and the strictly lower part poisoned, x with inc 2.
 template <int WG, class T, class MakeEx>
@@ -171,7 +171,7 @@ void trmv_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per_item, c
         const auto ex = make_ex(it);
         const auto av = v2::mat(a + std::ptrdiff_t(b) * ld * n, n, n, ld);
         const auto xv = v2::assume_published(v2::vec(x + std::ptrdiff_t(b) * n * inc, n, inc));
-        v2::trmv_upper_row_owner(ex, av, xv, v2::vec(y + std::ptrdiff_t(b) * n, n));
+        v2::larft_detail::trmv_upper_row_owner(ex, av, xv, v2::vec(y + std::ptrdiff_t(b) * n, n));
     });
     const auto got = dev.down(y, hy.size());
     EXPECT_EQ(items_differing(got, n), 0) << where;
@@ -215,7 +215,7 @@ TYPED_TEST(DeviceBlasV2LarftTest, TrmvColumnRecurrenceNeedsNoBarrier) {
         const auto Tm = v2::mat(t + std::ptrdiff_t(b) * ld * n, n, n, ld);
         v2::copy(ex, v2::vec(dg + std::ptrdiff_t(b) * n, n), v2::vec(Tm.p, n, ld + 1));
         for (int j = 1; j < n; ++j)
-            v2::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), v2::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
+            v2::larft_detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), v2::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
     });
     const auto got = this->dev.down(t, hy.size());
     EXPECT_EQ(items_differing(got, ld * n), 0);
@@ -239,7 +239,7 @@ TYPED_TEST(DeviceBlasV2LarftTest, TrmvColumnRecurrenceNeedsNoBarrier) {
     EXPECT_VERIFY(T, Check::blas, n, worst);
 }
 
-// ---- larf_frag: H applied to a register column ----------------------------------------------
+// ---- core larf (Frag form): H applied to a register column --------------------------------------
 
 // Each of 13 lanes of a Partition<16> owns column l of C (ld = n + 3) in a Frag<16, ColPerLane>;
 // the reflector has head 3, is staged in local memory under a sub-group barrier and is zero
@@ -270,7 +270,7 @@ template <class Ops, class T> void larf_frag_case(Dev& dev, const char* where) {
         for (int r = 0; r < P; ++r) col[r] = lane < n && r < n ? Cm(r, lane) : T(0);
         sycl::group_barrier(sg);
         const auto vh = v2::assume_published(v2::Vec<T, v2::Ext<P>, v2::Unit, v2::Mem::Local>{vl, {}});
-        if (lane < n) v2::larf_frag<Ops>(v2::Thread{}, tau, vh, col);
+        if (lane < n) v2::larf<Side::Left, Ops>(col, vh, tau);
 #pragma unroll
         for (int r = 0; r < P; ++r)
             if (lane < n && r < n) Cm(r, lane) = col[r];
