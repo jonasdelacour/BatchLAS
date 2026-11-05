@@ -170,9 +170,10 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             const auto itm = static_cast<std::ptrdiff_t>(e / per);
             if (mask && !mask[itm]) return;  // I3
             const int r = static_cast<int>(e % per), i = r % kb, c = r / kb;
-            // H = the Hermitian A, real diagonal.
-            v2::lacpy(v2::ElemAt<true>{i, c}, dla::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo),
-                      v2::mat(hp + itm * stride_f, kb, kb, ldf));
+            // H = the Hermitian A, real diagonal. H is named first: the capture order is the kernel's
+            // parameter order (hp, then ap), as in the hand kernel.
+            const auto H = v2::mat(hp + itm * stride_f, kb, kb, ldf);
+            v2::lacpy(v2::ElemAt<true>{i, c}, dla::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
         });
     });
     return ctx.get_event();
