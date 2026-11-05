@@ -551,7 +551,7 @@ template <NormType NT, class Ex, class T> BATCHLAS_DLA_INLINE T lanst(const Ex& 
     T acc = T(0);
     if (d.owns(ex)) acc = sycl::fabs(d.v);
     if (e.owns(ex)) acc = sycl::fmax(acc, sycl::fabs(e.v));
-    return butterfly<1, Ex::size, bfly::Asc>(ex, acc, op::FMax{});
+    return bfly::inline_body<1, Ex::size, bfly::Asc>(ex, acc, op::FMax{});
 }
 
 // LAPACK lange on a Cyclic executor (|.| is the modulus). Max / Fro walk the flat column-major

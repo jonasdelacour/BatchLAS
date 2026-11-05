@@ -76,8 +76,11 @@ template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_down(const Part& pa
 // Order bfly::Down applies masks Hi/2 .. Lo, bfly::Asc Lo .. Hi/2 (another evaluation order,
 // so a strict port names its hand kernel's). Op is called op(mine, theirs) and must be
 // associative; for a commutative op every lane gets the identical value.
-template <int Lo, int Hi, class Order = bfly::Down, class Part, class T, class Op>
-BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
+// bfly::inline_body is the same body always_inline, for an op that replaces an always_inline hand
+// butterfly (inline policy, core.hh); butterfly forwards to it.
+namespace bfly {
+template <int Lo, int Hi, class Order = Down, class Part, class T, class Op>
+BATCHLAS_DLA_INLINE T inline_body(const Part& part, T v, Op op) {
     static_assert(detail::is_pow2(Lo) && detail::is_pow2(Hi) && Lo <= Hi, "butterfly: Lo <= Hi, powers of two");
     static_assert(std::is_same_v<Order, bfly::Down> || std::is_same_v<Order, bfly::Asc>, "butterfly: bfly::Down or bfly::Asc");
     if constexpr (std::is_same_v<Order, bfly::Down>) {
@@ -88,6 +91,11 @@ BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
         for (int m = Lo; m < Hi; m <<= 1) v = op(v, shuffle_xor(part, v, static_cast<std::uint32_t>(m)));
     }
     return v;
+}
+}  // namespace bfly
+template <int Lo, int Hi, class Order = bfly::Down, class Part, class T, class Op>
+BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
+    return bfly::inline_body<Lo, Hi, Order>(part, v, op);
 }
 // The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2).
 template <class Order = bfly::Down, class Part, class T, class Op>
