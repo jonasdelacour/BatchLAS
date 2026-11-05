@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // LAPACK xPOTF2, Lower: the unblocked Cholesky recurrence A = L L^H as ONE column loop whose data
-// placement is a distribution policy (v22 design A.3). Per column k the loop asks the
-// distribution, in this order:
-//   skip(k)               (only when Dist::skips) column k is past the run-time order: no work,
-//                         no collective (legal only when the order is uniform over the executor)
-//   pivot(k) -> akk       Re A(k, k) as every item sees it (collective for register forms)
-//   check(k, akk) -> act  LAPACK's test `!(akk > 0)` (NaN fails), sticky: the first failure records
-//                         info and every later column stops changing; act = column k factors
-//   scale(k, akk, act)    L(k, k) := sqrt(akk), L(k+1:, k) *= 1 / L(k, k)
-//   update(k, act)        A(k+1:, k+1:) -= L(k+1:, k) L(k+1:, k)^H on the lower triangle
-// and returns d.result(). Dist::static_cols > 0 is a compile-time column count (fully unrolled,
-// register-resident forms), 0 a run-time d.cols() (not unrolled). Distributions here:
+// placement is a distribution policy (v22 design A.3). The loop owns LAPACK's control: the pivot
+// test `!(akk > 0)` (NaN fails), sticky, so the first failing column k records info = k + 1 and
+// every later column stops changing. Per column k it asks the distribution:
+//   skip(k)             (only when Dist::skips) column k is past the run-time order: no work, no
+//                       collective (legal only when the order is uniform over the executor)
+//   col_live(k)         column k is inside the matrix (a padded form runs it masked)
+//   pivot(k) -> akk     Re A(k, k) as every item sees it (collective for register forms)
+//   scale(k, akk, act)  L(k, k) := sqrt(akk), L(k+1:, k) *= 1 / L(k, k), when act
+//   update(k, act)      A(k+1:, k+1:) -= L(k+1:, k) L(k+1:, k)^H on the lower triangle, when act
+//   fail(k)             (optional) the distribution records the failing column itself
+// and returns {info, alive}, uniform over the executor. Dist::static_cols > 0 is a compile-time
+// column count (fully unrolled, register-resident forms), 0 a run-time d.cols(). The control
+// stays here, not in a hook: hook state lives in memory until inlined, and the tiny tiers' SASS
+// is pinned to the form simplified with SSA state. Distributions here:
 //   potf2_sg_slm      SubGroup, lane r holds row r in a Frag, column k published to local memory
 //   potf2_panel_rows  any executor, one item per row of a local n x kb panel, caller's barrier
 // The Partition RowFrag form (lane r holds row r, columns by shuffle or SLM broadcast) is the
@@ -32,36 +35,55 @@
 
 namespace batchlas::device::inline v2 {
 
-// LAPACK's pivot test: a pivot that is not > 0 fails, NaN included.
-template <class R> BATCHLAS_DLA_INLINE bool potf2_bad_pivot(R akk) { return !(akk > R(0)); }
-
 namespace potrf_detail {
-template <class Dist> BATCHLAS_DLA_INLINE void potf2_step(Dist& d, int k) {
-    if constexpr (Dist::skips) {
-        if (d.skip(k)) return;
-    }
-    const auto akk = d.pivot(k);
-    const bool act = d.check(k, akk);
-    d.scale(k, akk, act);
-    d.update(k, act);
-}
+struct Potf2Result {
+    std::int32_t info;  // 1-based first failing column, 0: success
+    bool alive;         // live and no failure
+};
 }  // namespace potrf_detail
 
-template <Uplo UL, class Dist> BATCHLAS_DLA_INLINE auto potf2(Dist& d) {
+// Column k. A macro, not a function: the sticky state must stay SSA in the function that holds
+// the loop (a by-value step function changes PotrfTiny's SASS), and the two loop headers differ
+// only in the unroll pragma (unroll_count(1) on the run-time loop would add PTX "nounroll").
+#define BATCHLAS_POTF2_COLUMN(k)                                                          \
+    if constexpr (Dist::skips) {                                                          \
+        if (d.skip(k)) continue;                                                          \
+    }                                                                                     \
+    const bool col_live = d.col_live(k);                                                  \
+    const R akk = d.pivot(k);                                                             \
+    const bool bad = !(akk > R(0));                                                       \
+    if (alive && col_live && bad) {                                                       \
+        info = k + 1;                                                                     \
+        alive = false;                                                                    \
+        if constexpr (requires { d.fail(k); }) d.fail(k); /* a Dist that records info */  \
+    }                                                                                     \
+    const bool act = alive && col_live;                                                   \
+    d.scale(k, akk, act);                                                                 \
+    d.update(k, act);
+
+template <Uplo UL, class Dist> BATCHLAS_DLA_INLINE potrf_detail::Potf2Result potf2(const Dist& d, bool live = true) {
     static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
+    using R = typename Dist::R;
+    bool alive = live;
+    std::int32_t info = 0;
     if constexpr (Dist::static_cols > 0) {
 BATCHLAS_UNROLL_FULL
-        for (int k = 0; k < Dist::static_cols; ++k) potrf_detail::potf2_step(d, k);
+        for (int k = 0; k < Dist::static_cols; ++k) {
+            BATCHLAS_POTF2_COLUMN(k)
+        }
     } else {
-        for (int k = 0; k < d.cols(); ++k) potrf_detail::potf2_step(d, k);
+        for (int k = 0; k < d.cols(); ++k) {
+            BATCHLAS_POTF2_COLUMN(k)
+        }
     }
-    return d.result();
+    return {info, alive};
 }
+#undef BATCHLAS_POTF2_COLUMN
 
 namespace potrf_detail {
 // The ib x ib block `a` (ib <= NB <= SG) on one sub-group: lane r holds row r in `d`; column k is
-// written to `a` (local) and read back after one sub-group barrier; diag(k) := L(k, k). The first
-// bad pivot sets *info := info_base + k + 1. The NB barriers are unconditional.
+// written to `a` (local) and read back after one sub-group barrier; diag(k) := L(k, k). The NB
+// barriers are unconditional.
 template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
     using D = typename MA::value_type;
     using A = arith_t<arith::Fma, D>;
@@ -76,21 +98,15 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
     int info_base;
     int lane;
     Frag<D, NB>& d;
-    bool alive;
 
+    BATCHLAS_DLA_INLINE bool col_live(int k) const { return k < ib; }
+    BATCHLAS_DLA_INLINE void fail(int k) const {
+        if (lane == 0) *info = info_base + k + 1;
+    }
     BATCHLAS_DLA_INLINE R pivot(int k) const {
         return sycl::select_from_group(ex.sg, A::re(d[k]), static_cast<std::uint32_t>(k));
     }
-    BATCHLAS_DLA_INLINE bool check(int k, R akk) {
-        bool active = alive && (k < ib);
-        if (active && potf2_bad_pivot(akk)) {
-            if (lane == 0) *info = info_base + k + 1;
-            active = false;
-            alive = false;
-        }
-        return active;
-    }
-    BATCHLAS_DLA_INLINE void scale(int k, R akk, bool active) {
+    BATCHLAS_DLA_INLINE void scale(int k, R akk, bool active) const {
         const R dkk = active ? sycl::sqrt(akk) : R(1);
         const R r = Rsqrt::inv_sqrt(active ? akk : R(1), dkk);
         if (active) {
@@ -101,7 +117,7 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
         }
         sycl::group_barrier(ex.sg);
     }
-    BATCHLAS_DLA_INLINE void update(int k, bool active) {
+    BATCHLAS_DLA_INLINE void update(int k, bool active) const {
         if (active) {
             BATCHLAS_UNROLL_FULL
             for (int c = k + 1; c < NB; ++c) {
@@ -109,9 +125,9 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
             }
         }
     }
-    BATCHLAS_DLA_INLINE void result() const {}
 };
 
+// The first bad pivot sets *info := info_base + k + 1 (lane 0, SgSlm::fail).
 template <int NB, class Rsqrt, int SG, class MA, class DV>
 BATCHLAS_DLA_HELPER void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV diag, int* info, int info_base) {
     using D = typename MA::value_type;
@@ -120,42 +136,36 @@ BATCHLAS_DLA_HELPER void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV dia
     Frag<D, NB> d;
     BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) d[c] = (lane < ib && c < ib && c <= lane) ? a(lane, c) : D{};
-    SgSlm<NB, Rsqrt, SG, MA, DV> dist{ex, a, ib, diag, info, info_base, lane, d, true};
+    const SgSlm<NB, Rsqrt, SG, MA, DV> dist{ex, a, ib, diag, info, info_base, lane, d};
     potf2<Uplo::Lower>(dist);
 }
 
 // The n x kb panel P whose diagonal block starts at row c0, one item per row (row = ex.lid();
 // rows outside (c0, n) idle). `bar` is the caller's barrier over every item reading P, three per
-// column: pivot read / its overwrite, scale, rank-1 update. `ok` is sticky; the first bad pivot
-// sets *info := c0 + i + 1 (leader).
-template <class Rsqrt, class Ex, class PM, class Bar> struct PanelRows {
+// column: pivot read / its overwrite, scale, rank-1 update.
+template <class Rsqrt, class PM, class Bar> struct PanelRows {
     using D = typename PM::value_type;
     using A = arith_t<arith::Fma, D>;
     using R = real_t<D>;
     static constexpr int static_cols = 0;
     static constexpr bool skips = false;
-    const Ex& ex;
     const PM& p;
     int c0;
     int kb;
     int n;
-    bool ok;
-    int* info;
     Bar& bar;
     int row;
+    bool leader;
+    int* info;
 
     BATCHLAS_DLA_INLINE int cols() const { return kb; }
-    BATCHLAS_DLA_INLINE R pivot(int i) const { return A::re(p(c0 + i, i)); }
-    BATCHLAS_DLA_INLINE bool check(int i, R d) {
-        const bool bad = ok && potf2_bad_pivot(d);
-        if (bad) {
-            ok = false;
-            if (ex.leader()) *info = c0 + i + 1;
-        }
-        bar();  // WAR: every item read the pivot cell above, item c0 + i overwrites it below
-        return ok;
+    BATCHLAS_DLA_INLINE bool col_live(int) const { return true; }
+    BATCHLAS_DLA_INLINE void fail(int i) const {
+        if (leader) *info = c0 + i + 1;
     }
-    BATCHLAS_DLA_INLINE void scale(int i, R d, bool act) {
+    BATCHLAS_DLA_INLINE R pivot(int i) const { return A::re(p(c0 + i, i)); }
+    BATCHLAS_DLA_INLINE void scale(int i, R d, bool act) const {
+        bar();  // WAR: every item read the pivot cell above, item c0 + i overwrites it below
         if (act) {
             const R dkk = sycl::sqrt(d);
             const R rs = Rsqrt::inv_sqrt(d, dkk);  // act: d > 0, not NaN
@@ -164,8 +174,8 @@ template <class Rsqrt, class Ex, class PM, class Bar> struct PanelRows {
         }
         bar();
     }
-    BATCHLAS_DLA_INLINE void update(int i, bool act) {
-        if (act && row > c0 + i && row < n) {
+    BATCHLAS_DLA_INLINE void update(int i, bool act) const {
+        if (row > c0 + i && act && row < n) {  // this operand order keeps PotrfLpanel's SASS
             const D lri = p(row, i);
             for (int c = i + 1; c < kb; ++c) {
                 const D ljc = p(c0 + c, i);
@@ -174,7 +184,6 @@ template <class Rsqrt, class Ex, class PM, class Bar> struct PanelRows {
         }
         bar();
     }
-    BATCHLAS_DLA_INLINE bool result() const { return ok; }
 };
 }  // namespace potrf_detail
 
@@ -191,13 +200,14 @@ BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int i
     }
 }
 
-// potf2 of the panel P, one item per row (PanelRows above). Returns the sticky `ok`.
+// potf2 of the panel P, one item per row (PanelRows above). `ok` is sticky: returns it, and the
+// first bad pivot sets *info := c0 + i + 1 (leader).
 template <class Rsqrt, class Ex, class PM, class Bar>
 BATCHLAS_DLA_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info,
                                           Bar&& bar) {
     using B = std::remove_reference_t<Bar>;
-    potrf_detail::PanelRows<Rsqrt, Ex, PM, B> dist{ex, p, c0, kb, n, ok, info, bar, ex.lid()};
-    return potf2<Uplo::Lower>(dist);
+    const potrf_detail::PanelRows<Rsqrt, PM, B> dist{p, c0, kb, n, bar, ex.lid(), ex.leader(), info};
+    return potf2<Uplo::Lower>(dist, ok).alive;
 }
 
 }  // namespace batchlas::device

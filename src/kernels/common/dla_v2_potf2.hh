@@ -26,8 +26,8 @@ namespace batchlas::tiny_native {
 // when n is uniform over the sub-group.
 enum class OrderGuard { Predicate, Skip };
 
-// Bcast (device::bcast_policy): how column j of L reaches the lanes below the pivot. Every
-// failure effect is a value substitution, never control flow, because `live` is partition-uniform
+// Bcast (device::bcast_policy): how column j of L reaches the lanes below the pivot. The loop's
+// failure effects are value substitutions, never control flow, because `live` is partition-uniform
 // but not sub-group-uniform. rA[k] for k > lane stays exactly zero (the `k <= lane` predicate),
 // so the identity padding stays inert.
 template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct Potf2RowFrag {
@@ -39,24 +39,13 @@ template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct 
     int n;
     const Bcast& bc;
     int lane;
-    bool alive;
-    std::int32_t linfo;
-    bool col_live;
 
     BATCHLAS_DLA_INLINE bool skip(int j) const { return j >= n; }
-    BATCHLAS_DLA_INLINE R pivot(int j) {
-        col_live = (j < n);
+    BATCHLAS_DLA_INLINE bool col_live(int j) const { return j < n; }
+    BATCHLAS_DLA_INLINE R pivot(int j) const {
         return part.bcast(sycl_device::dev_real(rA[j]), static_cast<std::uint32_t>(j));
     }
-    BATCHLAS_DLA_INLINE bool check(int j, R akk) {
-        const bool bad = ::batchlas::device::potf2_bad_pivot(akk);
-        if (alive && col_live && bad) {
-            linfo = j + 1;  // sticky: the first failure wins
-            alive = false;
-        }
-        return alive && col_live;
-    }
-    BATCHLAS_DLA_INLINE void scale(int j, R akk, bool act) {
+    BATCHLAS_DLA_INLINE void scale(int j, R akk, bool act) const {
         namespace sd = ::batchlas::sycl_device;
         const R dkk = act ? sycl::sqrt(akk) : R(1);
         const R rinv = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
@@ -64,7 +53,7 @@ template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct 
             act, ::batchlas::device::select(lane == j, sd::dev_from_real<D>(dkk), sd::dev_mul_real(rA[j], rinv)),
             rA[j]);
     }
-    BATCHLAS_DLA_INLINE void update(int j, bool act) {
+    BATCHLAS_DLA_INLINE void update(int j, bool act) const {
         namespace sd = ::batchlas::sycl_device;
         if constexpr (std::is_same_v<Bcast, ::batchlas::device::bcast_policy::Shuffle>) {
 BATCHLAS_UNROLL_FULL
@@ -107,7 +96,6 @@ BATCHLAS_UNROLL_FULL
             }
         }
     }
-    BATCHLAS_DLA_INLINE std::int32_t result() const { return linfo; }
 };
 
 // Returns the 1-based first failing column (0: success), partition-uniform.
@@ -115,8 +103,8 @@ template <class D, int N, int NC, OrderGuard G = OrderGuard::Predicate, class Pa
 BATCHLAS_DLA_INLINE std::int32_t potf2_lower(const Part& part,
                                              ::batchlas::device::Frag<D, NC, ::batchlas::device::RowFrag>& rA, int n,
                                              bool live, Bcast bc) {
-    Potf2RowFrag<D, N, NC, G, Part, Bcast> d{part, rA, n, bc, part.lid(), live, 0, false};
-    return ::batchlas::device::potf2<Uplo::Lower>(d);
+    const Potf2RowFrag<D, N, NC, G, Part, Bcast> d{part, rA, n, bc, part.lid()};
+    return ::batchlas::device::potf2<Uplo::Lower>(d, live).info;
 }
 
 }  // namespace batchlas::tiny_native
