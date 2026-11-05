@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2 ops private to the elementwise-glue kernels (src/util/elementwise.cc, norm.cc,
+// Device LA v2 ops private to the elementwise-glue kernels (src/util/elementwise.cc,
 // transpose.cc, src/kernels/common/triangular_expand.hh): geam, trimask on a runtime or static
-// triangle, tri_expand, the SLM tile moves of transpose / mirror, and lange. Everything they
-// share with other families (Grid2D, for_each_owned_2d, mat_wide, modulus, abs2, reductions)
-// is core; an op moves to core when a second family needs it.
+// triangle, tri_expand and the SLM tile moves of transpose / mirror. Each waits for its core
+// form (lacpy with a run-time part, a diagonal offset and a fill outside the part; 2-D map and
+// axpby; tile-owned lacpy / mirror); lange, conj_if and force_real are core already.
 
 #include <type_traits>
 
@@ -13,7 +13,6 @@
 #include <batchlas/device.hh>
 
 namespace batchlas::device::inline v2::glue {
-using device::lange;  // core lapack_aux.hh
 
 // Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
 // (the legacy spelling, so a 1:1 port stays 1:1).
@@ -34,16 +33,6 @@ template <class U> BATCHLAS_DLA_INLINE constexpr bool is_lower([[maybe_unused]] 
 template <class D> BATCHLAS_DLA_INLINE constexpr bool is_unit([[maybe_unused]] D d) {
     if constexpr (std::is_same_v<D, Diag>) return d == Diag::Unit;
     else return D::value == Diag::Unit;
-}
-template <bool Conj, class T> BATCHLAS_DLA_INLINE T conj_if(T a) {
-    if constexpr (Conj) return Arith<T>::conj(a);
-    else return a;
-}
-// (re(a), 0): a Hermitian diagonal.
-template <class T> BATCHLAS_DLA_INLINE T real_only(T a) {
-    using A = Arith<T>;
-    if constexpr (A::is_complex) return A::make(A::re(a), real_t<T>(0));
-    else return a;
 }
 }  // namespace impl
 
@@ -156,7 +145,7 @@ BATCHLAS_DLA_INLINE void tile_store_pair(const Ex& ex, const MT& t, const MB& b,
     const int r = ex.lrow();
     impl::tile_cols<TN>(ex, [&](int c) {
         if (i0 + r < b.rows() && j0 + c < b.cols()) b(i0 + r, j0 + c) = t(r, c);
-        if (j0 + r < b.rows() && i0 + c < b.cols()) b(j0 + r, i0 + c) = impl::conj_if<Conj>(static_cast<T>(t(c, r)));
+        if (j0 + r < b.rows() && i0 + c < b.cols()) b(j0 + r, i0 + c) = device::conj_if<Conj>(static_cast<T>(t(c, r)));
     });
 }
 // A diagonal tile (i0 == j0) of a mirror: the referenced member of each pair, op(t(c, r))
@@ -170,9 +159,9 @@ BATCHLAS_DLA_INLINE void tile_store_diag(const Ex& ex, U uplo, const MT& t, cons
         const int i = i0 + r, j = i0 + c;
         if (i >= b.rows() || j >= b.cols()) return;
         const bool referenced = lower ? (r >= c) : (r <= c);
-        T value = referenced ? static_cast<T>(t(r, c)) : impl::conj_if<Conj>(static_cast<T>(t(c, r)));
+        T value = referenced ? static_cast<T>(t(r, c)) : device::conj_if<Conj>(static_cast<T>(t(c, r)));
         if constexpr (Conj) {
-            if (i == j) value = impl::real_only(value);
+            if (i == j) value = device::force_real(value);
         }
         b(i, j) = value;
     });
