@@ -3,11 +3,13 @@
 #include <cstddef>
 
 #include <batchlas/device.hh>
+#include <batchlas/device/level3/cfg.hh>
 #include <batchlas/device/level3/copy_async.hh>
 #include <batchlas/device/level3/epilogue.hh>
 #include <batchlas/device/level3/mma.hh>
 #include <batchlas/device/level3/packet.hh>
 #include <batchlas/device/level3/pipeline.hh>
+#include <batchlas/device/level3/schedule.hh>
 #include <batchlas/device/level3/stage.hh>
 
 #include <src/ops/gemm/gemm_kernels.hh>
@@ -45,6 +47,8 @@ inline int register_ceil_div(int value, int divisor) {
     return (value + divisor - 1) / divisor;
 }
 
+// The tile geometry is the public l3::RegGeom (one definition with the in-group Level 3);
+// VecA / VecB are the host launcher's packet widths.
 template <int TileM_,
           int TileN_,
           int TileK_,
@@ -54,32 +58,9 @@ template <int TileM_,
           int VecB_ = 4,
           int UnrollK_ = 1,
           int Stages_ = 1>
-struct RegisterTilePolicy {
-    static constexpr int TileM = TileM_;
-    static constexpr int TileN = TileN_;
-    static constexpr int TileK = TileK_;
-    static constexpr int ThreadTileRows = ThreadTileRows_;
-    static constexpr int ThreadTileCols = ThreadTileCols_;
+struct RegisterTilePolicy : gc::RegGeom<TileM_, TileN_, TileK_, ThreadTileRows_, ThreadTileCols_, UnrollK_, Stages_> {
     static constexpr int VecA = VecA_;
     static constexpr int VecB = VecB_;
-    static constexpr int UnrollK = UnrollK_;
-    static constexpr int Stages = Stages_;
-    static constexpr int LocalRows = TileM / ThreadTileRows;
-    static constexpr int LocalCols = TileN / ThreadTileCols;
-    static constexpr int ThreadsPerGroup = LocalRows * LocalCols;
-    static constexpr int TileAStride = TileM + 1;
-    static constexpr int TileBStride = TileK + 1;
-    static constexpr int StageASize = TileAStride * TileK;
-    static constexpr int StageBSize = TileBStride * TileN;
-    // B slot of (k row, n col). With ThreadTileCols 4 and an odd stride, local_col and
-    // local_col + 8 read the same bank at every t (64-wide tiles: 2-way; 32x128: 4-way), and
-    // no stride pad can fix that (4 * stride * 8 == 0 mod 32). XOR-ing the row with the col's
-    // 32-column group stays inside the row's aligned 4-block, so it needs no extra memory.
-    // evidence: docs/perf/gemm.md#gemm-wp-g-transpose-aware-scalar-staging
-    static constexpr int b_slot(int col, int row) {
-        if constexpr (TileN <= 32) return col * TileBStride + row;  // one group: the compiler cannot see q == 0
-        else return col * TileBStride + (row ^ ((col >> 5) & 3));
-    }
 };
 
 template <typename T>
@@ -199,44 +180,38 @@ Event launch_register_tiled(Queue& ctx,
                 v2::fill(accum, T(0));
 
                 // Stage op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B) (k x n; the
-                // swizzled b_slot) of k slab kk0 into local stage `stage`. Scalar staging (odd ld or
-                // base) walks the operand's contiguous index fastest; the shared layout is the same.
-                auto load_stage = [&](int kk0, int stage) BATCHLAS_DLA_BODY {
-                    T* tile_a_stage = &tile_a[stage * Policy::StageASize];
-                    T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
-                    auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * Policy::TileAStride + r]; };
-                    auto dst_b = [&](int r, int c) -> T& { return tile_b_stage[Policy::b_slot(c, r)]; };
-                    const int m0 = group_row * TileM, n0 = group_col * TileN;
-                    constexpr int Thr = Policy::ThreadsPerGroup;
-                    if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
-                                  && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
+                // swizzled b_slot) of k slab kk0 (l3::reg_tile_mma calls A then B per stage). Scalar
+                // staging (odd ld or base) walks the operand's contiguous index fastest; the shared
+                // layout is the same.
+                constexpr int Thr = Policy::ThreadsPerGroup;
+                constexpr bool aligned_nn = AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
+                                            && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>;
+                auto stage_a = [&](int kk0, auto& dst_a) BATCHLAS_DLA_BODY {
+                    const int m0 = group_row * TileM;
+                    if constexpr (aligned_nn) {
                         gc::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
-                        gc::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
-                        return;
-                    }
-                    if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
+                    } else if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
                         if (packet_a) gc::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
                         else gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                    } else {
+                        gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                    }
+                };
+                auto stage_b = [&](int kk0, auto& dst_b) BATCHLAS_DLA_BODY {
+                    const int n0 = group_col * TileN;
+                    if constexpr (aligned_nn) {
+                        gc::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
+                    } else if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
                         if (packet_b) gc::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                         else gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                     } else {
-                        gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
                         gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                     }
                 };
 
-                // accum += A(:, t) B(t, :) over the slab's k steps (all TileK when aligned).
-                auto accumulate_stage = [&](int stage, int kk0) {
-                    const T* tile_a_stage = &tile_a[stage * Policy::StageASize];
-                    const T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
-                    gc::mma_slab<TileK, UnrollK, AlignedFastPath>(
-                        accum, kk0, k,
-                        [&](int t, int i) { return tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i]; },
-                        [&](int t, int j) { return tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)]; });
-                };
-
-                const int tile_count = AlignedFastPath ? (k / TileK) : register_ceil_div<T>(k, TileK);
-                gc::kloop<Policy::Stages, AlignedFastPath, TileK>(ex, tile_count, load_stage, accumulate_stage);
+                // accum += A(:, t) B(t, :) over every slab's k steps (all TileK when aligned).
+                gc::reg_tile_mma<Policy, AlignedFastPath>(ex, local_row, local_col, &tile_a[0], &tile_b[0], k, stage_a, stage_b,
+                                                          accum);
 
                 // C goes out through tile_a/tile_b, lane = consecutive row: lanes run along n here,
                 // so a direct store puts adjacent lanes ldc apart. kloop ends on a barrier after its

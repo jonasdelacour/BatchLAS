@@ -3,7 +3,7 @@
 // Level 3 stagers (v22 design B.2): op(X) blocks into local memory, zero outside the matrix, and
 // the element read they share (OperandAccessor). The tuned gemm code moved behind a signature:
 // same loops, pragmas, predicate order and helpers, so a kernel built from them keeps its SASS.
-//   stage_block, stage_block_packet, stage_block_packet_aligned, stage_storage
+//   stage_block_read, stage_block, stage_block_packet, stage_block_packet_aligned, stage_storage
 
 #include <type_traits>
 #include <utility>
@@ -42,20 +42,30 @@ struct OperandAccessor {
     }
 };
 
-// dst(r, c) := op(X)(r0 + r, c0 + c) for the R x C block, zero where row >= mr or col >= mc.
-// Items lid, lid + Threads, ... walk X's contiguous index fastest (r for NoTrans, c otherwise),
-// so a warp reads consecutive addresses whatever dst's slot map is. x, ld and the bounds are
-// references for the same reason as mma_slab's k (the reg tiles' REG and LDG/STS).
+// dst(r, c) := read(r0 + r, c0 + c) for the R x C block, zero where row >= mr or col >= mc:
+// THE staging loop; the operand adapters (plain op(X), a mirrored or triangular operand) are
+// the read. Items lid, lid + Threads, ... walk r fastest when RowFastest (c otherwise): name the
+// operand's contiguous index so a warp reads consecutive addresses whatever dst's slot map is.
+// The bounds are references for the same reason as mma_slab's k (the reg tiles' REG and LDG/STS).
+template <bool RowFastest, int R, int C, int Threads, class T, class Read, class Dst>
+BATCHLAS_DLA_INLINE void stage_block_read(int lid, int r0, int c0, const int& mr, const int& mc, Read&& read, Dst&& dst) {
+    for (int index = lid; index < R * C; index += Threads) {
+        const int r = RowFastest ? index % R : index / C;
+        const int c = RowFastest ? index / R : index % C;
+        const int row = r0 + r;
+        const int col = c0 + c;
+        dst(r, c) = (row < mr && col < mc) ? read(row, col) : T(0);
+    }
+}
+
+// stage_block_read of op(X)(row, col) of a column-major X. x and ld are references (the
+// closure fields of the reg tiles' kernel lambda, read where the tuned loop read them).
 template <Transpose Op, int R, int C, int Threads, class T, class Dst>
 BATCHLAS_DLA_INLINE void stage_block(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr, const int& mc,
                                      Dst&& dst) {
-    for (int index = lid; index < R * C; index += Threads) {
-        const int r = Op == Transpose::NoTrans ? index % R : index / C;
-        const int c = Op == Transpose::NoTrans ? index / R : index % C;
-        const int row = r0 + r;
-        const int col = c0 + c;
-        dst(r, c) = (row < mr && col < mc) ? OperandAccessor<T, Op>::load(x, ld, 0, row, col) : T(0);
-    }
+    stage_block_read<Op == Transpose::NoTrans, R, C, Threads, T>(
+        lid, r0, c0, mr, mc, [&](int row, int col) BATCHLAS_DLA_BODY { return OperandAccessor<T, Op>::load(x, ld, 0, row, col); },
+        dst);
 }
 
 // stage_block with V-element aligned packets along X's contiguous index (x + offset 16-byte
