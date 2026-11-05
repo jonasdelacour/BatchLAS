@@ -415,12 +415,12 @@ template <class D, class MA> inline D load_pad_identity(const MA& a, int r, int 
 // N divides the sub-group; every lane of the SUB-GROUP reaches every collective (a dead
 // partition passes live = false and factors an identity; n is sub-group uniform).
 // The factor is stored at row `rowid` (rows are relabelled, never moved); ipiv 1-based.
+// `lane` is px.lid(), read by the caller before it builds the operands (the host route's order).
 // evidence: docs/perf/lu.md#lu-the-tiny-tier
 template <int NC, class Px, class MA, class PV, class Bc, class Sink>
-BATCHLAS_DLA_INLINE std::int32_t reg_run(const Px& px, const MA& a, const PV& ipiv, int n, bool live, const Bc& bc,
-                                         const Sink& sink) {
+BATCHLAS_DLA_INLINE std::int32_t reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
+                                         const Bc& bc, const Sink& sink) {
     using D = typename MA::value_type;
-    const int lane = px.lid();
     Frag<D, NC> rA;
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NC; ++c) rA[c] = load_pad_identity<D>(a, lane, c, n, live);
@@ -506,7 +506,7 @@ BATCHLAS_DLA_INLINE std::int32_t getrf(const Ex& ex, const MA& a, std::int32_t* 
     static_assert(HasTier<routine::getrf, Tr, D>, "getrf: this tier is not offered for this scalar type");
     if constexpr (getrf_detail::is_reg_v<Tr>) {
         static_assert(Tr::n_max <= Ex::size, "getrf: tier::Reg<N> needs a Partition of at least N lanes");
-        return getrf_detail::reg_run<Tr::n_max>(ex, a, getrf_detail::PivPtr{ipiv}, a.cols(), live,
+        return getrf_detail::reg_run<Tr::n_max>(ex, ex.lid(), a, getrf_detail::PivPtr{ipiv}, a.cols(), live,
                                                 getf2_detail::bcast_shuffle(ex), getrf_detail::NoInfo{});
     } else {
         static_assert(getrf_detail::is_cta_v<Tr>, "getrf: the Blocked tier is not offered yet");

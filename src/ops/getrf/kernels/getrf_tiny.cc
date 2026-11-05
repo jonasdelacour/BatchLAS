@@ -84,8 +84,9 @@ struct TinyMat {
 };
 struct TinyPiv {
     int* p;
-    std::ptrdiff_t off;
-    BATCHLAS_DLA_INLINE int& operator()(int i) const { return p[off + i]; }
+    int b;
+    int n;
+    BATCHLAS_DLA_INLINE int& operator()(int i) const { return p[static_cast<std::ptrdiff_t>(b) * n + i]; }
 };
 struct TinyInfo {
     int32_t* p;
@@ -167,7 +168,7 @@ struct GetrfTinyBody {
         const auto sg = it.get_sub_group();
         const v2::SgpPartition<N> px(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
-        [[maybe_unused]] const int lane = px.lid();  // the Slm policy's; reg_run reads its own
+        const int lane = px.lid();
         const int pidx = tn::tiny_partition_id(sg, px.part);
         const int prob_id = wg_id * kMpw + pidx;
 
@@ -177,7 +178,7 @@ struct GetrfTinyBody {
         const bool live = (prob_id < batch) && (mask == nullptr || mask[prob_id] != 0);
         const int b = live ? prob_id : 0;
         const TinyMat<D> A{ap + static_cast<std::ptrdiff_t>(b) * strp, ldp};
-        const TinyPiv piv{piv_ptr, static_cast<std::ptrdiff_t>(b) * n};
+        const TinyPiv piv{piv_ptr, b, n};
         const TinyInfo info{info_ptr, b};
 
         // The public Reg body: ?GETF2 by lazy relabel, kmax = ncols = n. The unroll is FULL only
@@ -187,10 +188,10 @@ struct GetrfTinyBody {
         // rejects a heterogeneous batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
         if constexpr (Slm) {
             const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
-            v2::getrf_detail::reg_run<NC>(px, A, piv, n, live, bc, info);
+            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, bc, info);
         } else {
             // one select per element, two per complex
-            v2::getrf_detail::reg_run<NC>(px, A, piv, n, live, g2::bcast_shuffle(px), info);
+            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, g2::bcast_shuffle(px), info);
         }
     }
 };

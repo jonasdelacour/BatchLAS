@@ -156,7 +156,10 @@ def classify(head, has_body):
     m = re.match(r"(?:enum\s+(?:class\s+|struct\s+)?|(?:struct|class|union)\s+)(?:alignas\s*\([^)]*\)\s*|[A-Z_]+\s+)*"
                  r"([A-Za-z_]\w*)", head)
     if m:
-        return ("type", m.group(1), None) if has_body else None
+        if not has_body:
+            return None
+        # `struct X<...> {` specialises a template declared elsewhere: it defines no new name.
+        return ("spec" if head[m.end():].lstrip().startswith("<") else "type", m.group(1), None)
     eq = top_level(head, "=")
     if eq >= 0 and eq < (top_level(head, "(") if top_level(head, "(") >= 0 else len(head)) + 1:
         idm = re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*$", head[:eq])
@@ -269,7 +272,7 @@ def findings(root):
                 stem = os.path.splitext(rel[len(LAPACK_DIR):])[0].replace("/", "_")
                 rs = ROUTINES.get(stem, (stem,))
                 det = any(seg.startswith(tuple(r + "_" for r in rs)) for seg in d.ns.split("::"))
-                if not (routine_of(d.name, rs) or det):
+                if not (routine_of(d.name, rs) or det or d.kind == "spec"):
                     add("lapack-header", rel, qual, d.line)
             elif public and d.kind in ("function", "type") and routine_of(d.name, LAPACK_NAMES):
                 add("lapack-core", rel, qual, d.line)
@@ -325,6 +328,7 @@ SELF_TREE = {
         template <class Ex, class M> void potf2_lower(const Ex& ex, const M& a) {}
         namespace potrf_detail { inline int step(int k) { return k; } }
         constexpr int potrf_buffer_size(int n) { return n; }
+        template <class T> struct tier_info<routine::potrf, tier::Reg<8>, T> { int x; };
         template <class Ex, class M> void gemv(const Ex& ex, const M& a) {}     // BREAK 2
         } }
         """,

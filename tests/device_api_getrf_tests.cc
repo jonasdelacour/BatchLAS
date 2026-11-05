@@ -30,6 +30,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
 
 using namespace batchlas;
 namespace dv = batchlas::device;
@@ -222,12 +223,23 @@ template <class T> void check_device(const Prob<T>& p, const char* what) {
     }
 }
 
+// The host cta route's own ceiling (its occupancy-scaled local-memory gate, getrf_cta.cc): above
+// it the host route throws, so only the device op runs there, against the oracle.
+template <class T> int host_cta_cap(Queue& ctx) {
+    const auto lm = static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    return sycl_getrf::getrf_cta_max_n_for_slm<T>(resident::device_slm_budget(lm));
+}
+template <class T> bool host_runs(Queue& ctx, int n, Route r) { return r == Route::Tiny || n <= host_cta_cap<T>(ctx); }
+
 template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Route route, const char* what) {
     Prob<T> p(n, 0x5eedu + 977u * n);
-    run_host(ctx, p, route);
+    const bool host = host_runs<T>(ctx, n, route);
+    if (host) run_host(ctx, p, route);
     run_device<Tier>(ctx, p);
-    const auto bad = mismatches(p);
-    EXPECT_TRUE(bad.empty()) << what << " n=" << n << ": " << bad.size() << " items differ from the host route, first " << (bad.empty() ? -1 : bad[0]);
+    if (host) {
+        const auto bad = mismatches(p);
+        EXPECT_TRUE(bad.empty()) << what << " n=" << n << ": " << bad.size() << " items differ from the host route, first " << (bad.empty() ? -1 : bad[0]);
+    }
     check_device(p, what);
 }
 
@@ -271,7 +283,11 @@ TYPED_TEST(DeviceApiGetrfTest, RegTierIsTheTinyRouteBitForBit) {
 
 TYPED_TEST(DeviceApiGetrfTest, CtaTierIsTheCtaRouteBitForBit) {
     using T = TypeParam;
-    for (int n : {17, 33, 47, 63, 64}) expect_thin_launcher<dv::tier::Cta<64>, T>(this->ctx, n, Route::Cta, "Cta<64>");
+    const int cap = host_cta_cap<T>(this->ctx);  // straddled: the last order the host route takes
+    ASSERT_GE(cap, 17) << "the host cta route takes no order this test compares";
+    for (int n : {17, 33, 47, cap, cap + 1, 63, 64}) {
+        if (n <= 64) expect_thin_launcher<dv::tier::Cta<64>, T>(this->ctx, n, Route::Cta, "Cta<64>");
+    }
 }
 
 // The advertised ceiling, launched: Cta<128> at n = 128 wherever the device's local memory holds it.
@@ -290,10 +306,12 @@ TYPED_TEST(DeviceApiGetrfTest, WithTierLaunchesThePickedTier) {
     using T = TypeParam;
     for (int n : {13, 40}) {
         Prob<T> p(n, 0x7e11u + n);
-        run_host(this->ctx, p, n <= 32 && n <= dv::getrf_detail::reg_cap<T>() ? Route::Tiny : Route::Cta);
+        const Route r = n <= 32 && n <= dv::getrf_detail::reg_cap<T>() ? Route::Tiny : Route::Cta;
+        const bool host = host_runs<T>(this->ctx, n, r);
+        if (host) run_host(this->ctx, p, r);
         dv::with_tier<dv::routine::getrf, T>(sycl_queue(this->ctx).get_device(), n,
                                              [&]<class Tier>(Tier) { run_device<Tier>(this->ctx, p); });
-        EXPECT_TRUE(mismatches(p).empty()) << "with_tier n=" << n;
+        if (host) EXPECT_TRUE(mismatches(p).empty()) << "with_tier n=" << n;
         check_device(p, "with_tier");
     }
 }
@@ -309,7 +327,7 @@ TYPED_TEST(DeviceApiGetrfTest, DeliberateBreakADeadItemIsTheOnlyMismatch) {
         EXPECT_EQ(mismatches(p), std::vector<int>{517}) << "Reg<16>";
     }
     {
-        Prob<T> p(40, 0xbeefu);
+        Prob<T> p(std::min(40, host_cta_cap<T>(this->ctx)), 0xbeefu);
         run_host(this->ctx, p, Route::Cta);
         run_device<dv::tier::Cta<64>>(this->ctx, p, 3);
         EXPECT_EQ(mismatches(p), std::vector<int>{3}) << "Cta<64>";
