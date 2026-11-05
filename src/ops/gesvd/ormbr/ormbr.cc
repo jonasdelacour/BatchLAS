@@ -109,7 +109,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             if (mask != nullptr && mask[b] == 0) return;  // I3
 
             // AQ := 0, then AQ(1:, 1:) strictly lower := A(0:, 1:)^H: P's row reflectors as Q-form columns.
-            const glue::Elem2 ex{row, col};
+            const v2::ElemAt<true> ex{row, col};
             const auto aq = v2::item(AQ, b, nn, nn);
             v2::laset(ex, v2::Zero{}, v2::Zero{}, aq);
             v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(
@@ -130,7 +130,8 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            glue::downshift(glue::Elem{j}, glue::item_n(TAU, b, nn - 1), glue::item_n(TAUQ, b, nn));
+            const auto tauq = glue::item_n(TAUQ, b, nn);
+            v2::copy(v2::Grid1D<true>{j}, v2::shifted(glue::item_n(TAU, b, nn - 1), 1, nn), tauq);
         });
     });
 
@@ -183,7 +184,7 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 const int c = static_cast<int>(idx[2]);
                                                 if (mask != nullptr && mask[b] == 0) return;  // I3
                                                 // V := unit lower part of A(i0:, i0+1:)^H (row reflectors as columns).
-                                                const glue::Elem2 ex{r, c};
+                                                const v2::ElemAt<true> ex{r, c};
                                                 const auto ap = v2::mat(a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a,
                                                                         i0 + ib, i0 + 1 + m, ld_a);
                                                 const auto v = v2::mat(v_out + static_cast<std::ptrdiff_t>(b) * stride_v_out,

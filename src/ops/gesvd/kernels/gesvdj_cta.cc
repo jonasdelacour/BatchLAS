@@ -42,6 +42,7 @@ class GesvdjCTAKernel;
 namespace {
 
 namespace v2 = ::batchlas::device;
+namespace jac = ::batchlas::device::jacobi_detail;
 
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
@@ -155,7 +156,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // Relative threshold (LAWN 169 Remark 2.2); an absolute test would
         // forfeit the relative accuracy this kernel exists for.
-        const auto thr = v2::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
+        const auto thr = jac::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
         const Real zero_mult = params.zero_sigma_multiplier;
 
         Real* S = s_ptr;
@@ -187,7 +188,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
-                    Pair_local[idx] = v2::pack_pair(k < pairs_per_round ? v2::round_robin_pair(mp, t, k) : v2::PivotPair{kC, kC});
+                    Pair_local[idx] = jac::pack_pair(k < pairs_per_round ? jac::round_robin_pair(mp, t, k) : jac::PivotPair{kC, kC});
                 }
                 sycl::group_barrier(wg);
 
@@ -214,7 +215,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without V, V_local is never named, so the kernel does not capture it (an extra
                 // local accessor argument moves the shared-memory layout).
-                std::conditional_t<ComputeV, Tile, v2::NoPhase> V{};
+                std::conditional_t<ComputeV, Tile, v2::None> V{};
                 if constexpr (ComputeV) V = Tile{V_local, {}, {}, {}, tile_off};
                 const auto nrm = v2::vec(Nrm_local, kC, part_id * kC);
                 const auto inv = v2::vec(Inv_local, kC, part_id * kC);
@@ -230,7 +231,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
-                            v = transposed_f ? v2::detail::conj_ref<T>(A_prob(c, row)) : A_prob(row, c);
+                            v = transposed_f ? v2::conj(A_prob(c, row)) : A_prob(row, c);
                         }
                         A(row, c) = v;
                         if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? T(1) : T(0);
@@ -257,9 +258,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // completion fills U, V is identity.
                 // evidence: docs/design/gesvd.md#gesvdj_cta-global-power-of-two-scaling
                 const Real my_n2 = (lane < CC) ? nrm(lane) : Real(0);
-                const Real nmax = v2::allreduce(ex, my_n2, v2::FMax{});
+                const Real nmax = v2::allreduce(ex, my_n2, v2::op::FMax{});
                 const Real nmin = v2::allreduce(ex, (lane < CC && my_n2 > Real(0)) ? my_n2 : std::numeric_limits<Real>::max(),
-                                                 v2::FMin{});
+                                                 v2::op::FMin{});
                 Real beta = Real(1);
                 if (nmax > Real(0) && nmin <= nmax) {
                     const Real e = sycl::round(Real(0.25) * (sycl::log2(nmax) + sycl::log2(nmin)));
@@ -301,7 +302,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // live registers (80 T, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
                         // Real T never names Rd_local, so the kernel does not capture it.
-                        std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::NoPhase> rd{};
+                        std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
                         if constexpr (kNeedPhase) rd = v2::vec(Rd_local, K, base_r + ch * K);
                         const auto rnd = v2::rot_round<T>(v2::vec(Rcs_local, K, base_r + ch * K), rd,
                                                           v2::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
@@ -317,7 +318,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         v2::Frag<T, K> g;
 BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < K; ++k) {
-                            const v2::PivotPair pqk = rnd.pair(k);
+                            const jac::PivotPair pqk = rnd.pair(k);
                             pk[k] = pqk.p;
                             qk[k] = pqk.q;
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
@@ -334,12 +335,12 @@ BATCHLAS_UNROLL_FULL
                         const int32_t k_of_lane = lane >> 1;
                         const int32_t slot = ch * K + k_of_lane;
                         // Re-read from LDS: a runtime index into pq[] would spill it.
-                        const v2::PivotPair kpq = rnd.pair(k_of_lane);
+                        const jac::PivotPair kpq = rnd.pair(k_of_lane);
 
                         bool active = (slot < pairs_per_round) && (kpq.p < CC) && (kpq.q < CC);
                         Real app = Real(0);
                         Real aqq = Real(0);
-                        v2::JacobiRotation<T> jr = v2::identity_rotation<T>();
+                        jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
                         if (active) {
                             app = nrm(kpq.p);
                             aqq = nrm(kpq.q);
@@ -352,7 +353,7 @@ BATCHLAS_UNROLL_FULL
                         // only. BOTH sides clamp at zero: a negative q side NaNs
                         // the rank sort into an out-of-bounds LDS index.
                         if (active && (lane % 2 == 0)) {
-                            const auto n2 = v2::rotated_norms2(jr, app, aqq);
+                            const auto n2 = jac::rotated_norms2(jr, app, aqq);
                             nrm(kpq.p) = n2.p;
                             nrm(kpq.q) = n2.q;
                         }
@@ -539,7 +540,7 @@ BATCHLAS_UNROLL_FULL
                             const int32_t dst = lane + cc * kP;
                             if (!live || dst >= LC) continue;
                             const int32_t c = static_cast<int32_t>(inv(dst));
-                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = v2::detail::conj_ref<T>(A(r, c));
+                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = v2::conj(A(r, c));
                         }
                     }
                 }
@@ -552,7 +553,7 @@ BATCHLAS_UNROLL_FULL
                             const int32_t dst = lane + cc * kP;
                             if (!live || dst >= CC) continue;
                             const int32_t c = static_cast<int32_t>(inv(dst));
-                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = v2::detail::conj_ref<T>(V(r, c));
+                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = v2::conj(V(r, c));
                         }
                     } else {
                         // U = V' directly. Here lane is the output ROW.

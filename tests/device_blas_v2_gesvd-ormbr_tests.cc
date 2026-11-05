@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // The gesvd / ormbr private v2 pieces (src/ops/gesvd/gesvd-ormbr_v2.hh) against host references:
-// the Elem / Elem2 / ElemIn2 executors driving core ops in the compositions the glue kernels use,
-// the item_n / col_of / row_of / sub_of / reversed / gathered adaptors, and dgmm, downshift,
-// bdgram, bdmv_div, tridiag_abs_offdiag. Core ops themselves are covered by device_blas_v2_tests.
+// core's Grid1D<true> / ElemAt<true> / ElemIn executors driving core ops in the compositions the
+// glue kernels use, the item_n / col_of / row_of / sub_of adaptors with core flip / mapped /
+// shifted over them, core dgmm, and bdgram, bdmv_div, tridiag_abs_offdiag. Core ops themselves are
+// covered by the device_core tests.
 // Guards (agent-guide section 8): non-natural ld / inc / stride, views longer than the n an
 // adaptor is given, rectangular shapes and blocks, complex data with nonzero imaginary parts,
 // NaN-poisoned outputs where nothing may be written, all kBatch = 1024 items checked against their
@@ -120,7 +121,7 @@ TYPED_TEST_SUITE(DeviceBlasV2GesvdOrmbrTest, Types);
 std::size_t at(int b, int stride, int i, int j, int ld) { return std::size_t(b) * stride + i + std::size_t(j) * ld; }
 std::ptrdiff_t off(int b, int stride) { return std::ptrdiff_t(b) * stride; }
 
-// Elem2 driving core laset / lacpy (real -> T widening) / lacpy<ConjTrans> on the swapped element
+// ElemAt<true> driving core laset / lacpy (real -> T widening) / lacpy<ConjTrans> on the swapped element
 // (adjoint_into) / mirror<Lower, Herm> on the swapped element (mirror_lower_to_upper).
 TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, Elem2DrivesCoreCopies) {
     using T = TypeParam;
@@ -140,11 +141,11 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, Elem2DrivesCoreCopies) {
     const KernelMatrixView<R, MatrixFormat::Dense> rk(ar, m, n, lda, sa, kBatch);
     const KernelMatrixView<T, MatrixFormat::Dense> hk(hp, nh, nh, ldh, sh, kBatch);
     this->dev.grid(m, n, [=](int b, int i, int j) {
-        v2::laset(glue::Elem2{i, j}, alpha, v2::One{}, v2::mat(lp + off(b, sa), m, n, lda));
-        v2::lacpy(glue::Elem2{i, j}, v2::item(rk, b, m, n), v2::mat(wp + off(b, sa), m, n, lda));
-        v2::lacpy<v2::Part::Full, Transpose::ConjTrans>(glue::Elem2{j, i}, v2::item(ak, b, m, n), v2::item(ck, b, n, m));
+        v2::laset(v2::ElemAt<true>{i, j}, alpha, v2::One{}, v2::mat(lp + off(b, sa), m, n, lda));
+        v2::lacpy(v2::ElemAt<true>{i, j}, v2::item(rk, b, m, n), v2::mat(wp + off(b, sa), m, n, lda));
+        v2::lacpy<v2::Part::Full, Transpose::ConjTrans>(v2::ElemAt<true>{j, i}, v2::item(ak, b, m, n), v2::item(ck, b, n, m));
     });
-    this->dev.grid(nh, nh, [=](int b, int i, int j) { v2::mirror<Uplo::Lower, true>(glue::Elem2{j, i}, v2::item(hk, b, nh, nh)); });
+    this->dev.grid(nh, nh, [=](int b, int i, int j) { v2::mirror<Uplo::Lower, true>(v2::ElemAt<true>{j, i}, v2::item(hk, b, nh, nh)); });
     const auto gl = this->dev.down(lp, std::size_t(kBatch) * sa), gw = this->dev.down(wp, std::size_t(kBatch) * sa);
     const auto gc = this->dev.down(cp, std::size_t(kBatch) * sc), gh = this->dev.down(hp, hh.size());
     int bad = 0, pad = 0, bad_h = 0;
@@ -169,12 +170,12 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, Elem2DrivesCoreCopies) {
     }
     EXPECT_EQ(bad, 0);
     EXPECT_EQ(pad, 0) << "ld padding was written";
-    EXPECT_EQ(bad_h, 0) << "mirror<Lower, Herm> on the swapped Elem2";
+    EXPECT_EQ(bad_h, 0) << "mirror<Lower, Herm> on the swapped ElemAt";
 }
 
-// The ormbr compositions: AQ := 0 then its strict lower (1:, 1:) := A(0:, 1:)^H on ElemIn2 over
-// sub_of(item()); a non-square ElemIn2 block (its far column bound is not implied by the
-// triangle); the P panel V := unit lower of A(i0:, i0+1:)^H on Elem2 (laset<Upper> + lacpy).
+// The ormbr compositions: AQ := 0 then its strict lower (1:, 1:) := A(0:, 1:)^H on ElemIn over
+// sub_of(item()); a non-square ElemIn block (its far column bound is not implied by the
+// triangle); the P panel V := unit lower of A(i0:, i0+1:)^H on ElemAt<true> (laset<Upper> + lacpy).
 TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
     using T = TypeParam;
     constexpr int N = 40, lda = N + 3, sa = lda * N, i0 = 2, ib = 8, mv = N - i0 - 1, ldv = mv + 2, sv = ldv * ib;
@@ -186,7 +187,7 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
     T* fp = this->dev.up(poisoned<T>(std::size_t(kBatch) * sf));
     const KernelMatrixView<T, MatrixFormat::Dense> ak(a, N, N, lda, sa, kBatch), qk(qp, N, N, ldq, sq, kBatch);
     this->dev.grid(N, N, [=](int b, int row, int col) {
-        const glue::Elem2 ex{row, col};
+        const v2::ElemAt<true> ex{row, col};
         const auto aq = v2::item(qk, b, N, N);
         v2::laset(ex, v2::Zero{}, v2::Zero{}, aq);
         v2::lacpy<v2::Part::StrictLower, Transpose::ConjTrans>(ex.sub(1, 1), glue::sub_of(v2::item(ak, b, N, N), 0, 1, N - 1, N - 1),
@@ -195,10 +196,10 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
     this->dev.grid(Mf, Nf, [=](int b, int r, int c) {
         const auto src = v2::mat(static_cast<const T*>(a) + off(b, sa), rm, rn, lda);
         const auto dst = glue::sub_of(v2::mat(fp + off(b, sf), Mf, Nf, ldf), 1, 2, rm, rn);
-        v2::lacpy<v2::Part::StrictLower>(glue::Elem2{r, c}.sub(1, 2), src, dst);
+        v2::lacpy<v2::Part::StrictLower>(v2::ElemAt<true>{r, c}.sub(1, 2), src, dst);
     });
     this->dev.grid(mv, ib, [=](int b, int r, int c) {
-        const glue::Elem2 ex{r, c};
+        const v2::ElemAt<true> ex{r, c};
         const auto ap = v2::mat(static_cast<const T*>(a) + off(b, sa), N, N, lda);
         const auto v = v2::mat(vp + off(b, sv), mv, ib, ldv);
         v2::laset<v2::Part::Upper>(ex, v2::Zero{}, v2::One{}, v);
@@ -222,12 +223,12 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
                 bad_f += in ? !same_bits(g, A(i, j)) : !is_nan(g);
             }
     }
-    EXPECT_EQ(bad_v, 0) << "P panel: laset<Upper> + lacpy<StrictLower, ConjTrans> on Elem2";
-    EXPECT_EQ(bad_q, 0) << "AQ: laset + lacpy<StrictLower, ConjTrans> on ElemIn2 over sub_of";
-    EXPECT_EQ(bad_f, 0) << "lacpy<StrictLower> on a non-square ElemIn2 block";
+    EXPECT_EQ(bad_v, 0) << "P panel: laset<Upper> + lacpy<StrictLower, ConjTrans> on ElemAt";
+    EXPECT_EQ(bad_q, 0) << "AQ: laset + lacpy<StrictLower, ConjTrans> on ElemIn over sub_of";
+    EXPECT_EQ(bad_f, 0) << "lacpy<StrictLower> on a non-square ElemIn block";
 }
 
-// map on Elem over reversed() / gathered() of item_n views longer than n (finalize_*_values);
+// map on Grid1D<true> over flip() / mapped() of item_n views longer than n (finalize_*_values);
 // Thread copy / map through col_of / row_of, and a zero column through laset on sub_of
 // (build_hermitian_vectors, build_bidiag_vectors, patch_zero_left_vectors).
 TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, AdaptorsAddressTheirElement) {
@@ -250,9 +251,9 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, AdaptorsAddressTheirElement) {
     const KernelMatrixView<T, MatrixFormat::Dense> qk(q, N, N, ld, s, kBatch), uk(u, N, N, ld, s, kBatch), wk(w, N, N, ld, s, kBatch);
     this->dev.line(n, [=](int b, int i) {
         const std::ptrdiff_t base = std::ptrdiff_t(b) * n;
-        v2::map(glue::Elem{i}, v2::vec(o1 + base, n), [](T t) { return v2::Arith<T>::neg(t); }, glue::reversed(glue::item_n(vv, b, n)));
-        v2::map(glue::Elem{i}, v2::vec(o2 + base, n), [](T t) { return t; },
-                glue::gathered(glue::item_n(vv, b, n), glue::item_n(pv, b, n)));
+        v2::map(v2::Grid1D<true>{i}, v2::vec(o1 + base, n), [](T t) { return v2::Arith<T>::neg(t); }, v2::flip(glue::item_n(vv, b, n)));
+        v2::map(v2::Grid1D<true>{i}, v2::vec(o2 + base, n), [](T t) { return t; },
+                v2::mapped(glue::item_n(pv, b, n), [x = glue::item_n(vv, b, n)](int k) { return x(k); }));
     });
     this->dev.line(N, [=](int b, int tgt) {
         const int src = (N - 1) - tgt;
@@ -285,8 +286,9 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, AdaptorsAddressTheirElement) {
     EXPECT_EQ(pad, 0) << "ld padding was written";
 }
 
-// dgmm Left with a real d (inc 2, item_n) on Elem2 over item(), Right with a T d on a WG = 1024
-// launch (the ceiling); downshift on Elem with x shorter than y and x's view longer than nx.
+// dgmm Left with a real d (inc 2, item_n) on ElemAt<true> over item(), Right with a T d on a WG = 1024
+// launch (the ceiling); copy of shifted(x, 1) on Grid1D<true> with x shorter than y and x's view
+// longer than nx.
 TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, DgmmAndDownshift) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -307,14 +309,14 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, DgmmAndDownshift) {
     const VectorView<T> yv1(y1, nx + 1, kBatch), yv2(y2, nx + 4, kBatch);
     const KernelMatrixView<T, MatrixFormat::Dense> ak(a, m, n, ld, s, kBatch);
     this->dev.grid(m, n, [=](int b, int i, int j) {
-        glue::dgmm<Side::Left>(glue::Elem2{i, j}, glue::item_n(dv, b, m), v2::item(ak, b, m, n));
+        v2::dgmm<Side::Left>(v2::ElemAt<true>{i, j}, glue::item_n(dv, b, m), v2::item(ak, b, m, n));
     });
     this->dev.template run<1024>([=](sycl::nd_item<1> it, int b) {
-        glue::dgmm<Side::Right>(v2::WorkGroup<1024>{it}, v2::vec(e + off(b, n), n), v2::mat(a2 + off(b, s), m, n, ld));
+        v2::dgmm<Side::Right>(v2::WorkGroup<1024>{it}, v2::vec(e + off(b, n), n), v2::mat(a2 + off(b, s), m, n, ld));
     });
     this->dev.line(nx + 4, [=](int b, int i) {
-        if (i < nx + 1) glue::downshift(glue::Elem{i}, glue::item_n(xv, b, nx), glue::item_n(yv1, b, nx + 1));
-        glue::downshift(glue::Elem{i}, glue::item_n(xv, b, nx), glue::item_n(yv2, b, nx + 4));
+        if (i < nx + 1) v2::copy(v2::Grid1D<true>{i}, v2::shifted(glue::item_n(xv, b, nx), 1, nx + 1), glue::item_n(yv1, b, nx + 1));
+        v2::copy(v2::Grid1D<true>{i}, v2::shifted(glue::item_n(xv, b, nx), 1, nx + 4), glue::item_n(yv2, b, nx + 4));
     });
     const auto ga = this->dev.down(a, ha.size()), ga2 = this->dev.down(a2, ha.size());
     const auto g1 = this->dev.down(y1, std::size_t(kBatch) * (nx + 1)), g2 = this->dev.down(y2, std::size_t(kBatch) * (nx + 4));
@@ -337,10 +339,10 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, DgmmAndDownshift) {
         }
     }
     EXPECT_VERIFY(T, Check::blas, 1, worst);
-    EXPECT_EQ(bad, 0) << "downshift";
+    EXPECT_EQ(bad, 0) << "copy(shifted(x, 1))";
 }
 
-// Real bidiagonal ops: bdgram Right / Left (zero padding) on Elem and WorkGroup<64>, bdmv_div on
+// Real bidiagonal ops: bdgram Right / Left (zero padding) on Grid1D<true> and WorkGroup<64>, bdmv_div on
 // Thread through col_of (live and dead sigma: every 4th item straddles tol).
 TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BidiagonalOps) {
     using T = TypeParam;
@@ -361,9 +363,9 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BidiagonalOps) {
         const KernelMatrixView<T, MatrixFormat::Dense> vk(v, k, k, ldv, sv, kBatch);
         this->dev.line(order, [=](int b, int i) {
             if (i < k)
-                glue::bdgram<Side::Right>(glue::Elem{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdrv, b, k),
+                glue::bdgram<Side::Right>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdrv, b, k),
                                           glue::item_n(terv, b, k - 1));
-            glue::bdgram<Side::Left>(glue::Elem{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdlv, b, order),
+            glue::bdgram<Side::Left>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdlv, b, order),
                                      glue::item_n(telv, b, order - 1));
         });
         this->dev.template run<64>([=](sycl::nd_item<1> it, int b) {

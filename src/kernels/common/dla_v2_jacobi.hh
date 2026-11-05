@@ -2,9 +2,10 @@
 #pragma once
 // Device LA v2, Jacobi family (syev_jacobi_cta, gesvdj_cta): the 2x2 Hermitian rotation
 // (sym_schur2), rounds of disjoint plane rotations from the right (A U) or the left (U^H A), the
-// round-robin pivot schedule, the reduce-scatter behind the one-sided Gram and column-norm
-// passes, and per-item fragment ops on Cyclic rows of a static extent. src-side: no other family
-// uses them. Shared ops (abs2, modulus, Vec / Mat over a local_accessor, allreduce) come from core.
+// reduce-scatter behind the one-sided Gram and column-norm passes, and per-item fragment ops on
+// Cyclic rows of a static extent: the pieces still waiting for core (inv_sqrt, the unitary rot,
+// reduce_scatter, Frag ops). The pivot schedule, threshold and rotation record are public
+// (batchlas/device/lapack/jacobi.hh, jacobi_detail). Shared ops come from core.
 //
 // Ops = arith::Native (default) writes every update with T's own operators, the expressions of
 // the kernels these ops replaced (bit identity; for std::complex the Annex-G multiply).
@@ -14,9 +15,9 @@
 
 #include <src/sycl/inv_sqrt.hh>
 #include <cstdint>
-#include <limits>
 #include <type_traits>
 
+#include <batchlas/device/lapack/jacobi.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/reduce.hh>
 #include <batchlas/device/scalar.hh>
@@ -25,11 +26,6 @@
 namespace batchlas::device::inline v2 {
 
 namespace detail {
-// conj of an element reference: the load happens inside, as with v1 device::detail::conj.
-template <class T> inline T conj_ref(const T& x) {
-    if constexpr (Arith<T>::is_complex) return T(x.real(), -x.imag());
-    else return x;
-}
 template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, arith::Native>;
 template <int N> constexpr int ilog2() {
     int r = 0;
@@ -37,18 +33,6 @@ template <int N> constexpr int ilog2() {
     return r;
 }
 }  // namespace detail
-
-// An operand slot a kernel leaves unnamed (real T's phase, the V tile without vectors), so the
-// kernel does not capture its accessor.
-struct NoPhase {};
-
-// IEEE max / min reduction operators: a NaN operand loses, as sycl::fmax / fmin.
-struct FMax {
-    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
-};
-struct FMin {
-    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
-};
 
 // Reduce-scatter of K values over the P = Ex::size lanes (K | P, both powers of two): lane l
 // returns the sum over all lanes of x[l / (P / K)]. log2(K) halving steps over xor masks
@@ -112,7 +96,7 @@ template <class Ops = arith::Native, class T, int K> BATCHLAS_DLA_INLINE T dotc_
     T acc = T(0);
 #pragma unroll
     for (int k = 0; k < K; ++k) {
-        if constexpr (detail::is_native_v<Ops>) acc = acc + detail::conj_ref(x[k]) * y[k];
+        if constexpr (detail::is_native_v<Ops>) acc = acc + conj(x[k]) * y[k];
         else arith_t<Ops, T>::mac_conj(acc, x[k], y[k]);
     }
     return acc;
@@ -129,7 +113,7 @@ BATCHLAS_DLA_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v, X
         const int r = l + k * Ex::size;
         x[k] = u(r);
         y[k] = v(r);
-        acc = acc + detail::conj_ref<T>(x[k]) * y[k];
+        acc = acc + conj(x[k]) * y[k];
     }
     return acc;
 }
@@ -168,71 +152,16 @@ template <class Ex, class M> BATCHLAS_DLA_INLINE auto col_sumsq(const Ex& ex, co
     return reduce_scatter<P>(ex, x);
 }
 
-// ---- pivot schedule ------------------------------------------------------------------------
-struct PivotPair {
-    int p, q;
-};
-// Round-robin ("circle method") pairing for even m: round t in [0, m-2] has m/2 disjoint pairs
-// (k in [0, m/2)), the m-1 rounds cover every pair once; index 0 is fixed, the rest rotate.
-// Weakly equivalent to cyclic-by-rows (Hari & Begovic Kovac 2017). Returns p < q.
-BATCHLAS_DLA_INLINE PivotPair round_robin_pair(int m, int t, int k) {
-    const int ring = m - 1;
-    int p, q;
-    if (k == 0) {
-        p = 0;
-        q = (t % ring) + 1;
-    } else {
-        p = ((t + k) % ring) + 1;
-        q = (((t - k) % ring + ring) % ring) + 1;
-    }
-    if (p > q) {
-        const int tmp = p;
-        p = q;
-        q = tmp;
-    }
-    return {p, q};
-}
-// Both indices (< 128) in one 16-bit slot.
-BATCHLAS_DLA_INLINE std::int16_t pack_pair(PivotPair pq) { return static_cast<std::int16_t>(pq.p | (pq.q << 8)); }
-BATCHLAS_DLA_INLINE PivotPair unpack_pair(std::int16_t packed) {
-    const int pq = static_cast<int>(packed);
-    return {pq & 0xFF, (pq >> 8) & 0xFF};
-}
-
-// ---- the 2x2 Hermitian Jacobi rotation ------------------------------------------------------
-template <class R> struct JacobiThreshold {
-    R tol;      // rotate only when |a_pq| > tol * sqrt(|a_pp a_qq|) (relative test)
-    R tiny;     // and |a_pq| > tiny: denormal / zero off-diagonals count as converged
-    R tau_big;  // |tau| above this uses t = 1 / (2 tau): tau * tau would overflow
-    // tol = tol_multiplier * n * eps, tiny = the smallest normal, tau_big = 1 / sqrt(eps).
-    static JacobiThreshold relative(R tol_multiplier, int n) {
-        return {tol_multiplier * static_cast<R>(n) * std::numeric_limits<R>::epsilon(), std::numeric_limits<R>::min(),
-                R(1) / sycl::sqrt(std::numeric_limits<R>::epsilon())};
-    }
-};
-
-// U = [c s; -d s  d c] with d a unit phase; t = s / c, g the real off-diagonal after the phase.
-template <class T> struct JacobiRotation {
-    real_t<T> c, s;
-    T d;
-    real_t<T> t, g;
-    bool active;  // false: U is the identity (below threshold, or s rounded to 0)
-};
-template <class T> BATCHLAS_DLA_INLINE JacobiRotation<T> identity_rotation() {
-    using R = real_t<T>;
-    return {R(1), R(0), T(1), R(0), R(0), false};
-}
-
-
 // Golub & Van Loan sym.schur2 generalised by a diagonal phase: for H = [app apq; conj(apq) aqq]
 // (app, aqq real) U^H H U is diagonal. d = conj(apq) / |apq| makes the 2x2 real, then the
 // classical rotation with tau = (aqq - app) / (2 g), t = sign(tau) / (|tau| + sqrt(1 + tau^2)).
 // For real T, d = 1 and g carries the sign of apq. A rotation below the threshold or whose s
 // rounds to 0 (it could never annihilate apq) is the identity with active == false.
 template <class T>
-BATCHLAS_DLA_INLINE JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T apq, const JacobiThreshold<real_t<T>>& th) {
+BATCHLAS_DLA_INLINE jacobi_detail::JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T apq,
+                                                                const jacobi_detail::JacobiThreshold<real_t<T>>& th) {
     using R = real_t<T>;
-    JacobiRotation<T> r = identity_rotation<T>();
+    jacobi_detail::JacobiRotation<T> r = jacobi_detail::identity_rotation<T>();
     const R g_abs = modulus(apq);
     const R thresh = th.tol * sycl::sqrt(sycl::fabs(app) * sycl::fabs(aqq));
     if (g_abs > thresh && g_abs > th.tiny) {
@@ -263,16 +192,6 @@ BATCHLAS_DLA_INLINE JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T
         r.d = T(1);
     }
     return r;
-}
-
-// One-sided Jacobi: squared column norms after rotation r from the norms before it (LAPACK
-// ?GESVJ's SVA recurrence), both clamped at 0. Meaningful only when r.active.
-template <class R> struct NormPair {
-    R p, q;
-};
-template <class T> BATCHLAS_DLA_INLINE NormPair<real_t<T>> rotated_norms2(const JacobiRotation<T>& r, real_t<T> app, real_t<T> aqq) {
-    using R = real_t<T>;
-    return {sycl::fmax(app - r.t * r.g, R(0)), sycl::fmax(aqq + r.t * r.g, R(0))};
 }
 
 // ---- applying a rotation -------------------------------------------------------------------
@@ -337,7 +256,7 @@ template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE void rot_right
 }
 
 // One round of disjoint rotations as the caller published it: slot k holds (c, s) in one 2-wide
-// element, the phase d (complex T only; NoPhase for real T) and the packed pair (p, q). Each slot
+// element, the phase d (complex T only; None for real T) and the packed pair (p, q). Each slot
 // array is an operand read with (k): a v2::Vec over the kernel's local accessor or a pointer.
 template <class T, class CS, class D, class PR> struct RotRound {
     using R = real_t<T>;
@@ -345,9 +264,9 @@ template <class T, class CS, class D, class PR> struct RotRound {
     D d;
     PR pairs;
 
-    BATCHLAS_DLA_INLINE PivotPair pair(int k) const { return unpack_pair(pairs(k)); }
+    BATCHLAS_DLA_INLINE jacobi_detail::PivotPair pair(int k) const { return jacobi_detail::unpack_pair(pairs(k)); }
     BATCHLAS_DLA_INLINE sycl::vec<R, 2> coef(int k) const { return cs(k); }
-    BATCHLAS_DLA_INLINE void store(int k, const JacobiRotation<T>& r) const {
+    BATCHLAS_DLA_INLINE void store(int k, const jacobi_detail::JacobiRotation<T>& r) const {
         cs(k) = sycl::vec<R, 2>(r.c, r.s);
         if constexpr (Arith<T>::is_complex) d(k) = r.d;
     }
@@ -371,7 +290,7 @@ BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T, CS, D, PR>& rd, N npa
         const R c = cs[0];
         const R s = cs[1];
         if (s == R(0)) continue;
-        const PivotPair pq = rd.pair(k);
+        const jacobi_detail::PivotPair pq = rd.pair(k);
         const Rot2<T> u = rd.template rot<false, Ops>(k, c, s);
         (rot_right_inplace<Ops>(u, ms(row, pq.p), ms(row, pq.q)), ...);
     }
@@ -388,7 +307,7 @@ BATCHLAS_DLA_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR>& 
         const R c = cs[0];
         const R s = cs[1];
         if (s == R(0)) continue;
-        const PivotPair pq = rd.pair(k);
+        const jacobi_detail::PivotPair pq = rd.pair(k);
         const Rot2<T> u = rd.template rot<true, Ops>(k, c, s);
         const T x = a(pq.p, col);
         const T y = a(pq.q, col);

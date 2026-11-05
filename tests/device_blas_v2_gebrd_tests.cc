@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-// gebrd's private device LA v2 pieces (src/ops/gesvd/gebrd/gebrd_v2.hh) against long-double host
-// references, used the way the complex labrd panel uses them: herm and conj_view as gemv_acc
-// operands, a conj_view y0 that aliases y, NegZero as y0, lacgv on a WorkGroup and a Thread.
-// Shared core ops have their own tests (device_blas_v2_tests). Guards (agent guide section 8):
-// non-natural ld and inc, complex data with nonzero imaginary parts, a zero row whose result must
-// keep the sign of zero (NegZero adds nothing), outputs poisoned with NaN that NegZero must never
-// read, strided gaps compared bit for bit, batch 1024 with period-3 data.
+// The core views and ops the complex labrd panel (lapack/gebrd.hh labrd_panel) composes, against
+// long-double host references, used the way the panel uses them: op_view<ConjTrans> and conj_view
+// as gemv_acc operands, a conj_view y0 that aliases y, a -0 fn_vec as y0, lacgv on a WorkGroup and
+// a Thread. Guards (agent guide section 8): non-natural ld and inc, complex data with nonzero
+// imaginary parts, a zero row whose result must keep the sign of zero (the -0 y0 adds nothing),
+// outputs poisoned with NaN that the -0 y0 must never read, strided gaps compared bit for bit,
+// batch 1024 with period-3 data.
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <batchlas/device.hh>
-#include <src/ops/gesvd/gebrd/gebrd_v2.hh>
 #include <src/queue.hh>
 
 using namespace batchlas;
@@ -100,8 +99,8 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
     return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
 }
 
-// y := conj(y) + alpha (herm(B) conj(x1) + A x2), y0 = conj_view(y) aliasing y, x1 with inc 2,
-// B stored k1 x m (read transposed). Then z := beta (A x2) with NegZero as y0 over a NaN-poisoned
+// y := conj(y) + alpha (B^H conj(x1) + A x2), y0 = conj_view(y) aliasing y, x1 with inc 2,
+// B stored k1 x m (read transposed). Then z := beta (A x2) with a -0 y0 over a NaN-poisoned
 // z; A's row 0 is zero, so z(0) = beta * (+0) must keep its sign: re(z(0)) is -0 for beta < 0.
 TYPED_TEST(DeviceBlasV2GebrdTest, ConjAndHermViewsInGemvAcc) {
     using T = TypeParam;
@@ -123,11 +122,12 @@ TYPED_TEST(DeviceBlasV2GebrdTest, ConjAndHermViewsInGemvAcc) {
         T* p = d + std::ptrdiff_t(b) * sz;
         const auto A = v2::mat(p + oA, m, k2, ld);
         const auto B = v2::mat(p + oB, k1, m, ldb);
-        const auto x1 = v2::assume_published(gebrd_v2::conj_view(v2::vec(p + oX1, k1, inc)));
+        const auto x1 = v2::assume_published(v2::conj_view(v2::vec(p + oX1, k1, inc)));
         const auto x2 = v2::assume_published(v2::vec(p + oX2, k2));
         const auto yv = v2::vec(y + std::ptrdiff_t(b) * m, m), zv = v2::vec(z + std::ptrdiff_t(b) * m, m);
-        v2::gemv_acc(ex, alpha, gebrd_v2::conj_view(yv), yv, v2::term(gebrd_v2::herm(B), x1), v2::term(A, x2));
-        v2::gemv_acc(ex, beta, gebrd_v2::NegZero<T>{}, zv, v2::term(A, x2));
+        v2::gemv_acc(ex, alpha, v2::conj_view(yv), yv, v2::term(v2::op_view<Transpose::ConjTrans>(B), x1), v2::term(A, x2));
+        const auto neg_zero = v2::fn_vec(m, [](int) { return v2::Arith<T>::make(-R(0), -R(0)); });
+        v2::gemv_acc(ex, beta, neg_zero, zv, v2::term(A, x2));
     });
     const auto gy = this->dev.down(y, hy.size()), gz = this->dev.down(z, hz.size());
     int bitdiff = 0, zero_sign_bad = 0;
@@ -138,7 +138,7 @@ TYPED_TEST(DeviceBlasV2GebrdTest, ConjAndHermViewsInGemvAcc) {
         zero_sign_bad += !(z0 == R(0) && std::signbit(z0));
     }
     EXPECT_EQ(bitdiff, 0) << "items differ from their representative";
-    EXPECT_EQ(zero_sign_bad, 0) << "NegZero must add nothing: beta * (+0) keeps its -0";
+    EXPECT_EQ(zero_sign_bad, 0) << "a -0 y0 must add nothing: beta * (+0) keeps its -0";
     double worst = 0, worst_z = 0;
     for (int b = 0; b < kPeriod; ++b) {
         const T* p = hd.data() + std::size_t(b) * sz;
@@ -159,7 +159,7 @@ TYPED_TEST(DeviceBlasV2GebrdTest, ConjAndHermViewsInGemvAcc) {
         }
     }
     EXPECT_VERIFY(T, Check::blas, k1 + k2 + 1, worst);
-    EXPECT_VERIFY(T, Check::blas, k2, worst_z) << "NegZero y0 over a NaN-poisoned z";
+    EXPECT_VERIFY(T, Check::blas, k2, worst_z) << "-0 y0 over a NaN-poisoned z";
 }
 
 // lacgv on a WorkGroup (n = 150 > WG: items own several elements) and on a Thread (item 0), both
@@ -174,8 +174,8 @@ TYPED_TEST(DeviceBlasV2GebrdTest, LacgvStridedOnWorkGroupAndThread) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<WG> ex{it};
         T* p = x + std::ptrdiff_t(b) * per;
-        gebrd_v2::lacgv(ex, v2::vec(p, n, inc));
-        if (ex.leader()) gebrd_v2::lacgv(v2::Thread{}, v2::vec(p + n * inc, n, inc));
+        v2::lacgv(ex, v2::vec(p, n, inc));
+        if (ex.leader()) v2::lacgv(v2::Thread{}, v2::vec(p + n * inc, n, inc));
     });
     const auto gx = this->dev.down(x, hx.size());
     int conj_bad = 0, gap_bad = 0;

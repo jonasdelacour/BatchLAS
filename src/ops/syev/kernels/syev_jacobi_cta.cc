@@ -38,6 +38,7 @@ class SyevJacobiCTAKernel;
 namespace {
 
 namespace v2 = ::batchlas::device;
+namespace jac = ::batchlas::device::jacobi_detail;
 
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,
@@ -132,8 +133,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
         // RELATIVE off-diagonal threshold (an absolute test forfeits the relative accuracy);
-        // tiny and tau_big as documented on v2::JacobiThreshold.
-        const auto thr = v2::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
+        // tiny and tau_big as documented on jac::JacobiThreshold.
+        const auto thr = jac::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
 
         Real* W = w_ptr;
         // A local of the submit lambda for the same reason as W, so the kernel's
@@ -155,7 +156,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
-                    Pair_local[idx] = v2::pack_pair(v2::round_robin_pair(mm, t, idx - t * pairs_per_round));
+                    Pair_local[idx] = jac::pack_pair(jac::round_robin_pair(mm, t, idx - t * pairs_per_round));
                 }
                 sycl::group_barrier(wg);
 
@@ -179,19 +180,19 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without vectors Z_local is never named, so the kernel does not capture it.
-                std::conditional_t<ComputeVectors, Tile, v2::NoPhase> Z{};
+                std::conditional_t<ComputeVectors, Tile, v2::None> Z{};
                 if constexpr (ComputeVectors) Z = Tile{Z_local, {}, {}, {}, tile_off};
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
                 // Real T never names Rd_local, so the kernel does not capture it.
-                std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::NoPhase> rd{};
+                std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
                 if constexpr (kNeedPhase) rd = v2::vec(Rd_local, kRotSlots, base_r);
 
                 // ---- Load: A = the Hermitian matrix of the stored triangle, Z = I, zero pad. ----
                 for (int32_t c = 0; c < kP; ++c) {
                     T v = T(0);
                     if (live && lane < nn && c < nn) {
-                        if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : v2::detail::conj_ref<T>(A_prob(c, lane));
-                        else v = (lane >= c) ? A_prob(lane, c) : v2::detail::conj_ref<T>(A_prob(c, lane));
+                        if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : v2::conj(A_prob(c, lane));
+                        else v = (lane >= c) ? A_prob(lane, c) : v2::conj(A_prob(c, lane));
                         // The diagonal of a Hermitian matrix is real: drop imaginary noise.
                         if (lane == c) {
                             if constexpr (kNeedPhase) v = T(v.real(), Real(0));
@@ -215,13 +216,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                         const auto rnd = v2::rot_round<T>(v2::vec(Rcs_local, kRotSlots, base_r), rd,
                                                           v2::vec(Pair_local, pairs_per_round, t * pairs_per_round));
 
-                        v2::PivotPair pq{0, 0};
+                        jac::PivotPair pq{0, 0};
                         bool active = false;
                         if (pair_lane) {
                             pq = rnd.pair(lane);
                             active = (pq.q < nn);
                         }
-                        v2::JacobiRotation<T> jr = v2::identity_rotation<T>();
+                        jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
                         if (active) {
                             jr = v2::sym_schur2<T>(v2::Arith<T>::re(A(pq.p, pq.p)), v2::Arith<T>::re(A(pq.q, pq.q)),
                                                    static_cast<T>(A(pq.p, pq.q)), thr);

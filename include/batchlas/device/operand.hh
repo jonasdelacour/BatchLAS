@@ -158,7 +158,7 @@ template <class T, int R, int C> BATCHLAS_DLA_INLINE void fill(Tile<T, R, C>& t,
 // owns) make one; an op that reads across owners demands it at compile time.
 template <class V> struct Published {
     V v;
-    using value_type = typename V::value_type;
+    using value_type = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
     BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return v(i); }
     BATCHLAS_DLA_INLINE int size() const { return v.size(); }
     template <class W = V> BATCHLAS_DLA_INLINE Published<decltype(std::declval<W>().tail(0))> tail(int k) const {
