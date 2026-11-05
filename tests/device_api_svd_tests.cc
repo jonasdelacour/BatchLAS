@@ -12,9 +12,9 @@
 // would accept; batch 1024 with period-3 items bit-identical to their representative (SLM tiles
 // shared by four sub-groups); n straddling every tier width (4/5, 16/17) and the ceiling n = 32;
 // the reconstruction is a long-double host product, not the device code; EXPECT_VERIFY only.
-// Red set: building with -DBATCHLAS_DEVICE_API_SVD_BREAK drops the per-partition workspace offset
-// in the user kernel (all partitions share one tile: the slicing error a caller can make); every
-// GebrdCta case must fail on the bit-identity check. (Record the run at the gate: no build here.)
+// Red set: building with -DBATCHLAS_DEVICE_API_SVD_BREAK shifts the workspace of odd partitions
+// by one slice in the user kernel (partitions 1 and 2 then share a tile: the slicing error a
+// caller can make); every GebrdCta case must fail on the bit-identity check (gate: all six n).
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -161,7 +161,8 @@ protected:
     sycl::queue& q() { return sycl_queue(*this->ctx); }
 
     // The user-style kernel: SgpPartition<P> per matrix, the tier visited by with_tier, the
-    // workspace a local byte accessor sliced per partition, dead partitions with live = false.
+    // workspace the work-group's local byte accessor (gebrd slices it per partition), dead
+    // partitions with live = false.
     template <class R> void device_gebrd(GebrdData<R>& g, DevBuf<R>& a, DevBuf<R>& d, DevBuf<R>& e, DevBuf<R>& tq, DevBuf<R>& tp) {
         const MatrixView<R, MatrixFormat::Dense> av(a.p, g.n, g.n, g.ld, g.sa, kBatch);
         const auto akv = av.kernel_view();
@@ -174,7 +175,7 @@ protected:
             const std::size_t lb = dv::gebrd_buffer_size<Tier, R>(n).local_bytes;
             const int groups = (kBatch + mats - 1) / mats;
             q().submit([&](sycl::handler& h) {
-                   sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(lb * mats), h);
+                   sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(lb * (mats + 1)), h);
                    h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                        const auto sg = it.get_sub_group();
                        const dv::SgpPartition<P> ex{sg};
@@ -184,9 +185,9 @@ protected:
                        const bool live = b < kBatch;
                        const int pb = live ? b : 0;
 #ifdef BATCHLAS_DEVICE_API_SVD_BREAK
-                       const std::size_t slice = 0;
+                       const std::size_t slice = (part & 1) ? lb : 0;
 #else
-                       const std::size_t slice = std::size_t(part) * lb;
+                       const std::size_t slice = 0;
 #endif
                        const dv::Workspace w{slm.template get_multi_ptr<sycl::access::decorated::yes>() + slice, nullptr};
                        (void)dv::gebrd<Tier>(ex, it, dv::item(akv, pb, n, n), dv::item(dvw, pb), dv::item(evw, pb), dv::item(tqv, pb),
@@ -207,6 +208,8 @@ TYPED_TEST(DeviceApiSvd, GebrdCtaDeviceCallIsBitIdenticalToTheHostRoute) {
     constexpr Backend B = TestFixture::B;
     if constexpr (dv::Arith<T>::is_complex) {
         GTEST_SKIP() << "gebrd tier::Cta is real only (the throw is covered by WithTierPicksTheCtaWidthPerN)";
+    } else if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "the gebrd_cta host route has no CPU image (batchlas_extensions_cta is GPU-only)";
     } else {
         if (!this->sg32()) GTEST_SKIP() << "gebrd tier::Cta needs sub-group size 32";
         for (int n : {1, 4, 5, 16, 17, 32}) {

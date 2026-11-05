@@ -254,29 +254,37 @@ template <class T> struct tiers<routine::gebrd, T> {
                                     tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>>;
 };
 
-// Local / global bytes of ONE matrix for gebrd<Tier> at order n (local: per partition).
+// Local / global bytes of ONE matrix for gebrd<Tier> at order n (the work-group's local
+// buffer holds one such slice per partition).
 template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int n) {
     return tier_info<routine::gebrd, resolve_tier_t<routine::gebrd, T, Tier>, T>::buffer_size(n);
 }
 
 // xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
 // overwritten with the reflectors (xGEBD2's layout), d / e receive the bidiagonal, tauq / taup
-// the reflector scalars. ws.local is this matrix's gebrd_buffer_size<Tier, T>(n).local_bytes
-// (the caller offsets it by partition). Collective over the WORK-GROUP of `it`: the barriers are
-// work-group wide, so every partition calls it with the same n, and a partition without a
-// matrix passes live = false (a zero tile, nothing read or stored). Returns 0 (no info).
+// the reflector scalars. ws.local is the WORK-GROUP's local buffer, one gebrd_buffer_size<Tier,
+// T>(n).local_bytes slice per partition: partition k of the group (k = sub-group * 32 / P +
+// partition in its sub-group) uses slice k, addressed by an int32 element offset from ws.local
+// (a local pointer moved per partition costs ~8% more SASS). Collective over the work-group of
+// it: the barriers are work-group wide, so every partition calls it with the same n and ws, and
+// a partition without a matrix passes live = false (a zero tile, nothing read or stored).
+// Returns 0 (no info).
 template <class Tier, class Ex, class MA, class RV, class TV>
 BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
                               const TV& taup, const Workspace& ws, bool live = true) {
-    using T = typename MA::value_type;
+    using T = std::remove_cv_t<std::remove_reference_t<decltype(A(0, 0))>>;
     using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
     static_assert(HasTier<routine::gebrd, Tr, T>, "gebrd: tier not implemented (tier::Cta<4|8|16|32>)");
     constexpr int P = Tr::n_max;
     static_assert(!Arith<T>::is_complex, "gebrd: tier::Cta is real only");
     static_assert(Ex::size == P, "gebrd: tier::Cta<P> runs on a P-lane partition");
     constexpr auto plan = gebrd_detail::cta_plan<P, T>();
+    constexpr int slice = static_cast<int>(plan.size.local_bytes / sizeof(T));
+    static_assert(plan.tile.offset == 0 && slice * sizeof(T) == plan.size.local_bytes, "gebrd: a slice is whole T");
+    const int part = static_cast<int>(it.get_sub_group().get_group_linear_id()) * static_cast<int>(ex.part.get_group_linear_range()) +
+                     static_cast<int>(ex.part.get_group_linear_id());
     const int n = A.rows();
-    const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, 0};
+    const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, part * slice};
     gebd2_tile<T>(ex, it, tile, A, d, e, tauq, taup, n, live);
     return 0;
 }
