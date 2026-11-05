@@ -8,7 +8,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
-#include <src/kernels/common/dla_v2_sparse.hh>
+#include <batchlas/device/sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -160,11 +160,8 @@ Event spmm_gather(Queue& ctx,
                 const v2::RtOpMat<const D, Pair> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
                 const v2::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
 
-                // acc = A(i, :) op(B)(:, c0:c0+NC); C(i, c0:c0+NC) = alpha acc + beta C.
-                v2::Frag<D, NC> acc;
-                v2::fill(acc, D{});
-                if (!alpha_zero) v2::usmm_row<Ar>(v2::Thread{}, arow, opB, c0, width, acc);
-                v2::store_cols<v2::arith::Fma>(v2::Thread{}, alpha_d, acc, v2::MaybeZero{beta_d, beta_zero}, Cb, i, c0, width);
+                // C(i, c0:c0+NC) = alpha A(i, :) op(B)(:, c0:c0+NC) + beta C: the device spmm's unit.
+                v2::spmm_detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, v2::MaybeZero{beta_d, beta_zero}, Cb, i);
             });
     });
 
@@ -322,27 +319,10 @@ Event spmm_scatter(Queue& ctx,
                 const int rs = a_ro[ro + i];
                 const int re = a_ro[ro + i + 1];
 
-                // C(A_ci, c0:c0+NCS) += conj?(A(i, :))^T (alpha op(B)(i, c0:c0+NCS)); ConjTrans
-                // conjugates the SPARSE operand. The row loop reads A in the body, not through a
-                // v2::SpRow (sass_parity strict): the operand's int64-based reads lose GEP
-                // inbounds under LICM and cost +4..5% instructions.
-                for (int c0 = 0; c0 < width; c0 += NCS) {
-                    v2::Frag<D, NCS> ab;
-                    v2::load_cols_scaled<Ar>(v2::Thread{}, alpha_d, opB, i, c0, width, ab);
-                    for (int p = rs; p < re; ++p) {
-                        D av = a_val[vb + p];
-                        if constexpr (dev_is_complex_v<D>) {
-                            if (conj_a) av = v2::Arith<D>::conj(av);
-                        }
-                        const int j = a_ci[vb + p];  // an OUTPUT ROW of C
-                        if (static_cast<unsigned>(j) >= static_cast<unsigned>(rows_out)) continue;
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < NCS; ++t) {
-                            const int c = c0 + t;
-                            if (c < width) v2::atomic_accumulate(Cb + static_cast<int64_t>(c) * ldc + j, Ar::mul(av, ab[t]));
-                        }
-                    }
-                }
+                // C(A_ci, :) += conj?(A(i, :))^T (alpha op(B)(i, :)), the device spmm's scatter row;
+                // ConjTrans conjugates the SPARSE operand.
+                v2::spmm_detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
+                                                      v2::spmm_detail::ColPtr<D>{Cb, ldc});
             });
     });
 

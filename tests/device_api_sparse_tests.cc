@@ -1,0 +1,472 @@
+// SPDX-License-Identifier: MIT
+// device_api_sparse_tests: the public in-kernel spmm and iluk_apply (include/batchlas/device/sparse.hh)
+// called from user-style kernels, against the host routes and a long-double scalar reference.
+// spmm with A NoTrans and iluk_apply are thin launchers of the same bodies: BIT-IDENTICAL to the
+// host (every element of the output buffer, pads included) at work-group sizes 32, 128 and 1024.
+// spmm with A (Conj)Trans scatters by atomics in an unspecified order: tolerance vs host and reference.
+// Guards (agent-guide section 8): host spmm pinned to `direct` and its `reached` row read back;
+// batch 1024 of three representatives, every item bit-identical to its representative; per-item
+// CSR strides and row-offset pads with in-range poison (value 1e3 at column 0), ld and stride pads
+// with large finite poison that must stay untouched; rows != cols, nrhs = 19 straddling every column
+// block; complex data with Im != 0 and ConjTrans on both operands; beta == 0 over NaN C and
+// alpha == 0 over NaN A; ILU n = 150 > the work-group (one level split over items, several levels);
+// WG 1024 is the launch at the ceiling; with_tier, upto and buffer_size per routine.
+// Deliberate breaks, run in-process so the comparators are seen to fail: spmm with alpha negated,
+// iluk_apply with the L solve skipped (l_levels = 0).
+#include <tests/device_core_common.hh>
+
+#include <batchlas/blas/functions/iluk.hh>
+#include <batchlas/blas/functions/spmm.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/device/sparse.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
+#include <src/ops/spmm/choice.hh>
+#include <src/select/select.hh>
+#include <tests/test_support/coverage_rows.hh>
+
+#include <cmath>
+#include <limits>
+#include <string>
+#include <vector>
+
+using namespace device_core_test;
+using batchlas::verify::Check;
+
+namespace {
+
+constexpr int kBatch = 1024;
+constexpr int kPeriod = 3;
+constexpr Transpose N = Transpose::NoTrans, Tr = Transpose::Trans, Cj = Transpose::ConjTrans;
+constexpr int kTerms = 10;  // products per C element: at most 4 per stored row (NoTrans), about 7 per column (Trans), + beta
+
+template <class T> T poison_v() { return T(real_of<T>(1e3)); }
+template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class T> LD<T> cj_if(LD<T> v, bool on) {
+    if constexpr (is_cplx<T>) return on ? std::conj(v) : v;
+    else return v;
+}
+template <class T> double rel(T got, LD<T> ref, long double scale) {
+    const long double d = std::abs(wide(got) - ref);
+    if (std::isnan(d)) return std::numeric_limits<double>::infinity();
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+}
+template <class T> int bit_mismatches(const std::vector<T>& a, const std::vector<T>& b) {
+    int bad = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) bad += !same_bits(a[i], b[i]);
+    return bad;
+}
+
+// groups work-groups of WG items; the ops under test use no sub-group collectives.
+template <int WG, class F> void launch(sycl::queue& q, std::size_t groups, F f) {
+    q.submit([&](sycl::handler& h) { h.parallel_for(sycl::nd_range<1>(groups * WG, WG), [=](sycl::nd_item<1> it) { f(it); }); })
+        .wait_and_throw();
+}
+bool fits_wg(sycl::queue& q, int wg) { return q.get_device().get_info<sycl::info::device::max_work_group_size>() >= std::size_t(wg); }
+
+// ---- spmm problem: stored A ar x ac, op(A) rows_out x kk, op(B) kk x nrhs, C rows_out x nrhs --
+template <class T> struct Spmm {
+    int ar = 37, ac = 29, nrhs = 19;
+    int kk = 0, rows_out = 0, brows = 0, bcols = 0, ldb = 0, strb = 0, ldc = 0, strc = 0, ms = 0, os = 0, max_nnz = 0;
+    Transpose ta = N, tb = N;
+    std::vector<T> a_val, b, c0;
+    std::vector<int> a_ro, a_ci;
+    int row_nnz(int r, int q) const { return (r * 7 + q) % 5; }  // 0..4: empty rows included
+    int col_of(int r, int t, int q) const { return (r * 3 + t * 5 + q) % ac; }
+    T B(int q, int r, int c) const { return b[std::size_t(q) * strb + std::size_t(c) * ldb + r]; }
+    LD<T> opB(int q, int j, int c) const {
+        if (tb == N) return wide(B(q, j, c));
+        return cj_if<T>(wide(B(q, c, j)), tb == Cj);
+    }
+};
+
+template <class T> Spmm<T> make_spmm(Transpose ta, Transpose tb, bool nan_a, bool nan_c) {
+    Spmm<T> d;
+    d.ta = ta;
+    d.tb = tb;
+    d.kk = ta == N ? d.ac : d.ar;
+    d.rows_out = ta == N ? d.ar : d.ac;
+    d.brows = tb == N ? d.kk : d.nrhs;
+    d.bcols = tb == N ? d.nrhs : d.kk;
+    for (int q = 0; q < kPeriod; ++q) {
+        int nnz = 0;
+        for (int r = 0; r < d.ar; ++r) nnz += d.row_nnz(r, q);
+        d.max_nnz = std::max(d.max_nnz, nnz);
+    }
+    d.ms = d.max_nnz + 4;
+    d.os = d.ar + 4;
+    d.ldb = d.brows + 3;
+    d.strb = d.ldb * d.bcols + 7;
+    d.ldc = d.rows_out + 2;
+    d.strc = d.ldc * d.nrhs + 5;
+    d.a_val.assign(std::size_t(d.ms) * kBatch, poison_v<T>());  // in-range poison past each item's nnz
+    d.a_ci.assign(std::size_t(d.ms) * kBatch, 0);
+    d.a_ro.assign(std::size_t(d.os) * kBatch, 0);
+    d.b.assign(std::size_t(d.strb) * kBatch, poison_v<T>());
+    d.c0.assign(std::size_t(d.strc) * kBatch, poison_v<T>());
+    for (int bi = 0; bi < kBatch; ++bi) {
+        const int q = bi % kPeriod;
+        int p = 0;
+        for (int r = 0; r < d.ar; ++r) {
+            d.a_ro[std::size_t(bi) * d.os + r] = p;
+            for (int t = 0; t < d.row_nnz(r, q); ++t, ++p) {
+                d.a_ci[std::size_t(bi) * d.ms + p] = d.col_of(r, t, q);
+                d.a_val[std::size_t(bi) * d.ms + p] = nan_a ? nan_v<T>() : val<T>(1000003u * q + 31u * r + t);
+            }
+        }
+        d.a_ro[std::size_t(bi) * d.os + d.ar] = p;
+        for (int c = 0; c < d.bcols; ++c)
+            for (int r = 0; r < d.brows; ++r) d.b[std::size_t(bi) * d.strb + std::size_t(c) * d.ldb + r] = val<T>(7000003u * (q + 1) + 977u * c + r);
+        for (int c = 0; c < d.nrhs; ++c)
+            for (int r = 0; r < d.rows_out; ++r)
+                d.c0[std::size_t(bi) * d.strc + std::size_t(c) * d.ldc + r] = nan_c ? nan_v<T>() : val<T>(9000011u * (q + 1) + 613u * c + r);
+    }
+    return d;
+}
+
+// The worst relative error of C over the representatives against the long-double reference (and,
+// on the same scale, against `other` when given); counts pad elements that are no longer poison.
+template <class T>
+double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, int* pads_moved, const std::vector<T>* other = nullptr,
+                  double* vs_other = nullptr) {
+    const bool az = dv::Arith<T>::is_zero(alpha), bz = dv::Arith<T>::is_zero(beta);
+    double worst = 0;
+    for (int q = 0; q < kPeriod; ++q) {
+        std::vector<LD<T>> ref(std::size_t(d.rows_out) * d.nrhs, LD<T>(0));
+        std::vector<long double> sc(ref.size(), 0.0L);
+        for (int i = 0; i < d.ar && !az; ++i)
+            for (int p = d.a_ro[std::size_t(q) * d.os + i]; p < d.a_ro[std::size_t(q) * d.os + i + 1]; ++p) {
+                const int j = d.a_ci[std::size_t(q) * d.ms + p];
+                const LD<T> a = cj_if<T>(wide(d.a_val[std::size_t(q) * d.ms + p]), d.ta == Cj);
+                const int r = d.ta == N ? i : j, k = d.ta == N ? j : i;
+                for (int c = 0; c < d.nrhs; ++c) {
+                    ref[std::size_t(c) * d.rows_out + r] += a * d.opB(q, k, c);
+                    sc[std::size_t(c) * d.rows_out + r] += std::abs(a) * std::abs(d.opB(q, k, c));
+                }
+            }
+        for (int c = 0; c < d.nrhs; ++c)
+            for (int r = 0; r < d.rows_out; ++r) {
+                const std::size_t e = std::size_t(c) * d.rows_out + r, at = std::size_t(q) * d.strc + std::size_t(c) * d.ldc + r;
+                const LD<T> cold = bz ? LD<T>(0) : wide(d.c0[at]);
+                const LD<T> want = wide(alpha) * ref[e] + wide(beta) * cold;
+                const long double s = std::abs(wide(alpha)) * sc[e] + std::abs(wide(beta)) * std::abs(cold);
+                worst = std::max(worst, rel(got[at], want, s));
+                if (other) *vs_other = std::max(*vs_other, rel(got[at], wide((*other)[at]), s));
+            }
+    }
+    int moved = 0;
+    for (int bi = 0; bi < kBatch; ++bi)
+        for (int e = 0; e < d.strc; ++e) {
+            const int c = e / d.ldc, r = e % d.ldc;
+            const bool live = c < d.nrhs && r < d.rows_out;
+            if (!live) moved += !same_bits(got[std::size_t(bi) * d.strc + e], poison_v<T>());
+        }
+    *pads_moved = moved;
+    return worst;
+}
+
+template <Transpose TA, Transpose TB, int WG, class Tier = dv::tier::upto<1>, class T>
+void device_spmm(sycl::queue& q, const Spmm<T>& d, KernelMatrixView<T, MatrixFormat::CSR> akv, const T* bp, T* cp, T alpha, T beta) {
+    const int brows = d.brows, bcols = d.bcols, ldb = d.ldb, strb = d.strb, crows = d.rows_out, nrhs = d.nrhs, ldc = d.ldc,
+              strc = d.strc;
+    launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
+        const int b = static_cast<int>(it.get_group(0));
+        const dv::WorkGroup<WG> ex{it};
+        const dv::ItemMat<const T> B{bp, b, strb, ldb, brows, bcols};
+        const dv::ItemMat<T> C{cp, b, strc, ldc, crows, nrhs};
+        (void)dv::spmm<TA, TB, Tier>(ex, dv::csr_item(akv, b), B, C, alpha, beta);
+    });
+}
+
+template <class T> class DeviceApiSparse : public DeviceCoreTest<T> {
+  protected:
+    struct Run {
+        std::vector<T> host, device;
+        double worst_device = 0, worst_host = 0, device_vs_host = 0;
+        int pads_moved = 0, item_vs_rep = 0, host_route_rows = 0;
+    };
+
+    // The host spmm pinned to `direct` (its reached row counted) and the device spmm, on copies of
+    // one C; alpha_dev lets a break call the device op with other arguments than the host.
+    template <Transpose TA, Transpose TB, int WG, class Tier = dv::tier::upto<1>>
+    Run run_spmm(T alpha, T beta, bool nan_a, bool nan_c, T alpha_dev) {
+        Dev& dev = this->dev;
+        const Spmm<T> d = make_spmm<T>(TA, TB, nan_a, nan_c);
+        T* av = dev.up(d.a_val);
+        int* aro = dev.up(d.a_ro);
+        int* aci = dev.up(d.a_ci);
+        T* bp = dev.up(d.b);
+        T* ch = dev.up(d.c0);
+        T* cd = dev.up(d.c0);
+        MatrixView<T, MatrixFormat::CSR> A(av, aro, aci, d.ar, d.ac, NonZeros{d.max_nnz}, d.ms, d.os, kBatch);
+        MatrixView<T, MatrixFormat::Dense> Bv(bp, d.brows, d.bcols, d.ldb, d.strb, kBatch);
+        MatrixView<T, MatrixFormat::Dense> Cv(ch, d.rows_out, d.nrhs, d.ldc, d.strc, kBatch);
+        Run out;
+        {
+            const select::ScopedPin<ops::spmm::SpmmChoice> pin("spmm", ops::spmm::SpmmChoice{ops::spmm::Direct{}});
+            for (const auto& row : test_support::reached_rows([&] {
+                     (void)spmm(*dev.ctx, A, Bv, Cv, alpha, beta, TA, TB, Span<std::byte>());
+                     dev.ctx->wait();
+                 }))
+                out.host_route_rows += row.op == "spmm" && row.spelling == "direct";
+        }
+        device_spmm<TA, TB, WG, Tier>(dev.q(), d, A.kernel_view(), bp, cd, alpha_dev, beta);
+        out.host = dev.down(ch, d.c0.size());
+        out.device = dev.down(cd, d.c0.size());
+        int unused = 0;
+        out.worst_host = spmm_worst(d, out.host, alpha, beta, &unused);
+        out.worst_device = spmm_worst(d, out.device, alpha, beta, &out.pads_moved, &out.host, &out.device_vs_host);
+        for (int bi = kPeriod; bi < kBatch; ++bi)
+            for (int e = 0; e < d.strc; ++e)
+                out.item_vs_rep += !same_bits(out.device[std::size_t(bi) * d.strc + e], out.device[std::size_t(bi % kPeriod) * d.strc + e]);
+        return out;
+    }
+
+    template <Transpose TA, Transpose TB, int WG = 128, class Tier = dv::tier::upto<1>>
+    void expect_thin_launcher(T alpha, T beta, bool nan_a, bool nan_c, const char* what) {
+        const Run r = run_spmm<TA, TB, WG, Tier>(alpha, beta, nan_a, nan_c, alpha);
+        EXPECT_GT(r.host_route_rows, 0) << what << ": the host spmm did not reach `direct`";
+        EXPECT_EQ(bit_mismatches(r.device, r.host), 0) << what << ": device spmm != host route";
+        EXPECT_EQ(r.item_vs_rep, 0) << what << ": items differ from their representative";
+        EXPECT_EQ(r.pads_moved, 0) << what << ": wrote outside C(0:m, 0:n)";
+        EXPECT_VERIFY(T, Check::blas, kTerms, r.worst_device) << what;
+    }
+
+    template <Transpose TA, Transpose TB> void expect_scatter(T alpha, T beta, bool nan_c, const char* what) {
+        const Run r = run_spmm<TA, TB, 128>(alpha, beta, false, nan_c, alpha);
+        EXPECT_GT(r.host_route_rows, 0) << what << ": the host spmm did not reach `direct`";
+        EXPECT_EQ(r.pads_moved, 0) << what << ": wrote outside C(0:m, 0:n)";
+        EXPECT_VERIFY(T, Check::blas, kTerms, r.worst_device) << what << " (device vs reference)";
+        EXPECT_VERIFY(T, Check::blas, kTerms, r.worst_host) << what << " (host vs reference)";
+        // Two results each within one bound of the reference: twice the terms.
+        EXPECT_VERIFY(T, Check::blas, 2 * kTerms, r.device_vs_host) << what << " (device vs host)";
+    }
+};
+TYPED_TEST_SUITE(DeviceApiSparse, AllTypes);
+
+template <class T> T cval(double re, double im) {
+    if constexpr (is_cplx<T>) return T(real_of<T>(re), real_of<T>(im));
+    else return T(real_of<T>(re));
+}
+
+TYPED_TEST(DeviceApiSparse, SpmmNoTransIsTheHostGatherBitForBit) {
+    using T = TypeParam;
+    const T alpha = cval<T>(0.7, -0.3), beta = cval<T>(-0.4, 0.2);
+    this->template expect_thin_launcher<N, N>(alpha, beta, false, false, "NN");
+    this->template expect_thin_launcher<N, Tr>(alpha, beta, false, false, "NT");
+    this->template expect_thin_launcher<N, Cj>(alpha, beta, false, false, "NC");
+    this->template expect_thin_launcher<N, N>(alpha, T(0), false, true, "NN beta 0 over NaN C");
+    this->template expect_thin_launcher<N, Cj>(T(0), beta, true, false, "NC alpha 0 over NaN A");
+    // The column block does not reorder a sum: Blocked<2> (the host's nrhs <= 2 block) is the same bits.
+    this->template expect_thin_launcher<N, N, 128, dv::tier::Blocked<2>>(alpha, beta, false, false, "NN Blocked<2>");
+}
+
+TYPED_TEST(DeviceApiSparse, SpmmGatherIsIndependentOfTheWorkGroup) {
+    using T = TypeParam;
+    const T alpha = cval<T>(1.1, 0.5), beta = cval<T>(0.3, -0.6);
+    this->template expect_thin_launcher<N, Tr, 32>(alpha, beta, false, false, "NT WG 32");
+    if (!fits_wg(this->dev.q(), 1024)) GTEST_SKIP() << "no 1024-item work-group";
+    this->template expect_thin_launcher<N, Tr, 1024>(alpha, beta, false, false, "NT WG 1024 (the ceiling)");
+}
+
+TYPED_TEST(DeviceApiSparse, SpmmTransScatterMatchesHostAndReference) {
+    using T = TypeParam;
+    const T alpha = cval<T>(-0.8, 0.45), beta = cval<T>(0.55, 0.25);
+    this->template expect_scatter<Tr, N>(alpha, beta, false, "TN");
+    this->template expect_scatter<Cj, Cj>(alpha, beta, false, "CC");
+    this->template expect_scatter<Cj, Tr>(alpha, T(0), true, "CT beta 0 over NaN C");
+}
+
+TYPED_TEST(DeviceApiSparse, SpmmBreakIsSeenByBothComparators) {
+    using T = TypeParam;
+    const T alpha = cval<T>(0.7, -0.3), beta = cval<T>(-0.4, 0.2);
+    const auto r = this->template run_spmm<N, N, 128>(alpha, beta, false, false, -alpha);
+    EXPECT_GT(bit_mismatches(r.device, r.host), 0) << "a negated alpha passed the bit comparison";
+    EXPECT_FALSE(batchlas::verify::within<T>(Check::blas, kTerms, r.worst_device)) << "a negated alpha passed the reference";
+    EXPECT_VERIFY(T, Check::blas, kTerms, r.worst_host);
+}
+
+// ---- iluk_apply -----------------------------------------------------------------------------
+// A batch of n x n diagonally dominant CSR matrices sharing one sorted pattern, values per
+// representative: rows < 100 couple only upward (one L level of 100 rows: split over the items of
+// a 32-item work-group), rows >= 100 couple to rows i - 100, i - 50 and i - 1 (a chain of levels).
+template <class T> struct Iluk {
+    static constexpr int n = 150, nrhs = 2;
+    int nnz = 0, ld = n + 3, stride = (n + 3) * nrhs + 5;
+    UnifiedVector<T> val, rhs, out_host, out_dev;
+    UnifiedVector<int> ro, ci;
+    std::optional<ILUKPreconditioner<T>> M;
+};
+
+template <class T> void make_iluk(Iluk<T>& d, Queue& ctx) {
+    constexpr int n = Iluk<T>::n;
+    std::vector<int> ro1{0}, ci1;
+    for (int i = 0; i < n; ++i) {
+        if (i < 100) {
+            ci1.push_back(i);
+            ci1.push_back(100 + i % 50);
+        } else {
+            for (int j : {i - 100, i - 50, i - 1, i})
+                if (j != i - 1 || i > 100) ci1.push_back(j);
+        }
+        ro1.push_back(static_cast<int>(ci1.size()));
+    }
+    d.nnz = static_cast<int>(ci1.size());
+    d.val = UnifiedVector<T>(std::size_t(d.nnz) * kBatch);
+    d.ci = UnifiedVector<int>(std::size_t(d.nnz) * kBatch);
+    d.ro = UnifiedVector<int>(std::size_t(n + 1) * kBatch);
+    for (int b = 0; b < kBatch; ++b) {
+        const int q = b % kPeriod;
+        for (int i = 0; i <= n; ++i) d.ro[std::size_t(b) * (n + 1) + i] = ro1[i];
+        for (int i = 0; i < n; ++i)
+            for (int p = ro1[i]; p < ro1[i + 1]; ++p) {
+                d.ci[std::size_t(b) * d.nnz + p] = ci1[p];
+                const T v = val<T>(500009u * (q + 1) + 7u * p);
+                d.val[std::size_t(b) * d.nnz + p] = ci1[p] == i ? v + T(real_of<T>(6)) : v;
+            }
+    }
+    MatrixView<T, MatrixFormat::CSR> A(d.val.data(), d.ro.data(), d.ci.data(), n, n, NonZeros{d.nnz}, d.nnz, n + 1, kBatch);
+    ILUKParams<T> params;
+    params.levels_of_fill = 1;
+    d.M.emplace(iluk_factorize(ctx, A, params));
+    const std::size_t len = std::size_t(d.stride) * kBatch;
+    d.rhs = UnifiedVector<T>(len);
+    d.out_host = UnifiedVector<T>(len);
+    d.out_dev = UnifiedVector<T>(len);
+    for (std::size_t e = 0; e < len; ++e) d.rhs[e] = d.out_host[e] = d.out_dev[e] = poison_v<T>();
+    for (int b = 0; b < kBatch; ++b)
+        for (int c = 0; c < Iluk<T>::nrhs; ++c)
+            for (int i = 0; i < n; ++i) d.rhs[std::size_t(b) * d.stride + std::size_t(c) * d.ld + i] = val<T>(300007u * (b % kPeriod) + 211u * c + i);
+}
+
+// The device iluk_apply over every (item, column) system; skip_l breaks it (no L solve).
+template <int WG, class T> void device_iluk(sycl::queue& q, Iluk<T>& d, bool skip_l) {
+    const auto batch = dv::iluk_batch(d.M->view());
+    const T* rp = d.rhs.data();
+    T* yp = d.out_dev.data();
+    const int nrhs = Iluk<T>::nrhs, ld = d.ld, stride = d.stride;
+    launch<WG>(q, std::size_t(kBatch) * nrhs, [=](sycl::nd_item<1> it) {
+        const int g = static_cast<int>(it.get_group(0));
+        const int b = g / nrhs, col = g % nrhs;
+        const dv::WorkGroup<WG> ex{it};
+        auto F = batch.item(b);
+        if (skip_l) F.l_levels = 0;
+        const dv::BasedVec<const T> r{rp, b * stride + col * ld};
+        const dv::BasedVec<T> y{yp, b * stride + col * ld};
+        (void)dv::iluk_apply<dv::tier::Blocked<1>>(ex, F, r, y);
+    });
+}
+
+// Normwise forward error per column against L U x = rhs solved in long double from the factor.
+template <class T> double iluk_worst(const Iluk<T>& d, const UnifiedVector<T>& got) {
+    constexpr int n = Iluk<T>::n;
+    const auto lu = d.M->lu.view();
+    const T* v = lu.data_ptr();
+    const auto ro = lu.row_offsets();
+    const auto ci = lu.col_indices();
+    double worst = 0;
+    for (int q = 0; q < kPeriod; ++q)
+        for (int c = 0; c < Iluk<T>::nrhs; ++c) {
+            std::vector<LD<T>> x(n);
+            const std::size_t vb = std::size_t(q) * lu.matrix_stride(), rb = std::size_t(q) * lu.offset_stride();
+            for (int i = 0; i < n; ++i) {
+                LD<T> s = wide(d.rhs[std::size_t(q) * d.stride + std::size_t(c) * d.ld + i]);
+                for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p)
+                    if (ci[vb + p] < i) s -= wide(v[vb + p]) * x[ci[vb + p]];
+                x[i] = s;
+            }
+            for (int i = n - 1; i >= 0; --i) {
+                LD<T> s = x[i], dg = LD<T>(1);
+                for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p) {
+                    if (ci[vb + p] > i) s -= wide(v[vb + p]) * x[ci[vb + p]];
+                    if (ci[vb + p] == i) dg = wide(v[vb + p]);
+                }
+                x[i] = s / dg;
+            }
+            long double num = 0, den = 0;
+            for (int i = 0; i < n; ++i) {
+                num = std::max(num, std::abs(wide(got[std::size_t(q) * d.stride + std::size_t(c) * d.ld + i]) - x[i]));
+                den = std::max(den, std::abs(x[i]));
+            }
+            worst = std::max(worst, std::isnan(num) ? std::numeric_limits<double>::infinity() : static_cast<double>(num / den));
+        }
+    return worst;
+}
+
+template <class T> int iluk_bits(const UnifiedVector<T>& a, const UnifiedVector<T>& b) {
+    int bad = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) bad += !same_bits(a[i], b[i]);
+    return bad;
+}
+
+TYPED_TEST(DeviceApiSparse, IlukApplyIsTheHostSolveBitForBit) {
+    using T = TypeParam;
+    Iluk<T> d;
+    make_iluk(d, *this->dev.ctx);
+    ASSERT_GT(d.M->l_levels, 2);
+    ASSERT_GE(d.M->u_levels, 2);
+    int widest = 0;
+    for (int lv = 0; lv < d.M->l_levels; ++lv) widest = std::max(widest, d.M->l_level_ptr[lv + 1] - d.M->l_level_ptr[lv]);
+    ASSERT_GT(widest, 32) << "no L level wider than the 32-item work-group";
+    MatrixView<T, MatrixFormat::Dense> rv(d.rhs.data(), Iluk<T>::n, Iluk<T>::nrhs, d.ld, d.stride, kBatch);
+    MatrixView<T, MatrixFormat::Dense> ov(d.out_host.data(), Iluk<T>::n, Iluk<T>::nrhs, d.ld, d.stride, kBatch);
+    (void)iluk_apply(*this->dev.ctx, *d.M, rv, ov);
+    this->dev.ctx->wait();
+    EXPECT_VERIFY(T, Check::solve, Iluk<T>::n, iluk_worst(d, d.out_host)) << "host route vs reference";
+    auto check = [&](const char* what) {
+        EXPECT_EQ(iluk_bits(d.out_dev, d.out_host), 0) << what << ": device iluk_apply != host route (pads included)";
+        int rep = 0;
+        for (int b = kPeriod; b < kBatch; ++b)
+            for (int e = 0; e < d.stride; ++e)
+                rep += !same_bits(d.out_dev[std::size_t(b) * d.stride + e], d.out_dev[std::size_t(b % kPeriod) * d.stride + e]);
+        EXPECT_EQ(rep, 0) << what << ": items differ from their representative";
+        EXPECT_VERIFY(T, Check::solve, Iluk<T>::n, iluk_worst(d, d.out_dev)) << what;
+        for (std::size_t e = 0; e < d.out_dev.size(); ++e) d.out_dev[e] = poison_v<T>();
+    };
+    device_iluk<128>(this->dev.q(), d, false);
+    check("WG 128 (the host's)");
+    device_iluk<32>(this->dev.q(), d, false);
+    check("WG 32 (n > the work-group: every level split over items)");
+    if (!fits_wg(this->dev.q(), 1024)) GTEST_SKIP() << "no 1024-item work-group";
+    device_iluk<1024>(this->dev.q(), d, false);
+    check("WG 1024 (the ceiling)");
+}
+
+TYPED_TEST(DeviceApiSparse, IlukApplyBreakIsSeenByBothComparators) {
+    using T = TypeParam;
+    Iluk<T> d;
+    make_iluk(d, *this->dev.ctx);
+    MatrixView<T, MatrixFormat::Dense> rv(d.rhs.data(), Iluk<T>::n, Iluk<T>::nrhs, d.ld, d.stride, kBatch);
+    MatrixView<T, MatrixFormat::Dense> ov(d.out_host.data(), Iluk<T>::n, Iluk<T>::nrhs, d.ld, d.stride, kBatch);
+    (void)iluk_apply(*this->dev.ctx, *d.M, rv, ov);
+    this->dev.ctx->wait();
+    device_iluk<128>(this->dev.q(), d, true);
+    EXPECT_GT(iluk_bits(d.out_dev, d.out_host), 0) << "skipping the L solve passed the bit comparison";
+    EXPECT_FALSE(batchlas::verify::within<T>(Check::solve, Iluk<T>::n, iluk_worst(d, d.out_dev))) << "skipping the L solve passed the reference";
+}
+
+// ---- tiers and workspace --------------------------------------------------------------------
+TYPED_TEST(DeviceApiSparse, WithTierPicksTheOneTierAndNoWorkspace) {
+    using T = TypeParam;
+    using S = dv::routine::spmm<N, Cj>;
+    using Blk = dv::tier::Blocked<dv::spmm_block_v<T>>;
+    static_assert(std::is_same_v<dv::resolve_tier_t<S, T, dv::tier::upto<1>>, Blk>);
+    static_assert(std::is_same_v<dv::resolve_tier_t<S, T, dv::tier::upto<100000>>, Blk>);
+    static_assert(dv::spmm_block_v<T> * sizeof(T) == 64);
+    static_assert(dv::spmm_buffer_size<N, Cj, dv::tier::upto<1>, T>(4096) == dv::WorkspaceSize{});
+    static_assert(dv::iluk_apply_buffer_size<dv::tier::Blocked<1>, T>(4096) == dv::WorkspaceSize{});
+    for (int n : {0, 1, 150, 100000}) {
+        std::string spmm_tier = "none", iluk_tier = "none";
+        dv::with_tier<S, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) { spmm_tier = std::is_same_v<Tier, Blk> ? "blocked" : "other"; });
+        dv::with_tier<dv::routine::iluk_apply, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            iluk_tier = std::is_same_v<Tier, dv::tier::Blocked<1>> ? "blocked" : "other";
+        });
+        EXPECT_EQ(spmm_tier, "blocked") << "n=" << n;
+        EXPECT_EQ(iluk_tier, "blocked") << "n=" << n;
+    }
+    dv::DeviceLimits none = dv::DeviceLimits::of(this->dev.q().get_device());
+    none.sub_group_sizes = {8};
+    EXPECT_THROW((dv::with_tier<S, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
+}
+
+}  // namespace
