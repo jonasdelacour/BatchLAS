@@ -14,7 +14,7 @@
 #include <src/util/template-instantiations.hh>
 
 #include <src/ops/syev/sytrd/sytrd_cta_device.hh>
-#include <src/ops/syev/steqr/steqr_cta_device.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
@@ -53,7 +53,7 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
 // in one partition from load to store (sytrd -> steqr -> back-transform), so no
 // intermediate touches global memory. The stages are the SAME code as the standalone
-// kernels (sytrd_cta_device.hh / steqr_cta_device.hh): keep it that way, so a
+// kernels (sytrd_cta_device.hh / device/lapack/steqr.hh): keep it that way, so a
 // head-to-head benchmark measures fusion and nothing else. Real input seeds the
 // sweeps with an in-place Q_house (DSYEV's route); Hermitian input applies the
 // reflectors afterwards. The reduction always runs Uplo::Upper.
@@ -245,8 +245,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                 if constexpr (!ComputeVectors) {
                     // ---- Stage 2: eigenvalues only, no accumulator. ----
-                    QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
+                    v2::steqr_detail::QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
+                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps,
                                              shift_strategy, update_scheme);
                     // A STORE, not a raise: exactly one of the three arms below runs per
@@ -275,8 +275,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     group_barrier(part);
 
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
-                    QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
+                    v2::steqr_detail::QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
+                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
@@ -292,7 +292,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 } else {
                     // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
                     // reflectors are applied afterwards, in stage 3). ----
-                    QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
+                    v2::steqr_detail::QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
                     const v2::Mat<Real, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDQ>, v2::Mem::Local, v2::Cyclic,
                                   sycl::local_accessor<Real, 1>>
                         qtile{Q_local, {}, {}, {}, base_q};
@@ -304,7 +304,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
+                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);

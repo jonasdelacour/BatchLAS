@@ -15,7 +15,7 @@
 #include <src/util/kernel-trace.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sort.hh>
-#include <src/ops/syev/steqr/steqr_cta_device.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <src/kernels/common/info_span.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <array>
@@ -106,26 +106,17 @@ namespace batchlas {
                     // I2: an inactive item is a dead chunk, solved on zeros and never stored.
                     const bool live = prob_id < static_cast<int32_t>(batch_size) && d.active(prob_id);
                     const int32_t b = live ? prob_id : 0;
-                    auto d_prob = d.batch_item(b);
-                    auto e_prob = e.batch_item(b);
 
                     // Compile-time selectable eigenvector accumulation (shared-memory Q).
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     using QLocalAccT = decltype(Q_local);
-                    QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
+                    device::steqr_detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
-                    if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(b);
-                        if (live) qcache.load(Q_prob);  // lane-private; a dead tile is never read
-                    }
-
-                    // Load D/E into registers (one element per lane).
-                    T diag = (live && lane < n) ? d_prob(lane) : T(0);
-                    T offdiag = (live && lane < (n - 1)) ? e_prob(lane) : T(0);
-
-                    const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n,
-                                                             static_cast<int32_t>(max_sweeps),
-                                                             cta_shift_strategy, cta_update_scheme);
+                    // Thin launcher: the body of device::steqr<J, tier::Cta<P>> (load, solve, store;
+                    // a dead chunk solves zeros and stores nothing), on the accessor-based Q cache.
+                    const bool failed = device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
+                        partition, d.batch_item(b), e.batch_item(b), Q_view.batch_item(b), qcache, n,
+                        static_cast<int32_t>(max_sweeps), cta_shift_strategy, cta_update_scheme, live);
                     if (live && failed && lane == 0) {
                         // We cannot throw from device code; the host decides how to
                         // handle it. info_report is an atomic fetch_max, not a store:
@@ -133,19 +124,6 @@ namespace batchlas {
                         // several writers to the same item (stedc runs a leaf solve per
                         // half), and it must never lower a failure already recorded.
                         detail::info_report(status, prob_id, 1);
-                    }
-
-                    // Store back D/E (one element per lane).
-                    if (live && lane < n) {
-                        d_prob(lane) = diag;
-                    }
-                    if (live && lane < (n - 1)) {
-                        e_prob(lane) = offdiag;
-                    }
-
-                    if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(b);
-                        if (live) qcache.store(Q_prob);
                     }
                 });
         });
