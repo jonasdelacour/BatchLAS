@@ -3,7 +3,7 @@
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
 // The bodies are device LA v2 op sequences (partial dot, lane fold, fused epilogue)
 // that keep the hand code's fma chain, int64 index arithmetic and shuffle trees:
-// v2.1 core ops plus the private ones in src/ops/gemv/gemv_native_v2.hh.
+// core ops plus fold_down (src/ops/gemv/gemv_native_v2.hh: a run-time-stride shift fold).
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies
 
 #include <src/ops/gemv/gemv_native.hh>
@@ -34,25 +34,6 @@ using sycl_device::DevMap;
 using Fma = v2::arith::Fma;
 
 namespace {
-
-// The work-group ladder. The grid is FLATTENED to 1-D over (out_len * batch),
-// b = gid / out_len, so the work-group count never depends on the batch alone.
-inline int gemv_wg_ladder(int64_t work_units, int max_wg, int cu,
-                          int units_per_wg_shift) {
-    // units_per_wg_shift: 0 = one work-ITEM per unit, 5 = one 32-lane SUB-GROUP.
-    int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t per_wg = cand >> units_per_wg_shift;
-        if (per_wg < 1) continue;
-        const int64_t groups = (work_units + per_wg - 1) / per_wg;
-        if (groups >= static_cast<int64_t>(4) * cu) break;
-    }
-    // `wg` is still 32 if no candidate was admissible, which may exceed max_wg.
-    if (max_wg > 0 && wg > max_wg) wg = max_wg;
-    return wg;
-}
 
 // One launch's batched operands, re-typed to the device scalar D at the pointer
 // boundary. NO __restrict__ ON ANY OF THEM: ortho.cc passes views into the same
@@ -243,7 +224,7 @@ Event gemv_direct_notrans(Queue& ctx,
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
                 if (!alpha_zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, Ai, xb);
-                dla::store_fma(dla::rt_scalar(op.alpha, alpha_zero), acc, dla::rt_scalar(op.beta, beta_zero), yb(i));
+                v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(i));
             });
     });
 
@@ -303,10 +284,10 @@ Event gemv_seg_notrans(Queue& ctx,
                 const auto xb = op.xvec(b, op.n);
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero && jsub < W) acc = v2::detail::dot_partial<false, Fma>(dla::Member<W>{jsub}, Ai, xb);
+                if (!alpha_zero && jsub < W) acc = v2::dot_partial<false, Fma>(v2::Slot<W>{jsub}, Ai, xb);
                 acc = dla::fold_down<W>(sg, acc, v2::Dyn{seg});  // lanes i + seg*t onto lane i
                 if (lane < seg)
-                    dla::store_fma(dla::rt_scalar(op.alpha, alpha_zero), acc, dla::rt_scalar(op.beta, beta_zero), yb(i));
+                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(i));
             });
     });
 
@@ -353,12 +334,12 @@ Event gemv_direct_trans(Queue& ctx,
                 const int j = static_cast<int>(gid - b * op.n);
 
                 // y(j) := alpha op(A)(j, :) x + beta y(j), op(A)(j, :) = conj?(A(:, j))^T.
-                const auto Aj = dla::conj_if(op.col(b, j), conj);
+                const auto Aj = v2::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
                 if (!alpha_zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, Aj, xb);
-                dla::store_fma(dla::rt_scalar(op.alpha, alpha_zero), acc, dla::rt_scalar(op.beta, beta_zero), yb(j));
+                v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 
@@ -367,7 +348,7 @@ Event gemv_direct_trans(Queue& ctx,
 
 // BODY 3 -- `cta`, transA != NoTrans, GPU with an ENUMERATED sub-group
 // size of 32. One 32-lane sub-group per output element, folded through
-// dla::leader_sum, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
+// v2::shift_reduce, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
 // and has to be: a shuffle reached by only some lanes of a sub-group is UB.
 template <typename T>
 Event gemv_cta_trans(Queue& ctx,
@@ -419,14 +400,14 @@ Event gemv_cta_trans(Queue& ctx,
 
                 // The team's partial dots, a shift-down fold (no shared memory, unlike
                 // reduce_over_group), and the leader alone writes y(j).
-                const auto Aj = dla::conj_if(op.col(b, j), conj);
+                const auto Aj = v2::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) acc = v2::detail::dot_partial<false, Fma>(team, Aj, xb);
-                acc = dla::leader_sum(team, acc);
+                if (!alpha_zero) acc = v2::dot_partial<false, Fma>(team, Aj, xb);
+                acc = v2::shift_reduce<kSg>(team.sg, acc, [](D u, D w) { return v2::Arith<D>::add(u, w); });  // leader-only
                 if (team.leader())
-                    dla::store_fma(dla::rt_scalar(op.alpha, alpha_zero), acc, dla::rt_scalar(op.beta, beta_zero), yb(j));
+                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 
@@ -507,14 +488,14 @@ Event gemv_seg_trans(Queue& ctx,
                 const bool active = in_range && (mask == nullptr || mask[b] != 0);
 
                 // L is compile-time, so the owned-slice loop unrolls -- W's point.
-                const auto Aj = dla::conj_if(op.col(b, j), conj);
+                const auto Aj = v2::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero && active) acc = v2::detail::dot_partial<false, Fma>(team, Aj, xb);
-                acc = dla::leader_sum(team, acc);
+                if (!alpha_zero && active) acc = v2::dot_partial<false, Fma>(team, Aj, xb);
+                acc = v2::shift_reduce<kLanes>(team.part, acc, [](D u, D w) { return v2::Arith<D>::add(u, w); });  // leader-only
                 if (team.leader() && active)
-                    dla::store_fma(dla::rt_scalar(op.alpha, alpha_zero), acc, dla::rt_scalar(op.beta, beta_zero), yb(j));
+                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 

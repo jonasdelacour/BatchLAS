@@ -118,14 +118,19 @@ template <class T, bool Pair = false> struct RtOpMat {
     }
 };
 
-// Column-major C (int64 ld): element (r, c) at p + (c * ld + r).
+// Column-major C (int64 ld): element (r, c) at p + (c * ld + r). C(r, c) is an element reference
+// that reads and writes through PairAccess, so core store() can take it as its y.
 template <class T, bool Pair = false> struct ColMat64 {
     using value_type = std::remove_cv_t<T>;
+    struct Ref {
+        T* q;
+        BATCHLAS_DLA_INLINE operator value_type() const { return PairAccess<Pair>::load(q); }
+        BATCHLAS_DLA_INLINE void operator=(value_type x) const { PairAccess<Pair>::store(q, x); }
+    };
     T* p;
     std::int64_t ld;
     BATCHLAS_DLA_INLINE T* ptr(int r, int c) const { return p + (static_cast<std::int64_t>(c) * ld + r); }
-    BATCHLAS_DLA_INLINE value_type load(int r, int c) const { return PairAccess<Pair>::load(ptr(r, c)); }
-    BATCHLAS_DLA_INLINE void store(int r, int c, value_type x) const { PairAccess<Pair>::store(ptr(r, c), x); }
+    BATCHLAS_DLA_INLINE Ref operator()(int r, int c) const { return {ptr(r, c)}; }
 };
 
 // ---- CSR row products ----------------------------------------------------------------------
@@ -156,20 +161,16 @@ BATCHLAS_DLA_INLINE void usmm_row(const Thread&, const Row& a, const B& b, int c
     }
 }
 
-// C(r, c0 + t) := fma(beta, C, fma(alpha, acc[t], 0)) for c0 + t < width; beta_zero (a kernel
-// argument) never reads C.
-template <class Ar, class T, int NC, class L, class CM>
-BATCHLAS_DLA_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>& acc, T beta, bool beta_zero, const CM& C, int r,
+// C(r, c0 + t) := store<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c0 + t)) for c0 + t < width;
+// a set beta flag (decided on the host) never reads C. Only the column loop is sparse-private:
+// core has no Frag-row epilogue with a column bound yet.
+template <class Ops, class T, int NC, class L, class CM>
+BATCHLAS_DLA_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>& acc, MaybeZero<T> beta, const CM& C, int r,
                                     int c0, int width) {
     BATCHLAS_UNROLL_FULL
     for (int t = 0; t < NC; ++t) {
         const int c = c0 + t;
-        if (c < width) {
-            T out = Arith<T>::zero();
-            Ar::mac(out, alpha, acc[t]);
-            if (!beta_zero) Ar::mac(out, beta, C.load(r, c));
-            C.store(r, c, out);
-        }
+        if (c < width) store<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c));
     }
 }
 

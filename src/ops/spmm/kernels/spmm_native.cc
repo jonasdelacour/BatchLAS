@@ -4,6 +4,7 @@
 // evidence: docs/perf/spmm.md#spmm-the-kernel-contract
 
 #include <src/ops/spmm/spmm_native.hh>
+#include <src/ops/gemv/gemv_native.hh>
 
 #include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
@@ -30,24 +31,9 @@ namespace {
 
 namespace v2 = batchlas::device;
 
-// Body-for-body copy of gemv_wg_ladder (gemv_native.cc), kept diffable -- hence
-// the `units_per_wg_shift` parameter that every caller here passes 0 for.
-inline int spmm_wg_ladder(int64_t work_units, int max_wg, int cu,
-                          int units_per_wg_shift) {
-    int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t per_wg = cand >> units_per_wg_shift;
-        if (per_wg < 1) continue;
-        const int64_t groups = (work_units + per_wg - 1) / per_wg;
-        if (groups >= static_cast<int64_t>(4) * cu) break;
-    }
-    // No admissible candidate leaves `wg` at its initial 32, which may exceed the
-    // device limit: that is an INVALID nd_range, not merely a slow one.
-    if (max_wg > 0 && wg > max_wg) wg = max_wg;
-    return wg;
-}
+// The work-group ladder is gemv's (src/ops/gemv/gemv_native.hh); every caller here passes
+// units_per_wg_shift 0 (one work-item per unit).
+using sycl_gemv::gemv_wg_ladder;
 
 // 64 bytes of accumulator for every scalar type, so the register block shrinks as
 // the scalar widens. evidence: docs/perf/spmm.md#the-gather-window
@@ -107,7 +93,7 @@ Event spmm_gather(Queue& ctx,
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
@@ -178,7 +164,7 @@ Event spmm_gather(Queue& ctx,
                 v2::Frag<D, NC> acc;
                 v2::fill(acc, D{});
                 if (!alpha_zero) v2::usmm_row<Ar>(v2::Thread{}, arow, opB, c0, width, acc);
-                v2::store_cols<Ar>(v2::Thread{}, alpha_d, acc, beta_d, beta_zero, Cb, i, c0, width);
+                v2::store_cols<v2::arith::Fma>(v2::Thread{}, alpha_d, acc, v2::MaybeZero{beta_d, beta_zero}, Cb, i, c0, width);
             });
     });
 
@@ -218,7 +204,7 @@ Event spmm_scale(Queue& ctx,
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(elems, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(elems, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (elems + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
@@ -286,7 +272,7 @@ Event spmm_scatter(Queue& ctx,
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
