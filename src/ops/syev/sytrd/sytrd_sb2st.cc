@@ -76,7 +76,6 @@ Event kd0_extract(Queue& q,
                   const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
-    using Real = typename base_type<T>::type;
 
     auto ABv = ab.kernel_view();
     auto dv = d;
@@ -93,13 +92,7 @@ Event kd0_extract(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            for (int i = 0; i < n; ++i) {
-                Db[i] = detail::real_part(AB(0, i));
-                if (i < n - 1) {
-                    Eb[i] = Real(0);
-                    Taub[i] = T(0);
-                }
-            }
+            v2::sb2st_detail::extract_narrow<0>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -120,7 +113,6 @@ Event kd1_extract_lower(Queue& q,
                   const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
-    using Real = typename base_type<T>::type;
 
     auto ABv = ab.kernel_view();
     auto dv = d;
@@ -137,18 +129,7 @@ Event kd1_extract_lower(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            for (int i = 0; i < n; ++i) {
-                Db[i] = detail::real_part(AB(0, i));
-            }
-
-            // The off-diagonal is |AB(1, i)|: LAPACK's KD = 1 case (the chained phase only matters
-            // for Q, which this path never forms).
-            for (int i = 0; i < n - 1; ++i) {
-                const T t = AB(1, i);
-                const Real a = detail::abs(t);
-                Eb[i] = a;
-                Taub[i] = T(0);
-            }
+            v2::sb2st_detail::extract_narrow<1>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -409,7 +390,7 @@ Event btrd_lower_inplace(Queue& q,
             }
 
             if (ex.leader()) {
-                Ops::finalize_tridiag(ABv, n, D, E, TAU);
+                v2::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
             }
         });
     });
