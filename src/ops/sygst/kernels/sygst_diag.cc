@@ -1,13 +1,11 @@
-// sygst blocked's diagonal block (sygst_native.hh). One work-item per column of a kb x kb block, the
-// column in registers; the factor F and a transpose buffer per item in shared memory, F stored so each
-// pass reads its rows (or columns) as 16-byte packs. Each pass is a triangular solve with F (itype 1)
-// or a product with F^H (2, 3), applied to A and then to the conjugate transpose of the result, which
-// is the Hermitian C itself. Orders 32, 16 and 8 have compile-time instances.
+// sygst blocked's diagonal block (sygst_native.hh): a thin launcher over the public ?sygs2 body,
+// device::sygs2_group (include/batchlas/device/lapack/sygst.hh), ipw blocks per work-group. Orders
+// 32, 16 and 8 have compile-time instances.
 // evidence: docs/perf/sygvd.md#sygst-the-blocked-family
 
 #include <src/ops/sygst/sygst_native.hh>
 
-#include <src/ops/sygst/sygst_v2.hh>
+#include <batchlas/device/lapack/sygst.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
 
@@ -28,42 +26,9 @@ template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;
 
 template <typename D>
-using Col = v2::Frag<D, kDiagMaxOrder>;  // one column of the block, in registers
+using Pack = v2::sygst_detail::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
 template <typename D>
-using Pack = dla::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
-template <typename D>
-constexpr int kVec = dla::pack16_elems<D>;
-// Every element of the 16-byte-aligned SLM packs is aligned to min(16, sizeof(D)): said through the
-// operand base, since a view's pointer member drops the alignment derived from &slm[0] (a complex
-// S column would go out as two 8-byte shared stores per element instead of one 16-byte store).
-template <typename D>
-constexpr int kSlmAlign = sizeof(D) < 16 ? static_cast<int>(sizeof(D)) : 16;
-template <typename D>
-using Slm = v2::Aligned<D, kSlmAlign<D>>;
-
-template <int KB>
-using KbExt = std::conditional_t<(KB > 0), v2::Ext<KB>, v2::Dyn>;
-template <int KB>
-inline KbExt<KB> kb_ext(int kb) {
-    if constexpr (KB > 0) return {};
-    else return v2::Dyn{kb};
-}
-
-// F(r, q) as stored: F^T column-major for the solve (column i of the store is row i of F),
-// F column-major for the product.
-template <bool Inverse, class M>
-inline auto& fat(const M& fs, int r, int q) { return Inverse ? fs(q, r) : fs(r, q); }
-
-// F^-1 c (itype 1, ?TRSV with the stored F^T) or F^H c (2, 3, ?TRMV). A plain inline function as
-// before the port, so the compiler's inlining choice for the two calls is unchanged.
-template <bool Inverse, int KB, typename D>
-inline Col<D> apply(Col<D> c, const D* f, int ldf, int kb) {
-    const KbExt<KB> kn = kb_ext<KB>(kb);
-    const v2::Mat<const D, KbExt<KB>, KbExt<KB>, v2::Dyn, v2::Mem::Local> fs{f, kn, kn, v2::Dyn{ldf}};
-    if constexpr (Inverse) dla::trsv_packed<Uplo::Upper, Transpose::Trans>(v2::Thread{}, fs, c);
-    else dla::trmv_packed<Uplo::Lower, Transpose::ConjTrans>(v2::Thread{}, fs, c);
-    return c;
-}
+constexpr int kVec = v2::sygst_detail::pack16_elems<D>;
 
 template <bool Inverse, int KB, typename T, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
@@ -77,54 +42,17 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
         sycl::local_accessor<Pack<D>, 1> slm(sycl::range<1>(packs), h);
         h.parallel_for<SygstDiagKernel<D, Inverse, KB>>(
             sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
-                using SMat = v2::Mat<D, KbExt<KB>, KbExt<KB>, v2::Dyn, v2::Mem::Local, v2::Cyclic, Slm<D>>;
-                const int live = KB ? KB : kb;
-                const KbExt<KB> kn = kb_ext<KB>(kb);
-                const Uplo ul = lower ? Uplo::Lower : Uplo::Upper;
-                const int t = static_cast<int>(it.get_local_id(0));
-                const std::ptrdiff_t first = static_cast<std::ptrdiff_t>(it.get_group(0)) * ipw;
-                D* const fbase = reinterpret_cast<D*>(&slm[0]);
-                D* const sbase = fbase + ipw * fper;
-                auto a_of = [=](std::ptrdiff_t itm) { return v2::mat(ap + itm * stride_a, kb, kb, lda); };
-                auto s_of = [=](int gi) { return v2::mat_aligned<kSlmAlign<D>, v2::Mem::Local>(sbase + gi * sper, kb, kb, lds); };
-                // ?LACPY of A's uplo triangle into S and of B's into F (conjugate-transposed from U),
-                // column-wise and coalesced. I2: a masked item is a dead partition, never loaded,
-                // computed or stored.
-                dla::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DLA_BODY {
-                    const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch || (mask && !mask[itm]) || !dla::in_triangle(ul, row, c)) return;
-                    s_of(gi)(row, c) = a_of(itm)(row, c);
-                    const D bv = v2::mat(bp + itm * stride_b, kb, kb, ldb)(row, c);
-                    const auto fs = v2::mat_aligned<kSlmAlign<D>, v2::Mem::Local>(fbase + gi * fper, kb, kb, ldf);
-                    if (lower) fat<Inverse>(fs, row, c) = bv;
-                    else fat<Inverse>(fs, c, row) = v2::Arith<D>::conj(bv);
-                });
-                const int g = t / kb, j = t - g * kb;
-                const bool active = g < ipw && first + g < batch && (!mask || mask[first + g]);
-                const D* const f = fbase + (active ? g * fper : 0);
-                const SMat s{Slm<D>{sbase + (active ? g * sper : 0)}, kn, kn, v2::Dyn{lds}};
-                it.barrier(sycl::access::fence_space::local_space);
-                // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
-                Col<D> col{};
-                if (active) v2::load(col, dla::herm(s, ul).col(j), live);
-                it.barrier(sycl::access::fence_space::local_space);
-                if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
-                if (active) v2::store(col, s.col(j), live);
-                it.barrier(sycl::access::fence_space::local_space);
-                // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
-                if (active) v2::load(col, v2::conj_view(s.row(j)), live);
-                it.barrier(sycl::access::fence_space::local_space);
-                if (active) col = apply<Inverse, KB>(col, f, ldf, kb);
-                if (active) v2::store(col, s.col(j), live);
-                it.barrier(sycl::access::fence_space::local_space);
-                // The Hermitian C (real diagonal) to `full` and its uplo triangle back to A.
-                dla::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DLA_BODY {
-                    const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch || (mask && !mask[itm])) return;
-                    const D v = dla::herm(s_of(gi), ul)(row, c);
-                    if (hp) v2::mat(hp + itm * stride_h, kb, kb, ldh)(row, c) = v;
-                    if (dla::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
-                });
+                // The arguments name the captures in the hand kernel's order (its parameter order).
+                // I2: a masked item is a dead block, never loaded, computed or stored.
+                v2::sygs2_group<Inverse, KB>(
+                    v2::RtGroup<>{it}, static_cast<int>(it.get_local_id(0)), kb, lower, it.get_group(0), ipw,
+                    reinterpret_cast<D*>(&slm[0]), fper,
+                    [=](std::ptrdiff_t itm) { return v2::mat(ap + itm * stride_a, kb, kb, lda); }, sper, lds, wg,
+                    [=](std::ptrdiff_t itm) BATCHLAS_DLA_BODY { return itm >= batch || (mask && !mask[itm]); },
+                    [=](std::ptrdiff_t itm) BATCHLAS_DLA_BODY { return v2::mat(bp + itm * stride_b, kb, kb, ldb); }, ldf,
+                    [=](std::ptrdiff_t itm, int row, int c, const D& v) BATCHLAS_DLA_BODY {
+                        if (hp) v2::mat(hp + itm * stride_h, kb, kb, ldh)(row, c) = v;
+                    });
             });
     });
 }
@@ -173,7 +101,7 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             // H = the Hermitian A, real diagonal. H is named first: the capture order is the kernel's
             // parameter order (hp, then ap), as in the hand kernel.
             const auto H = v2::mat(hp + itm * stride_f, kb, kb, ldf);
-            v2::lacpy(v2::ElemAt<true>{i, c}, dla::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
+            v2::lacpy(v2::ElemAt<true>{i, c}, v2::sygst_detail::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
         });
     });
     return ctx.get_event();

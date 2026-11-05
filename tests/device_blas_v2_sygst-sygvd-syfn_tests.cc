@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// sygst's private device LA v2 ops (src/ops/sygst/sygst_v2.hh) against host references; the core
+// sygst_detail of lapack/sygst.hh (the ?sygs2 body's helpers) against host references; the core
 // ops they compose with (v2::load / store, arith::Fma) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): pack-padded, non-natural ld and inc, complex
 // data, every Uplo x {Trans, ConjTrans}, a NaN-poisoned unread triangle, pad and fragment tail,
@@ -20,13 +20,13 @@
 #include <vector>
 
 #include <batchlas/device.hh>
-#include <src/ops/sygst/sygst_v2.hh>
+#include <batchlas/device/lapack/sygst.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace dla = batchlas::sycl_sygst::dla;
+namespace dla = batchlas::device::sygst_detail;
 using batchlas::verify::Check;
 
 namespace {
