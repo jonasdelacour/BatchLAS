@@ -9,6 +9,7 @@
 //   wilkinson_shift          dsteqr's shift from the leading 2x2 of a tridiagonal window
 //   larfg_scalars<Conv>      the reflector scalars of xLARFG under three conventions
 //   Givens<R, S>             a rotation (c real, s real or complex)
+//   inv_sqrt<Edge>           1 / sqrt(a): rsqrt.approx + one Newton step on NVPTX float
 
 #include <array>
 #include <cmath>
@@ -381,6 +382,30 @@ template <class R> BATCHLAS_DLA_INLINE R eig2x2_nearest(R a, R b, R c) {
     const auto [rt1, rt2] = lae2(a, b, c);
     return sycl::fabs(rt1 - c) <= sycl::fabs(rt2 - c) ? rt1 : rt2;
 }
+
+// ---- 1 / sqrt -----------------------------------------------------------------------------------
+// inv_sqrt<E>(a, sqrt_a) = 1 / sqrt(a), sqrt_a = sqrt(a) the divisor for callers that hold it.
+// NVPTX float (not AdaptiveCpp): rsqrt.approx + one FMA Newton step, y + (y/2)(1 - (a y) y), near
+// correctly rounded and the same whatever is inlined (decision 10; a plain 1 / sqrt(a) folds into
+// rsqrt.approx by code shape). Edge: Lapack 1/inf = 0, not NaN; FiniteGeOne a finite a >= 1 (no
+// guard, the Jacobi cosine 1 + t^2); Exact 1 / sqrt_a on every target. Elsewhere 1 / sqrt_a.
+enum class InvSqrtEdge { Lapack, FiniteGeOne, Exact };
+
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> inline R inv_sqrt(R a, R sqrt_a) {
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    if constexpr (std::is_same_v<R, float> && E != InvSqrtEdge::Exact) {
+        float y;
+        asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
+        const float e = sycl::fma(-(a * y), y, 1.0f);
+        const float r = sycl::fma(0.5f * y, e, y);
+        if constexpr (E == InvSqrtEdge::Lapack) return sycl::isinf(a) ? 0.0f : r;
+        else return r;
+    }
+#endif
+    (void)a;
+    return R(1) / sqrt_a;
+}
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> inline R inv_sqrt(R a) { return inv_sqrt<E>(a, sycl::sqrt(a)); }
 
 // Multiply by the reciprocal when it is finite and nonzero, else divide (the sfmin arm), else
 // (an exact zero d) the caller's value. make() decides once per pivot; apply() branches on the
