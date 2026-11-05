@@ -265,13 +265,17 @@ template <class T> BATCHLAS_DLA_INLINE LaneVec<T> lane_vec(T& v, int lo, int hi)
 
 // Element k of a lane-cyclic register vector (lane l holds elements l + size * r in f[r]), to
 // every lane of the executor (one bcast; f[k / size] selected by unrolled compares). COLLECTIVE.
+// k >= 0. A per-component select: a complex `v = f[r]` became a select of addresses into f, which
+// kept sytrs' whole Frag in local memory (STL 56 -> 134).
 template <class Ex, class T, int R, class L> BATCHLAS_DLA_HELPER T frag_bcast(const Ex& ex, const Frag<T, R, L>& f, int k) {
     constexpr int P = Ex::size;
+    static_assert(P > 0 && (P & (P - 1)) == 0, "frag_bcast: a power-of-two executor");
+    constexpr int S = __builtin_ctz(P);
     T v = f[0];
 #pragma unroll
     for (int r = 1; r < R; ++r)
-        if (k / P == r) v = f[r];
-    return ex.bcast(v, k % P);
+        v = select((k >> S) == r, f[r], v);
+    return ex.bcast(v, k & (P - 1));
 }
 // The neighbours of every element of a lane-cyclic register vector: up[r] = element e + 1 and
 // dn[r] = element e - 1 for this lane's element e = lane + size * r (wrapping lanes read the
@@ -286,8 +290,8 @@ BATCHLAS_DLA_INLINE void neighbor_exchange(const Ex& ex, const Frag<T, R, L>& x,
         const T d = ex.shuffle(x[r], (lane + P - 1) & (P - 1));
         const T hi = ex.bcast(x[r + 1 < R ? r + 1 : r], 0);
         const T lo = ex.bcast(x[r > 0 ? r - 1 : 0], P - 1);
-        up[r] = (lane == P - 1 && r + 1 < R) ? hi : u;
-        dn[r] = (lane == 0 && r > 0) ? lo : d;
+        up[r] = select(lane == P - 1 && r + 1 < R, hi, u);
+        dn[r] = select(lane == 0 && r > 0, lo, d);
     }
 }
 

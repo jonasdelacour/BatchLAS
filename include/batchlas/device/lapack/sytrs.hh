@@ -22,18 +22,31 @@ namespace batchlas::device::inline v2 {
 
 namespace sytrs_detail {
 
+// ?SYTRS's 2 x 2 solve: x0 / x1 and d0 / d1 the first / second row's value and diagonal, off the
+// block's off-diagonal. ldl_block2 divides once per block; ldl_block2_row gives one row.
+template <class T> struct LdlBlock2 {
+    T akm1, ak, denom, b0, b1;
+};
+template <class T> BATCHLAS_DLA_INLINE LdlBlock2<T> ldl_block2(T x0, T x1, T d0, T d1, T off) {
+    using A = arith_t<arith::Fma, T>;
+    const T akm1 = A::div(d0, off);
+    const T ak = A::div(d1, off);
+    const T denom = A::sub(A::mul(akm1, ak), A::one());
+    return {akm1, ak, denom, A::div(x0, off), A::div(x1, off)};
+}
+template <class T> BATCHLAS_DLA_INLINE T ldl_block2_row(const LdlBlock2<T>& b, bool second) {
+    using A = arith_t<arith::Fma, T>;
+    return second ? A::div(A::sub(A::mul(b.akm1, b.b1), b.b0), b.denom) : A::div(A::sub(A::mul(b.ak, b.b0), b.b1), b.denom);
+}
+
 // Row t of D^-1 x for a block of kind kd (0: 1 x 1; 1 / 2: the first / second row of a 2 x 2):
 // x is row t's value, xp its partner's, dtt and dpp their diagonals, off the block's
-// off-diagonal. ?SYTRS's arithmetic, so both rows of a block agree with sytrs_col's.
+// off-diagonal. Bitwise sytrs_col's rows.
 template <class T> BATCHLAS_DLA_HELPER T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
     using A = arith_t<arith::Fma, T>;
     if (kd == 0) return A::mul(x, A::recip(dtt));
-    const T akm1 = A::div(kd == 1 ? dtt : dpp, off);
-    const T ak = A::div(kd == 1 ? dpp : dtt, off);
-    const T denom = A::sub(A::mul(akm1, ak), A::one());
-    const T bkm1 = A::div(kd == 1 ? x : xp, off);
-    const T bk = A::div(kd == 1 ? xp : x, off);
-    return kd == 1 ? A::div(A::sub(A::mul(ak, bkm1), bk), denom) : A::div(A::sub(A::mul(akm1, bk), bkm1), denom);
+    const bool first = kd == 1;
+    return ldl_block2_row(ldl_block2(first ? x : xp, first ? xp : x, first ? dtt : dpp, first ? dpp : dtt, off), !first);
 }
 
 // The staged factor in local memory, logical indices. `ps` is the logical ipiv: +(p + 1) a \f$1 \times 1\f$
@@ -136,7 +149,7 @@ BATCHLAS_DLA_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* k
         const int kd = kind[t];
         const int p = kd == 1 ? t + 1 : kd == 2 ? t - 1 : t;
         const T off = kd == 1 ? e[t] : kd == 2 ? e[t - 1] : arith_t<arith::Fma, T>::one();
-        x[r] = ldl_dsolve_row(kd, x[r], kd == 1 ? up[r] : dn[r], d(t, t), d(p, p), off);
+        x[r] = ldl_dsolve_row(kd, x[r], select(kd == 1, up[r], dn[r]), d(t, t), d(p, p), off);
     }
 }
 
@@ -206,9 +219,9 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
                 b(i) = A::sub(A::sub(b(i), A::mul(S(i, k), bk)), A::mul(S(i, k + 1), bk1));
             });
             if (g.leader()) {
-                const D off = S(k + 1, k), d0 = S(k, k), d1 = S(k + 1, k + 1);
-                b(k) = sytrs_detail::ldl_dsolve_row(1, bk, bk1, d0, d1, off);
-                b(k + 1) = sytrs_detail::ldl_dsolve_row(2, bk1, bk, d1, d0, off);
+                const auto blk = sytrs_detail::ldl_block2(bk, bk1, S(k, k), S(k + 1, k + 1), S(k + 1, k));
+                b(k) = sytrs_detail::ldl_block2_row(blk, false);
+                b(k + 1) = sytrs_detail::ldl_block2_row(blk, true);
             }
             sync<scope::Group>(g, Mem::Global);
             k += 2;
