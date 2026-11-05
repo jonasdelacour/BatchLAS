@@ -89,13 +89,16 @@ BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
     }
     return v;
 }
-// The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2).
+// The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2),
+// lo >= 1. always_inline, unsigned masks: the hand form it replaced (plain inline, cdouble
+// geqr2 resident: +4 REG).
 template <class Order = bfly::Down, class Part, class T, class Op>
-BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op, int lo, int hi) {
+BATCHLAS_DLA_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
+    const auto ulo = static_cast<std::uint32_t>(lo), uhi = static_cast<std::uint32_t>(hi);
     if constexpr (std::is_same_v<Order, bfly::Down>) {
-        for (int m = hi / 2; m >= lo; m >>= 1) v = op(v, shuffle_xor(part, v, static_cast<std::uint32_t>(m)));
+        for (std::uint32_t m = uhi / 2; m >= ulo; m >>= 1) v = op(v, shuffle_xor(part, v, m));
     } else {
-        for (int m = lo; m < hi; m <<= 1) v = op(v, shuffle_xor(part, v, static_cast<std::uint32_t>(m)));
+        for (std::uint32_t m = ulo; m < uhi; m <<= 1) v = op(v, shuffle_xor(part, v, m));
     }
     return v;
 }

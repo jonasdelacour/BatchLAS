@@ -182,11 +182,12 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // and needs no publish/broadcast pair. Widening either leaks across
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
                     R smax = (lane >= j) ? v2::abs_inf(rA[j]) : R(0);
-                    smax = v2::butterfly<1, N, v2::bfly::Asc>(ex, smax, v2::op::FMax{});
+                    // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
+                    smax = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, smax, v2::op::FMax());
 
                     R ssq = R(0);
                     if (lane > j && smax > R(0)) ssq = gd::abs2_scaled(rA[j], smax);
-                    ssq = v2::butterfly<1, N, v2::bfly::Asc>(ex, ssq, sycl::plus<R>());
+                    ssq = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
 
                     const v2::ScaledSsq<R> nrm{smax, ssq};
                     const v2::LarfgScalars<D> hh = v2::larfg_scalars<v2::conv::Lapack>(alpha, nrm);

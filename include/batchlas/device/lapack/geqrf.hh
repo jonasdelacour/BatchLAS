@@ -137,8 +137,10 @@ template <int C, class T> BATCHLAS_DLA_INLINE void frag_rank1(T v, const T* y, T
 // static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Scalars: larfg_scalars<
 // conv::Lapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), the
 // apply uses conj(tau) (zgeqr2's); tau[j] per reflector, kmax <= min(m, n). COLLECTIVE.
+// ex and a by value: the body is simplified before it is inlined, and through references it
+// keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
 template <class Ex, class MA, class D>
-inline void geqr2(const Ex& ex, const MA& a, int kmax, D* tau) {
+inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
     using R = real_t<D>;
     using F = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
     constexpr bool sub = Ex::sub_whole;
@@ -180,11 +182,11 @@ inline void geqr2(const Ex& ex, const MA& a, int kmax, D* tau) {
     }
 }
 
-// xGEQR2 on an m x n panel (a, ld), n <= N, a row per item of the work-group ex; m <= its size,
-// kmax <= min(m, n), launch-uniform. Rows >= m run every barrier (no early return). sred: 2 reals,
-// sw: N scalars per sub-group, plus 1 (butterflies, never reduce_over_group: the 48 KB hole).
-template <int N, class D, class Real, class Ex>
-inline void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
+namespace geqrf_detail {
+// geqr2_reg's body, a call: ex is built here (an Ex argument: 24 B frame, FP64 N = 16 spills).
+template <int N, int SG, class D, class Real>
+inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
+    const RtGroup<Scope::Group, SG> ex{it};
     using R = real_t<D>;
     using A = Arith<D>;
     using F = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
@@ -252,6 +254,17 @@ inline void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau
             a[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(k) * ld] = rA[k];
         }
     }
+}
+}  // namespace geqrf_detail
+
+// xGEQR2 on an m x n panel (a, ld), n <= N, a row per item of the work-group ex (RtGroup<
+// Scope::Group>); m <= its size, kmax <= min(m, n), launch-uniform. Rows >= m run every barrier
+// (no early return). sred: 2 reals, sw: N scalars per sub-group, plus 1 (butterflies, never
+// reduce_over_group: the 48 KB hole).
+template <int N, class D, class Real, class Ex>
+BATCHLAS_DLA_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
+    static_assert(Ex::runtime && !Ex::sub_whole, "geqr2_reg: ex is an RtGroup<Scope::Group>");
+    geqrf_detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
 }
 
 }  // namespace batchlas::device

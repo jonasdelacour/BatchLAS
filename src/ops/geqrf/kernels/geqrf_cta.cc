@@ -216,7 +216,10 @@ Event geqrf_panel_global_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+            // Listed captures: their order is the kernel's argument order, so ld stays before
+            // m, n (the [=] first-use order moves it: FP32 +2 REG, one VOTEU less).
+            [mask, ap, stride, ld, m, n, kmax, tp, tau_batch_stride, tau_offset](sycl::nd_item<1> it)
+                BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
