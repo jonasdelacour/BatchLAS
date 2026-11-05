@@ -27,6 +27,7 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
+    device_api_qr_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
@@ -251,6 +252,7 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     cond_tests
     group_collectives_tests
+    device_api_qr_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
@@ -570,7 +572,8 @@ function(batchlas_add_test_target test_name)
     # kernel), which is why this is a source check and not a behavioural one.
     if(test_name STREQUAL "geqrf_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_GEQRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/geqrf/kernels/geqrf_tiny.cc")
+            BATCHLAS_GEQRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/geqrf/kernels/geqrf_tiny.cc"
+            BATCHLAS_GEQRF_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/device/lapack/geqrf.hh")
     endif()
     # getrf_tests reads getrf_tiny.cc back for the same reason potrf_tests reads
     # potrf_tiny.cc: the register-resident tier declares no local memory and no
@@ -588,7 +591,8 @@ function(batchlas_add_test_target test_name)
     endif()
     if(test_name STREQUAL "ormqr_mask_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_ORMQR_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/ormqr/kernels/ormqr_cta.cc")
+            BATCHLAS_ORMQR_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/ormqr/kernels/ormqr_cta.cc"
+            BATCHLAS_ORMQR_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/device/lapack/ormqr.hh")
     endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE

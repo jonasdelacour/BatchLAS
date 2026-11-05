@@ -1789,66 +1789,74 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
 // work-group barrier in a partition kernel is a RACE that stays green, and a work-group
 // reduce_over_group adds static shared whose cost lands on a NEIGHBOURING kernel's cold
 // first launch. Comments are stripped before matching, so this prose does not match itself.
-#ifdef BATCHLAS_GEQRF_TINY_CC_PATH
+// The kernel is a thin launcher (geqrf_tiny.cc); its body is device::geqrf<tier::Reg<N>>'s
+// geqrf_detail::geqrf_reg_body in include/batchlas/device/lapack/geqrf.hh, so each check reads
+// both: the launcher's lambda and the body function.
+#if defined(BATCHLAS_GEQRF_TINY_CC_PATH) && defined(BATCHLAS_GEQRF_HH_PATH)
 namespace {
 
-std::string FirstLineContaining(const std::string& path, const char* token) {
-    std::FILE* f = std::fopen(path.c_str(), "r");
-    if (!f) return std::string("<could not open ") + path + ">";
-    char line[8192];
-    std::string found;
-    while (std::fgets(line, sizeof(line), f)) {
-        const std::string text(line);
-        const size_t comment = text.find("//");
-        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
-        if (code.find(token) != std::string::npos) { found = text; break; }
-    }
-    std::fclose(f);
-    return found;
+constexpr const char* kTinyLambda = "parallel_for<GeqrfTinyKernel";
+constexpr const char* kTinyBody = "void geqrf_reg_body(";
+
+std::string CodeOf(const std::string& text) {
+    const size_t comment = text.find("//");
+    return comment == std::string::npos ? text : text.substr(0, comment);
 }
 
 }  // namespace
 
-// The kernel body's text between the parallel_for and its closing brace. Returned as a
-// vector of (line number, code) with comments stripped, so a scan can ask structural
-// questions about the region a source check actually cares about.
+// The region opened by the first code line containing open_token, through the brace that closes
+// the first brace opened at or after it: a kernel lambda or a function body. Returned as (line
+// number, code) with comments stripped, so a scan can ask structural questions about exactly
+// the region a source check cares about.
 std::vector<std::pair<int, std::string>> KernelBodyLines(const std::string& path,
                                                          const char* open_token) {
     std::vector<std::pair<int, std::string>> out;
     std::FILE* f = std::fopen(path.c_str(), "r");
     if (!f) return out;
     char line[8192];
-    int no = 0;
-    bool inside = false;
+    int no = 0, depth = 0;
+    bool inside = false, opened = false;
     while (std::fgets(line, sizeof(line), f)) {
         ++no;
-        const std::string text(line);
-        const size_t comment = text.find("//");
-        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        const std::string code = CodeOf(line);
         if (!inside) {
-            if (code.find(open_token) != std::string::npos) inside = true;
-            continue;
+            if (code.find(open_token) == std::string::npos) continue;
+            inside = true;
         }
-        if (code.find("});") != std::string::npos) break;
         out.emplace_back(no, code);
+        for (const char c : code) {
+            if (c == '{') ++depth, opened = true;
+            if (c == '}') --depth;
+        }
+        if (opened && depth <= 0) break;
     }
     std::fclose(f);
     return out;
 }
 
-// T8b. NO EARLY RETURN in the kernel body, checked in the SOURCE because the behavioural
+// Both regions, launcher lambda first; empty when either cannot be located.
+std::vector<std::pair<int, std::string>> TinyRegions() {
+    auto lambda = KernelBodyLines(BATCHLAS_GEQRF_TINY_CC_PATH, kTinyLambda);
+    const auto body = KernelBodyLines(BATCHLAS_GEQRF_HH_PATH, kTinyBody);
+    if (lambda.empty() || body.empty()) return {};
+    lambda.insert(lambda.end(), body.begin(), body.end());
+    return lambda;
+}
+
+// T8b. NO EARLY RETURN in the kernel or its body, checked in the SOURCE because the behavioural
 // guard does not work: the break was planted and the whole suite stayed green. The idiom is
 // undefined (a sub-group barrier reached by only part of a sub-group) but this toolchain
 // tolerates it on sm_89, so no numerical test on this box can see it.
 // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
 TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
-    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
-    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
-    ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
+    const auto body = TinyRegions();
+    ASSERT_FALSE(body.empty()) << "the kernel lambda or geqrf_reg_body could not be located in "
+                               << BATCHLAS_GEQRF_TINY_CC_PATH << " / " << BATCHLAS_GEQRF_HH_PATH
                                << "; this check would pass vacuously";
     for (const auto& [no, code] : body) {
         EXPECT_EQ(code.find("return"), std::string::npos)
-            << path << ":" << no << " returns from inside the kernel body. With several "
+            << no << ": returns from inside the tiny kernel or its body. With several "
                "matrices per sub-group a `prob >= batch` return is partition-uniform but "
                "NOT sub-group-uniform, and every group_barrier(sg) after it is then "
                "undefined: " << code;
@@ -1865,78 +1873,66 @@ TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
 // here and not ordered everywhere. Barrier the PLAIN sub-group everywhere.
 // evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
 TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
-    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
-    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
-    ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
+    const auto body = TinyRegions();
+    ASSERT_FALSE(body.empty()) << "the kernel lambda or geqrf_reg_body could not be located"
                                << "; this check would pass vacuously";
     int sg_barriers = 0;
     std::string part_barrier;
     for (const auto& entry : body) {
         const std::string& code = entry.second;
         if (code.find("group_barrier(sg)") != std::string::npos) ++sg_barriers;
-        if (code.find("group_barrier(part)") != std::string::npos) {
+        if (code.find("group_barrier(part)") != std::string::npos ||
+            code.find("group_barrier(ex.part)") != std::string::npos) {
             part_barrier = std::to_string(entry.first) + ": " + code;
         }
     }
     EXPECT_EQ(sg_barriers, 2)
-        << path << ": the reflector apply must carry EXACTLY two sycl::group_barrier(sg) "
-           "calls -- one after the elementwise product into the tile, one after the column "
-           "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
-           "is warp-uniform here; more is a barrier per chunk nobody needs.";
+        << "the reflector apply must carry EXACTLY two sycl::group_barrier(sg) calls -- one "
+           "after the elementwise product into the tile, one after the column sum into y. "
+           "Fewer is a race that stays green on sm_89 because the chunk body is warp-uniform "
+           "here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is backend-specific (include/batchlas/device/detail/sg_partition/; "
+        << "group_barrier(part) is backend-specific (include/batchlas/device/detail/sg_partition/; "
            "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
            "correct on this box and not ordered everywhere: " << part_barrier;
 }
 
-// Every barrier in the file, by SPELLING rather than by argument: the first code line
-// that names a barrier and is not the one sanctioned spelling, sycl::group_barrier(sg).
-// Matching `get_group()` alone leaves `it.barrier()` -- nd_item::barrier, a WORK-GROUP
-// barrier that names no group at all -- through the scan.
-std::string FirstUnsanctionedBarrierLine(const std::string& path) {
-    std::FILE* f = std::fopen(path.c_str(), "r");
-    if (!f) return std::string("<could not open ") + path + ">";
-    char line[8192];
-    std::string found;
-    while (std::fgets(line, sizeof(line), f)) {
-        const std::string text(line);
-        const size_t comment = text.find("//");
-        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
-        if (code.find("barrier(") == std::string::npos) continue;
-        if (code.find("group_barrier(sg)") != std::string::npos) continue;
-        found = text;
-        break;
-    }
-    std::fclose(f);
-    return found;
-}
-
 TEST(GeqrfTinySource, SynchronisesAtSubGroupScopeOnly) {
-    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
-    // POSITIVE CONTROL. Both assertions below are ABSENCES, so a path that names the
-    // wrong file -- or a scan that reads nothing -- reports the property as held. The
-    // scan must first find the one construct that IS in this kernel.
-    ASSERT_FALSE(FirstLineContaining(path, "group_barrier(sg)").empty())
-        << "the source scan found no sycl::group_barrier(sg) in " << path
-        << ": BATCHLAS_GEQRF_TINY_CC_PATH does not name the tiny tier's source, and the "
-           "absence assertions below would pass vacuously";
-    ASSERT_FALSE(FirstLineContaining(path, "parallel_for").empty())
-        << "the source scan found no parallel_for in " << path;
+    // POSITIVE CONTROL. Both assertions below are ABSENCES, so a path that names the wrong
+    // file -- or a scan that reads nothing -- reports the property as held. The scan must
+    // first find the constructs that ARE there.
+    const auto lambda = KernelBodyLines(BATCHLAS_GEQRF_TINY_CC_PATH, kTinyLambda);
+    const auto body = KernelBodyLines(BATCHLAS_GEQRF_HH_PATH, kTinyBody);
+    ASSERT_FALSE(lambda.empty()) << "no tiny kernel lambda in " << BATCHLAS_GEQRF_TINY_CC_PATH;
+    ASSERT_FALSE(body.empty()) << "no geqrf_reg_body in " << BATCHLAS_GEQRF_HH_PATH;
+    bool sg_barrier_seen = false;
+    for (const auto& entry : body) sg_barrier_seen = sg_barrier_seen || entry.second.find("group_barrier(sg)") != std::string::npos;
+    ASSERT_TRUE(sg_barrier_seen) << "the source scan found no sycl::group_barrier(sg) in geqrf_reg_body: the "
+                                    "absence assertions below would pass vacuously";
 
-    const std::string wg_barrier = FirstUnsanctionedBarrierLine(path);
+    // Every barrier by SPELLING rather than by argument: matching `get_group()` alone leaves
+    // `it.barrier()` -- nd_item::barrier, a WORK-GROUP barrier that names no group -- through.
+    std::string wg_barrier, reduce;
+    for (const auto* region : {&lambda, &body}) {
+        for (const auto& [no, code] : *region) {
+            if (wg_barrier.empty() && code.find("barrier(") != std::string::npos &&
+                code.find("group_barrier(sg)") == std::string::npos)
+                wg_barrier = std::to_string(no) + ": " + code;
+            if (reduce.empty() && code.find("reduce_over_group") != std::string::npos)
+                reduce = std::to_string(no) + ": " + code;
+        }
+    }
     EXPECT_TRUE(wg_barrier.empty())
-        << "geqrf_tiny.cc carries a barrier that is not sycl::group_barrier(sg) -- a "
-           "work-group barrier (including the argument-free it.barrier()) makes the "
-           "matrices sharing a work-group synchronise with each other, which is a race "
-           "and not a launch failure; group_barrier(part) is a no-op off NVPTX: "
-        << wg_barrier;
-    const std::string reduce = FirstLineContaining(path, "reduce_over_group");
+        << "the tiny kernel or its body carries a barrier that is not sycl::group_barrier(sg) -- a "
+           "work-group barrier (including the argument-free it.barrier()) makes the matrices "
+           "sharing a work-group synchronise with each other, which is a race and not a launch "
+           "failure; group_barrier(part) is a no-op off NVPTX: " << wg_barrier;
     EXPECT_TRUE(reduce.empty())
-        << "geqrf_tiny.cc calls reduce_over_group; over a work-group it emits static "
-           "shared, and the shared-memory attribute is sticky per CUfunction, so the cost "
-           "lands on whichever kernel launches cold: " << reduce;
+        << "the tiny kernel or its body calls reduce_over_group; over a work-group it emits static "
+           "shared, and the shared-memory attribute is sticky per CUfunction, so the cost lands "
+           "on whichever kernel launches cold: " << reduce;
 }
-#endif  // BATCHLAS_GEQRF_TINY_CC_PATH
+#endif  // BATCHLAS_GEQRF_TINY_CC_PATH && BATCHLAS_GEQRF_HH_PATH
 
 // ===========================================================================================
 // P5. THE REGISTER PANEL LEAF. One panel ROW per work-item, the m x N panel in registers.

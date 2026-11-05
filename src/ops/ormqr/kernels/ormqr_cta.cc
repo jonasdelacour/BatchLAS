@@ -12,6 +12,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/ormqr.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -30,21 +31,6 @@ namespace batchlas {
 // Small-matrix CTA ORMQR/ORMQL/UNMQR/UNMQL: apply the implicit Q of a GEQRF/GEQLF
 // factorization (A, TAU) to C. Very small sizes only (n <= 32), square C (SYEVD's
 // tridiagonal eigenvector post-processing). Order/storage match LAPACK's ORMQx/UNMQx.
-
-namespace detail {
-
-// sycl::vec<std::complex> does not compile on AdaptiveCpp; complex never takes the
-// vector path (vec_ok is false), so it only needs a type that compiles.
-template <typename T, int N>
-struct PlainVec {
-    T v[N];
-    T& operator[](int i) { return v[i]; }
-    const T& operator[](int i) const { return v[i]; }
-};
-template <typename T, int N>
-using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
-
-} // namespace detail
 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
@@ -141,8 +127,6 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
-                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
-
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
@@ -153,128 +137,20 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const int32_t pid = live ? prob_id : 0;
 
+                // First uses in the inline body's order (views, n, vec_ok, k, V_local): [=]
+                // orders the kernel arguments by them.
                 auto A_prob = A_view.batch_item(pid);
                 auto TAU_prob = TAU_view.batch_item(pid);
                 auto C_prob = C_view.batch_item(pid);
+                const int32_t order = n;
+                const bool vec = vec_ok;
+                const int32_t nref = k;
                 const int32_t base_v = part_id * static_cast<int32_t>(P);
 
-                const bool active_col = live && (lane < n);
-                const int32_t j = lane;
-
-                // Register column buffer for column j.
-                //
-                // Every index into `C_col` below is a compile-time constant so that the
-                // array really is promoted to registers.  Indexing it with a runtime
-                // value (the reflector support `offset + r`, or a bound of `n`) forces
-                // the whole array into local memory, and the reflector loop then pays a
-                // dependent L1/global round trip for each of its ~n^2 accesses.
-                v2::Frag<T, static_cast<int>(P), v2::ColPerLane> C_col;
-BATCHLAS_UNROLL_FULL
-                for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                    C_col[r] = T(0);
-                }
-                if (vec_ok && active_col) {
-                    using VecT = detail::ColVec<T, VW>;
-                    auto* col_ptr = reinterpret_cast<const VecT*>(&C_prob(0, j));
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
-                        if (r < n) {
-                            const VecT v = col_ptr[r / VW];
-BATCHLAS_UNROLL_FULL
-                            for (int32_t t = 0; t < VW; ++t) {
-                                C_col[r + t] = v[t];
-                            }
-                        }
-                    }
-                } else if (active_col) {
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        if (r < n) {
-                            C_col[r] = C_prob(r, j);
-                        }
-                    }
-                }
-
-                // Determine reflector application order.
-                //
-                // QR (DORMQR/ZUNMQR): Q = H(1) H(2) ... H(k)
-                //   LEFT:  C := Q*C      => apply H(k) ... H(1)
-                //          C := Q^T/H*C  => apply H(1) ... H(k)
-                //   RIGHT: C := C*Q      => apply H(1) ... H(k)
-                //          C := C*Q^T/H  => apply H(k) ... H(1)
-                //
-                // QL (DORMQL/ZUNMQL): Q = H(k) ... H(2) H(1)
-                //   LEFT:  C := Q*C      => apply H(1) ... H(k)
-                //          C := Q^T/H*C  => apply H(k) ... H(1)
-                //   RIGHT: C := C*Q      => apply H(k) ... H(1)
-                //          C := C*Q^T/H  => apply H(1) ... H(k)
-                //
-                // Compactly: descending = (left XOR QL) ? !transpose_or_conj : transpose_or_conj.
-                const bool descending = (Left ^ QL) ? (!TransposeOrConj) : TransposeOrConj;
-
-                const int32_t i0 = descending ? (k - 1) : 0;
-                const int32_t i1 = descending ? -1 : k;
-                const int32_t step = descending ? -1 : 1;
-
-                using Ar = v2::arith_t<v2::arith::Native, T>;  // strict port: the hand loop's arithmetic
-                using VLocal = v2::Vec<T, v2::Ext<static_cast<int>(P)>, v2::Unit, v2::Mem::Local, v2::Cyclic,
-                                       sycl::local_accessor<T, 1>>;
-
-                for (int32_t ii = i0; ii != i1; ii += step) {
-                    const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
-                    const T tau_eff = TransposeOrConj ? Ar::conj(tau_i) : tau_i;
-
-                    // Stage the reflector indexed by *absolute row*, explicitly zeroed
-                    // outside its support.  The rank-1 update can then run over the
-                    // full compile-time row range with no predication and, crucially,
-                    // with constant `C_col` subscripts.
-                    if constexpr (!QL) {
-                        // QR: reflector ii is stored in column ii with v(ii) == 1 and
-                        // v(0:ii-1) == 0; its support ends at row n-1.
-                        const bool in_support = live && (lane >= ii) && (lane < n);
-                        V_local[base_v + lane] =
-                            !in_support ? T(0) : ((lane == ii) ? T(1) : A_prob(lane, ii));
-                    } else {
-                        // QL: reflector ii is H(ii+1); with m == n the pivot row is
-                        // (n-k)+ii, v(pivot) == 1 and v(pivot+1:) == 0.
-                        const int32_t col = (n - k) + ii;
-                        const int32_t pivot = (n - k) + ii;
-                        const bool in_support = live && (lane <= pivot) && (lane < n);
-                        V_local[base_v + lane] =
-                            !in_support ? T(0) : ((lane == pivot) ? T(1) : A_prob(lane, col));
-                    }
-
-                    group_barrier(part);
-                    // vh(r) == V_local[base_v + r], formed here as the hand loop's address was (hoisted
-                    // above the loop it holds one more register: complex P = 32 spilled 8 B more).
-                    const auto vh = v2::assume_published(VLocal{V_local, {}, {}, base_v});
-                    if (active_col && tau_eff != T(0)) v2::larf<Side::Left, v2::arith::Native>(C_col, vh, tau_eff);  // C(:, j) := H C(:, j)
-                    // Ensure all lanes have finished consuming v before overwrite.
-                    group_barrier(part);
-                }
-
-                if (vec_ok && active_col) {
-                    using VecT = detail::ColVec<T, VW>;
-                    auto* col_ptr = reinterpret_cast<VecT*>(&C_prob(0, j));
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
-                        if (r < n) {
-                            VecT v{};
-BATCHLAS_UNROLL_FULL
-                            for (int32_t t = 0; t < VW; ++t) {
-                                v[t] = C_col[r + t];
-                            }
-                            col_ptr[r / VW] = v;
-                        }
-                    }
-                } else if (active_col) {
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        if (r < n) {
-                            C_prob(r, j) = C_col[r];
-                        }
-                    }
-                }
+                // The body is device::ormqr's Left form (lapack/ormqr.hh), on the hand loop's
+                // arithmetic (strict port).
+                v2::ormqr_detail::orm2x_left<static_cast<int>(P), QL, TransposeOrConj, v2::arith::Native>(
+                    v2::wrap(part), A_prob, TAU_prob, C_prob, V_local, base_v, order, nref, live, vec);
             });
         } else {
             // Per problem: the P x P tile of C (column-major) and v. Lane r owns row r: no work vector.
@@ -291,8 +167,6 @@ BATCHLAS_UNROLL_FULL
                     const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
-                    const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
-
                     const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
@@ -300,91 +174,21 @@ BATCHLAS_UNROLL_FULL
                     bool live = prob_id < static_cast<int32_t>(batch_size);
                     if constexpr (Masked) live = live && mask[prob_id] != 0;
                     const int32_t pid = live ? prob_id : 0;
-                    const bool row_live = live && (lane < n);
+                    // First uses in the inline body's order (n, views, C_local, k, V_local).
+                    const int32_t order = n;
 
                     auto A_prob = A_view.batch_item(pid);
                     auto TAU_prob = TAU_view.batch_item(pid);
                     auto C_prob = C_view.batch_item(pid);
+                    const auto& c_tile = C_local;
+                    const int32_t nref = k;
 
                     const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
 
-                    const int32_t P_i = static_cast<int32_t>(P);
-
-                    // Load C into local memory (column-major).
-                    if (row_live) {
-                        for (int32_t col = 0; col < n; ++col) {
-                            C_local[base_c + lane + col * P_i] = C_prob(lane, col);
-                        }
-                        for (int32_t col = n; col < P_i; ++col) {
-                            C_local[base_c + lane + col * P_i] = T(0);
-                        }
-                    } else {
-                        for (int32_t col = 0; col < P_i; ++col) {
-                            C_local[base_c + lane + col * P_i] = T(0);
-                        }
-                    }
-                    group_barrier(part);
-
-                    const bool descending = (Left ^ QL) ? (!TransposeOrConj) : TransposeOrConj;
-
-                    const int32_t i0 = descending ? (k - 1) : 0;
-                    const int32_t i1 = descending ? -1 : k;
-                    const int32_t step = descending ? -1 : 1;
-
-                    for (int32_t ii = i0; ii != i1; ii += step) {
-                        const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
-
-                        // Build v and compute (offset,len) for this reflector.
-                        int32_t offset = 0;
-                        int32_t len = 0;
-
-                        if constexpr (!QL) {
-                            // QR: reflector ii stored in column ii, v has leading zeros of length ii.
-                            offset = ii;
-                            len = n - ii;
-
-                            if (lane < len) {
-                                const int32_t row = offset + lane;
-                                const int32_t col = ii;
-                                V_local[base_v + lane] = (lane == 0) ? T(1) : (live ? A_prob(row, col) : T(0));
-                            } else {
-                                V_local[base_v + lane] = T(0);
-                            }
-                        } else {
-                            // QL: reflector ii is H(ii+1), stored in last k columns.
-                            // From LAPACK DGEQLF/ZGEQLF: v(pivot) = 1, v(pivot+1:m)=0, and v(0:pivot-1)
-                            // stored in A(0:pivot-1, n-k+ii).
-                            const int32_t col = (n - k) + ii;
-                            const int32_t pivot = (n - k) + ii; // since m=n in our current restriction
-                            offset = 0;
-                            len = pivot + 1;
-
-                            if (lane < len) {
-                                const int32_t row = lane;
-                                V_local[base_v + lane] = (row == pivot) ? T(1) : (live ? A_prob(row, col) : T(0));
-                            } else {
-                                V_local[base_v + lane] = T(0);
-                            }
-                        }
-
-                        group_barrier(part);
-
-                        // C(lane, offset:) H on the lane's own row (algo port); a predicate, never a return.
-                        const T tau_eff = TransposeOrConj ? v2::Arith<T>::conj(tau_i) : tau_i;
-                        if (lane < n && !(tau_eff == T(0) || len <= 0))
-                            v2::larf<Side::Right>(v2::Thread{}, tau_eff, v2::assume_published(v2::vec(V_local, len, base_v)),
-                                                  v2::mat(C_local, 1, len, P_i, base_c + lane + offset * P_i));
-
-                        group_barrier(part);
-                    }
-
-                    // Write back C.
-                    if (row_live) {
-                        for (int32_t col = 0; col < n; ++col) {
-                            C_prob(lane, col) = C_local[base_c + lane + col * P_i];
-                        }
-                    }
+                    // The body is device::ormqr's Right form (lapack/ormqr.hh).
+                    v2::ormqr_detail::orm2x_right<static_cast<int>(P), QL, TransposeOrConj>(
+                        v2::wrap(part), A_prob, TAU_prob, C_prob, c_tile, base_c, V_local, base_v, order, nref, live);
                 });
         }
     });

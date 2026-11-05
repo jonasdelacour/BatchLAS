@@ -136,59 +136,37 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
-                int b, slot, tid, lwg;
+                int b, slot;
                 if constexpr (SC == gn::GeqrfScope::SubGroup) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
                     b = wg_id * G + sg_id;
                     slot = sg_id;
-                    tid = static_cast<int>(sg.get_local_linear_id());
-                    lwg = static_cast<int>(sg.get_local_linear_range());
                     // Sub-group-uniform, and this scope executes only sub-group barriers: an
                     // inactive item (one per sub-group) returns as a tail sub-group does.
                     if (b >= batch || (mask != nullptr && mask[b] == 0)) return;
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;
-                    tid = static_cast<int>(it.get_local_linear_id());
-                    lwg = static_cast<int>(it.get_local_range(0));
                     if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group
-                }
-
-                D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
-                                               static_cast<std::ptrdiff_t>(tile_elems);
-                D* const src = ap + static_cast<std::ptrdiff_t>(b) * stride;
-
-                for (std::size_t e = static_cast<std::size_t>(tid); e < tile_elems;
-                     e += static_cast<std::size_t>(lwg)) {
-                    const int r = static_cast<int>(e % static_cast<std::size_t>(m));
-                    const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-                    mine[e] = src[static_cast<std::ptrdiff_t>(r) +
-                                  static_cast<std::ptrdiff_t>(c) * ld];
-                }
-                if constexpr (SC == gn::GeqrfScope::SubGroup) {
-                    sycl::group_barrier(sg);                  // B0
-                } else {
-                    sycl::group_barrier(it.get_group());      // B0
                 }
 
                 // Raw-pointer tile: G panels share one local_accessor, so each needs its own
                 // base; ld unpadded.
-                using Ex = v2::RtGroup<SC == gn::GeqrfScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group>;
-                v2::geqr2(Ex{it}, v2::mat_wide(mine, m, n, m), kmax,
-                          tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
+                D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
+                                               static_cast<std::ptrdiff_t>(tile_elems);
+                D* const src = ap + static_cast<std::ptrdiff_t>(b) * stride;
+                // First uses in the inline body's order (m, ld, n, kmax, tp, ...): [=] orders
+                // the kernel arguments by them.
+                const int rows = m;
+                const int lda = ld;
+                const int cols = n;
+                const int kk = kmax;
+                D* const tau_b = tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset;
 
-                if constexpr (SC == gn::GeqrfScope::SubGroup) {
-                    sycl::group_barrier(sg);                  // B4
-                } else {
-                    sycl::group_barrier(it.get_group());      // B4
-                }
-                for (std::size_t e = static_cast<std::size_t>(tid); e < tile_elems;
-                     e += static_cast<std::size_t>(lwg)) {
-                    const int r = static_cast<int>(e % static_cast<std::size_t>(m));
-                    const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-                    src[static_cast<std::ptrdiff_t>(r) +
-                        static_cast<std::ptrdiff_t>(c) * ld] = mine[e];
-                }
+                // The body is device::geqrf<tier::Cta<N>>'s (lapack/geqrf.hh), with kmax and the
+                // tile size folded on the host.
+                using Ex = v2::RtGroup<SC == gn::GeqrfScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group>;
+                v2::geqrf_detail::geqrf_cta_body(Ex{it}, v2::mat_wide(src, rows, cols, lda), tau_b, mine, kk, tile_elems);
             });
     });
     return ctx.get_event();

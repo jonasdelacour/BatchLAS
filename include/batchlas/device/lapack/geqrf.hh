@@ -267,4 +267,254 @@ BATCHLAS_DLA_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int
     geqrf_detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
 }
 
+// ==== public geqrf (v22 design C.2-C.7) ======================================================
+namespace routine {
+struct geqrf {
+    static constexpr const char* name = "geqrf";
+};
+}  // namespace routine
+
+namespace geqrf_detail {
+
+// Reg<N>, per matrix: an N x (C + 1) tile and a SEPARATE C-element y (why two barriers per chunk
+// suffice). evidence: docs/perf/qr.md#the-two-partition-butterflies
+template <class D, int N, int C> struct RegPlan {
+    ws::Slot<D> tile{};
+    ws::Slot<D> y{};
+    WorkspaceSize size{};
+    constexpr RegPlan() {
+        Plan p;
+        tile = p.take<D>(ws::Space::Local, static_cast<std::size_t>(N) * static_cast<std::size_t>(C + 1));
+        y = p.take<D>(ws::Space::Local, static_cast<std::size_t>(C));
+        size = p.size();
+    }
+};
+
+// Cta<N>: m * n scalars unpadded, stepped over the CUDA launch hole (47104, 49664].
+// evidence: docs/perf/qr.md#the-48-kib-launch-hole
+inline constexpr std::size_t kCtaHoleLo = 47104;
+inline constexpr std::size_t kCtaHoleHi = 49664;
+inline constexpr std::size_t kCtaHolePadTo = 49920;
+constexpr std::size_t cta_hole_padded(std::size_t bytes) {
+    return (bytes > kCtaHoleLo && bytes <= kCtaHoleHi) ? kCtaHolePadTo : bytes;
+}
+template <class D> constexpr WorkspaceSize cta_size(int m, int n) {
+    Plan p;
+    p.take<D>(ws::Space::Local, static_cast<std::size_t>(m) * static_cast<std::size_t>(n));
+    WorkspaceSize s = p.size();
+    s.local_bytes = cta_hole_padded(s.local_bytes);
+    return s;
+}
+// The Cta launch width: 32 * teams, teams = min(8, pow2 >= n) (teams track columns, lanes rows).
+constexpr int cta_wg(int n) {
+    int teams = 1;
+    while (teams < 8 && teams < n) teams *= 2;
+    return teams * 32;
+}
+
+// Row r := identity row r (so the unrolled body needs no lane guard), then A(r, 0:n) where
+// row_live. Plain inline, as tiny_device.hh's helpers; `select`, never a complex `?:`.
+template <class D, int N, class MA> BATCHLAS_DLA_HELPER void reg_load_rows(D* rA, const MA& a, int lane, int n, bool row_live) {
+    BATCHLAS_UNROLL_FULL
+    for (int c = 0; c < N; ++c) rA[c] = select(c == lane, Arith<D>::one(), D{});
+    BATCHLAS_UNROLL_FULL
+    for (int c = 0; c < N; ++c) {
+        if (row_live && c < n) rA[c] = a(lane, c);
+    }
+}
+template <class D, int N, class MA> BATCHLAS_DLA_HELPER void reg_store_rows(const D* rA, const MA& a, int lane, int n, bool row_live) {
+    BATCHLAS_UNROLL_FULL
+    for (int c = 0; c < N; ++c) {
+        if (row_live && c < n) a(lane, c) = rA[c];
+    }
+}
+
+// The Reg<N> body (xGEQR2 in registers), the trailing update by C-column chunks with exactly two
+// sub-group barriers each. NO EARLY RETURN: a dead partition carries the identity, stores nothing.
+// evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
+template <int N, int C, class Ex, class MA, class VT, class D>
+BATCHLAS_DLA_INLINE void geqrf_reg_body(const Ex& ex, const MA& a, const VT& tau, D* sP, D* sy, bool live) {
+    using R = real_t<D>;
+    using Ar = Arith<D>;
+    using Fa = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
+    constexpr int SLDA = C + 1;
+    static_assert(N == 8 || N == 16 || N == 32, "geqrf Reg<N>: N divides the 32-lane sub-group");
+    static_assert(C >= 1 && C <= N, "geqrf Reg<N>: the chunk width C is in [1, N]");
+    const sycl::sub_group sg = ex.sub();
+    const int lane = ex.lid();
+    const int n = a.cols();
+    const bool row_live = live && lane < n;
+
+    D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
+    reg_load_rows<D, N>(rA, a, lane, n, row_live);
+
+    D my_tau = D{};  // one register, stored once N-wide rather than N times
+
+    // unroll(FULL) on every loop indexing rA. evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
+#pragma clang loop unroll(full)
+    for (int j = 0; j < N; ++j) {
+        if (j >= n) continue;  // n is batch-uniform: the barrier sequence is uniform
+
+        const D alpha = ex.bcast(rA[j], static_cast<uint32_t>(j));
+
+        // Order-symmetric, so every lane leaves with a BIT-IDENTICAL smax and ssq. Widening
+        // either leaks across partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
+        R smax = (lane >= j) ? abs_inf(rA[j]) : R(0);
+        smax = detail::butterfly<N, bfly::Asc>(ex.part, smax, op::FMax());
+
+        R ssq = R(0);
+        if (lane > j && smax > R(0)) ssq = abs2_scaled(rA[j], smax);
+        ssq = detail::butterfly<N, bfly::Asc>(ex.part, ssq, sycl::plus<R>());
+
+        const ScaledSsq<R> nrm{smax, ssq};
+        const LarfgScalars<D> hh = larfg_scalars<conv::Lapack>(alpha, nrm);
+
+        // NO `if (hh.identity) continue;`: inert arithmetically; keeps the barriers uniform.
+        if (lane == j) {
+            rA[j] = hh.beta;
+            my_tau = hh.tau;
+        } else if (lane > j) {
+            rA[j] = hh.use_mul ? Fa::mul(rA[j], hh.scale) : Fa::div(rA[j], hh.scale);
+        }
+
+        // One select drives the apply: it zeroes eliminated rows (dropping `lane < j` lets them
+        // re-enter the reflector) and supplies the implicit v(j) = 1.
+        const D vr = (lane < j) ? D{} : ((lane == j) ? Ar::one() : rA[j]);
+        const D cvr = Ar::conj(vr);
+        // CONJ(tau), zgeqr2's convention. evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
+        const D ctau = Ar::conj(hh.tau);
+
+        // larf by C-column chunks; the column sums run in ROW order (LAPACK's).
+#pragma clang loop unroll(full)
+        for (int k0 = 0; k0 < N; k0 += C) {
+            if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
+            if (k0 >= n) continue;          // wholly past the runtime cap
+            frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
+            sycl::group_barrier(sg);
+            colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
+            sycl::group_barrier(sg);
+            // The two barriers cover all three hazards ONLY because sy is a separate array.
+            // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
+            frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+        }
+        // No barrier between columns: rA[j+1] is register-private.
+    }
+
+    reg_store_rows<D, N>(rA, a, lane, n, row_live);
+    if (row_live) tau(lane) = my_tau;
+}
+
+// The executor's own barrier at its scope, in the spelling the panel kernels use.
+template <class Ex> BATCHLAS_DLA_INLINE void cta_sync(const Ex& ex) {
+    if constexpr (Ex::sub_whole) sycl::group_barrier(ex.sub());
+    else sycl::group_barrier(ex.it.get_group());
+}
+
+// The Cta<N> body: A (m x n, any memory) copied into `tile` (m * n scalars, ld = m), geqr2 there,
+// copied back. kmax = min(m, n) and elems = m * n are the caller's (a host launcher folds them).
+template <class Ex, class MA, class D>
+BATCHLAS_DLA_INLINE void geqrf_cta_body(const Ex& ex, const MA& a, D* tau, D* tile, int kmax, std::size_t elems) {
+    const int m = a.rows(), n = a.cols();
+    const int tid = ex.lid();
+    const int lwg = ex.width();
+    for (std::size_t e = static_cast<std::size_t>(tid); e < elems; e += static_cast<std::size_t>(lwg)) {
+        const int r = static_cast<int>(e % static_cast<std::size_t>(m));
+        const int c = static_cast<int>(e / static_cast<std::size_t>(m));
+        tile[e] = a(r, c);
+    }
+    cta_sync(ex);  // B0
+    geqr2(ex, mat_wide(tile, m, n, m), kmax, tau);
+    cta_sync(ex);  // B4
+    for (std::size_t e = static_cast<std::size_t>(tid); e < elems; e += static_cast<std::size_t>(lwg)) {
+        const int r = static_cast<int>(e % static_cast<std::size_t>(m));
+        const int c = static_cast<int>(e / static_cast<std::size_t>(m));
+        a(r, c) = tile[e];
+    }
+}
+
+template <class Tier> inline constexpr bool is_reg_v = false;
+template <int N, bool E> inline constexpr bool is_reg_v<tier::Reg<N, E>> = true;
+template <class Tier> inline constexpr bool is_cta_v = false;
+template <int N, class Alg> inline constexpr bool is_cta_v<tier::Cta<N, Alg>> = true;
+
+template <class D> BATCHLAS_DLA_INLINE D* local_base(const Workspace& w, std::size_t offset) {
+    return reinterpret_cast<D*>(w.local.get_raw() + offset);
+}
+
+}  // namespace geqrf_detail
+
+/// @brief Local and global bytes one m x n matrix needs for geqrf() at this tier (host and device).
+/// @tparam Tier tier::Reg<N> or tier::Cta<N>
+/// @tparam T    the scalar the op runs on
+/// @tparam C    Reg's chunk width (default N; the factors do not depend on it)
+/// @param m, n  the matrix extents (Reg: square, unused)
+/// @return the WorkspaceSize the op carves (the same plan the op uses)
+template <class Tier, class T, int C = Tier::n_max> constexpr WorkspaceSize geqrf_buffer_size(int m, int n) {
+    if constexpr (geqrf_detail::is_reg_v<Tier>) {
+        static_cast<void>(m);
+        static_cast<void>(n);
+        return geqrf_detail::RegPlan<T, Tier::n_max, C>{}.size;
+    } else {
+        static_assert(geqrf_detail::is_cta_v<Tier>, "geqrf: tiers are Reg<N> and Cta<N>");
+        return geqrf_detail::cta_size<T>(m, n);
+    }
+}
+template <class Tier, class T, int C = Tier::n_max> constexpr WorkspaceSize geqrf_buffer_size(int n) {
+    return geqrf_buffer_size<Tier, T, C>(n, n);
+}
+
+/// @brief xGEQRF inside a kernel: A = Q R, R in the upper triangle, Q's reflectors below it.
+/// @tparam Tier tier::Reg<N> (N in {8, 16, 32}; square n <= N; ex = SgpPartition<N>, one matrix
+///              per N-lane partition, lane r owns row r) or tier::Cta<N> (m, n <= N, A held in
+///              local memory; ex = RtGroup<Scope::Group> or RtGroup<Scope::Sub>)
+/// @param ex    the executor; COLLECTIVE: every item calls with the same arguments (Reg: every
+///              lane of the sub-group)
+/// @param A     the matrix operand (Mat, mat_wide, item(view, b)), overwritten
+/// @param tau   tau(0:min(m, n)) receives the reflector scalars (zgeqr2's convention); Cta: a
+///              unit-stride Vec
+/// @param ws    this matrix's slice, geqrf_buffer_size<Tier, T>(m, n) bytes
+/// @param live  Reg only: false for a partition with no matrix (it runs every collective on the
+///              identity and touches no memory)
+/// @return 0 (geqrf has no info; with_tier and tier_info::admits check the arguments on the host)
+template <class Tier, int C = Tier::n_max, class Ex, class MA, class VT>
+BATCHLAS_DLA_INLINE int geqrf(const Ex& ex, const MA& A, const VT& tau, const Workspace& ws, bool live = true) {
+    using D = typename MA::value_type;
+    if constexpr (geqrf_detail::is_reg_v<Tier>) {
+        constexpr int N = Tier::n_max;
+        static_assert(Ex::size == N && Ex::sub_whole, "geqrf Reg<N>: ex is an N-lane Partition (SgpPartition<N>)");
+        constexpr geqrf_detail::RegPlan<D, N, C> plan{};
+        geqrf_detail::geqrf_reg_body<N, C>(ex, A, tau, geqrf_detail::local_base<D>(ws, plan.tile.offset),
+                                           geqrf_detail::local_base<D>(ws, plan.y.offset), live);
+    } else {
+        static_assert(geqrf_detail::is_cta_v<Tier>, "geqrf: tiers are Reg<N> and Cta<N>");
+        static_assert(is_runtime_v<Ex>, "geqrf Cta<N>: ex is an RtGroup<Scope::Group> or RtGroup<Scope::Sub>");
+        static_assert(std::is_same_v<std::remove_cv_t<decltype(VT::inc)>, Unit>, "geqrf Cta<N>: tau is a unit-stride Vec");
+        static_cast<void>(live);
+        const int m = A.rows(), n = A.cols();
+        geqrf_detail::geqrf_cta_body(ex, A, &tau(0), geqrf_detail::local_base<D>(ws, 0), m < n ? m : n,
+                                     static_cast<std::size_t>(m) * static_cast<std::size_t>(n));
+    }
+    return 0;
+}
+
+// No Reg<32> for complex<double>: evidence: docs/perf/qr.md#the-cdouble-n32-cell
+template <class T> struct tiers<routine::geqrf, T> {
+    using type = std::conditional_t<std::is_same_v<real_t<T>, double> && Arith<T>::is_complex,
+                                    tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<128>>,
+                                    tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<128>>>;
+};
+template <int N, class T> struct tier_info<routine::geqrf, tier::Reg<N>, T> {
+    static constexpr int wg_size = 32, sg_size = 32;  // 32 / N matrices per sub-group
+    static constexpr bool admits(int n) { return n >= 1 && n <= N; }
+    static constexpr bool admits(int m, int n) { return m == n && admits(n); }
+    static constexpr WorkspaceSize buffer_size(int n) { return geqrf_buffer_size<tier::Reg<N>, T>(n); }
+};
+template <int N, class Alg, class T> struct tier_info<routine::geqrf, tier::Cta<N, Alg>, T> {
+    static constexpr int wg_size = geqrf_detail::cta_wg(N), sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 1 && n <= N; }
+    static constexpr bool admits(int m, int n) { return m >= 1 && admits(n) && m <= N; }
+    static constexpr WorkspaceSize buffer_size(int n) { return geqrf_buffer_size<tier::Cta<N, Alg>, T>(n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return geqrf_buffer_size<tier::Cta<N, Alg>, T>(m, n); }
+};
+
 }  // namespace batchlas::device

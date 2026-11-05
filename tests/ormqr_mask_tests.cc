@@ -284,4 +284,33 @@ TEST(OrmqxCtaSource, NoReturnBeforeAPartitionBarrier) {
 }
 #endif  // BATCHLAS_ORMQR_CTA_CC_PATH
 
+#ifdef BATCHLAS_ORMQR_HH_PATH
+// The kernels' bodies (device::ormqr's orm2x_left / orm2x_right, lapack/ormqr.hh) carry the
+// partition barriers: no `return` at all from the first body to the end of the second (the
+// public ormqr's `return 0;` follows them), and each body reaches its barriers (positive control).
+TEST(OrmqxCtaSource, DeviceBodiesNeverReturn) {
+    const std::string path = BATCHLAS_ORMQR_HH_PATH;
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    ASSERT_NE(f, nullptr) << path;
+    const std::regex any_return(R"(\breturn\b)");
+    char line[8192];
+    int bodies = 0, barriers = 0;
+    bool inside = false;
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const std::size_t cut = text.find("//");
+        const std::string code = cut == std::string::npos ? text : text.substr(0, cut);
+        if (code.find("void orm2x_left(") != std::string::npos || code.find("void orm2x_right(") != std::string::npos)
+            inside = true, ++bodies;
+        if (inside && code.find("struct CtaPlan") != std::string::npos) inside = false;
+        if (!inside) continue;
+        if (code.find("group_barrier(ex.part)") != std::string::npos) ++barriers;
+        EXPECT_FALSE(std::regex_search(code, any_return)) << "a return inside an orm2x body: " << text;
+    }
+    std::fclose(f);
+    EXPECT_EQ(bodies, 2) << "orm2x_left and orm2x_right were not both found in " << path;
+    EXPECT_EQ(barriers, 5) << "Left: two per reflector; Right: one after the load, two per reflector";
+}
+#endif  // BATCHLAS_ORMQR_HH_PATH
+
 }  // namespace
