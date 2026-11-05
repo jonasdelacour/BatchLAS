@@ -970,10 +970,8 @@ BATCHLAS_UNROLL_FULL
         // slab s-1 was read from, and every read of it finished before the barrier ending s-1.
         const int slabs = (k + TileK - 1) / TileK;
         if constexpr (kPipe) {
-            // As the 128x128 u4 pipeline: step s waits for slab s (own copies, then the barrier for
-            // everyone's), refills the buffer slab s - 1 was read from and computes. One commit per
-            // step, empty past the end, keeps the wait count at Stages - 2. Each operand pointer
-            // bumps one slab per issue; the buffer index is runtime (an unrolled ring is Stages x the code).
+            // As the 128x128 u4 pipeline (l3::kloop_async_ring); each operand pointer bumps one
+            // slab per issue, so issue runs in slab order.
             std::uint32_t sa_l = 0, sb_l = 0;
 #if BATCHLAS_GEMM_CP_ASYNC
             asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sa_l) : "l"(sa));
@@ -993,23 +991,7 @@ BATCHLAS_UNROLL_FULL
                 ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
                 gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
             };
-BATCHLAS_UNROLL_FULL
-            for (int j = 0; j < Stages - 1; ++j) {
-                if (j < slabs) issue(j * TileK, j);
-                copy_async_commit();
-            }
-            int buf = 0;
-#pragma unroll 1
-            for (int s = 0; s < slabs; ++s) {
-                copy_async_wait<Stages - 2>();
-                item.barrier(sycl::access::fence_space::local_space);
-                const int nb = buf == 0 ? Stages - 1 : buf - 1;
-                if (s + Stages - 1 < slabs) issue((s + Stages - 1) * TileK, nb);
-                copy_async_commit();
-                compute(buf);
-                buf = buf + 1 == Stages ? 0 : buf + 1;
-            }
-            copy_async_wait<0>();
+            gc::kloop_async_ring<Stages, TileK>(v2::Grid2D<>{item}, slabs, 0, issue, compute);
         } else {
             // An odd slab count ends in buffer 0, with no barrier after. origin above stays the
             // first direct operator() call, so the SemaSYCL body does not move (F4).

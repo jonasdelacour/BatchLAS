@@ -5,11 +5,14 @@
 //   kloop             1-stage or 2-stage double-buffered local stages
 //   kloop_prefetch2   register-prefetched double buffer, one barrier per slab
 //   kloop_async       Stages - 1 slabs in flight through asynchronous copies
+//   kloop_async_ring  the same with a run-time ring index (the wide kernels)
 
 #include <type_traits>
 #include <utility>
 
 #include <batchlas/device/core.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/level3/copy_async.hh>
 
 namespace batchlas::device::inline v2::l3 {
 
@@ -104,6 +107,33 @@ BATCHLAS_DLA_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Com
         }(std::make_integer_sequence<int, Stages>{});
     }
     drain();
+}
+
+/// Stages - 1 slabs in flight through cp.async (copy_async.hh) into a ring whose buffer index is a
+/// run-time value (an unrolled ring is Stages x the code): issue(k0, buf) starts slab k0's copies
+/// into buffer buf, slab s being k_lo + s * TileK, in slab order. Step s waits for slab s (own
+/// copies, then the barrier for everyone's), refills the buffer slab s - 1 was read from and runs
+/// compute(buf); one commit per step, empty past the end, keeps the wait count at Stages - 2.
+/// Ends drained, without a barrier.
+template <int Stages, int TileK, class Ex, class Issue, class Compute>
+BATCHLAS_DLA_INLINE void kloop_async_ring(const Ex& ex, int slabs, int k_lo, Issue&& issue, Compute&& compute) {
+BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < Stages - 1; ++j) {
+        if (j < slabs) issue(k_lo + j * TileK, j);
+        copy_async_commit();
+    }
+    int buf = 0;
+#pragma unroll 1
+    for (int s = 0; s < slabs; ++s) {
+        copy_async_wait<Stages - 2>();
+        ex.barrier();
+        const int nb = buf == 0 ? Stages - 1 : buf - 1;
+        if (s + Stages - 1 < slabs) issue(k_lo + (s + Stages - 1) * TileK, nb);
+        copy_async_commit();
+        compute(buf);
+        buf = buf + 1 == Stages ? 0 : buf + 1;
+    }
+    copy_async_wait<0>();
 }
 
 }  // namespace batchlas::device::inline v2::l3
