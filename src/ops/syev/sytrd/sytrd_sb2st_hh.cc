@@ -171,7 +171,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                 // device::sb2st_hh_chase in an always_inline IIFE keeps the chase off the kernel's direct
                 // calls and its inlining as it was (a marked kernel lambda moves complex SASS).
-                const auto tau_slot = sbd::fn_vec(nrefl, [&](int32_t s) BATCHLAS_DLA_BODY -> T& { return TAUv(s, b); });
+                const auto tau_slot = v2::vec(TAUv.data_ptr() + static_cast<int64_t>(b) * TAUv.stride(), nrefl, TAUv.inc());
                 [&]() BATCHLAS_DLA_BODY { v2::sb2st_hh_chase(ex, rows, A, n, kd_i, vloc, wloc, Vb, tau_slot); }();
                 (void)ldv;
 
