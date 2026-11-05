@@ -21,6 +21,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include <src/ops/potrf/potrf_native.hh>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -172,8 +173,12 @@ template <class T> void check(Dev& dev, const Prob<T>& p, const std::vector<T>& 
     std::vector<T> a0(std::size_t(p.n) * p.n * kItems);
     for (int b = 0; b < kItems; ++b)
         for (std::size_t e = 0; e < std::size_t(p.n) * p.n; ++e) a0[b * std::size_t(p.n) * p.n + e] = p.ref[std::size_t(b % kPeriod) * p.n * p.n + e] * scale_of<T>(b);
-    T* da0 = dev.up(a0);
-    T* df = dev.up(std::vector<T>(got.begin(), got.begin() + std::size_t(p.stride) * kItems));
+    // potrf_residual reads its operands on the host (astype): unified memory, not dev.up's device memory.
+    UnifiedVector<T> ua0(a0.size()), uf(std::size_t(p.stride) * kItems);
+    std::copy(a0.begin(), a0.end(), ua0.data());
+    std::copy(got.begin(), got.begin() + std::size_t(p.stride) * kItems, uf.data());
+    T* da0 = ua0.data();
+    T* df = uf.data();
     const std::vector<int> items{0, 3, 6};
     const double res = MatrixView<T, MatrixFormat::Dense>::potrf_residual(
         *dev.ctx, MatrixView<T, MatrixFormat::Dense>(da0, p.n, p.n, p.n, p.n * p.n, kItems),
@@ -334,11 +339,11 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
     const dv::DeviceLimits metal{k32, {32}, 1024, true};
     EXPECT_EQ(pick<T>(metal, n32), n32 > 64 ? "cta128" : "cta64");
     EXPECT_EQ(pick<T>(metal, n32 + 1), "throw");
-    EXPECT_LE(dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32).local_bytes, k32);
-    EXPECT_GT(dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32 + 1).local_bytes, k32);
+    EXPECT_LE((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32).local_bytes), k32);
+    EXPECT_GT((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32 + 1).local_bytes), k32);
 
     const dv::DeviceLimits no_fp64{std::size_t(1) << 20, {32}, 1024, false};
-    EXPECT_EQ(pick<T>(no_fp64, 8), std::is_same_v<real_of<T>, double> ? "throw" : "reg8");
+    EXPECT_EQ(pick<T>(no_fp64, 8), (std::is_same_v<real_of<T>, double> ? "throw" : "reg8"));
     const dv::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
     EXPECT_EQ(pick<T>(sg16, 8), "throw");
     EXPECT_EQ(pick<T>(sg16, 64), "throw");

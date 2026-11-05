@@ -2,8 +2,8 @@
 // Native batched POTRF, the TINY tier: right-looking unblocked Cholesky with one matrix
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
 // barriers, every cross-lane value a sub-group shuffle. The kernel is a thin launcher: its body
-// is device::potrf's tier::Reg body (include/batchlas/device/lapack/potrf.hh, potrf_reg) with
-// the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
+// is device::potrf's tier::Reg body (include/batchlas/device/lapack/potrf.hh: reg_load_*,
+// potf2_reg, reg_store_*, the steps potrf_reg composes) with the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
 // device-code cluster. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
@@ -95,6 +95,10 @@ Event potrf_tiny_launch(Queue& ctx,
     const int stride_a = A.stride();
     int32_t* info_ptr = info.data();
 
+    // A Hermitian diagonal's imaginary part is contractually ignored; for a real type
+    // the transform is the identity.
+    constexpr bool real_diag = DM::is_complex;
+
     const int wg_size = per_wg * N;
     const int num_wg = (batch + per_wg - 1) / per_wg;
 
@@ -114,11 +118,31 @@ Event potrf_tiny_launch(Queue& ctx,
                 const bool in_range = (prob_id < batch);
                 bool live = in_range;
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
+                const bool row_live = live && (lane < n);
 
-                D* const Ag = a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
+                // The public tier::Reg body's three steps (potrf_detail::potrf_reg composes the same
+                // ones), spelled here so the captures, hence the kernel arguments, keep their order.
+                const D* __restrict Ag =
+                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
 
-                // The public tier::Reg body; `linfo` is partition-uniform because the pivot is a broadcast.
-                const int32_t linfo = v2::potrf_detail::potrf_reg<D, N>(v2::wrap(part), Ag, ld, lane, n, live, upper);
+                v2::Frag<D, N> rA;
+                if (upper) {
+                    v2::potrf_detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                } else {
+                    v2::potrf_detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                }
+
+                // `linfo` is partition-uniform because the pivot is a broadcast.
+                const int32_t linfo =
+                    v2::potrf_detail::potf2_reg<D, N, N>(v2::wrap(part), rA, n, live, v2::bcast_policy::Shuffle{});
+
+                D* __restrict Aout =
+                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
+                if (upper) {
+                    v2::potrf_detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
+                } else {
+                    v2::potrf_detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
+                }
 
                 if (live && part.leader()) info_ptr[prob_id] = linfo;
             });

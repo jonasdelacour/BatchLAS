@@ -104,12 +104,47 @@ struct InvSqrt {
 // uniform over the sub-group.
 enum class OrderGuard { Predicate, Skip };
 
+// The register tier's scalar steps: arith::Fma's values bit for bit, in the shape the tiny
+// kernels' SASS is pinned to. Each is a PLAIN inline call (folded early, the SLM vector load
+// splits into scalar LDS) and reads complex fields directly (a copy into Arith's by-value operand
+// reorders the field reads, and with them the scale and the Upper load).
+template <class D> struct RegScalar {
+    using A = arith_t<arith::Fma, D>;
+    using R = real_t<D>;
+    static R re(D a) {
+        if constexpr (A::is_complex) return a.re;
+        else return a;
+    }
+    static D from_real(R x) { return A::make(x, R(0)); }
+    static D mul_real(D a, R s) {  // a * s, a first (the hand form's operand order)
+        if constexpr (A::is_complex) return A::make(a.re * s, a.im * s);
+        else return a * s;
+    }
+    static D mul(D a, D b) {  // A::mul: two fma
+        if constexpr (A::is_complex) return A::make(sycl::fma(a.re, b.re, -a.im * b.im), sycl::fma(a.re, b.im, a.im * b.re));
+        else return a * b;
+    }
+    static D sub(D a, D b) {
+        if constexpr (A::is_complex) return A::make(a.re - b.re, a.im - b.im);
+        else return a - b;
+    }
+    static D conj(D a) {
+        if constexpr (A::is_complex) return A::make(a.re, -a.im);
+        else return a;
+    }
+    template <class V> static D vec_elem(V x, int e) {  // e: compile-time once unrolled
+        if constexpr (A::is_complex) return A::make(e == 0 ? x.x : x.z, e == 0 ? x.y : x.w);
+        else return e == 0 ? x.x : e == 1 ? x.y : e == 2 ? x.z : x.w;
+    }
+};
+
 // Bcast (bcast_policy): how column j of L reaches the lanes below the pivot. The failure effects
 // are value substitutions, never control flow, because `live` is partition-uniform but not
 // sub-group-uniform. rA[k] for k > lane stays exactly zero (the `k <= lane` predicate), so the
-// identity padding stays inert. Scale is a * (1 / L(j, j)), a first (the hand form's operand order).
+// identity padding stays inert. Scale is a * (1 / L(j, j)).
 template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct RegRows {
     using A = arith_t<arith::Fma, D>;
+    using S = RegScalar<D>;
     using R = real_t<D>;
     static constexpr int static_cols = NC;
     static constexpr bool skips = (G == OrderGuard::Skip);
@@ -119,21 +154,13 @@ template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct 
     const Bcast& bc;
     int lane;
 
-    BATCHLAS_DLA_INLINE static D times_real(const D& a, R s) {
-        if constexpr (A::is_complex) return A::make(A::re(a) * s, A::im(a) * s);
-        else return a * s;
-    }
-    template <class V> BATCHLAS_DLA_INLINE static D vec_elem(V x, int e) {  // e: compile-time once unrolled
-        if constexpr (A::is_complex) return A::make(e == 0 ? x.x : x.z, e == 0 ? x.y : x.w);
-        else return e == 0 ? x.x : e == 1 ? x.y : e == 2 ? x.z : x.w;
-    }
     BATCHLAS_DLA_INLINE bool skip(int j) const { return j >= n; }
     BATCHLAS_DLA_INLINE bool col_live(int j) const { return j < n; }
-    BATCHLAS_DLA_INLINE R pivot(int j) const { return part.bcast(A::re(rA[j]), static_cast<std::uint32_t>(j)); }
+    BATCHLAS_DLA_INLINE R pivot(int j) const { return part.bcast(S::re(rA[j]), static_cast<std::uint32_t>(j)); }
     BATCHLAS_DLA_INLINE void scale(int j, R akk, bool act) const {
         const R dkk = act ? sycl::sqrt(akk) : R(1);
         const R rinv = ::batchlas::device::inv_sqrt<InvSqrtEdge::Exact>(akk, dkk);  // NOT rsqrt: rsqrt.approx is not the reference
-        rA[j] = ::batchlas::device::select(act, ::batchlas::device::select(lane == j, A::make(dkk, R(0)), times_real(rA[j], rinv)), rA[j]);
+        rA[j] = ::batchlas::device::select(act, ::batchlas::device::select(lane == j, S::from_real(dkk), S::mul_real(rA[j], rinv)), rA[j]);
     }
     BATCHLAS_DLA_INLINE void update(int j, bool act) const {
         if constexpr (std::is_same_v<Bcast, bcast_policy::Shuffle>) {
@@ -143,7 +170,7 @@ BATCHLAS_UNROLL_FULL
                     if (k >= n) continue;
                 }
                 const D vk = part.bcast(rA[j], static_cast<std::uint32_t>(k));  // guard inside
-                const D upd = A::sub(rA[k], A::mul(rA[j], A::conj(vk)));
+                const D upd = S::sub(rA[k], S::mul(rA[j], S::conj(vk)));
                 rA[k] = ::batchlas::device::select(act && k < n && k <= lane, upd, rA[k]);
             }
         } else {
@@ -155,8 +182,8 @@ BATCHLAS_UNROLL_FULL
             R4* const sp = &bc.slm[bc.buffer(j, kNV)];
             R* const rp = reinterpret_cast<R*>(sp);
             if constexpr (kCpx == 2) {
-                rp[2 * lane] = A::re(rA[j]);
-                rp[2 * lane + 1] = A::im(rA[j]);
+                rp[2 * lane] = rA[j].re;  // the fields, as RegScalar reads them
+                rp[2 * lane + 1] = rA[j].im;
             } else {
                 rp[lane] = rA[j];
             }
@@ -170,8 +197,8 @@ BATCHLAS_UNROLL_FULL
                 for (int e = 0; e < kW; ++e) {
                     const int k = v * kW + e;
                     if (k <= j || k >= NC || k >= n) continue;
-                    const D vk = vec_elem(x, e);
-                    const D upd = A::sub(rA[k], A::mul(rA[j], A::conj(vk)));
+                    const D vk = S::vec_elem(x, e);
+                    const D upd = S::sub(rA[k], S::mul(rA[j], S::conj(vk)));
                     rA[k] = ::batchlas::device::select(act && k < n && k <= lane, upd, rA[k]);
                 }
             }
@@ -216,7 +243,7 @@ inline void reg_load_upper(D* rA, const D* __restrict a, int ld, int lane, bool 
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c <= lane) {
-            D v = A::conj(a[c + static_cast<std::ptrdiff_t>(lane) * ld]);
+            D v = RegScalar<D>::conj(a[c + static_cast<std::ptrdiff_t>(lane) * ld]);
             if (real_diag && c == lane) v = A::make(A::re(v), real_t<D>(0));
             rA[c] = v;
         }
@@ -231,7 +258,7 @@ BATCHLAS_UNROLL_FULL
 template <class D, int N> inline void reg_store_upper(const D* rA, D* __restrict a, int ld, int lane, bool row_live) {
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
-        if (row_live && c <= lane) a[c + static_cast<std::ptrdiff_t>(lane) * ld] = Arith<D>::conj(rA[c]);
+        if (row_live && c <= lane) a[c + static_cast<std::ptrdiff_t>(lane) * ld] = RegScalar<D>::conj(rA[c]);
     }
 }
 
