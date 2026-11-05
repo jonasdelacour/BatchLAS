@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The gemm-private components (src/ops/gemm/gemm-components_v2.hh) against host references: each
+// The level 3 components (include/batchlas/device/level3/) against host references: each
 // test composes them into the kernel shape a tuned gemm uses. Core ops (Tile, Frag, fill, load,
 // arith policies, executors) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld (m + 3, k + 5, 16-aligned
@@ -21,14 +21,18 @@
 #include <vector>
 
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/ops/gemm/gemm-components_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/pipeline.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
 using batchlas::verify::Check;
 
 namespace {
@@ -251,7 +255,7 @@ TYPED_TEST(DeviceBlasV2GemmComponentsTest, RegisterTiledGemmFromComponents) {
     }
 }
 
-// ---- stage_storage + gemv_t_frag + epilogue_store_fused on the POD scalar: the small batched gemm -
+// ---- stage_storage + gemv_t_frag + store<epi::MulMac> on the POD scalar: the small batched gemm -
 
 template <int NB, int Chunk, class T>
 void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, T beta, const char* where) {
@@ -310,7 +314,7 @@ void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, 
         if (r < m) {
             for (int j = 0; j < kCpt; ++j) {
                 const int c = c0 + j;
-                if (c < n) gc::epilogue_store_fused<Ops>(Cb + r + c * ldc, alpha_d, beta_d, beta_zero, acc[j]);
+                if (c < n) v2::store<v2::epi::MulMac, Ops>(alpha_d, acc[j], v2::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
             }
         }
     });
@@ -365,14 +369,14 @@ void run_tiled_general(Dev& dev, const Shape& s, T alpha, T beta, const char* wh
         T sum = T(0);
         for (int kk0 = 0; kk0 < k; kk0 += Tile) {
             ta[local_row * Tile + local_col] =
-                (row < m && kk0 + local_col < k) ? sycl_gemm::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
+                (row < m && kk0 + local_col < k) ? gc::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
             tb[local_row * Tile + local_col] =
-                (col < n && kk0 + local_row < k) ? sycl_gemm::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
+                (col < n && kk0 + local_row < k) ? gc::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
             ex.barrier();
-            gc::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
+            v2::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
             ex.barrier();
         }
-        if (row < m && col < n) sycl_gemm::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
+        if (row < m && col < n) gc::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
     });
     check_gemm(s, OpA, OpB, alpha, beta, hA, hB, hC, dev.down(C, hC.size()), sa, sb, sc, where);
 }
@@ -449,7 +453,7 @@ TYPED_TEST(DeviceBlasV2GemmComponentsTest, PipelinesRunEverySlabOnce) {
     }
 }
 
-// ---- epilogue_store_fused (bit-exact fma chain on the POD scalar) and outer_mac (both forms) ------
+// ---- store<epi::MulMac> (bit-exact fma chain on the POD scalar) and outer_mac (both forms) ------
 
 enum Slot { kFusedZero, kFused, kOuterFull0, kOuterPlain0 = kOuterFull0 + 15, kSlots = kOuterPlain0 + 15 };
 
@@ -472,8 +476,8 @@ TYPED_TEST(DeviceBlasV2GemmComponentsTest, EpilogueAndOuterMacMatchTheHost) {
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         if (it.get_local_linear_id() != 0) return;
         D* const o = reinterpret_cast<D*>(out);
-        gc::epilogue_store_fused<v2::arith::Fma>(o + kFusedZero, ad, bd, true, xd);  // NaN destination, never read
-        gc::epilogue_store_fused<v2::arith::Fma>(o + kFused, ad, bd, false, xd);
+        v2::store<v2::epi::MulMac, v2::arith::Fma>(ad, xd, v2::MaybeZero<D>{bd, true}, o[kFusedZero]);  // NaN destination, never read
+        v2::store<v2::epi::MulMac, v2::arith::Fma>(ad, xd, v2::MaybeZero<D>{bd, false}, o[kFused]);
         T a3[3], b5[5];
         for (int i = 0; i < 3; ++i) a3[i] = av[i];
         for (int j = 0; j < 5; ++j) b5[j] = bv[j];

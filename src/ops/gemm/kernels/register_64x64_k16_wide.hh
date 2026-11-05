@@ -10,9 +10,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
-#include <src/ops/gemm/kernels/register_tiled_common.hh>
+#include <src/ops/gemm/kernels/register_tiled_common.hh>  // level3/{copy_async,packet}.hh
 
 #include <src/linalg-impl.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -29,6 +27,11 @@
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::Vec4;
 
 namespace wide_scalar {
 
@@ -1008,22 +1011,9 @@ BATCHLAS_UNROLL_FULL
             }
             copy_async_wait<0>();
         } else {
-            load(0);
-            store(0);
-            item.barrier(sycl::access::fence_space::local_space);
-            int s = 0;
-            for (; s + 1 < slabs; s += 2) {
-                load((s + 1) * TileK);
-                compute(0);
-                store(1);
-                item.barrier(sycl::access::fence_space::local_space);
-                const bool more = s + 2 < slabs;
-                if (more) load((s + 2) * TileK);
-                compute(1);
-                if (more) store(0);
-                item.barrier(sycl::access::fence_space::local_space);
-            }
-            if (s < slabs) compute(0);  // an odd slab count ends in buffer 0, with no barrier after
+            // An odd slab count ends in buffer 0, with no barrier after. origin above stays the
+            // first direct operator() call, so the SemaSYCL body does not move (F4).
+            gc::kloop_prefetch2<TileK>(v2::Grid2D<>{item}, slabs, load, store, compute);
         }
 
         // The NN kernel's epilogue: the 16-byte band store for a group inside C with 16-byte

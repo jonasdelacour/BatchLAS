@@ -2,7 +2,9 @@
 #pragma once
 #include <cstddef>
 
-#include <src/ops/gemm/gemm-components_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <sycl/sycl.hpp>
@@ -10,7 +12,9 @@
 namespace batchlas::sycl_gemm {
 
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::OperandAccessor;
 
 template <typename T, int Tile, Transpose OpA, Transpose OpB>
 class GemmTiledGeneralKernel;
@@ -79,7 +83,7 @@ Event launch_tiled_general(Queue& ctx,
                 tile_b[local_row * Tile + local_col] =
                     (col < n && tile_row < k) ? OperandAccessor<T, OpB>::load(b_item, ldb, 0, tile_row, col) : T(0);
                 ex.barrier();
-                gc::dot_slab<Tile, v2::arith::Native>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
+                v2::dot_slab<Tile, v2::arith::Native>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
                 ex.barrier();
             }
 

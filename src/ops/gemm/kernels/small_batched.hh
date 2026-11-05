@@ -22,14 +22,17 @@
 #include <type_traits>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/gemm-components_v2.hh>
 
 namespace batchlas::sycl_gemm_small {
 
 namespace v2 = batchlas::device;
-namespace gc = batchlas::sycl_gemm::components;
+namespace gc = batchlas::device::l3;
 
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
@@ -151,7 +154,7 @@ Event launch_small_batched(Queue& ctx,
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) gc::epilogue_store_fused<Ops>(Cb + r + c * ldc, alpha_d, beta_d, beta_zero, acc[j]);
+                        if (c < n) v2::store<v2::epi::MulMac, Ops>(alpha_d, acc[j], v2::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
                     }
                 }
             });
@@ -178,7 +181,7 @@ Event launch_small_tiled(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
-    using V4 = sycl_gemm::Vec4<T>;
+    using V4 = gc::Vec4<T>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned
@@ -256,7 +259,7 @@ BATCHLAS_UNROLL_FULL
                             // acc.v, not acc(i, j): a direct operator() call in the kernel lambda
                             // would become SemaSYCL's force-inlined "body" (scripts/check_kernel_entry_calls.py).
                             if constexpr (PrefetchC) *dst = alpha * acc.v[i][j] + beta * prior[i][j];
-                            else gc::epilogue_store_fused<v2::arith::Fma>(dst, alpha, beta, beta_zero, acc.v[i][j]);
+                            else v2::store<v2::epi::MulMac, v2::arith::Fma>(alpha, acc.v[i][j], v2::MaybeZero<T>{beta, beta_zero}, *dst);
                         }
                     }
                 }
