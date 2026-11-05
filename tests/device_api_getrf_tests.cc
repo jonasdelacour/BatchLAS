@@ -30,6 +30,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/queue.hh>
+#include <src/sycl/local_mem.hh>
 #include <src/util/resident_capacity.hh>
 
 using namespace batchlas;
@@ -231,6 +232,13 @@ template <class T> int host_cta_cap(Queue& ctx) {
 }
 template <class T> bool host_runs(Queue& ctx, int n, Route r) { return r == Route::Tiny || n <= host_cta_cap<T>(ctx); }
 
+// Whether one work-group of the tier launches with its workspace at order n: acpp Metal's 32 KiB
+// less its wg * 8 B runtime scratch stops complex<float> Cta<64> below n = 64.
+template <class Tier, class T> bool device_holds(Queue& ctx, int n) {
+    using I = dv::tier_info<dv::routine::getrf, Tier, T>;
+    return dv::getrf_buffer_size<Tier, T>(n).local_bytes <= batchlas::impl::local_mem_bytes(sycl_queue(ctx).get_device(), I::wg_size);
+}
+
 template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Route route, const char* what) {
     Prob<T> p(n, 0x5eedu + 977u * n);
     const bool host = host_runs<T>(ctx, n, route);
@@ -285,8 +293,10 @@ TYPED_TEST(DeviceApiGetrfTest, CtaTierIsTheCtaRouteBitForBit) {
     using T = TypeParam;
     const int cap = host_cta_cap<T>(this->ctx);  // straddled: the last order the host route takes
     ASSERT_GE(cap, 17) << "the host cta route takes no order this test compares";
-    for (int n : {17, 33, 47, cap, cap + 1, 63, 64}) {
-        if (n <= 64) expect_thin_launcher<dv::tier::Cta<64>, T>(this->ctx, n, Route::Cta, "Cta<64>");
+    int top = 64;  // the largest order this device holds, launched at that ceiling
+    while (top > cap && !device_holds<dv::tier::Cta<64>, T>(this->ctx, top)) --top;
+    for (int n : {17, 33, 47, cap, cap + 1, 63, 64, top}) {
+        if (n <= top) expect_thin_launcher<dv::tier::Cta<64>, T>(this->ctx, n, Route::Cta, "Cta<64>");
     }
 }
 
@@ -294,8 +304,7 @@ TYPED_TEST(DeviceApiGetrfTest, CtaTierIsTheCtaRouteBitForBit) {
 TYPED_TEST(DeviceApiGetrfTest, CtaTierLaunchesAtItsCeiling) {
     using T = TypeParam;
     const auto need = dv::getrf_buffer_size<dv::tier::Cta<128>, T>(128).local_bytes;
-    const auto have = sycl_queue(this->ctx).get_device().template get_info<sycl::info::device::local_mem_size>();
-    if (need > have) GTEST_SKIP() << "Cta<128> needs " << need << " bytes of local memory, the device has " << have;
+    if (!device_holds<dv::tier::Cta<128>, T>(this->ctx, 128)) GTEST_SKIP() << "Cta<128> needs " << need << " bytes of local memory";
     Prob<T> p(128, 0xce11u);
     run_device<dv::tier::Cta<128>>(this->ctx, p);
     check_device(p, "Cta<128>");
