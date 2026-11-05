@@ -207,8 +207,8 @@ template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void stage(const Ex&
 template <typename T, int NR> class GetrsFusedNKernel;
 template <typename T, int NR> class GetrsFusedTKernel;
 
-// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every T: the
-// complex<float> hand body it replaced won 1.062x only because gemm_nr's r loop stayed rolled.
+// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every T; against
+// the deleted complex<float> hand body it is 0.96-1.01x at nrhs <= 4, 1.02-1.05x at nrhs 6-8.
 template <typename T, int NR>
 Event fused_launch_notrans(Queue& ctx,
                            const T* A, int lda, int strideA,

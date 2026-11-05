@@ -51,10 +51,11 @@ BATCHLAS_DLA_INLINE void trsm_lane(const SubGroup<SG>& ex, const MA& a, const MY
     }
 }
 
-// C := C - op(A) X; X.cols() <= NR is read at run time, accumulators past it are never touched.
+// C := C - op(A) X; X.cols() <= NR is read at run time, accumulators past it are never stored.
 // NoTrans: item per row of C, k serial (coalesced down A's columns), the NR columns expanded at
-// compile time by static_for, so no loop is left for the unroller to decline (a rolled r loop
-// keeps acc[] off the register file: GetrsFusedN<complex<float>, 8> FMA 564 -> 116). Trans:
+// compile time by static_for. Columns past nrhs re-read column nrhs - 1 into an accumulator that
+// is never stored: no branch per column, which a complex mac kept (GetrsFusedN<complex<float>,
+// 4>: 1.02-1.03x slower than the hand body), and LLVM still runtime-unrolls k for a real T. Trans:
 // sub-group per row of C, lanes stride k, a leader-only shift_reduce, lane 0 writes. ConjTrans
 // is Trans of conj_if(A, true).
 template <Transpose TA, int NR, class Ex, class MA, class MX, class MC>
@@ -70,7 +71,7 @@ BATCHLAS_DLA_INLINE void gemm_nr(const Ex& ex, NegOne, const MA& a, const MX& x,
             for (int kk = 0; kk < k; ++kk) {
                 const T av = a(i, kk);
                 static_for<NR>([&](auto r) BATCHLAS_DLA_BODY {
-                    if (r < nrhs) Ar::mac(acc[r], av, x(kk, r));
+                    Ar::mac(acc[r], av, x(kk, r < nrhs ? static_cast<int>(r) : nrhs - 1));
                 });
             }
             static_for<NR>([&](auto r) BATCHLAS_DLA_BODY {

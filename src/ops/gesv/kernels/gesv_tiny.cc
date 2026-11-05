@@ -48,9 +48,7 @@ namespace sycl_gesv {
 
 namespace {
 
-namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
-namespace sd = ::batchlas::sycl_device;
 namespace v2 = ::batchlas::device;
 namespace g2 = ::batchlas::device::getf2_detail;
 

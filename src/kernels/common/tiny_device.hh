@@ -54,7 +54,7 @@ inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
 // the register file. Core select is that rule; this name stays until posv_tiny.cc calls it.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 template <typename D>
-inline D tiny_select(bool cond, D a, D b) {
+BATCHLAS_DLA_INLINE D tiny_select(bool cond, D a, D b) {
     return ::batchlas::device::select(cond, a, b);
 }
 
