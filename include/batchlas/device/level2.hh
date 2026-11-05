@@ -451,25 +451,47 @@ BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp,
         if constexpr (detail::is_scalar_value_v<std::remove_cv_t<decltype(alpha)>>) return Scalar<T>{Ar::conj(static_cast<T>(alpha.v))};
         else return alpha;
     }();
+    using S = std::remove_cv_t<decltype(alpha)>;
+    constexpr bool native_tag = std::is_same_v<Ops, arith::Native> && (std::is_same_v<S, One> || std::is_same_v<S, NegOne>);
     const int m = a.rows(), n = a.cols();
+    // Columns of row r that part P can touch: the triangle bound keeps a Lower trip count at r + 1.
+    auto col_end = [&](int r) BATCHLAS_DLA_BODY {
+        if constexpr (P == Part::Lower) return sycl::min(n, r + 1);
+        else if constexpr (P == Part::StrictLower) return sycl::min(n, r);
+        else return n;
+    };
     auto upd = [&](int r, int c) BATCHLAS_DLA_BODY {
         if (!detail::in_part<P>(r, c)) return;
-        const T t1 = Ar::mul(static_cast<T>(x(r)), Ar::conj(static_cast<T>(y(c))));
-        const T t2 = Ar::mul(static_cast<T>(y(r)), Ar::conj(static_cast<T>(x(c))));
-        T v = Ar::add(Ar::add(static_cast<T>(a(r, c)), tag_mul(alpha, t1)), tag_mul(alpha_c, t2));
+        T v;
+        // Native with a One / NegOne alpha: one expression, so -ffp-contract=on fuses each product
+        // into the sum as T's own operators do (the strict-port rounding, D6).
+        if constexpr (native_tag && std::is_same_v<S, NegOne>)
+            v = static_cast<T>(a(r, c)) - static_cast<T>(x(r)) * Ar::conj(static_cast<T>(y(c))) -
+                static_cast<T>(y(r)) * Ar::conj(static_cast<T>(x(c)));
+        else if constexpr (native_tag)
+            v = static_cast<T>(a(r, c)) + static_cast<T>(x(r)) * Ar::conj(static_cast<T>(y(c))) +
+                static_cast<T>(y(r)) * Ar::conj(static_cast<T>(x(c)));
+        else {
+            const T t1 = Ar::mul(static_cast<T>(x(r)), Ar::conj(static_cast<T>(y(c))));
+            const T t2 = Ar::mul(static_cast<T>(y(r)), Ar::conj(static_cast<T>(x(c))));
+            v = Ar::add(Ar::add(static_cast<T>(a(r, c)), tag_mul(alpha, t1)), tag_mul(alpha_c, t2));
+        }
         if constexpr (Ar::is_complex && P != Part::Full)
             if (r == c) v = Ar::make(Ar::re(v), real_t<T>(0));
         a(r, c) = v;
     };
     if constexpr (std::is_same_v<Alg, alg::RowOwner>) {
         for_each_owned(ex, m, [&](int r) {
-            for (int c = 0; c < n; ++c) upd(r, c);
+            const int ce = col_end(r);
+            for (int c = 0; c < ce; ++c) upd(r, c);
         });
     } else {
         static_assert(std::is_same_v<Alg, alg::TeamPerRow>, "v2::her2: alg::RowOwner or alg::TeamPerRow");
         const int nt = detail::nteams_of(ex), ts = detail::team_size_of(ex);
-        for (int r = ex.team(); r < m; r += nt)
-            for (int c = ex.lane(); c < n; c += ts) upd(r, c);
+        for (int r = ex.team(); r < m; r += nt) {
+            const int ce = col_end(r);
+            for (int c = ex.lane(); c < ce; c += ts) upd(r, c);
+        }
     }
 }
 

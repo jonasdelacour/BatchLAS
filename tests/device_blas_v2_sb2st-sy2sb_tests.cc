@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The band-reduction family's private device LA v2 ops (src/ops/syev/sytrd/sb2st_v2.hh) against
+// The band-reduction routine header's own ops (include/batchlas/device/lapack/sb2st.hh) against
 // long-double host references; the core ops the kernels also use are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): band storage with ld > kd + 1 whose padding
 // rows hold a sentinel that must survive, windows that cross the band edge (reads 0, writes
@@ -20,13 +20,13 @@
 #include <vector>
 
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/ops/syev/sytrd/sb2st_v2.hh>
+#include <batchlas/device/lapack/sb2st.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace sbv = batchlas::sb2st_v2;
+namespace sbd = batchlas::device::sb2st_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -129,7 +129,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 }
 template <class T> T nan_t() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
 
-// Host view of lower band storage s (ld, kd): the same mirror / zero rule as sbv::HermBandLower.
+// Host view of lower band storage s (ld, kd): the same mirror / zero rule as sbd::HermBandLower.
 template <class T> struct HostBand {
     const T* s;
     int ld, kd;
@@ -169,7 +169,7 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
         const v2::Teams<WG, 8, O> rows{it};
         T* vl = reinterpret_cast<T*>(lm);
         T* wl = vl + m;
-        const sbv::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        const sbd::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
         v2::for_each_owned(ex, m, [&](int i) {
             vl[i] = x[std::ptrdiff_t(b) * m + i];
             wl[i] = T(std::numeric_limits<real_of<T>>::quiet_NaN());
@@ -178,10 +178,11 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
         const auto W = A.sub(a, a, m, m);
         const auto v = v2::vec<v2::Mem::Local>(vl, m);
         const auto w = v2::vec<v2::Mem::Local>(wl, m);
-        sbv::hemv_band<Uplo::Lower>(rows, v2::One{}, W, v2::assume_published(v), v2::Zero{}, w);
+        sbd::hemv_band<Uplo::Lower>(rows, v2::One{}, W, v2::assume_published(v), v2::Zero{}, w);
         v2::sync(ex, v2::Mem::Global);
         v2::for_each_owned(ex, m, [&](int i) { p[std::ptrdiff_t(b) * m + i] = wl[i]; });
-        sbv::her2<Uplo::Lower>(rows, v2::NegOne{}, v2::assume_published(w), v2::assume_published(v), W);
+        v2::her2<v2::Part::Lower, v2::alg::TeamPerRow, v2::arith::Native>(rows, v2::NegOne{}, v2::assume_published(w),
+                                                                          v2::assume_published(v), W);
     });
     const auto gs = dev.down(s, hs.size());
     const auto gp = dev.down(p, hp.size());
@@ -270,11 +271,11 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfOnBandWindows) {
         T* vl = reinterpret_cast<T*>(lm);
         v2::copy(ex, v2::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), v2::vec(vl, nc + mr1));
         v2::sync(ex, v2::Mem::Global);
-        const sbv::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
-        sbv::larf_native<Side::Right>(rows, tau, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
+        const sbd::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        sbd::larf_right(rows, tau, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
         v2::sync(ex, v2::Mem::Global);
-        sbv::larf_native<Side::Left>(rows, tau1, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc + mr1).tail(nc)),
-                                      A.sub(r1, c1, mr1, nc1));
+        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleW, v2::loop::Lockstep>(
+            rows, tau1, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
     });
     const auto gs = this->dev.down(s, hs.size());
     EXPECT_EQ(bitdiff_vs_rep(gs, ld * n), 0) << "items differ from their representative";
@@ -342,32 +343,33 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfColumnTeamsOnTilesAndGlobal) {
     this->dev.template run<32>(kBatch, rows * C * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<32> ex{it};
-        const sbv::StridedTeams<C> cols{it};
+        const sbd::StridedTeams<C> cols{it};
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z + std::ptrdiff_t(b) * rows * C;
         v2::for_each_owned(ex, rows * C, [&](int i) { zl[i] = zb[i]; });
         v2::sync(cols);
         const auto V = v2::mat(vg + std::ptrdiff_t(b) * ldv * S2, L, S2, ldv);
-        sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(cols, tau, v2::assume_published(V.col(1)), sbv::row_major_tile<C>(zl + s * C, L));
+        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
+            cols, tau, v2::assume_published(V.col(1)), v2::StridedMat<T, v2::Ext<C>, v2::Unit>{zl + s * C, L, C});
         v2::sync(cols);
         v2::for_each_owned(ex, rows * C, [&](int i) { zb[i] = zl[i]; });
         // (3) on global memory, the same work-group
         const auto Z3 = v2::mat(z3 + std::ptrdiff_t(b) * ldz * ncol3, rows, ncol3, ldz);
-        sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(ex, tau, v2::assume_published(v2::vec(v3 + std::ptrdiff_t(b) * L3, L3)),
-                                                             Z3.sub(s3, 0, L3, ncol3));
+        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
+            ex, tau, v2::assume_published(v2::vec(v3 + std::ptrdiff_t(b) * L3, L3)), Z3.sub(s3, 0, L3, ncol3));
     });
     this->dev.template run<128>(kBatch, rows * C2 * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const v2::WorkGroup<128> ex{it};
-        const sbv::StridedTeams<C2, 128> cols{it};
+        const sbd::StridedTeams<C2, 128> cols{it};
         const int g = static_cast<int>(it.get_local_linear_id()) / 32;
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z2 + std::ptrdiff_t(b) * rows * C2;
         v2::for_each_owned(ex, rows * C2, [&](int i) { zl[i] = zb[i]; });
         v2::sync(ex, v2::Mem::Global);
         const auto V = v2::mat(vg + std::ptrdiff_t(b) * ldv * S2, L2, S2, ldv);
-        sbv::larf_native<Side::Left, sbv::larf_form::ScaleV>(cols, tau, v2::assume_published(V.col(g)),
-                                                             sbv::row_major_tile<C2>(zl + g * 10 * C2, L2));
+        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
+            cols, tau, v2::assume_published(V.col(g)), v2::StridedMat<T, v2::Ext<C2>, v2::Unit>{zl + g * 10 * C2, L2, C2});
         v2::sync(ex, v2::Mem::Global);
         v2::for_each_owned(ex, rows * C2, [&](int i) { zb[i] = zl[i]; });
     });
@@ -430,12 +432,12 @@ template <class T> struct TestRot {
     static void rot_pair(T& x, T& y, R c, const T& s) {
         const T xt = x, yt = y;
         x = T(c) * xt + s * yt;
-        y = T(c) * yt - sbv::native_t<T>::conj(s) * xt;
+        y = T(c) * yt - v2::arith_t<v2::arith::Native, T>::conj(s) * xt;
     }
     static void lar2v_pair(T& x, T& y, T& z, R c, const T& s) {
         const T xo = x, yo = y, zo = z;
         x = T(c) * xo + s * zo;
-        y = T(c) * yo - sbv::native_t<T>::conj(s) * zo;
+        y = T(c) * yo - v2::arith_t<v2::arith::Native, T>::conj(s) * zo;
         z = zo * T(c) + xo - yo;
     }
 };
@@ -467,17 +469,17 @@ TYPED_TEST(DeviceBlasV2BandTest, PlaneRotationsDistributeOverStrides) {
         const std::ptrdiff_t o = std::ptrdiff_t(it.get_group_linear_id()) * per;
         const v2::WorkGroup<WG> ex{it};
         // largv: x (stride 7) <- r, y (stride 5) <- s, c (stride 3) <- c
-        sbv::largv<TestRot<T>>(ex, v2::vec(x + o, nr, ix), v2::vec(y + o, nr, iy), v2::vec(c + o, nr, ic));
+        v2::largv<TestRot<T>>(ex, v2::vec(x + o, nr, ix), v2::vec(y + o, nr, iy), v2::vec(c + o, nr, ic));
         v2::sync(ex, v2::Mem::Global);
         // lartv with the c just written and an independent s (stride 2) on fresh x2 / y2
-        sbv::lartv<TestRot<T>>(ex, v2::vec(x2 + o, nr, ix), v2::vec(y2 + o, nr, iy), v2::vec(c + o, nr, ic), v2::vec(sv + o, nr, is));
-        sbv::lar2v<TestRot<T>>(ex, v2::vec(x4 + o, nr, ix), v2::vec(y4 + o, nr, iy), v2::vec(z4 + o, nr), v2::vec(c + o, nr, ic),
+        v2::lartv<TestRot<T>>(ex, v2::vec(x2 + o, nr, ix), v2::vec(y2 + o, nr, iy), v2::vec(c + o, nr, ic), v2::vec(sv + o, nr, is));
+        v2::lar2v<TestRot<T>>(ex, v2::vec(x4 + o, nr, ix), v2::vec(y4 + o, nr, iy), v2::vec(z4 + o, nr), v2::vec(c + o, nr, ic),
                               v2::vec(sv + o, nr, is));
-        sbv::rot_by<TestRot<T>>(ex, v2::vec(x3 + o, nrot, ix), v2::vec(y3 + o, nrot, iy), c1, s1);
+        sbd::rot_by<TestRot<T>>(ex, v2::vec(x3 + o, nrot, ix), v2::vec(y3 + o, nrot, iy), c1, s1);
         // the Thread pass reaches x3 / y3 through fn_vec index maps returning references
-        const auto xs = sbv::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
-        const auto ys = sbv::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
-        if (ex.leader()) sbv::rot_by<TestRot<T>>(v2::Thread{}, xs, ys, c1, s1);
+        const auto xs = sbd::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
+        const auto ys = sbd::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
+        if (ex.leader()) sbd::rot_by<TestRot<T>>(v2::Thread{}, xs, ys, c1, s1);
     });
     const auto gx = this->dev.down(x, hx.size()), gy = this->dev.down(y, hy.size()), gx2 = this->dev.down(x2, hx.size()),
                gy2 = this->dev.down(y2, hy.size()), gx3 = this->dev.down(x3, hx.size()), gy3 = this->dev.down(y3, hy.size()),
