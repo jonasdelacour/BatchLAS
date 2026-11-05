@@ -27,6 +27,8 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
+    device_api_steqr_tests
+    device_api_sytrd_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
@@ -343,6 +345,8 @@ set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
+    device_api_steqr_tests
+    device_api_sytrd_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
