@@ -124,14 +124,6 @@ namespace batchlas {
             return ::batchlas::device::lamch<'E', T>() * ::batchlas::device::lamch<'E', T>();
         }
 
-        // Three fields, not v2::LarfgScalars (five): invoke_one_broadcast moves it whole.
-        template <typename T>
-        struct larfg_result {
-            T tau;
-            T beta;
-            T scale;
-        };
-
         // Device LA v2 scalar lartg; complex<float> works in double except on Metal (no fp64,
         // chosen at JIT time) to cut rounding noise in the downstream bulge chase.
         template <typename T>
@@ -143,14 +135,6 @@ namespace batchlas {
             } else {
                 return ::batchlas::device::lartg(f, g);
             }
-        }
-
-        // The phase-keeping larfg convention (device::conv::Phase).
-        template <typename T>
-        __attribute__((always_inline)) inline larfg_result<T> larfg(const T& alpha, base_float_t<T> xnorm, int len)
-        {
-            const auto s = ::batchlas::device::larfg_scalars<::batchlas::device::conv::Phase>(alpha, xnorm, len);
-            return {s.tau, s.beta, s.scale};
         }
 
         template <typename T>
@@ -165,7 +149,6 @@ namespace batchlas {
             return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
         }
 
-        using ::batchlas::device::las2;
         // Binds core laev2's operands by reference: a using-declaration (by value) costs the steqr
         // legacy / wg Francis kernels 3 LDG and 4 REG on sm_89. Goes when core laev2 takes const R&.
         template <typename T>

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
-#include <src/math-helpers.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -21,6 +20,7 @@
 #include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/ortho.hh>
 #include <src/ops/ortho/krylov-ortho-ritz_v2.hh>
 
 
@@ -179,7 +179,7 @@ namespace batchlas {
         // syrk writes only the lower triangle; potrf/trsm/shift read only that.
         // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
         // BATCHLAS_ORTHO_GRAM=gemm.
-        constexpr bool gram_is_real = !detail::is_complex<T>::value;
+        constexpr bool gram_is_real = !dla::Arith<T>::is_complex;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
@@ -215,7 +215,7 @@ namespace batchlas {
         };
 
         auto conj_vector = [&](const VectorView<T>& v) {
-            if constexpr (detail::is_complex<T>::value) {
+            if constexpr (dla::Arith<T>::is_complex) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
                     if (masked && !mk[id[0]]) return;
@@ -269,8 +269,7 @@ namespace batchlas {
                             if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
                             const dla::RtGroup<> ex{item};
                             const auto v = dla::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
-                            const float_t norm = std::sqrt(dla::sumsq<dla::alg::Unfused>(ex, v));
-                            dla::map(ex, v, [=](T x) { return dla::Arith<T>::div_real(x, norm); }, v);  // a true division
+                            dla::ortho_detail::normalize(ex, v);  // the device ortho's CGS2 step
                         });
                 });
             }
@@ -473,7 +472,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-        auto trans = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = dla::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
         auto no_trans = Transpose::NoTrans;
         auto inv_transA = transA == trans ? no_trans : trans;
         auto inv_transM = transM == trans ? no_trans : trans;

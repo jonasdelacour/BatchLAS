@@ -8,8 +8,8 @@
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/queue.hh>
-#include <src/math-helpers.hh>
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/norm.hh>
 #include <batchlas/device/detail/sscp_target.hh>
 
 namespace batchlas
@@ -107,7 +107,8 @@ namespace batchlas
         #endif
     }
 
-    // One work-group per item; NT and WG are types, so each norm is its own lange body.
+    // One work-group per item over the public device norm (a thin launcher); NT and WG are types,
+    // so each norm is its own lange body.
     template <NormType NT, int WG, typename T, MatrixFormat MF>
     void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
         const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
@@ -119,7 +120,7 @@ namespace batchlas
                 const auto b = item.get_group_linear_id();
                 if (masked && !mk[b]) return;  // I1: uniform per work-group, before any barrier
                 const v2::WorkGroup<WG> ex{item};
-                const auto r = v2::lange<NT>(ex, v2::mat(data + b * stride, rows, cols, ld));
+                const auto r = v2::norm<NT>(ex, v2::mat(data + b * stride, rows, cols, ld));
                 if (ex.leader()) norms[b] = r;
             });
         });
