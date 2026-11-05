@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSYTRD's unblocked reduction xSYTD2 / xHETD2 on a resident tile (one row per item), shared by
-// sytrd_cta and the fused syev kernel, plus the CTA driver's tile copies. Strict port:
-// arith::Native and the replaced kernel's expression shapes, so fp-contract fuses the same
-// products. sytrd_detail holds the forms core does not reproduce bit for bit yet: dotc / gemv /
-// her2 on a Fit executor (one guarded row, product-only dot, subtracted rank-2 term) and the
-// row-owner Hermitian tile copy.
+// xSYTRD / xHETRD.
+//   sytd2<UL>(ex, a, v, w, n)                  the unblocked reduction on a resident tile (one row
+//                                              per item), shared by sytrd_cta and the fused syev
+//   sytrd<UL, tier::Cta<N>>(ex, A, d, e, tau, ws)  one matrix per SgpPartition<N>, the tile in
+//                                              local memory (N in 4, 8, 16, 32)
+// Strict port: arith::Native and the replaced kernel's expression shapes, so fp-contract fuses
+// the same products. sytrd_detail holds the CTA body (sytrd_cta_run, run by the host sytrd_cta
+// kernel too) and the forms core does not reproduce bit for bit yet: dotc / gemv / her2 on a Fit
+// executor (one guarded row, product-only dot, subtracted rank-2 term) and the row-owner
+// Hermitian tile copy.
 
+#include <cstddef>
+#include <cstdint>
 #include <type_traits>
 
 #include <batchlas/device.hh>
@@ -183,6 +189,142 @@ BATCHLAS_DLA_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, con
         }
     }
     return tau_lane;
+}
+
+namespace sytrd_detail {
+
+// Local memory as the decorated pointer the Upper tile views take (never &acc[off]: generic).
+template <class T> BATCHLAS_DLA_INLINE typename local_mptr<T>::pointer decorated_ptr(const sycl::local_accessor<T, 1>& a) {
+    return a.template get_multi_ptr<sycl::access::decorated::yes>().get();
+}
+template <class T> BATCHLAS_DLA_INLINE T* decorated_ptr(T* p) { return p; }
+
+// sytd2<Upper> on the full Hermitian tile (ld LDA, zero past n) at A_local[base_a]; returns
+// tau(lane), 0 for lane >= n-1. The inliner declines this body for complex T, so the call
+// carries decorated local pointers by value: an accessor taken by reference is copied to the
+// stack (cf/cd Upper STACK 0->344).
+template <typename T, int32_t LDA, size_t P, bool M>
+inline T sytd2_upper_tile(const SubGroupPartition<P, M>& part, typename local_mptr<T>::pointer A_local, int32_t base_a,
+                          typename local_mptr<T>::pointer V_local, int32_t base_v, typename local_mptr<T>::pointer W_local,
+                          int32_t base_w, int32_t n) {
+    using LP = typename local_mptr<T>::pointer;
+    using Tile = Mat<T, Dyn, Dyn, Ext<LDA>, Mem::Local, Cyclic, LP>;
+    using Col = Vec<T, Dyn, Unit, Mem::Local, Cyclic, LP>;
+    return sytd2<Uplo::Upper>(wrap(part), Tile{A_local, Dyn{n}, Dyn{n}, {}, base_a}, Col{V_local, Dyn{n}, {}, base_v},
+                              Col{W_local, Dyn{n}, {}, base_w}, n);
+}
+
+// The CTA tier's one body (P x P tile, ld P): the Hermitian tile from A's UL triangle, sytd2,
+// d / e / tau out, the reduced tile back to A. Buf is the local memory's base (a
+// sycl::local_accessor<T, 1>, or a decorated pointer) and base_* the element offsets of this
+// problem's tile, v and w. live == false (a masked-off item) reduces a zero tile and stores
+// nothing. The host sytrd_cta kernel and device::sytrd<UL, tier::Cta<P>> both run it.
+template <Uplo UL, class T, size_t P, bool M, class Buf, class MA, class DV, class EV, class TV>
+BATCHLAS_DLA_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, const Buf& A_local, int32_t base_a,
+                                       const Buf& V_local, int32_t base_v, const Buf& W_local, int32_t base_w,
+                                       const MA& A, DV D_prob, EV E_prob, TV TAU_prob, int32_t n, bool live) {
+    constexpr int kP = static_cast<int>(P);
+    const auto ex = wrap(part);
+    const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+    // Views with the local base itself: the uniform base keeps [R.X4+UR] addressing.
+    using Tile = Mat<T, Ext<kP>, Ext<kP>, Ext<kP>, Mem::Local, Cyclic, Buf>;
+    using Col = Vec<T, Dyn, Unit, Mem::Local, Cyclic, Buf>;
+    const Tile tile{A_local, {}, {}, {}, base_a};
+
+    // Item r loads row r of the named triangle (coalesced); Im(diag) dropped; zero past n.
+    lacpy_herm<UL, arith::Native>(Fit{ex}, A, tile, live);
+    group_barrier(part);
+
+    if constexpr (UL == Uplo::Upper) {
+        const T tau_lane = sytd2_upper_tile<T, kP>(part, decorated_ptr(A_local), base_a, decorated_ptr(V_local), base_v,
+                                                   decorated_ptr(W_local), base_w, n);
+        // The tridiagonal straight off the reduced tile.
+        if (live && lane < n) {
+            D_prob(lane) = A_local[base_a + lane + lane * kP];
+        }
+        if (live && lane < (n - 1)) {
+            E_prob(lane) = A_local[base_a + lane + (lane + 1) * kP];
+            TAU_prob(lane) = tau_lane;
+        }
+    } else {
+        // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then). live by
+        // value: a flag the nested lambda takes by reference can land in local memory.
+        sytd2<Uplo::Lower>(ex, tile, Col{V_local, Dyn{n}, Unit{}, base_v}, Col{W_local, Dyn{n}, Unit{}, base_w}, n,
+                           [&, live](int32_t i, const T& beta, const T& taui) {
+                               if (live) {
+                                   E_prob(i) = beta;
+                                   TAU_prob(i) = taui;
+                                   D_prob(i) = tile(i, i);
+                               }
+                           });
+        if (live && lane == 0) {
+            D_prob(n - 1) = A_local[base_a + (n - 1) + (n - 1) * kP];
+        }
+    }
+
+    group_barrier(part);
+
+    // Write back A, one row per lane (core lacpy owns elements 2-D Cyclic, not rows).
+    if (live) lacpy_rows(Fit{ex}, tile.sub(0, 0, n, n), A);
+}
+
+// The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.
+template <int N, class T> struct cta_plan {
+    Plan plan{};
+    ws::Slot<T> a{}, v{}, w{};
+    constexpr cta_plan()
+        : a(plan.take<T>(ws::Space::Local, static_cast<std::size_t>(N) * N)), v(plan.take<T>(ws::Space::Local, N)),
+          w(plan.take<T>(ws::Space::Local, N)) {}
+};
+
+}  // namespace sytrd_detail
+
+namespace routine {
+// xSYTRD / xHETRD, triangle UL.
+template <Uplo UL> struct sytrd {
+    static constexpr const char* name = "sytrd";
+};
+}  // namespace routine
+
+template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::sytrd<UL>, tier::Cta<N, Alg>, T> {
+    static_assert(N == 4 || N == 8 || N == 16 || N == 32, "sytrd: tier::Cta<N> has N in {4, 8, 16, 32}");
+    static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
+    static constexpr int sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 1 && n <= N; }
+    static constexpr WorkspaceSize buffer_size(int) { return sytrd_detail::cta_plan<N, T>{}.plan.size(); }
+};
+template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
+    using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
+};
+
+// Bytes of ONE problem's workspace (local: tile + v + w; global: none).
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrd_buffer_size(int n) {
+    return tier_info<routine::sytrd<UL>, resolve_tier_t<routine::sytrd<UL>, T, Tier>, T>::buffer_size(n);
+}
+
+// xSYTRD / xHETRD (unblocked: xSYTD2) on one n x n matrix A (n = A.rows() <= N) per
+// SgpPartition<N>, reading only A's UL triangle (Im(diag) ignored). A leaves in LAPACK's packing
+// with BOTH triangles written (the reflectors in UL, the conjugate mirror in the other); d(i) =
+// A(i,i), e(i) the off-diagonal, tau(i) (i < n-1) the reflector scalars, all of A's scalar type.
+// ws.local: sytrd_buffer_size bytes for this problem. COLLECTIVE over the partition. Returns 0,
+// or -2 when A is not square with 1 <= n <= N.
+template <Uplo UL, class Tier, class Ex, class MA, class DV, class EV, class TV>
+BATCHLAS_DLA_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws) {
+    using T = std::remove_cv_t<typename MA::value_type>;
+    using R = routine::sytrd<UL>;
+    using Tr = resolve_tier_t<R, T, Tier>;
+    static_assert(HasTier<R, Tr, T>, "sytrd: the routine has no such tier (tier::Cta<N> only)");
+    constexpr int N = Tr::n_max;
+    static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
+                  "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+    const int n = A.rows();
+    if (n < 1 || n > N || A.cols() != n) return -2;
+    const sytrd_detail::cta_plan<N, T> plan{};
+    const auto a = carve_local(ws, plan.a).get();
+    const auto v = carve_local(ws, plan.v).get();
+    const auto w = carve_local(ws, plan.w).get();
+    sytrd_detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
+    return 0;
 }
 
 }  // namespace batchlas::device
