@@ -583,7 +583,8 @@ function(batchlas_add_test_target test_name)
     endif()
     if(test_name STREQUAL "gesvd_mask_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
+            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc"
+            BATCHLAS_GEBRD_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/device/lapack/gebrd.hh")
     endif()
     if(test_name STREQUAL "ormqr_mask_tests")
         target_compile_definitions(${test_name} PRIVATE
