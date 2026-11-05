@@ -98,13 +98,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 const v2::RtGroup<> all(it);
                 const Tile<D> G = rev_mat(const_cast<D*>(ap) + b * stra, lda, n, rev);
                 v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
-                const int* const gp = piv + b * n;
-                v2::for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY {
-                    S.ps[k] = v2::sytrs_detail::logical_piv(gp[rev ? n - 1 - k : k], n, rev);
-                });
-                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
-                const bool ok = v2::syconv<D>(S, n, S.ps, S.perm, S.kind, S.e, all, &im[3 * n]);
-                v2::sytrs_cols<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
+                v2::sytrs_detail::sytrs_cta_solve<R>(all, sg, lane, sgid, nsg, S, piv + b * n, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();

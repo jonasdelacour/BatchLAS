@@ -125,30 +125,22 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const v2::SubGroup<kSytrfCtaWg> g{sg};  // sub-group 0 factors
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Tile<D> S = rev_mat(tp, kLdt, n, false);
-                v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
-                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
-                if (sgid == 0) {
-                    int* const gp = piv + b * n;
-                    const int st = v2::sytf2(S, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]}, [&](int k, int v) {
+                int* const gp = piv + b * n;
+                v2::sytrf_detail::sytrf_cta_factor(
+                    all, g, sgid == 0, G, S, n, upper, ArgMaxScratch<R>{&red[0], &redi[0]},
+                    [&](int k, int v) {
                         gp[k] = v;
                         pp[k] = v;
-                    });
-                    v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(g, S, G);
-                    if (lane == 0) {
+                    },
+                    [&](int st) {
                         info[b] = st;
                         pp[4 * kN + 1] = st;
-                    }
-                }
+                    });
                 if (bp == nullptr) return;
                 v2::sync<v2::scope::Group>(all, v2::Mem::Global);
                 if (pp[4 * kN + 1] != 0) return;
                 const v2::sytrs_detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
-                v2::for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY {
-                    L.ps[k] = v2::sytrs_detail::logical_piv(pp[upper ? n - 1 - k : k], n, upper);
-                });
-                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
-                const bool ok = v2::syconv<D>(L, n, L.ps, L.perm, L.kind, L.e, all, pp + 4 * kN);
-                v2::sytrs_cols<1>(sg, lane, sgid, nsg, L, ok, upper, bp + b * strb, ldb, nrhs);
+                v2::sytrs_detail::sytrs_cta_solve<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
