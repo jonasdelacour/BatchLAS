@@ -20,6 +20,7 @@
 #include <batchlas/device/lapack/potrf.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/sycl/local_mem.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -259,14 +260,16 @@ TYPED_TEST(DeviceApiPotrfTest, RegMatchesHostRoute) {
     }
 }
 
-// The host route's own ceiling (LOCAL_MEM_SIZE - 4096 at its default occupancy target) bounds n.
+// The host route's own ceiling (its LOCAL_MEM_SIZE property, which on acpp Metal already excludes
+// the runtime's per-item scratch, less 4096, at its default occupancy target) bounds n; below 64
+// (Metal: 24 KB) the ceiling itself is a case.
 TYPED_TEST(DeviceApiPotrfTest, CtaMatchesHostRoute) {
     using T = TypeParam;
-    const std::size_t local = this->dev.q().get_device().template get_info<sycl::info::device::local_mem_size>();
-    const int ceil = sycl_potrf::potrf_cta_max_n_for_slm<T>(local > 4096 ? local - 4096 : 0);
-    ASSERT_GE(ceil, 37) << "the host cta route must reach the multi-panel orders";
-    for (int n : {1, 7, 8, 9, 37, 64}) {
-        if (n > ceil) continue;
+    const std::size_t local = this->dev.ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
+    const int ceil = sycl_potrf::potrf_cta_max_n_for_slm<T>(resident::device_slm_budget(local));
+    ASSERT_GE(ceil, 17) << "the host cta route must reach the multi-panel orders";
+    for (int n : {1, 7, 8, 9, 37, 64, ceil}) {
+        if (n > ceil || n > 64) continue;
         cta_case<T, Uplo::Lower, 64>(this->dev, n);
         cta_case<T, Uplo::Upper, 64>(this->dev, n);
     }
@@ -289,7 +292,9 @@ template <class T> int cta_fit(std::size_t bytes) {
 
 TYPED_TEST(DeviceApiPotrfTest, CtaAtTheLocalMemoryCeiling) {
     using T = TypeParam;
-    const std::size_t local = this->dev.q().get_device().template get_info<sycl::info::device::local_mem_size>();
+    // What a work-group of Cta<128>'s width may request (acpp Metal adds 8 B per item of scratch).
+    constexpr int kWg = dv::tier_info<dv::routine::potrf<Uplo::Lower>, dv::tier::Cta<128>, T>::wg_size;
+    const std::size_t local = batchlas::impl::local_mem_bytes(this->dev.q().get_device(), kWg);
     const int n = cta_fit<T>(local);  // the plan does not depend on the tier's bound
     ASSERT_GT(n, 32);
     const auto p = make_prob<T>(n, Uplo::Lower);
