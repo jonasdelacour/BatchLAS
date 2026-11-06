@@ -85,7 +85,6 @@ No `nb` equals a fit ceiling; sizing `nb` from the fit ceiling is measurably wro
 
 * `local_mem_size` is **101,376 B**; the budget is `local_mem_size - 4096` = **97,280 B** (`select::Device::slm_budget`).
   `kPotrfReferenceSlmBudget` (`potrf_cta.cc:50`) serves only `potrf_cta_max_n<T>()`.
-* `device_limits.hh`'s 49,152 (`cmake/BatchLASDetectSYCL.cmake`) is wrong here by 2.06x; no decision reads it.
 * The accessor slack is 256 B (at float \f$n = 155\f$, `ncu` reports 96,408 B).
 
 Ceilings, the resident row launched cold and correct (`slm/maxn_fitcheck.csv`), pinned by

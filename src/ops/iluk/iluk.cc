@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
+#include <src/ops/iluk/iluk_plan.hh>
 
 #include <src/util/template-instantiations.hh>
 
+#include <batchlas/device.hh>
 #include <batchlas/blas/functions/iluk.hh>
+#include <batchlas/device/sparse.hh>
 #include <batchlas/util/mempool.hh>
 #include <optional>
 #include <cstdlib>
@@ -22,19 +25,13 @@
 namespace batchlas {
 namespace {
 
+namespace v2 = batchlas::device;
+
 template <typename T>
 using RealT = typename base_type<T>::type;
 
-template <typename T>
-inline RealT<T> abs_value(const T& v) {
-    // Not std::abs for complex: it lowers to a libm cabs call that the
-    // native_cpu device link cannot resolve.
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-        return sycl::hypot(v.real(), v.imag());
-    } else {
-        return static_cast<RealT<T>>(std::abs(v));
-    }
-}
+// |x| of every drop and pivot test, host and device (std::abs, or hypot for complex).
+using v2::iluk_detail::pivot_modulus;
 
 template <typename T>
 inline T real_scalar(RealT<T> value) {
@@ -50,8 +47,8 @@ inline T stabilize_pivot_or_mark(const T& pivot,
                                  RealT<T> row_scale,
                                  const ILUKParams<T>& params,
                                  int32_t* status) {
-    const auto shift_mag = abs_value(params.diagonal_shift);
-    const auto pivot_mag = abs_value(pivot);
+    const auto shift_mag = pivot_modulus(params.diagonal_shift);
+    const auto pivot_mag = pivot_modulus(pivot);
     const auto threshold = std::max(shift_mag, params.diag_pivot_threshold * std::max(row_scale, RealT<T>(1)));
 
     if (pivot_mag >= threshold && pivot_mag > RealT<T>(0)) {
@@ -60,7 +57,7 @@ inline T stabilize_pivot_or_mark(const T& pivot,
 
     if (shift_mag > RealT<T>(0)) {
         const T shifted = pivot + params.diagonal_shift;
-        if (abs_value(shifted) >= threshold && abs_value(shifted) > RealT<T>(0)) {
+        if (pivot_modulus(shifted) >= threshold && pivot_modulus(shifted) > RealT<T>(0)) {
             return shifted;
         }
         if (shift_mag >= threshold) {
@@ -80,30 +77,6 @@ inline T stabilize_pivot_or_mark(const T& pivot,
 }
 
 template <typename T>
-inline T stabilize_pivot_or_mark(const T& pivot,
-                                 const T& diagonal_shift,
-                                 int32_t* status) {
-    const auto shift_mag = abs_value(diagonal_shift);
-    const auto pivot_mag = abs_value(pivot);
-    if (pivot_mag > shift_mag) {
-        return pivot;
-    }
-
-    if (shift_mag > RealT<T>(0)) {
-        const T shifted = pivot + diagonal_shift;
-        if (abs_value(shifted) > shift_mag) {
-            return shifted;
-        }
-        return diagonal_shift;
-    }
-
-    if (status != nullptr) {
-        *status = 1;
-    }
-    return T(1);
-}
-
-template <typename T>
 bool u_diagonals_are_usable(const T* vals,
                             const int* diag_positions,
                             int n,
@@ -114,7 +87,7 @@ bool u_diagonals_are_usable(const T* vals,
         if (host_mask != nullptr && host_mask[b] == 0) continue;  // an inactive item's factor is scratch
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
-            (void)stabilize_pivot_or_mark(vals[diag_positions[b * n + i]], diagonal_shift, &status);
+            (void)v2::iluk_detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
             if (status != 0) return false;
         }
     }
@@ -148,7 +121,7 @@ RealT<T> row_scale(const T* values, const uint8_t* keep_flags, int len) {
     RealT<T> scale = RealT<T>(0);
     for (int idx = 0; idx < len; ++idx) {
         if (keep_flags != nullptr && keep_flags[idx] == 0) continue;
-        scale = std::max(scale, abs_value(values[idx]));
+        scale = std::max(scale, pivot_modulus(values[idx]));
     }
     return scale;
 }
@@ -170,7 +143,7 @@ void apply_drop_and_fill_control(T* row_values,
     for (int idx = 0; idx < len; ++idx) {
         keep_flags[idx] = 1;
         if (idx == diag_index) continue;
-        if (abs_value(row_values[idx]) <= drop_threshold) {
+        if (pivot_modulus(row_values[idx]) <= drop_threshold) {
             if (params.modified_ilu) {
                 row_values[diag_index] += row_values[idx];
             }
@@ -178,7 +151,7 @@ void apply_drop_and_fill_control(T* row_values,
             keep_flags[idx] = 0;
             continue;
         }
-        candidates.emplace_back(abs_value(row_values[idx]), idx);
+        candidates.emplace_back(pivot_modulus(row_values[idx]), idx);
     }
 
     const int offdiag_quota = std::max(0, static_cast<int>(std::ceil(params.fill_factor * static_cast<RealT<T>>(original_row_nnz))) - 1);
@@ -599,32 +572,6 @@ template <Backend B, typename T> struct ILUKUnionKernel;
 template <Backend B, typename T> struct ILUKGatherKernel;
 template <Backend B, typename T> struct ILUKDiagCheckKernel;
 
-// Kernel-safe counterpart of stabilize_pivot_or_mark: reports an unusable pivot
-// through `status` instead of throwing, since the host cannot catch an exception
-// raised inside a kernel. The caller rechecks status once, after the queue drains.
-template <typename T>
-inline T stabilize_pivot_no_throw(const T& pivot,
-                                  RealT<T> scale,
-                                  const T& diagonal_shift,
-                                  RealT<T> diag_pivot_threshold,
-                                  int32_t* status) {
-    const auto shift_mag = abs_value(diagonal_shift);
-    const auto pivot_mag = abs_value(pivot);
-    const auto one = RealT<T>(1);
-    const auto scaled = diag_pivot_threshold * (scale > one ? scale : one);
-    const auto threshold = shift_mag > scaled ? shift_mag : scaled;
-
-    if (pivot_mag >= threshold && pivot_mag > RealT<T>(0)) return pivot;
-    if (shift_mag > RealT<T>(0)) {
-        const T shifted = pivot + diagonal_shift;
-        if (abs_value(shifted) >= threshold && abs_value(shifted) > RealT<T>(0)) return shifted;
-        if (shift_mag >= threshold) return diagonal_shift;
-    }
-    if (threshold > RealT<T>(0)) return real_scalar<T>(threshold);
-    if (status != nullptr) *status = 1;
-    return T(1);
-}
-
 // Everything about an ILU(k) factorization that is fixed by A's sparsity pattern.
 // Building this costs the same as one batch element's structural walk no matter
 // how large the batch is.
@@ -938,71 +885,11 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             if (masked && mask[b] == 0) return;
             const int i = level_rows[begin + t];
 
-            auto at = [&](int slot) -> T& { return work[static_cast<size_t>(slot) * batch + b]; };
-
-            for (int e = step_ptr[i]; e < step_ptr[i + 1]; ++e) {
-                const T lij = at(step_target[e]) / at(step_pivot[e]);
-                at(step_target[e]) = lij;
-                for (int u = step_upd_ptr[e]; u < step_upd_ptr[e + 1]; ++u) {
-                    at(upd_dst[u]) -= lij * at(upd_src[u]);
-                }
-            }
-
-            const int rs = sym_ro[i];
-            const int re = sym_ro[i + 1];
-            const int dg = diag_abs[i];
-
-            RealT<T> scale = RealT<T>(0);
-            for (int p = rs; p < re; ++p) {
-                const auto m = abs_value(at(p));
-                if (m > scale) scale = m;
-            }
-            const auto one = RealT<T>(1);
-            const auto threshold = drop_tolerance * (scale > one ? scale : one);
-
-            int kept = 0;
-            for (int p = rs; p < re; ++p) {
-                if (p == dg) continue;
-                if (abs_value(at(p)) <= threshold) {
-                    if (modified_ilu) at(dg) += at(p);
-                    at(p) = T(0);
-                } else {
-                    ++kept;
-                }
-            }
-
-            // Fill quota: keep the largest `quota` off-diagonal entries. Repeatedly
-            // dropping the smallest survivor is equivalent to sorting and truncating,
-            // and avoids needing per-row scratch in the kernel. With the default
-            // fill_factor this loop does not run at all.
-            const int quota_raw = static_cast<int>(sycl::ceil(fill_factor * static_cast<RealT<T>>(orig_nnz[i]))) - 1;
-            const int quota = quota_raw > 0 ? quota_raw : 0;
-            while (kept > quota) {
-                int victim = -1;
-                RealT<T> smallest = RealT<T>(0);
-                for (int p = rs; p < re; ++p) {
-                    if (p == dg) continue;
-                    const auto m = abs_value(at(p));
-                    if (m == RealT<T>(0)) continue;
-                    // Smallest magnitude wins; on a tie the later column is dropped, which
-                    // is the same survivor set the host path's tie-break produces.
-                    if (victim < 0 || m < smallest || (m == smallest && p > victim)) {
-                        victim = p;
-                        smallest = m;
-                    }
-                }
-                if (victim < 0) break;
-                if (modified_ilu) at(dg) += at(victim);
-                at(victim) = T(0);
-                --kept;
-            }
-
-            RealT<T> final_scale = RealT<T>(0);
-            for (int p = rs; p < re; ++p) {
-                const auto m = abs_value(at(p));
-                if (m > final_scale) final_scale = m;
-            }
-            at(dg) = stabilize_pivot_no_throw(at(dg), final_scale, diagonal_shift, diag_pivot_threshold, st);
+            // Item b's slots of the slot-major working values; row i as the device op runs it
+            // (operands in the body's first-use order: the capture layout is unchanged).
+            const v2::InterleavedVec<T> at{work, batch, b};
+            v2::iluk_detail::eliminate_row(at, i, step_ptr, step_target, step_pivot, step_upd_ptr, upd_dst, upd_src, sym_ro, diag_abs,
+                                           drop_tolerance, modified_ilu, fill_factor, orig_nnz, diagonal_shift, diag_pivot_threshold, st);
         });
     }
     q.wait_and_throw();
@@ -1028,7 +915,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             // threshold was dropped, so a non-zero value is exactly a kept one.
             // An inactive item keeps nothing: the union is over the active items.
             if (masked && mask[b] == 0) continue;
-            if (abs_value(work[slot * batch + b]) != RealT<T>(0)) keep = 1;
+            if (pivot_modulus(work[slot * batch + b]) != RealT<T>(0)) keep = 1;
         }
         ku[slot] = keep;
     });
@@ -1082,8 +969,8 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         if (masked && mask[b] == 0) return;  // neutral: an inactive item counts as usable
         const int slot = c2s[diag_off[i]];
         int32_t local = 0;
-        (void)stabilize_pivot_no_throw(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0),
-                                       diagonal_shift, RealT<T>(0), &local);
+        (void)v2::iluk_detail::stabilize_pivot(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0), diagonal_shift,
+                                               RealT<T>(0), &local);
         if (local != 0) *df = 1;
     });
     ctx.wait_and_throw();
@@ -1168,6 +1055,30 @@ std::vector<uint8_t> host_path_mask(Queue& ctx, Span<const uint8_t> mask) {
 }
 
 }  // namespace
+
+namespace sycl_iluk {
+template <typename T>
+IlukPlanStorage iluk_plan(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params) {
+    validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
+    const int n = A.rows();
+    const auto sym = build_iluk_symbolic(A.row_offsets(), A.col_indices(), n, A.nnz(), params.levels_of_fill);
+    const auto u = build_level_schedule(sym.sym_ro, sym.sym_ci, n, /*lower=*/false);
+    // device::IlukPlan's pointer order.
+    auto packed = pack_ints({&sym.sym_ro, &sym.sym_ci, &sym.diag_abs, &sym.original_row_nnz, &sym.a_to_sym, &sym.step_ptr,
+                             &sym.step_target, &sym.step_pivot_diag, &sym.step_upd_ptr, &sym.upd_src, &sym.upd_dst,
+                             &sym.levels.level_ptr, &sym.levels.rows, &u.level_ptr, &u.rows},
+                            0);
+    IlukPlanStorage out;
+    for (int k = 0; k < IlukPlanStorage::kArrays; ++k) out.offsets[static_cast<std::size_t>(k)] = packed.offsets[static_cast<std::size_t>(k)];
+    out.ints = std::move(packed.buffer);
+    out.n = n;
+    out.a_nnz = sym.a_nnz;
+    out.nnz = sym.sym_nnz;
+    out.levels = sym.levels.levels;
+    out.u_levels = u.levels;
+    return out;
+}
+}  // namespace sycl_iluk
 
 template <typename T>
 void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
@@ -1455,53 +1366,20 @@ Event iluk_apply(Queue& ctx,
         const int linear = static_cast<int>(item.get_group(0));
         const int b = linear / nrhs;
         const int col = linear % nrhs;
-        const int lid = static_cast<int>(item.get_local_id(0));
         if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
+        const v2::WorkGroup<wg_size> ex{item};
 
+        // Thin launcher over the device iluk_apply. The operands are formed in the order the solve
+        // reads them, so the kernel's capture layout (its parameter order) is the hand kernel's.
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
-        const int rhs_base = b * rhs_kv.stride_ + col * rhs_kv.ld_;
-        const int out_base = b * out_kv.stride_ + col * out_kv.ld_;
-
-        // Forward solve into out (as temporary y).
-        for (int lv = 0; lv < l_levels; ++lv) {
-            const int begin = l_level_ptr[lv];
-            const int end = l_level_ptr[lv + 1];
-            for (int t = begin + lid; t < end; t += wg_size) {
-                const int i = l_rows[t];
-                T sum = rhs_data[rhs_base + i];
-                const int rs = lu_ro[ro_base + i];
-                const int re = lu_ro[ro_base + i + 1];
-                for (int p = rs; p < re; ++p) {
-                    const int j = lu_ci[lu_base + p];
-                    if (j >= i) break;
-                    sum -= lu_vals[lu_base + p] * out_data[out_base + j];
-                }
-                out_data[out_base + i] = sum;
-            }
-            sycl::group_barrier(item.get_group());
-        }
-
-        for (int lv = 0; lv < u_levels; ++lv) {
-            const int begin = u_level_ptr[lv];
-            const int end = u_level_ptr[lv + 1];
-            for (int t = begin + lid; t < end; t += wg_size) {
-                const int i = u_rows[t];
-                T sum = out_data[out_base + i];
-                const int diag_abs = diag_pos[b * n + i];
-                const int re = lu_ro[ro_base + i + 1];
-                // Usability of every U diagonal was established when the factor was
-                // built; this only substitutes the shifted value.
-                T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
-                // Columns are sorted ascending, so the strict upper part of row i
-                // starts one past the diagonal.
-                for (int p = diag_abs - lu_base + 1; p < re; ++p) {
-                    sum -= lu_vals[lu_base + p] * out_data[out_base + lu_ci[lu_base + p]];
-                }
-                out_data[out_base + i] = sum / diag;
-            }
-            sycl::group_barrier(item.get_group());
-        }
+        const v2::BasedVec<const T> lu_val{lu_vals, lu_base};
+        const v2::BasedVec<const int> lu_col{lu_ci, lu_base};
+        const v2::BasedVec<const T> rhs_col{rhs_data, b * rhs_kv.stride_ + col * rhs_kv.ld_};
+        const v2::BasedVec<T> y{out_data, b * out_kv.stride_ + col * out_kv.ld_};
+        const v2::IlukFactor<T> factor{lu_val,   lu_col,      l_levels, l_level_ptr, l_rows, lu_ro,     ro_base,
+                                       u_levels, u_level_ptr, u_rows,   diag_pos,    b * n,  diag_shift};
+        (void)v2::iluk_apply<v2::tier::Blocked<1>>(ex, factor, rhs_col, y);
     });
 
     // No host sync here: the caller owns synchronization, so repeated applications
@@ -1515,7 +1393,8 @@ size_t iluk_apply_buffer_size(Queue&, const ILUKView<T>&, const MatrixView<T, Ma
 }
 
 #define ILUK_INSTANTIATE_COMMON(FP) \
-    template void iluk_build_level_schedule<FP>(ILUKPreconditioner<FP>&);
+    template void iluk_build_level_schedule<FP>(ILUKPreconditioner<FP>&); \
+    template sycl_iluk::IlukPlanStorage sycl_iluk::iluk_plan<FP>(const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&);
 
 ILUK_INSTANTIATE_COMMON(float)
 ILUK_INSTANTIATE_COMMON(double)

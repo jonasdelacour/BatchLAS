@@ -9,10 +9,12 @@
 // partition must reach every partition collective, so no kernel here returns early.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/arith.hh>
 
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/backend_config.h>
 
@@ -40,28 +42,20 @@ constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the ti
 }
 
 // COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
-// lane guard belongs INSIDE it. Complex shuffles as two reals: permute/select reject an
-// aggregate (gesvdj_cta.cc:95).
+// lane guard belongs INSIDE it. Device LA v2 Partition::bcast: complex shuffles as two
+// reals (permute/select reject an aggregate, gesvdj_cta.cc:95).
 template <typename D, std::size_t P>
 inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) {
-        return D{select_from_group(part, v.re, src), select_from_group(part, v.im, src)};
-    } else {
-        return select_from_group(part, v, src);
-    }
+    return ::batchlas::device::wrap(part).bcast(v, src);
 }
 
 // COMPONENT BY COMPONENT, never a plain `?:` on a complex scalar: LLVM will not build a
 // `select` of a 16-byte aggregate, SROA then declines to promote rA[] and the array leaves
-// the register file. evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
-
+// the register file. Core select is that rule; this name stays until posv_tiny.cc calls it.
+// evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 template <typename D>
-inline D tiny_select(bool cond, D a, D b) {
-    if constexpr (sycl_device::dev_is_complex_v<D>) {
-        return D{cond ? a.re : b.re, cond ? a.im : b.im};
-    } else {
-        return cond ? a : b;
-    }
+BATCHLAS_DLA_INLINE D tiny_select(bool cond, D a, D b) {
+    return ::batchlas::device::select(cond, a, b);
 }
 
 // A row that is not `row_live`, and every row of a dead partition, carries the IDENTITY,
@@ -211,7 +205,6 @@ inline int tiny_partition_id(const sycl::sub_group& sg, SubGroupPartition<P> par
            static_cast<int>(part.get_group_linear_id());
 }
 
-
 // ONE ELEMENT of the N x N padded tile. Per element, not per row, DELIBERATELY: the one
 // spelling that cannot take the address of the caller's register array, in the tier's
 // hottest loop. Pad rows and columns carry the IDENTITY; `live` short-circuits.
@@ -222,31 +215,6 @@ inline D tiny_load_pad_identity(const D* __restrict base, int r, int c, int n,
         return base[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
     }
     return (r == c) ? sycl_device::dev_one<D>() : D{};
-}
-
-// (magnitude, key) PAIR argmax. The XOR mask is a power of two below N and so uniform
-// across the whole 32-lane sub-group, which sg_partition.hh's generic backend requires.
-// THE CALLER OWES A NaN-FREE SEED: NaN loses every comparison, so it survives every round
-// and the lanes disagree about the winner. evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
-template <int N, typename R, typename Part>
-inline void tiny_argmax_pair(const Part& part, R& a, int& key) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        const R ov = permute_group_by_xor(part, a, mask);
-        const int ok = permute_group_by_xor(part, key, mask);
-        if (ov > a || (ov == a && ok < key)) { a = ov; key = ok; }
-    }
-}
-
-// The ONLY pivot-key encoding: ORDERING field high (lowest wins), winner's LANE low. Every
-// ordering field must stay distinct in a partition. evidence: docs/perf/lu.md#the-pivot-key-encoding
-inline constexpr int kTinyKeyLaneBits = 8;
-inline constexpr int tiny_key(int order_field, int lane) {
-    return (order_field << kTinyKeyLaneBits) | lane;
-}
-inline constexpr int tiny_key_order(int key) { return key >> kTinyKeyLaneBits; }
-inline constexpr uint32_t tiny_key_lane(int key) {
-    return static_cast<uint32_t>(key) & ((1u << kTinyKeyLaneBits) - 1u);
 }
 
 }  // namespace batchlas::tiny_native

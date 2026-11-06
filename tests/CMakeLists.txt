@@ -21,126 +21,175 @@ set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
 set(TEST_TARGETS
-    sg_partition_tests
-    util_span_tests
-    util_vector_tests
-    philox_tests
-    util_device_queue_tests
-    device_blas_tests
-    mempool_tests
     backend_dispatch_tests
-    options_api_tests
-    resident_capacity_tests
-    settings_tests
-    select_tests
-    tuned_tables_tests
-    tune_tests
-    verify_tests
-    tune_race_gpu_tests
-    error_model_tests
-    linalg_layer_tests
-    gemm_tests
-    gemm_mask_tests
-    iluk_mask_tests
-    getrf_mask_tests
-    getrs_mask_tests
-    syev_mask_tests
-    sygvd_mask_tests
-    geqrf_mask_tests
-    ormqr_mask_tests
-    trsm_mask_tests
-    level3_mask_tests
-    spmm_mask_tests
-    sytrf_mask_tests
-    potrf_mask_tests
-    gesvd_mask_tests
-    norm_mask_tests
-    ortho_mask_tests
-    syevx_mask_tests
-    steqr_mask_tests
-    stedc_mask_tests
-    tridiag_mask_tests
-    syevx_tests
-    syevx_range_tests
-    lanczos_tests
-    gemv_tests
-    matrix_tests
-    matrix_view_tests
-    batch_mask_view_tests
     batch_mask_entries_tests
-    masked_contract_tests
-    trsm_tests
-    potrf_tests
-    potrf_candidates_tests
-    posv_candidates_tests
-    trsm_candidates_tests
-    symm_candidates_tests
-    symm_mirror_tests
-    gemm_candidates_tests
-    gemv_candidates_tests
-    getrf_candidates_tests
-    getrs_candidates_tests
-    getri_candidates_tests
-    gesv_candidates_tests
-    geqrf_tests
-    geqrf_candidates_tests
-    getrf_tests
-    vendor_ptr_array_tests
-    gesv_tests
-    posv_tests
-    potri_tests
-    potrs_tests
-    ortho_tests
-    inverse_tests
-    norm_tests
+    batch_mask_view_tests
+    bdsdc_tests
+    bdsqr_tests
     cond_tests
-    ormqr_tests
-    ormqr_cta_tests
-    ormqr_blocked_tests
-    ormqr_candidates_tests
-    orgqr_tests
-    orgqr_candidates_tests
-    transpose_tests
-    iluk_tests
-    spmm_tests
-    spmm_candidates_tests
-    symm_tests
-    hemm_tests
-    herk_tests
-    her2k_tests
-    hermitian_candidates_tests
-    syrk_tests
-    syr2k_tests
-    syr2k_candidates_tests
-    syev_tests
+    device_api_chol_tests
+    device_api_gemv_tests
+    device_api_getrf_tests
+    device_api_l3_tests
+    device_api_potrf_tests
+    device_api_qr_tests
+    device_api_sb2st_tests
+    device_api_sparse_tests
+    device_api_stebz-stein_tests
+    device_api_stedc_tests
+    device_api_svd_tests
+    device_api_sygst_tests
+    device_api_sytrf_tests
+    device_api_util_tests
+    device_blas_v2_bdsqr-bdsdc_tests
+    device_blas_v2_elementwise-glue_tests
+    device_blas_v2_gebrd_tests
+    device_blas_v2_gemm-components_tests
+    device_blas_v2_gemv-native_tests
+    device_blas_v2_geqrf_tests
+    device_blas_v2_gesvd-ormbr_tests
+    device_blas_v2_getrf_tests
+    device_blas_v2_getrs-getri-gesv_tests
+    device_blas_v2_iluk-spmm_tests
+    device_blas_v2_jacobi_tests
+    device_blas_v2_krylov-ortho-ritz_tests
+    device_blas_v2_larft-orgqr-ormqr_tests
+    device_blas_v2_potrf-cta-lpanel_tests
+    device_blas_v2_potri_tests
+    device_blas_v2_sb2st-sy2sb_tests
+    device_blas_v2_stedc_tests
+    device_blas_v2_syev-cta-trio_tests
+    device_blas_v2_syevx_tests
+    device_blas_v2_sygst-sygvd-syfn_tests
+    device_blas_v2_sytrf-sytrs_tests
+    device_blas_v2_tests
+    device_blas_v2_tridiag-stebz-stein_tests
+    device_blas_v2_trsm_tests
+    device_core_arith_tests
+    device_core_exec_tests
+    device_core_lapack_aux_tests
+    device_core_level1_tests
+    device_core_level2_tests
+    device_core_level3_tests
+    device_core_operand_tests
+    device_core_reduce_tests
+    device_core_scalar_tests
+    device_core_tier_tests
+    device_core_view_tests
+    error_model_tests
+    gemm_candidates_tests
+    gemm_mask_tests
+    gemm_tests
+    gemv_candidates_tests
+    gemv_tests
+    geqrf_candidates_tests
+    geqrf_mask_tests
+    geqrf_tests
+    gesv_candidates_tests
+    gesv_tests
+    gesvd_candidates_tests
+    gesvd_mask_tests
     gesvd_tests
     gesvdj_cta_tests
-    gesvd_candidates_tests
-    bdsqr_tests
-    bdsdc_tests
-    steqr_tests
-    stebz_tests
-    stein_tests
-    trmm_tests
-    trmm_candidates_tests
-    stedc_tests
+    getrf_candidates_tests
+    getrf_mask_tests
+    getrf_tests
+    getri_candidates_tests
+    getrs_candidates_tests
+    getrs_mask_tests
+    group_collectives_tests
+    hemm_tests
+    her2k_tests
+    herk_tests
+    hermitian_candidates_tests
+    iluk_mask_tests
+    iluk_tests
+    inverse_tests
+    lanczos_tests
+    level3_mask_tests
+    linalg_layer_tests
+    masked_contract_tests
+    matrix_tests
+    matrix_view_tests
+    mempool_tests
+    norm_mask_tests
+    norm_tests
+    options_api_tests
+    orgqr_candidates_tests
+    orgqr_tests
+    ormqr_blocked_tests
+    ormqr_candidates_tests
+    ormqr_cta_tests
+    ormqr_mask_tests
+    ormqr_tests
+    ortho_mask_tests
+    ortho_tests
+    philox_tests
+    posv_candidates_tests
+    posv_tests
+    potrf_candidates_tests
+    potrf_mask_tests
+    potrf_tests
+    potri_tests
+    potrs_tests
+    resident_capacity_tests
     ritz_values_tests
-    sytrd_sy2sb_tests
-    sytrd_sb2st_tests
-    sytrd_sb2st_hh_tests
-    sytrd_cta_tests
-    sytrd_blocked_tests
+    select_tests
+    settings_tests
+    sg_partition_tests
+    spmm_candidates_tests
+    spmm_mask_tests
+    spmm_tests
+    stebz_tests
+    stedc_mask_tests
+    stedc_tests
+    stein_tests
+    steqr_mask_tests
+    steqr_tests
+    syev_align_tests
+    syev_blocked_tests
+    syev_candidates_tests
+    syev_cta_fused_tests
     syev_cta_tests
     syev_jacobi_cta_tests
-    syev_cta_fused_tests
-    syev_blocked_tests
+    syev_mask_tests
+    syev_tests
     syev_two_stage_tests
-    syev_candidates_tests
-    syrk_candidates_tests
-    sytrf_tests
-    syev_align_tests
+    syevx_mask_tests
+    syevx_range_tests
+    syevx_tests
     syfn_tests
+    sygvd_mask_tests
     sygvd_tests
+    symm_candidates_tests
+    symm_mirror_tests
+    symm_tests
+    syr2k_candidates_tests
+    syr2k_tests
+    syrk_candidates_tests
+    syrk_tests
+    sytrd_blocked_tests
+    sytrd_cta_tests
+    sytrd_sb2st_hh_tests
+    sytrd_sb2st_tests
+    sytrd_sy2sb_tests
+    sytrf_mask_tests
+    sytrf_tests
+    transpose_tests
+    tridiag_mask_tests
+    trmm_candidates_tests
+    trmm_tests
+    trsm_candidates_tests
+    trsm_mask_tests
+    trsm_tests
+    tune_race_gpu_tests
+    tune_tests
+    tuned_tables_tests
+    util_device_queue_tests
+    util_span_tests
+    util_vector_tests
+    vendor_ptr_array_tests
+    verify_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -214,21 +263,113 @@ set(BATCHLAS_TEST_LABELS_util
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
-    syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
-    trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests vendor_ptr_array_tests resident_capacity_tests
+    cond_tests
+    group_collectives_tests
+    device_api_chol_tests
+    device_api_gemv_tests
+    device_api_getrf_tests
+    device_api_l3_tests
+    device_api_potrf_tests
+    device_api_qr_tests
+    device_api_sparse_tests
+    device_api_stebz-stein_tests
+    device_api_stedc_tests
+    device_api_svd_tests
+    device_api_sygst_tests
+    device_api_sytrf_tests
+    device_api_util_tests
+    device_blas_v2_bdsqr-bdsdc_tests
+    device_blas_v2_elementwise-glue_tests
+    device_blas_v2_gebrd_tests
+    device_blas_v2_gemm-components_tests
+    device_blas_v2_gemv-native_tests
+    device_blas_v2_geqrf_tests
+    device_blas_v2_gesvd-ormbr_tests
+    device_blas_v2_getrf_tests
+    device_blas_v2_getrs-getri-gesv_tests
+    device_blas_v2_iluk-spmm_tests
+    device_blas_v2_jacobi_tests
+    device_blas_v2_krylov-ortho-ritz_tests
+    device_blas_v2_larft-orgqr-ormqr_tests
+    device_blas_v2_potrf-cta-lpanel_tests
+    device_blas_v2_potri_tests
+    device_blas_v2_sb2st-sy2sb_tests
+    device_blas_v2_stedc_tests
+    device_blas_v2_syev-cta-trio_tests
+    device_blas_v2_syevx_tests
+    device_blas_v2_sygst-sygvd-syfn_tests
+    device_blas_v2_sytrf-sytrs_tests
+    device_blas_v2_tests
+    device_blas_v2_tridiag-stebz-stein_tests
+    device_blas_v2_trsm_tests
+    device_core_arith_tests
+    device_core_exec_tests
+    device_core_lapack_aux_tests
+    device_core_level1_tests
+    device_core_level2_tests
+    device_core_level3_tests
+    device_core_operand_tests
+    device_core_reduce_tests
+    device_core_scalar_tests
+    device_core_tier_tests
+    device_core_view_tests
+    gemm_candidates_tests
+    gemm_mask_tests
+    gemm_tests
+    gemv_candidates_tests
+    gemv_tests
     geqrf_candidates_tests
-    gesv_tests posv_tests potri_tests potrs_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
-    gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests norm_mask_tests
-    sytrf_tests sytrf_mask_tests)
+    geqrf_mask_tests
+    geqrf_tests
+    gesv_candidates_tests
+    gesv_tests
+    getrf_candidates_tests
+    getrf_mask_tests
+    getrf_tests
+    getri_candidates_tests
+    getrs_candidates_tests
+    getrs_mask_tests
+    hemm_tests
+    her2k_tests
+    herk_tests
+    hermitian_candidates_tests
+    inverse_tests
+    level3_mask_tests
+    norm_mask_tests
+    norm_tests
+    ormqr_mask_tests
+    posv_candidates_tests
+    posv_tests
+    potrf_candidates_tests
+    potrf_mask_tests
+    potrf_tests
+    potri_tests
+    potrs_tests
+    resident_capacity_tests
+    symm_candidates_tests
+    symm_mirror_tests
+    symm_tests
+    syr2k_candidates_tests
+    syr2k_tests
+    syrk_candidates_tests
+    syrk_tests
+    sytrf_mask_tests
+    sytrf_tests
+    transpose_tests
+    trmm_candidates_tests
+    trmm_tests
+    trsm_candidates_tests
+    trsm_mask_tests
+    trsm_tests
+    vendor_ptr_array_tests
+)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ortho_mask_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
-    sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
+    sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests device_api_sb2st_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
@@ -313,6 +454,7 @@ list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS device_api_chol_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS sygvd_mask_tests syev_mask_tests syevx_mask_tests getrs_mask_tests
     getrf_mask_tests)
 
@@ -331,7 +473,7 @@ endfunction()
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
     if(test_name STREQUAL "sg_partition_tests")
-        # Header-only: compiles src/kernels/common/sg_partition/ directly and links
+        # Header-only: compiles include/batchlas/device/detail/sg_partition/ directly and links
         # no batchlas library, only the SYCL compiler and include paths.
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
@@ -469,7 +611,8 @@ function(batchlas_add_test_target test_name)
     endif()
     if(test_name STREQUAL "gesvd_mask_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
+            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc"
+            BATCHLAS_GEBRD_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/device/lapack/gebrd.hh")
     endif()
     if(test_name STREQUAL "ormqr_mask_tests")
         target_compile_definitions(${test_name} PRIVATE
@@ -733,6 +876,40 @@ if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
                 ${_device_calls_args})
     set_tests_properties(device_calls_tests PROPERTIES
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+
+    # sass_parity_tests: the gate's rule self-test, then each committed SASS snapshot of the
+    # device-LA v2 kernels against this build with the algo thresholds. Exit 2 ("A/B": an
+    # occupancy step) fails here too. Skips (77) without an NVPTX image of the snapshot's arch.
+    file(GLOB _sass_snapshots CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sass_snapshots/*.json")
+    set(_sass_parity "\"${Python3_EXECUTABLE}\" \"${PROJECT_SOURCE_DIR}/scripts/sass_parity.py\"")
+    set(_sass_check "--cand \"${PROJECT_BINARY_DIR}\"")
+    foreach(_snap ${_sass_snapshots})
+        string(APPEND _sass_check " --snapshot-check \"${_snap}\"")
+    endforeach()
+    if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
+        string(APPEND _sass_check " --cuobjdump \"${CUDAToolkit_BIN_DIR}/cuobjdump\"")
+    endif()
+    add_test(NAME sass_parity_tests
+        COMMAND sh -c "${_sass_parity} --self-test && ${_sass_parity} ${_sass_check}")
+    set_tests_properties(sass_parity_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 900)
+endif()
+
+# kernel_entry_calls_tests: v2-using kernel bodies never call a local lambda or a view's
+# operator() directly (the DPC++ SemaSYCL kernel-body quirk); see the script's docstring.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME kernel_entry_calls_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_kernel_entry_calls.py"
+                --root "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(kernel_entry_calls_tests PROPERTIES LABELS "util")
+
+    # device_placement_tests: device LA placement (design A.0): no batchlas::device definitions
+    # under src/, LAPACK routines only in lapack/<routine>.hh, no helper defined twice; findings
+    # beyond scripts/device_placement_allowlist.txt fail, and so do stale allowlist lines.
+    add_test(NAME device_placement_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_device_placement.py"
+                --root "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(device_placement_tests PROPERTIES LABELS "util")
 endif()
 
 # no_raw_subgroup_queries: every sub-group capability check goes through
@@ -818,4 +995,17 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     else()
         message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
     endif()
+endif()
+
+# examples/device/: the device API guide's worked examples (docs/design/device-la-v2.md), each a
+# smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_api_* tests.
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    foreach(_example potrf_any_n)
+        add_executable(device_example_${_example} "${PROJECT_SOURCE_DIR}/examples/device/${_example}.cc")
+        batchlas_configure_binary_target(device_example_${_example})
+        batchlas_gpu_test_command(_example_cmd device_example_${_example})
+        add_test(NAME device_example_${_example} COMMAND ${_example_cmd})
+        set_tests_properties(device_example_${_example} PROPERTIES LABELS "blas" TIMEOUT 300)
+        batchlas_test_needs_gpu(device_example_${_example})
+    endforeach()
 endif()

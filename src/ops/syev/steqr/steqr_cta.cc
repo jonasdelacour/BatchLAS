@@ -6,7 +6,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 #include <src/ops/syev/steqr/steqr_internal.hh>
@@ -17,7 +17,7 @@
 #include <src/sort.hh>
 #include <src/ops/syev/steqr/steqr_cta_device.hh>
 #include <src/kernels/common/info_span.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <array>
 #include <numeric>
 #include <type_traits>

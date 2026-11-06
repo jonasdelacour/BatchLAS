@@ -653,33 +653,64 @@ std::string first_code_line(const std::string& path, const char* token, const ch
     return found;
 }
 
-// gebrd_cta's work-group barriers are reached by every partition only when no partition returns
-// early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
-// this source scan, not a numerical case, holds the property: from the kernel's launch to the end
-// of its anonymous namespace no code line returns, and `live` reads the mask.
-TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
-    const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
-    const char* launch = "parallel_for<GebrdCTAKernel";
-    // Positive controls first: every assertion below is an absence.
-    ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
-    ASSERT_FALSE(first_code_line(path, "it.barrier(", launch).empty()) << "no work-group barrier after the launch";
-    const std::string live = first_code_line(path, "const bool live", launch);
-    ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
-    EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
+// Code lines (comments stripped) of `path` from the first one containing `from` up to the first
+// that starts with `stop` (exclusive): the scan window of a kernel or a function body.
+std::vector<std::string> code_lines(const std::string& path, const char* from, const char* stop) {
+    std::vector<std::string> out;
     std::FILE* f = std::fopen(path.c_str(), "r");
-    ASSERT_NE(f, nullptr) << path;
+    if (!f) return out;
     char line[8192];
-    bool in_kernel = false;
+    bool in = false;
     while (std::fgets(line, sizeof(line), f)) {
         const std::string text(line);
         const std::size_t cut = text.find("//");
         const std::string code = cut == std::string::npos ? text : text.substr(0, cut);
-        if (code.find(launch) != std::string::npos) in_kernel = true;
-        if (!in_kernel) continue;
-        if (text.rfind("} // namespace", 0) == 0 || text.rfind("}  // namespace", 0) == 0) break;  // the kernel's TU scope ends
-        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebrd_cta's packed kernel: " << text;
+        if (!in) in = code.find(from) != std::string::npos;
+        if (!in) continue;
+        if (!out.empty() && text.rfind(stop, 0) == 0) break;
+        out.push_back(code);
     }
     std::fclose(f);
+    return out;
+}
+
+// gebrd_cta's work-group barriers are reached by every partition only when no partition returns
+// early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
+// this source scan, not a numerical case, holds the property: neither the packed kernel (from its
+// launch to the end of the TU's anonymous namespace) nor gebd2_tile (lapack/gebrd.hh, the body
+// holding the barriers) has a code line that returns, the public device::gebrd the kernel calls
+// returns only after gebd2_tile, and `live` reads the mask.
+TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
+    const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
+    const std::string tile_path = BATCHLAS_GEBRD_HH_PATH;
+    const char* launch = "parallel_for<GebrdCTAKernel";
+    // Positive controls first: every assertion below is an absence.
+    ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
+    const char* body = "void gebd2_tile(";
+    const char* op = "int gebrd(";
+    ASSERT_FALSE(first_code_line(path, "v2::gebrd<", launch).empty()) << "the kernel does not call device::gebrd";
+    ASSERT_FALSE(first_code_line(tile_path, "gebd2_tile<T>(", op).empty()) << "device::gebrd does not call gebd2_tile";
+    const auto op_lines = code_lines(tile_path, op, "}");
+    ASSERT_GT(op_lines.size(), 3u) << "the device::gebrd scan window is empty";
+    bool past_body = false;
+    for (const auto& code : op_lines) {
+        if (code.find("return") != std::string::npos)
+            EXPECT_TRUE(past_body && code.find("return 0;") != std::string::npos) << "an early return in device::gebrd: " << code;
+        past_body = past_body || code.find("gebd2_tile<T>(") != std::string::npos;
+    }
+    ASSERT_FALSE(first_code_line(tile_path, body).empty()) << tile_path << " does not define gebd2_tile";
+    ASSERT_FALSE(first_code_line(tile_path, "it.barrier(", body).empty()) << "no work-group barrier in gebd2_tile";
+    const std::string live = first_code_line(path, "const bool live", launch);
+    ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
+    EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
+    const auto kernel = code_lines(path, launch, "} // namespace");
+    const auto tile = code_lines(tile_path, body, "}");
+    ASSERT_GT(kernel.size(), 10u) << "the packed kernel scan window is empty";
+    ASSERT_GT(tile.size(), 10u) << "the gebd2_tile scan window is empty";
+    for (const auto& code : kernel)
+        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside the packed kernel: " << code;
+    for (const auto& code : tile)
+        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebd2_tile: " << code;
 }
 #endif  // BATCHLAS_GEBRD_CTA_CC_PATH
 

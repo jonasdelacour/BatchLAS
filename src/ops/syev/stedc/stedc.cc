@@ -24,6 +24,8 @@
 
 namespace batchlas {
 
+namespace v2 = batchlas::device;
+
 namespace {
 
 // `is_gpu`, not `B != Backend::NETLIB`: why the host path exists (no ROCm-style root
@@ -92,19 +94,12 @@ template <Backend B, typename T> class StedcLevelUnpad;
 // Folds the per-leaf convergence status down onto the caller's per-item span.
 template <Backend B, typename T> class StedcLevelLeafStatus;
 
-// ---------------------------------------------------------------------------
-// One divide-and-conquer merge, applied to a *super-batch* of P size-uniform
-// sub-problems of size s whose halves are already solved. The recursive driver
-// passes P = batch_size; the level-synchronous one P = nodes_at_level * batch_size.
-//
+// One divide-and-conquer merge over a *super-batch* of P size-uniform sub-problems of size s
+// whose halves are solved (recursive driver: P = batch_size; level-synchronous: nodes * batch).
 //   eigenvalues  s x P, in/out: children's eigenvalues in, merged ones out
-//   eigvects     s x s x P, in/out: block-diagonal diag(Q_left, Q_right) in,
-//                merged eigenvectors out
-//   Qprime, temp_Q   s x s x P scratch
-//   rho          P signed rank-1 coefficients (the split off-diagonal element)
-//   m            size of the left half
+//   eigvects     s x s x P, in/out: diag(Q_left, Q_right) in, merged eigenvectors out
+//   Qprime, temp_Q   s x s x P scratch; rho  P signed tears; m  size of the left half
 // evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
-// ---------------------------------------------------------------------------
 // Select the even- or odd-indexed half of a batched view. Both halves stay
 // affine (stride doubles), so a level can write straight into its parent's two
 // diagonal sub-blocks with strided-batched GEMMs.
@@ -166,25 +161,10 @@ void stedc_merge_step(Queue& ctx,
         batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             if (!v.active(bid)) return;  // I1, no barrier
-            auto bdim = item.get_local_range(0);
-            auto tid = item.get_local_linear_id();
-            // When rho = e(m-1) is negative, the rank-1 perturbation has the
-            // form |rho| * u * u^T with u = e_{m-1} + sign(rho) * e_m (so that
-            // the diagonal corrections d1[m-1] -= |rho|, d2[0] -= |rho| match
-            // the off-diagonal value rho). The corresponding secular vector
-            // projected into the child-eigenvector basis therefore carries a
-            // sign(rho) factor on the components coming from Q2 (the second
-            // half of v). Without this sign flip the computed eigenvectors
-            // combine Q1 and Q2 columns with inconsistent signs and fail
-            // A*z = lambda*z even though A*z is numerically close to Z*Lambda.
+            const v2::RtGroup<> ex{item};
             const T v_sign2 = (rho[bid] >= T(0)) ? T(1) : T(-1);
-            //Normalized v through division by sqrt(2)
-            for (int i = tid; i < m; i += bdim) {
-                v(i, bid) = E1view(m - 1, i, bid) / std::sqrt(T(2));
-            }
-            for (int i = tid; i < n - m; i += bdim) {
-                v(i + m, bid) = v_sign2 * E2view(0, i, bid) / std::sqrt(T(2));
-            }
+            const auto z = v2::vec(v.batch_item(bid));
+            v2::laed2_merge_vector(ex, z, m, v2::mat(E1view.batch_item(bid)).row(m - 1), v2::mat(E2view.batch_item(bid)).row(0), v_sign2);
         });
     });
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -204,117 +184,23 @@ void stedc_merge_step(Queue& ctx,
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for<StedcDeflation<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        auto bdim = item.get_local_range(0);
-        auto tid = item.get_local_linear_id();
-        auto cta = item.get_group();
+        const v2::RtGroup<> ex{item};
         // I1, before any barrier. n_reduced = 0 is neutral: later kernels stop at it, dd_max ignores it.
         if (!v.active(bid)) {
-            if (tid == 0) n_reduced[bid] = 0;
+            if (ex.leader()) n_reduced[bid] = 0;
             return;
         }
-
-        for (int k = tid; k < n; k += bdim){
-            keep_indices(k, bid) = 0;
-            scan_mem_exclude[k] = 0;
-            permutation(k, bid) = -1;
-            perm_local[k] = perm_map(k, bid);
-        }
-
-        sycl::group_barrier(cta);
-
-        // LAPACK-style ABSOLUTE deflation tolerance tol = 8*eps*max(|D|_inf, |z|_inf),
-        // computed before the Givens loop so proximity deflation uses it too. A relative
-        // tolerance under-deflates clustered small eigenvalues (bad orthogonality).
-        // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
-        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max = batchlas::portable::joint_reduce(cta,
-                          util::get_raw_ptr(norm_mem),
-                          util::get_raw_ptr(norm_mem) + n,
-                          sycl::maximum<T>());
-        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid)); }
-        auto v_max_pre = batchlas::portable::joint_reduce(cta,
-                          util::get_raw_ptr(norm_mem),
-                          util::get_raw_ptr(norm_mem) + n,
-                          sycl::maximum<T>());
-        const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
-
-        for (int j = 0; j < n - 1; j++) {
-            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
-                auto f = v(j + 1, bid);
-                auto g = v(j, bid);
-                auto [c, s, r] = detail::lartg(f, g);
-                sycl::group_barrier(cta);
-                if (tid == 0) {
-                    v(j, bid) = T(0.0);
-                    v(j + 1, bid) = r;
-                }
-                const int32_t pj = perm_local[j];
-                const int32_t pj1 = perm_local[j + 1];
-                if (pj >= 0 && pj < n && pj1 >= 0 && pj1 < n) {
-                    for (int k = tid; k < n; k += bdim) {
-                        auto Qi = Q(k, pj, bid), Qj = Q(k, pj1, bid);
-                        Q(k, pj, bid) = Qi*c - Qj*s;
-                        Q(k, pj1, bid) = Qj*c + Qi*s;
-                    }
-                }
-                // Make tid 0's writes to v(j, bid) and v(j+1, bid) visible to all threads
-                // before the next iteration reads v(j+1, bid) to compute its Givens pair.
-                sycl::group_barrier(cta);
-            }
-        }
-
-        sycl::group_barrier(cta);
-        //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
-
-        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max2 = batchlas::portable::joint_reduce(cta,
-                          util::get_raw_ptr(norm_mem),
-                          util::get_raw_ptr(norm_mem) + n,
-                          sycl::maximum<T>());
-
-        auto v_norm = detail::nrm2<T>(cta, v);
-        for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid) / v_norm); }
-        auto v_max = batchlas::portable::joint_reduce(cta,
-                        util::get_raw_ptr(norm_mem),
-                        util::get_raw_ptr(norm_mem) + n,
-                        sycl::maximum<T>());
-        auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max2, v_max);
-
-        for (int k = tid; k < n; k += bdim) {
-            if (std::abs(rho[bid] * norm_mem[k]) > tol ) {
-                keep_indices(k, bid) = 1;
-            } else {
-                scan_mem_exclude[k] = 1;
-            }
-        }
-
-        sycl::group_barrier(cta);
-
-        //Exclusive scan to determine the indices to keep
-        batchlas::portable::joint_exclusive_scan(cta,
-                       keep_indices.batch_item(bid).data_ptr(),
-                       keep_indices.batch_item(bid).data_ptr() + n,
-                       util::get_raw_ptr(scan_mem_include),
-                       0,
-                       sycl::plus<int32_t>());
-        batchlas::portable::joint_exclusive_scan(cta,
-                       util::get_raw_ptr(scan_mem_exclude),
-                       util::get_raw_ptr(scan_mem_exclude) + n,
-                       util::get_raw_ptr(scan_mem_exclude),
-                       0,
-                       sycl::plus<int32_t>());
-
-        for (int k = tid; k < n; k += bdim) {
-            if (keep_indices(k, bid) == 1) {
-                permutation(scan_mem_include[k], bid) = k;
-            } else {
-                permutation(n - 1 - scan_mem_exclude[k], bid) = k;
-            }
-        }
-
-        if (tid == 0) {
-            n_reduced[bid] = scan_mem_include[n - 1] + keep_indices(n - 1, bid);
-        }
+        const int nn = static_cast<int>(n);
+        const auto d = v2::vec(eigenvalues.batch_item(bid));
+        const auto z = v2::vec(v.batch_item(bid));
+        const auto Qb = v2::mat(Q.data() + static_cast<int64_t>(bid) * Q.stride(), nn, nn, Q.ld());
+        const auto absx = v2::vec<v2::Mem::Local>(util::get_raw_ptr(norm_mem), nn);
+        v2::laed2(  // the batched views' own element expressions
+            ex, n, d, z, Qb, absx, [&](auto j) { return eigenvalues(j, bid); }, [&]() { return rho[bid]; },
+            [&](auto k) -> int32_t& { return keep_indices(k, bid); }, [&]() { return keep_indices.batch_item(bid).data_ptr(); },
+            [&](auto k) -> int32_t& { return permutation(k, bid); }, [&](auto k) { return perm_map(k, bid); }, perm_local,
+            scan_mem_include, [&]() { return util::get_raw_ptr(scan_mem_include); }, scan_mem_exclude,
+            [&]() { return util::get_raw_ptr(scan_mem_exclude); }, [&](int32_t reduced) { n_reduced[bid] = reduced; });
 
         });
     });
@@ -346,18 +232,14 @@ void stedc_merge_step(Queue& ctx,
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
-                auto bdim = item.get_local_range(0);
-                auto tid = item.get_local_linear_id();
-                auto cta = item.get_group();
+                const v2::RtGroup<> ex{item};
                 auto Q_bid = Qview.batch_item(bid);
                 auto n = n_reduced[bid];
-                for (int k = tid; k < n * n; k += bdim) {
-                    auto i = k % n;
-                    auto j = k / n;
-                    Q_bid(i, j) = eigenvalues(i, bid);
-                }
-                sycl::group_barrier(cta);
-                for (int k = tid; k < n; k += bdim) {
+                const auto poles = v2::vec(eigenvalues.batch_item(bid));
+                const auto Qn = v2::mat(Q_bid);
+                v2::for_each_owned_2d<v2::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                v2::for_each_owned(ex, n, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // info_report is an atomic fetch_max: exactly the "did ANY root
                     // fail" reduction, however many threads report the same item.
@@ -372,8 +254,8 @@ void stedc_merge_step(Queue& ctx,
                                             detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
                                             1);
                     }
-                }
-                sycl::group_barrier(cta);
+                });
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
             });
         });
 
@@ -386,9 +268,7 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
-                    auto g   = item.get_group();
-                    auto tid = item.get_local_linear_id();
-                    auto bdim = item.get_local_range(0);
+                    const v2::RtGroup<> ex{item};
                     auto Qbid = Qview.batch_item(bid);
                     auto dd = n_reduced[bid];
 
@@ -399,8 +279,7 @@ void stedc_merge_step(Queue& ctx,
                     {
                         const T Di = eigenvalues(eid, bid);
                         T partial = T(1);
-                        for(int j = tid; j < dd; j += static_cast<int>(bdim))
-                        {
+                        v2::for_each_owned(ex, dd, [&](int j) {
                             const T q_elem = Qbid(eid, j);
                             T ratio;
                             if (j == eid) {
@@ -410,10 +289,9 @@ void stedc_merge_step(Queue& ctx,
                                 ratio = q_elem / denom;
                             }
                             partial *= ratio;
-                        }
-
-                        T valf = batchlas::portable::reduce_over_group(g, partial, sycl::multiplies<T>());
-                        if(tid == 0)
+                        });
+                        const T valf = v2::allreduce(ex, partial, sycl::multiplies<T>());
+                        if(ex.leader())
                         {
                             T mag  = std::sqrt(std::fabs(valf));
                             T sign = v(eid, bid) >= T(0) ? T(1) : T(-1);
@@ -429,24 +307,17 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();
-                    auto cta  = item.get_group();
-                    auto tid  = item.get_local_linear_id();
-                    auto bdim = item.get_local_range(0);
+                    const v2::RtGroup<> ex{item};
 
                     const int dd = n_reduced[bid];
-                    auto Qbid = Qview.batch_item(bid);
+                    const auto Q = v2::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
+                    const auto z = v2::vec(v.batch_item(bid));
                     for(int eig = 0; eig < dd; ++eig)
                     {
-                        for(int i = tid; i < dd; i += static_cast<int>(bdim))
-                        {
-                            Qbid(i, eig) = v(i, bid) / Qbid(i, eig);
-                        }
-
-                        auto nrm2 = detail::nrm2(cta, Qview(Slice{0, dd}, eig));
-                        for(int i = tid; i < dd; i += static_cast<int>(bdim))
-                        {
-                            Qbid(i, eig) /= nrm2;
-                        }
+                        const auto q = Q.col(eig);
+                        v2::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
+                        const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
+                        v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
                     }
                 });
         });
@@ -455,12 +326,9 @@ void stedc_merge_step(Queue& ctx,
     ctx -> submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<StedcAssignEigenvalues<B, T>>(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        auto bdim = item.get_local_range(0);
-        auto tid = item.get_local_linear_id();
-
-        for (int k = tid; k < n_reduced[bid]; k += bdim) {
-            eigenvalues(k, bid) = temp_lambdas(k, bid);
-        }
+        const v2::RtGroup<> ex{item};
+        const int dd = n_reduced[bid];
+        v2::copy(ex, v2::vec(temp_lambdas.batch_item(bid)).head(dd), v2::vec(eigenvalues.batch_item(bid)).head(dd));
         });
     });
 

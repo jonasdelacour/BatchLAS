@@ -7,6 +7,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <sycl/sycl.hpp>
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <type_traits>
@@ -31,6 +32,17 @@ inline constexpr const char* kSlmCappedReason =
 #else
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
 #endif
+
+// True when Device::default_device() can name a device. With none visible it throws
+// std::out_of_range (vector::_M_range_check), so a fixture that builds a Queue skips on false.
+inline bool sycl_device_visible() {
+    using batchlas::Device;
+    using batchlas::DeviceType;
+    static const bool any = !Device::get_devices(DeviceType::GPU).empty() ||
+                            !Device::get_devices(DeviceType::CPU).empty() ||
+                            !Device::get_devices(DeviceType::HOST).empty();
+    return any;
+}
 
 // True when @p msg reports a kernel with no device image (runtimes word it differently) AND
 // BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1: only then may the caller skip. Otherwise it rethrows and
@@ -257,6 +269,13 @@ constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
 // True when the native GPU backend has no double kernels (Metal: no device fp64).
 inline constexpr bool native_gpu_lacks_fp64 =
     native_gpu_backend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
+
+// True when T is double or std::complex<double> and the device has no aspect::fp64 (Metal):
+// device LA fixtures skip such a type instead of failing the kernel build or launch.
+template <typename T> bool lacks_fp64(const sycl::device& d) {
+    using R = typename batchlas::base_type<T>::type;
+    return std::is_same_v<R, double> && !d.has(sycl::aspect::fp64);
+}
 
 // T for a native-kernel case written in double: double (or complex<double>) where the native
 // GPU backend has it, else the float type of the same kind, so the kernel still launches.

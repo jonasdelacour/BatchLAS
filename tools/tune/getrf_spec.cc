@@ -89,15 +89,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: tiny
             "src/ops/getrf/kernels/getrf_tiny.cc",
             // family: blocked
@@ -109,6 +110,18 @@ public:
             "src/ops/getrf/getrf_cta_device.hh",
             "src/ops/getrf/getrf_native.hh",
             "src/ops/getrf/choice.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/lapack/getrf.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
@@ -120,7 +133,16 @@ public:
         // blocked's batch chunk comes from tuning_params.hh (blocked_chunk_items).
         // family: blocked "include/batchlas/tuning_params.hh"
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/grid.hh"
+        // family: blocked "include/batchlas/device/interop.hh" "include/batchlas/device/level2.hh"
+        // family: blocked "include/batchlas/device/level3.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: blocked "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: blocked "include/batchlas/device/level3/mma.hh" "include/batchlas/device/level3/packet.hh"
+        // family: blocked "include/batchlas/device/level3/pipeline.hh" "include/batchlas/device/level3/schedule.hh"
+        // family: blocked "include/batchlas/device/level3/stage.hh"
+        // family: tiny "include/batchlas/device/sg_partition.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getrf_spec.cc"; }

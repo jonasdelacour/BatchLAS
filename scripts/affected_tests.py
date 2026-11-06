@@ -45,7 +45,7 @@ ALIASES = {
 SHARED_PREFIXES = (
     "cmake/", "CMakeLists.txt", "CMakePresets.json", "src/select/", "src/sycl/", "src/util/",
     "src/backends/", "src/kernels/", "src/verify/", "src/CMakeLists.txt", "src/ops/CMakeLists.txt",
-    "include/batchlas/util/", "include/batchlas/verify/", "include/batchlas/blas/device",
+    "include/batchlas/util/", "include/batchlas/verify/", "include/batchlas/device",
     "tests/test_utils.hh", "tests/CMakeLists.txt", "tests/cmake/",
 )
 IGNORED_PREFIXES = ("docs/", "benchmarks/", "python/", "examples/", "evaluation/", ".github/",

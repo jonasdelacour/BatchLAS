@@ -1,5 +1,5 @@
-// Native batched sytrs from Bunch-Kaufman factors, LAPACK ?sytrs2 form (sytrs_device.hh): `cta`
-// (one work-group per item, the converted factor in local memory, one sub-group per right-hand
+// Native batched sytrs from Bunch-Kaufman factors, LAPACK ?sytrs2 form
+// (batchlas/device/lapack/sytrs.hh): `cta` (one work-group per item, the converted factor in local memory, one sub-group per right-hand
 // side) and `blocked` (the converted factor and the gathered B in workspace per chunk of items,
 // then two public trsm around a D^-1 kernel, and the scatter). evidence: docs/perf/sytrf.md
 //
@@ -7,13 +7,13 @@
 // any other cluster.
 
 #include <src/ops/sytrf/sytrf_native.hh>
-#include <src/ops/sytrs/sytrs_device.hh>
+#include <batchlas/device/lapack/sytrs.hh>
 
 #include <src/queue.hh>
 #include <src/select/grid_chunk.hh>
 #include <src/select/select.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <batchlas/error.hh>
@@ -38,9 +38,11 @@ template <typename T> class SytrsScatterKernel;
 
 namespace {
 
-using sytrf_device::Staged;
-using sytrf_device::Tile;
-using sytrf_device::Vec;
+namespace v2 = batchlas::device;
+using v2::sytrs_detail::Staged;
+template <typename D> using Tile = v2::sytrf_detail::RevMat<D>;
+template <typename D> using Vec = v2::sytrf_detail::RevVec<D>;
+using v2::sytrf_detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -89,22 +91,15 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 if (skip != nullptr && skip[b] != 0) return;
-                const int lid = static_cast<int>(it.get_local_id(0));
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 const Staged<D> S{&lm[0], ldt, n, &lm[static_cast<std::size_t>(n) * ldt], &im[0], &im[n], &im[2 * n]};
-                const Tile<D> G{const_cast<D*>(ap) + b * stra, lda, n, rev};
-                for (int idx = lid; idx < n * n; idx += wg) {
-                    const int i = idx % n, j = idx / n;
-                    if (i >= j) S(i, j) = G(i, j);
-                }
-                const int* const gp = piv + b * n;
-                for (int k = lid; k < n; k += wg) S.ps[k] = sytrf_device::logical_piv(gp[rev ? n - 1 - k : k], n, rev);
-                auto bar = [&] { sycl::group_barrier(it.get_group()); };
-                bar();
-                const bool ok = sytrf_device::ldl_convert<D>(S, n, S.ps, S.perm, S.kind, S.e, lid, wg, &im[3 * n], bar);
-                sytrf_device::solve_columns<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
+                const v2::RtGroup<> all(it);
+                const Tile<D> G = rev_mat(const_cast<D*>(ap) + b * stra, lda, n, rev);
+                v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
+                const int* const gp = piv + b * n;  // before nsg: keeps the base closure layout
+                v2::sytrs_detail::sytrs_cta_solve<R>(all, sg, lane, sgid, nsg, S, gp, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -178,33 +173,34 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t nn = static_cast<std::ptrdiff_t>(n) * n, nb = static_cast<std::ptrdiff_t>(n) * nrhs;
-                const Tile<D> G{const_cast<D*>(ap) + i0 * stra, lda, n, rev};
-                const Tile<D> W{lw + i0 * nn, n, n, rev};
+                const v2::RtGroup<> ex(it);
+                const Tile<D> G = rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
+                const Tile<D> W = rev_mat(lw + i0 * nn, n, n, rev);
                 int* const ps = psw + i0 * n;
                 int* const perm = pw + i0 * n;
                 int* const kind = kw + i0 * n;
-                for (int k = lid; k < n; k += wg) ps[k] = sytrf_device::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
-                auto bar = [&] { sycl::group_barrier(it.get_group()); };
-                bar();
-                if (lid == 0) {
-                    const bool valid = sytrf_device::piv_list_valid(ps, n);
+                v2::for_each_owned(ex, n, [&](int k) BATCHLAS_DLA_BODY {
+                    ps[k] = v2::sytrs_detail::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
+                });
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                if (ex.leader()) {
+                    const bool valid = v2::sytrs_detail::piv_list_valid(ps, n);
                     flag[0] = valid ? 1 : 0;
-                    if (valid) sytrf_device::build_perm(ps, n, perm, kind);
+                    if (valid) v2::sytrs_detail::build_perm(ps, n, perm, kind);
                 }
-                bar();
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 const bool ok = flag[0] != 0;
                 if (ok) {
-                    sytrf_device::convert_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, lid, wg, bar);
-                } else {
-                    for (std::ptrdiff_t idx = lid; idx < nn; idx += wg) {
-                        const int i = static_cast<int>(idx % n), j = static_cast<int>(idx / n);
+                    v2::syconv_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, ex);
+                } else {  // an invalid list: L as stored, P the identity, every block 1 x 1
+                    v2::for_each_owned_2d<v2::alg::DivMod, std::ptrdiff_t>(ex, n, n, [&](int i, int j) BATCHLAS_DLA_BODY {
                         if (i > j) W(i, j) = G(i, j);
-                    }
-                    for (int t = lid; t < n; t += wg) {
+                    });
+                    v2::for_each_owned(ex, n, [&](int t) BATCHLAS_DLA_BODY {
                         perm[t] = t;
                         kind[t] = 0;
-                    }
-                    bar();
+                    });
+                    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 }
                 D* const y = bw + i0 * nb;
                 const D* const src = bp + i0 * strb;
@@ -212,7 +208,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                     const int t = static_cast<int>(idx % n), c = static_cast<int>(idx / n);
                     const int lt = rev ? n - 1 - t : t;
                     const int s = rev ? n - 1 - perm[lt] : perm[lt];
-                    y[idx] = ok ? src[s + static_cast<std::ptrdiff_t>(c) * ldb] : sytrf_device::nan_of<D>();
+                    y[idx] = ok ? src[s + static_cast<std::ptrdiff_t>(c) * ldb] : v2::qnan<D>();
                 }
             });
     });
@@ -241,15 +237,15 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int kd = kw[i0 * n + t];
                 if (kd == 2) return;
-                const Tile<D> G{const_cast<D*>(ap) + i0 * stra, lda, n, rev};
+                const Tile<D> G = rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
                 const Vec<D> x{bw + static_cast<std::ptrdiff_t>(rest) * n, n, rev};
                 if (kd == 0) {
-                    x(t) = sytrf_device::d_solve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
+                    x(t) = v2::sytrs_detail::ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
                     return;
                 }
                 const D x0 = x(t), x1 = x(t + 1), d0 = G(t, t), d1 = G(t + 1, t + 1), off = G(t + 1, t);
-                x(t) = sytrf_device::d_solve_row(1, x0, x1, d0, d1, off);
-                x(t + 1) = sytrf_device::d_solve_row(2, x1, x0, d1, d0, off);
+                x(t) = v2::sytrs_detail::ldl_dsolve_row(1, x0, x1, d0, d1, off);
+                x(t + 1) = v2::sytrs_detail::ldl_dsolve_row(2, x1, x0, d1, d0, off);
             });
     });
 }

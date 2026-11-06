@@ -81,7 +81,7 @@ dead tail chunks onto a zero problem instead of returning:
 | `redux.sync` with a per-chunk mask | ptxas serialises the warp | Rejected; `redux.sync` only with the full mask |
 | Interleaved Q tile (`LDQ = 32`, no bank conflicts) | 0.978-1.005x: the kernel is latency-bound | Rejected |
 
-Partition-primitive changes (`src/kernels/common/sg_partition/`) are judged by real-kernel A/B (`steqr`
+Partition-primitive changes (`include/batchlas/device/detail/sg_partition/`) are judged by real-kernel A/B (`steqr`
 and `syev_cta` at n = 5..16, batch 16,384), never by microbenchmark: full-warp and maskless rewrites
 that won microbenchmarks lost in these kernels.
 

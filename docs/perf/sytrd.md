@@ -14,10 +14,7 @@ on every call, so one process can A/B the kernels.
 | Value | Kernel |
 | --- | --- |
 | unset, or any other value | Legacy (default below `latrd_grid_min_n`) |
-| `%device` | Device-BLAS variant (`device::hemv`, `her2k`). Slower; no figures recorded |
 | `grid` | Grid kernel |
-
-`BATCHLAS_SYTRD_IMPL` (`sytrd_blocked.cc`) is latched in a `static` and does not behave this way.
 
 ## sytrd: the latrd grid-path threshold
 
@@ -239,7 +236,6 @@ case-folded disable set `sb2st_wave_disabled`; any other value, including a typo
 ## sytrd: open debts
 
 - The 25% local-memory headroom in `sytrd_sb2st_cta.cc` (`lmem_budget = lmem_bytes * 3 / 4`) is unmeasured.
-- `BATCHLAS_LATRD_IMPL=%device` is recorded as slower with no figures; re-measure before deleting or reviving it.
 - Overlapping \f$Q_1 Q_2\f$ with `stedc` needs an out-of-order queue; unmeasured.
 - The complex stage-2 retiling is tracked in
   [syev: open debt, complex stage-2 occupancy](syev.md#syev-open-debt-complex-stage-2-occupancy).

@@ -2,20 +2,20 @@
 
 
 #include <batchlas/blas/matrix.hh>
-#include <batchlas/blas/device.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 
+#include <batchlas/device.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 
@@ -27,17 +27,9 @@
 
 namespace batchlas {
 
-// Small-matrix CTA implementations of ORMQR/ORMQL/UNMQR/UNMQL semantics.
-//
-// These apply the implicit orthogonal/unitary matrix Q represented by Householder
-// reflectors (A, TAU) from a QR factorization (GEQRF) or QL factorization (GEQLF)
-// to a matrix C.
-//
-// Notes:
-// - This file is intended for very small sizes (n <= 32).
-// - Current implementation focuses on the n-by-n case (C is square), which is
-//   exactly what we need to post-process tridiagonal eigenvectors in SYEVD.
-// - Order/storage match LAPACK's DORMQR/ZUNMQR and DORMQL/ZUNMQL contracts.
+// Small-matrix CTA ORMQR/ORMQL/UNMQR/UNMQL: apply the implicit Q of a GEQRF/GEQLF
+// factorization (A, TAU) to C. Very small sizes only (n <= 32), square C (SYEVD's
+// tridiagonal eigenvector post-processing). Order/storage match LAPACK's ORMQx/UNMQx.
 
 namespace detail {
 
@@ -52,106 +44,12 @@ struct PlainVec {
 template <typename T, int N>
 using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
 
-// Reduce sum over a group.
-// NOTE: For non-uniform chunked partitions on CUDA, reduce_over_group may be
-// constrained; use XOR shuffles (butterfly) which is O(log P) and keeps the
-// reduced value replicated in all lanes.
-template <typename T, typename Group>
-inline T group_sum(const Group& g, T v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    (void)lanes;
-
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
-        Real re = v.real();
-        Real im = v.imag();
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            re += permute_group_by_xor(g, re, offset);
-            im += permute_group_by_xor(g, im, offset);
-        }
-        return T(re, im);
-    } else {
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
-    }
-}
-
 } // namespace detail
 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
 
-// Apply one Householder reflector H = I - tau * v * v^H to C.
-//
-// For LEFT:  C := H * C  (or H^H * C)
-// For RIGHT: C := C * H  (or C * H^H)
-//
-// The caller supplies:
-// - v vector in V_local[0:len-1]
-// - tau scalar
-// - (offset, len) describing which rows/cols are affected
-// - left/right, and whether we're applying conjugate-transpose (for complex)
-//
-template <typename T, typename Partition>
-inline void apply_reflector_small(const Partition& part,
-                                  T* C_local,
-                                  int32_t P_i,
-                                  int32_t n,
-                                  int32_t lane,
-                                  const T* V_local,
-                                  T* Work_local,
-                                  int32_t offset,
-                                  int32_t len,
-                                  T tau,
-                                  bool left,
-                                  bool conj_trans) {
-    // tau_eff = tau for H, conj(tau) for H^H
-    const T tau_eff = conj_trans ? batchlas::device::detail::conj(tau) : tau;
-
-    // A predicate, never a return: tau is per item, so a return here is per partition, and the
-    // barrier below would be reached by only part of the sub-group (a dead or inactive partition
-    // carries tau = 0). The skipped work is the same, so a live item's result is unchanged.
-    const bool apply = !(tau_eff == T(0) || len <= 0);
-
-    auto v_view = VectorView<T>(const_cast<T*>(V_local), apply ? len : 0);
-
-    if (left) {
-        if (apply && lane < n) {
-            T dot = T(0);
-            for (int32_t r = 0; r < len; ++r) {
-                const T v_r = V_local[r];
-                dot += batchlas::device::detail::conj(v_r) * C_local[(offset + r) + lane * P_i];
-            }
-            Work_local[lane] = tau_eff * dot;
-        }
-        group_barrier(part);
-        if (!apply) return;
-
-        auto gamma_view = VectorView<T>(Work_local, n);
-        auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset, len, n, P_i, P_i * n);
-        if constexpr (detail::is_complex<T>::value) {
-            batchlas::device::geru(part, v_view, gamma_view, c_sub, T(-1));
-        } else {
-            batchlas::device::ger(part, v_view, gamma_view, c_sub, T(-1));
-        }
-    } else {
-        if (apply && lane < n) {
-            T dot = T(0);
-            for (int32_t c = 0; c < len; ++c) {
-                dot += C_local[lane + (offset + c) * P_i] * V_local[c];
-            }
-            Work_local[lane] = tau_eff * dot;
-        }
-        group_barrier(part);
-        if (!apply) return;
-
-        auto gamma_view = VectorView<T>(Work_local, n);
-        auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset * P_i, n, len, P_i, P_i * n);
-        batchlas::device::gerc(part, gamma_view, v_view, c_sub, T(-1));
-    }
-}
+namespace v2 = batchlas::device;
 
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).
@@ -223,11 +121,9 @@ inline void ormqx_cta_impl_m(Queue& ctx,
             // LEFT specialization: lane->column and keep that column in registers.
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            // Coalescing: lane j owns column j, and a column is contiguous in memory.
-            // Consecutive lanes are therefore `ld` elements apart, so a scalar per-row
-            // load/store issues one 32-sector request per instruction (8x more L1<->L2
-            // traffic than the data requires). Moving 16 bytes per lane per access cuts
-            // the request count - and the resulting L2 traffic - by a factor of VW.
+            // Coalescing: lane j owns column j, so consecutive lanes are `ld` apart and a scalar
+            // per-row access issues one 32-sector request (8x the needed L1<->L2 traffic).
+            // 16 bytes per lane per access cuts the request count by VW.
             constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
             const bool vec_ok =
                 !detail::is_complex<T>::value && VW > 1 && (n % VW) == 0 &&
@@ -252,10 +148,9 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
                 // batch, or an inactive item: I2) applies tau = 0 reflectors to nothing and
                 // stores nothing.
-                const bool live = [&] {
-                    if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
-                    else return prob_id < static_cast<int32_t>(batch_size);
-                }();
+                // if constexpr, never a call taking mask: the unmasked kernel must not capture it.
+                bool live = prob_id < static_cast<int32_t>(batch_size);
+                if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);
@@ -273,7 +168,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 // value (the reflector support `offset + r`, or a bound of `n`) forces
                 // the whole array into local memory, and the reflector loop then pays a
                 // dependent L1/global round trip for each of its ~n^2 accesses.
-                T C_col[P];
+                v2::Frag<T, static_cast<int>(P), v2::ColPerLane> C_col;
 BATCHLAS_UNROLL_FULL
                 for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                     C_col[r] = T(0);
@@ -321,9 +216,13 @@ BATCHLAS_UNROLL_FULL
                 const int32_t i1 = descending ? -1 : k;
                 const int32_t step = descending ? -1 : 1;
 
+                using Ar = v2::arith_t<v2::arith::Native, T>;  // strict port: the hand loop's arithmetic
+                using VLocal = v2::Vec<T, v2::Ext<static_cast<int>(P)>, v2::Unit, v2::Mem::Local, v2::Cyclic,
+                                       sycl::local_accessor<T, 1>>;
+
                 for (int32_t ii = i0; ii != i1; ii += step) {
                     const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
-                    const T tau_eff = TransposeOrConj ? batchlas::device::detail::conj(tau_i) : tau_i;
+                    const T tau_eff = TransposeOrConj ? Ar::conj(tau_i) : tau_i;
 
                     // Stage the reflector indexed by *absolute row*, explicitly zeroed
                     // outside its support.  The rank-1 update can then run over the
@@ -346,20 +245,10 @@ BATCHLAS_UNROLL_FULL
                     }
 
                     group_barrier(part);
-
-                    if (active_col && tau_eff != T(0)) {
-                        T dot = T(0);
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
-                        }
-                        const T gamma = tau_eff * dot;
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            C_col[r] -= V_local[base_v + r] * gamma;
-                        }
-                    }
-
+                    // vh(r) == V_local[base_v + r], formed here as the hand loop's address was (hoisted
+                    // above the loop it holds one more register: complex P = 32 spilled 8 B more).
+                    const auto vh = v2::assume_published(VLocal{V_local, {}, {}, base_v});
+                    if (active_col && tau_eff != T(0)) v2::larf<Side::Left, v2::arith::Native>(C_col, vh, tau_eff);  // C(:, j) := H C(:, j)
                     // Ensure all lanes have finished consuming v before overwrite.
                     group_barrier(part);
                 }
@@ -388,13 +277,9 @@ BATCHLAS_UNROLL_FULL
                 }
             });
         } else {
-            // Local storage per problem:
-            // - Full P x P tile for C (column-major)
-            // - One length-P vector v
-            // - One length-P work vector for reflector coefficients
+            // Per problem: the P x P tile of C (column-major) and v. Lane r owns row r: no work vector.
             auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
-            auto Work_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
             impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
@@ -412,10 +297,8 @@ BATCHLAS_UNROLL_FULL
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
                     // inactive item) carries a zero tile and tau = 0, and stores nothing.
-                    const bool live = [&] {
-                        if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
-                        else return prob_id < static_cast<int32_t>(batch_size);
-                    }();
+                    bool live = prob_id < static_cast<int32_t>(batch_size);
+                    if constexpr (Masked) live = live && mask[prob_id] != 0;
                     const int32_t pid = live ? prob_id : 0;
                     const bool row_live = live && (lane < n);
 
@@ -425,7 +308,6 @@ BATCHLAS_UNROLL_FULL
 
                     const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
-                    const int32_t base_work = part_id * static_cast<int32_t>(P);
 
                     const int32_t P_i = static_cast<int32_t>(P);
 
@@ -488,20 +370,11 @@ BATCHLAS_UNROLL_FULL
 
                         group_barrier(part);
 
-                        apply_reflector_small<T>(
-                            part,
-                            &C_local[base_c],
-                            P_i,
-                            n,
-                            lane,
-                            &V_local[base_v],
-                            &Work_local[base_work],
-                            offset,
-                            len,
-                            tau_i,
-                            Left,
-                            TransposeOrConj
-                        );
+                        // C(lane, offset:) H on the lane's own row (algo port); a predicate, never a return.
+                        const T tau_eff = TransposeOrConj ? v2::Arith<T>::conj(tau_i) : tau_i;
+                        if (lane < n && !(tau_eff == T(0) || len <= 0))
+                            v2::larf<Side::Right>(v2::Thread{}, tau_eff, v2::assume_published(v2::vec(V_local, len, base_v)),
+                                                  v2::mat(C_local, 1, len, P_i, base_c + lane + offset * P_i));
 
                         group_barrier(part);
                     }

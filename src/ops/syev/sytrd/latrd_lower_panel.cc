@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -30,9 +30,9 @@ namespace batchlas {
 
 namespace {
 
-enum class LatrdImpl { Legacy, Device, Grid };
+enum class LatrdImpl { Legacy, Grid };
 
-// BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "device" -> Device, "grid" -> Grid.
+// BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "grid" -> Grid.
 // Re-read on every call, never cached: a static would pin the first answer and
 // make an in-process A/B vacuous.
 // evidence: docs/perf/sytrd.md#sytrd-the-latrd-implementation-selector
@@ -40,12 +40,9 @@ inline LatrdImpl latrd_impl() {
     const char* v = batchlas::settings().selection.latrd_impl.get();
     if (!v) return LatrdImpl::Legacy;
     const std::string s(v);
-    if (s == "device") return LatrdImpl::Device;
     if (s == "grid") return LatrdImpl::Grid;
     return LatrdImpl::Legacy;
 }
-
-inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 
 // Smallest n at which the multi-work-group panel is worth its grid barrier (five
 // device-scope syncs per panel column). A knob, not a formula: the crossover is a
@@ -125,7 +122,6 @@ inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
 // Kernel name tags — "Legacy" variants so both paths can coexist.
 // ---------------------------------------------------------------------------
 template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelLegacy;
-template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernel;
 template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelGrid;
 
 // ---------------------------------------------------------------------------
@@ -253,6 +249,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
@@ -272,7 +269,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
+                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -291,7 +288,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             }
 
                             const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
+                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -304,7 +301,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     for (int r = x0 + lid; r < n; r += wg) {
                         sumsq += detail::abs2_if_complex(Ab(r, i));
                     }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
+                    sumsq = ex.group_reduce(sumsq);
 
                     T alpha = T(0);
                     if (lid == 0 && i + 1 < n) {
@@ -403,13 +400,13 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int c = i + 1 + lid; c < n; c += wg) {
                             const T vc = v_local[c];
 
-                            gamma_partial += batchlas::device::detail::conj(Wb(c, pc)) * vc;
+                            gamma_partial += batchlas::device::conj(Wb(c, pc)) * vc;
 
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
+                            delta_partial += batchlas::device::conj(vcp) * vc;
                         }
-                        const T gamma = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                        const T delta = batchlas::device::detail::reduce_sum_group(g, delta_partial);
+                        const T gamma = ex.group_reduce(gamma_partial);
+                        const T delta = ex.group_reduce(delta_partial);
 
                         for (int r = i + 1 + lid; r < n; r += wg) {
                             const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
@@ -425,9 +422,9 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     T dot_partial = T(0);
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         const T vr = v_local[r];
-                        dot_partial += batchlas::device::detail::conj(vr) * wcol_local[r];
+                        dot_partial += batchlas::device::conj(vr) * wcol_local[r];
                     }
-                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
+                    const T dot = ex.group_reduce(dot_partial);
 
                     const T alpha2 = T(-0.5) * tau_i * dot;
                     for (int r = i + 1 + lid; r < n; r += wg) {
@@ -457,7 +454,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
@@ -556,6 +553,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                 const int gg = glid - b * G;
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
@@ -589,7 +587,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
+                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -607,7 +605,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                 vrp = Ab(r, p);
                             }
                             const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
+                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -622,7 +620,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     for (int r = slo + lid; r < rhi; r += wg) {
                         sumsq += detail::abs2_if_complex(Ab(r, i));
                     }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
+                    sumsq = ex.group_reduce(sumsq);
                     if (lid == 0) red_sumsq[gg] = pack_real<T>(sumsq);
 
                     grid_barrier(it, bar, G);   // barrier 1
@@ -710,12 +708,12 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         T delta_partial = T(0);
                         for (int c = rlo + lid; c < rhi; c += wg) {
                             const T vc = v_local[c];
-                            gamma_partial += batchlas::device::detail::conj(Wb(c, p)) * vc;
+                            gamma_partial += batchlas::device::conj(Wb(c, p)) * vc;
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
+                            delta_partial += batchlas::device::conj(vcp) * vc;
                         }
-                        gamma_partial = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                        delta_partial = batchlas::device::detail::reduce_sum_group(g, delta_partial);
+                        gamma_partial = ex.group_reduce(gamma_partial);
+                        delta_partial = ex.group_reduce(delta_partial);
                         if (lid == 0) {
                             red_gamma[static_cast<size_t>(gg) * ib + p] = gamma_partial;
                             red_delta[static_cast<size_t>(gg) * ib + p] = delta_partial;
@@ -752,9 +750,9 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 
                     T dot_partial = T(0);
                     for (int r = rlo + lid; r < rhi; r += wg) {
-                        dot_partial += batchlas::device::detail::conj(v_local[r]) * wcol_local[r];
+                        dot_partial += batchlas::device::conj(v_local[r]) * wcol_local[r];
                     }
-                    dot_partial = batchlas::device::detail::reduce_sum_group(g, dot_partial);
+                    dot_partial = ex.group_reduce(dot_partial);
                     if (lid == 0) red_dot[gg] = dot_partial;
 
                     grid_barrier(it, bar, G);   // barrier 4
@@ -788,7 +786,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
@@ -807,187 +805,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 }
 
 // ---------------------------------------------------------------------------
-// Device-BLAS kernel: uses device::hemv, dotc, axpy, scal, copy, her2k
-// ---------------------------------------------------------------------------
-template <typename T, int WG, bool FuseTrailingUpdate>
-Event latrd_lower_panel_batched_wg_device(Queue& q,
-                                          const MatrixView<T, MatrixFormat::Dense>& a,
-                                          const VectorView<T>& e,
-                                          const VectorView<T>& tau,
-                                          const MatrixView<T, MatrixFormat::Dense>& w,
-                                          const std::uint8_t* mask) {
-    constexpr int wg = WG;
-    const int n = a.rows();
-    const int batch = a.batch_size();
-    const int ib = w.cols();
-    const auto launch = batchlas::device::make_group_launch_info(wg);
-    std::size_t workspace_elements = 0;
-
-    if (batch > 0 && n > 1) {
-        const int extent = n - 1;
-        workspace_elements = std::max(
-            workspace_elements,
-            batchlas::device::hemv_workspace_elements<T,
-                batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(launch, extent));
-
-        if constexpr (FuseTrailingUpdate) {
-            if (n > ib) {
-                const int trailing_extent = n - ib;
-                workspace_elements = std::max(
-                    workspace_elements,
-                    batchlas::device::her2k_workspace_elements<T,
-                        batchlas::device::DeviceBlasPolicy::Subgroup16,
-                        Uplo::Lower, Transpose::NoTrans>(launch, trailing_extent, ib));
-            }
-        }
-    }
-
-    (void)q->submit([&](sycl::handler& h) {
-        auto A_view = a.kernel_view();
-        auto W_view = w.kernel_view();
-
-        VectorView<T> E_view = e;
-        VectorView<T> TAU_view = tau;
-
-        auto v_local    = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
-        auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
-        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
-
-        batchlas::impl::parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
-
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-                T* v_ptr        = util::get_raw_ptr(v_local);
-                T* wcol_ptr     = util::get_raw_ptr(wcol_local);
-                T* vip_ptr      = util::get_raw_ptr(vip_local);
-                T* wip_ptr      = util::get_raw_ptr(wip_local);
-                T* workspace_ptr = workspace_elements == 0
-                    ? static_cast<T*>(nullptr)
-                    : util::get_raw_ptr(workspace);
-
-                auto Ab = A_view.batch_item(b);
-                auto Wb = W_view.batch_item(b);
-
-                for (int i = 0; i < ib; ++i) {
-                    if (i >= n - 1) break;
-                    const int tail = n - (i + 1);
-                    auto a_col_tail  = Ab(Slice(i + 1, SliceEnd()), i);
-                    auto v_tail      = VectorView<T>(v_ptr + i + 1, tail);
-                    auto wcol_tail   = VectorView<T>(wcol_ptr + i + 1, tail);
-
-                    if (i > 0) {
-                        auto vip_view = VectorView<T>(vip_ptr, i);
-                        auto wip_view = VectorView<T>(wip_ptr, i);
-                        batchlas::device::copy(g, Ab(i, Slice(0, i)), vip_view);
-                        batchlas::device::copy(g, Wb(i, Slice(0, i)), wip_view);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i > 0) {
-                        const auto vip_view = VectorView<T>(vip_ptr, i);
-                        const auto wip_view = VectorView<T>(wip_ptr, i);
-                        const T panel_dot = batchlas::device::dotc(g, vip_view, wip_view);
-                        if (lid == 0) {
-                            Ab(i, i) = hermitian_diagonal(
-                                Ab(i, i) - panel_dot - batchlas::device::detail::conj(panel_dot));
-                        }
-                    }
-
-                    if (i > 0) {
-                        it.barrier(sycl::access::fence_space::local_space);
-                        for (int p = 0; p < i; ++p) {
-                            auto v_prev = Ab(Slice(i + 1, SliceEnd()), p);
-                            auto w_prev = Wb(Slice(i + 1, SliceEnd()), p);
-                            batchlas::device::hadamard(g, a_col_tail,
-                                [&](T x, T v, T wv) {
-                                    return x
-                                        - batchlas::device::detail::conj(wip_ptr[p]) * v
-                                        - batchlas::device::detail::conj(vip_ptr[p]) * wv;
-                                },
-                                a_col_tail, v_prev, w_prev);
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    const int x0 = i + 2;
-                    T alpha_i = i + 1 < n ? Ab(i + 1, i) : T(0);
-                    const T tau_i = detail::larfg(g, alpha_i, Ab(Slice(x0, SliceEnd()), i));
-                    if (lid == 0) {
-                        E_view(i, b)   = alpha_i;
-                        TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i)   = T(1);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lid == 0) {
-                        v_ptr[i + 1] = T(1);
-                    }
-                    if (x0 < n) {
-                        batchlas::device::copy(g, Ab(Slice(x0, SliceEnd()), i),
-                                               VectorView<T>(v_ptr + x0, n - x0));
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                        Ab.data() + (i + 1) + (i + 1) * Ab.ld(),
-                        tail, tail, Ab.ld());
-                    batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
-                        g, trailing_view, v_tail, wcol_tail, T(1), T(0), static_cast<T*>(nullptr));
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    for (int p = 0; p < i; ++p) {
-                        const auto vp_tail = Ab(Slice(i + 1), p);
-                        const auto wp_tail = Wb(Slice(i + 1), p);
-                        const auto gamma   = batchlas::device::dotc(g, wp_tail, v_tail);
-                        const auto delta   = batchlas::device::dotc(g, vp_tail, v_tail);
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            wcol_local[r] -= vp_tail(r - (i + 1)) * gamma
-                                           + wp_tail(r - (i + 1)) * delta;
-                        }
-                    }
-
-                    it.barrier(sycl::access::fence_space::local_space);
-                    batchlas::device::scal(g, wcol_tail, tau_i);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const T dot    = batchlas::device::dotc(g, v_tail, wcol_tail);
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    batchlas::device::axpy(g, v_tail, wcol_tail, alpha2);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    batchlas::device::copy(g, wcol_tail, Wb(Slice(i + 1, SliceEnd()), i));
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-
-                if constexpr (FuseTrailingUpdate) {
-                    const int j2 = ib;
-                    const int n2 = n - j2;
-                    if (n2 > 0) {
-                        batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Subgroup16,
-                                                Uplo::Lower, Transpose::NoTrans>(
-                            g,
-                            Ab(Slice(j2), Slice(0, ib)),
-                            Wb(Slice(j2), Slice(0, ib)),
-                            Ab(Slice(j2), Slice(j2)),
-                            T(-1), T(1),
-                            workspace_ptr);
-                    }
-                }
-            });
-    });
-
-    return q.get_event();
-}
-
-// ---------------------------------------------------------------------------
-// Dispatcher: selects legacy or device path based on use_device_latrd().
-// Legacy supports WG = 64/128/256; device additionally supports WG = 512.
+// Dispatcher: the legacy kernel (WG = 64/128/256) or the grid kernel.
 // ---------------------------------------------------------------------------
 // Chooses (G, wg) for the grid path. Co-residency is the hard constraint: the
 // software grid barrier deadlocks unless all batch*G work-groups are resident, so
@@ -1077,7 +895,6 @@ Event latrd_lower_panel_batched(Queue& q,
                                 int32_t wg_hint,
                                 bool fuse_trailing_update) {
     const int n = a.rows();
-    const bool use_device = use_device_latrd();
     const std::uint8_t* mask =
         ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("latrd_lower_panel", a, e, tau, w));
 
@@ -1086,12 +903,6 @@ Event latrd_lower_panel_batched(Queue& q,
         if (fuse_trailing_update)
             return latrd_lower_panel_batched_wg_legacy<T, WG, true>(q, a, e, tau, w, mask);
         return latrd_lower_panel_batched_wg_legacy<T, WG, false>(q, a, e, tau, w, mask);
-    };
-    auto call_device = [&](auto wg_tag) {
-        constexpr int WG = decltype(wg_tag)::value;
-        if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_device<T, WG, true>(q, a, e, tau, w, mask);
-        return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w, mask);
     };
 
     if (use_grid_latrd(n)) {
@@ -1102,22 +913,12 @@ Event latrd_lower_panel_batched(Queue& q,
         // G == 1: fall through to the legacy kernel verbatim.
     }
 
-    if (use_device) {
-        if (wg_hint == 64)  return call_device(std::integral_constant<int, 64>{});
-        if (wg_hint == 128) return call_device(std::integral_constant<int, 128>{});
-        if (wg_hint == 256) return call_device(std::integral_constant<int, 256>{});
-        if (n <= 64)  return call_device(std::integral_constant<int, 64>{});
-        if (n <= 128) return call_device(std::integral_constant<int, 128>{});
-        if (n <= 256) return call_device(std::integral_constant<int, 256>{});
-        return call_device(std::integral_constant<int, 512>{});
-    } else {
-        if (wg_hint == 64)  return call_legacy(std::integral_constant<int, 64>{});
-        if (wg_hint == 128) return call_legacy(std::integral_constant<int, 128>{});
-        if (wg_hint == 256) return call_legacy(std::integral_constant<int, 256>{});
-        if (n <= 64)  return call_legacy(std::integral_constant<int, 64>{});
-        if (n <= 128) return call_legacy(std::integral_constant<int, 128>{});
-        return call_legacy(std::integral_constant<int, 256>{});
-    }
+    if (wg_hint == 64)  return call_legacy(std::integral_constant<int, 64>{});
+    if (wg_hint == 128) return call_legacy(std::integral_constant<int, 128>{});
+    if (wg_hint == 256) return call_legacy(std::integral_constant<int, 256>{});
+    if (n <= 64)  return call_legacy(std::integral_constant<int, 64>{});
+    if (n <= 128) return call_legacy(std::integral_constant<int, 128>{});
+    return call_legacy(std::integral_constant<int, 256>{});
 }
 
 template <typename T>

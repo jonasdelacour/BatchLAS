@@ -37,3 +37,8 @@ util_device_queue_tests
 # gemm.sm_120.txt has 0 timed double rows (tests/tuned_tables_tests.cc:481). Host-independent:
 # move to tests/known-failures.txt or retune, but CI runs no ctest, so it was first seen here.
 tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger
+
+# --- DELIBERATELY ABSENT: timing races (a listed case that passes would read NEWLY PASSING) -------
+# tune_race_gpu_tests::TuneRaceGpu.LeanRaceCutsAGrossLoserBeforeTheWarmUp: a timing race (the
+#   lean race must cut a slow arm before its warm-up), red under parallel ctest on a shared GPU and
+#   green alone on both main and the device LA v2 branch (2026-11-04). Not a defect: rerun alone.

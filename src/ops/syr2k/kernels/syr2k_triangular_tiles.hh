@@ -14,7 +14,7 @@
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

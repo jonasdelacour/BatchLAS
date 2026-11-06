@@ -14,7 +14,6 @@ set(BATCHLAS_DETECTED_NVIDIA_GPU FALSE)
 set(BATCHLAS_DETECTED_AMD_GPU FALSE)
 set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "")
 set(BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "")
-set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672)
 
 set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -fsycl
@@ -43,61 +42,6 @@ if(_batchlas_link_jobs GREATER 1)
     list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS
         -fsycl-max-parallel-link-jobs=${_batchlas_link_jobs})
 endif()
-
-# The per-architecture local-memory table. Its one caller is the tile cap below, which
-# needs it as the HISTORICAL figure it must not move away from. It is deliberately NOT a device capacity -- no kernel may size anything from
-# it, because a build-host table cannot bind the device the process later opens; every
-# resident capacity asks DeviceProperty::LOCAL_MEM_SIZE instead
-# (src/util/resident_capacity.hh).
-function(batchlas_architecture_table_local_mem_bytes architecture device_type out_var)
-    set(_table_bytes 32768)
-
-    if("${device_type}" STREQUAL "gpu")
-        if("${architecture}" MATCHES "^nvidia_gpu_sm_[0-9]+$")
-            set(_table_bytes 49152)
-        elseif("${architecture}" MATCHES "^amd_gpu_gfx[0-9]+$")
-            set(_table_bytes 65536)
-        elseif("${architecture}" MATCHES "^intel")
-            set(_table_bytes 65536)
-        elseif("${architecture}" MATCHES "^apple_gpu_")
-            # Hypothesis (Metal maxThreadgroupMemoryLength on M5 Max), not a measured budget.
-            set(_table_bytes 32768)
-        endif()
-    endif()
-
-    set(${out_var} "${_table_bytes}" PARENT_SCOPE)
-endfunction()
-
-# The DEVICE-GEMM tiles' compile-time workspace cap, and the only value in the generated
-# header anything reads (group_blas_subgroup_common.hh's kSubgroupWorkspaceBudgetBytes).
-#
-# It is derived from the ARCHITECTURE TABLE and never from a device capacity, even a true
-# one. The budget sizes fixed arrays inside device structs and drives five `if constexpr`
-# gates spanning gemm, symm, herk, syrk and syr2k, so it is a tuning constant wearing a
-# capacity's clothes: raising it changes both which tile variants compile in and how many
-# subgroups each stages. Feeding sm_89's real 101,376 into it would retune five ops as a
-# side effect of correcting a capacity table, and no benchmark in this tree has ever
-# timed any budget but the one each architecture already ships.
-#
-# The `- 4096` reserve and the 16384 floor are likewise historical, not derived: together
-# with the table they reproduce, byte for byte, the budget every architecture had before
-# any of this was touched (NVIDIA 45,056, AMD and Intel 61,440, unrecognised GPU 28,672).
-# Changing any of the three is a measured change, not a cleanup.
-# evidence: docs/perf/gemm.md#the-subgroup-workspace-budget
-function(batchlas_subgroup_workspace_budget_bytes architecture local_mem_bytes device_type out_var)
-    set(_workspace_budget_bytes "${local_mem_bytes}")
-
-    if("${device_type}" STREQUAL "gpu")
-        batchlas_architecture_table_local_mem_bytes("${architecture}" "${device_type}" _table_bytes)
-        math(EXPR _workspace_budget_bytes "${_table_bytes} - 4096")
-
-        if(_workspace_budget_bytes LESS 16384)
-            set(_workspace_budget_bytes 16384)
-        endif()
-    endif()
-
-    set(${out_var} "${_workspace_budget_bytes}" PARENT_SCOPE)
-endfunction()
 
 # DPC++ names an NVIDIA device's architecture only if its SYCL table lists it, and that
 # table ends at sm_90a (intel/llvm sycl tip, 2026-09: no sm_100/sm_120). sycl-ls then
@@ -332,66 +276,6 @@ function(detect_sycl_gpu_architectures)
     set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "${_compile_options}" PARENT_SCOPE)
 endfunction()
 
-function(collect_sycl_device_limit_info)
-    batchlas_normalize_sycl_ls_architectures("${BATCHLAS_SYCL_LS_VERBOSE_OUTPUT}" SYCL_LS_DEVICE_LIMITS_OUTPUT)
-    string(REPLACE "\r\n" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
-    string(REPLACE "\r" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
-    string(REPLACE "\n" ";" _sycl_ls_lines "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
-
-    set(_min_gpu_workspace_budget_bytes 0)
-    set(_current_device_type "")
-    set(_in_device FALSE)
-
-    foreach(_line IN LISTS _sycl_ls_lines)
-        string(STRIP "${_line}" _trimmed_line)
-        if(_trimmed_line STREQUAL "")
-            continue()
-        endif()
-
-        if(_trimmed_line MATCHES "^Platform \\\[#")
-            set(_in_device FALSE)
-            continue()
-        endif()
-
-        if(_trimmed_line MATCHES "^Device \\\[#")
-            set(_in_device TRUE)
-            set(_current_device_type "")
-            continue()
-        endif()
-
-        if(_in_device)
-            if(_trimmed_line MATCHES "^Type[ ]*:[ ]*(.+)$")
-                set(_current_device_type "${CMAKE_MATCH_1}")
-            elseif(_trimmed_line MATCHES "^Architecture:[ ]*(.+)$")
-                set(_current_architecture "${CMAKE_MATCH_1}")
-                if("${_current_device_type}" STREQUAL "gpu")
-                    batchlas_architecture_table_local_mem_bytes("${_current_architecture}" "gpu" _current_local_mem_bytes)
-                    batchlas_subgroup_workspace_budget_bytes("${_current_architecture}" "${_current_local_mem_bytes}" "gpu" _current_workspace_budget_bytes)
-                    if(_min_gpu_workspace_budget_bytes EQUAL 0 OR _current_workspace_budget_bytes LESS _min_gpu_workspace_budget_bytes)
-                        set(_min_gpu_workspace_budget_bytes "${_current_workspace_budget_bytes}")
-                    endif()
-                endif()
-            endif()
-        endif()
-    endforeach()
-
-    foreach(_dev IN LISTS BATCHLAS_FALLBACK_DEVICE_ENTRIES)
-        string(REPLACE "|" ";" _f "${_dev}")
-        list(GET _f 3 _arch)
-        batchlas_architecture_table_local_mem_bytes("${_arch}" gpu _local)
-        batchlas_subgroup_workspace_budget_bytes("${_arch}" "${_local}" gpu _budget)
-        if(_min_gpu_workspace_budget_bytes EQUAL 0 OR _budget LESS _min_gpu_workspace_budget_bytes)
-            set(_min_gpu_workspace_budget_bytes "${_budget}")
-        endif()
-    endforeach()
-
-    if(_min_gpu_workspace_budget_bytes EQUAL 0)
-        set(_min_gpu_workspace_budget_bytes 28672)
-    endif()
-
-    set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES "${_min_gpu_workspace_budget_bytes}" PARENT_SCOPE)
-endfunction()
-
 function(detect_sycl_cpu_target)
     if(NOT BATCHLAS_CPU_TARGET STREQUAL "auto")
         if(BATCHLAS_CPU_TARGET STREQUAL "none")
@@ -453,7 +337,6 @@ if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
 batchlas_run_sycl_ls()
 detect_sycl_gpu_architectures()
 detect_sycl_cpu_target()
-collect_sycl_device_limit_info()
 
 set(DETECTED_AMD_ARCH "")
 foreach(_arch ${BATCHLAS_SYCL_TARGETS})

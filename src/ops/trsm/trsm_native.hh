@@ -16,10 +16,10 @@ namespace batchlas::sycl_trsm {
 // Zero means "no native TRSM kernel in this build": trsm's can_run (src/ops/trsm/trsm.cc)
 // then refuses cta and blocked.
 template <typename T>
-int trsm_cta_max_n();
+BATCHLAS_INTERNAL_API int trsm_cta_max_n();
 
 template <typename T>
-bool trsm_blocked_available();
+BATCHLAS_INTERNAL_API bool trsm_blocked_available();
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,

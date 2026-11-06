@@ -73,7 +73,7 @@ cmake --build build -j8
 | option | meaning |
 | --- | --- |
 | `BATCHLAS_BUILD_TESTS`, `BATCHLAS_TEST_TARGET_SET` | unit tests (default `ON` top-level, `OFF` as a subproject); `all` (default) or `smoke` |
-| `BATCHLAS_BUILD_BENCHMARKS`, `BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS` | benchmarks plus `batchlas_tune` with a GPU backend; the `device_blas_*` benchmarks (both default `OFF`) |
+| `BATCHLAS_BUILD_BENCHMARKS` | benchmarks plus `batchlas_tune` with a GPU backend (default `OFF`) |
 | `BATCHLAS_BUILD_PYTHON`, `BATCHLAS_PYTHON_INSTALL_DIR` | Python package (default `OFF`); install dir relative to the prefix (default `lib/pythonX.Y/site-packages`) |
 | `BATCHLAS_BUILD_DOCS` | the `batchlas_docs` target |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when the compiler is `acpp`), `DPCPP` or `ACPP` (finds `acpp` on `PATH`, else `/opt/adaptivecpp/bin`) |

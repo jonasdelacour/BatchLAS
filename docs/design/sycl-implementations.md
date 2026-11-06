@@ -25,7 +25,7 @@ JIT-compiled at first launch); a third configuration is acpp with its Metal back
 - Device-link options (`BATCHLAS_SYCL_LINK_JOBS`, FTZ, `native_cpu`) are DPC++ only. On acpp
   `BATCHLAS_CPU_TARGET` takes only `auto` or `none` (@ref design_cpu_target_detection).
 - `backend_config.h` carries `BATCHLAS_SYCL_IMPL_DPCPP` / `_ACPP`. acpp runtime names appear only in
-  `src/sycl/impl.hh` and `src/sycl/sscp_target.hh`.
+  `src/sycl/impl.hh` and `include/batchlas/device/detail/sscp_target.hh`.
 - A consumer must use the same implementation (`BatchLASConfig.cmake` records `BatchLAS_SYCL_IMPL`);
   an acpp install ships `include/batchlas/acpp/annexg_complex.hh` and `-include`s it through
   `BatchLAS_SYCL_COMPILE_OPTIONS`.
@@ -48,14 +48,14 @@ on DPC++ each helper is the plain DPC++ call.
 | `on_async_errors`, `throw_async_errors`, `throw_launch_errors`, `wait_and_throw` | the error sink ([asynchronous errors](#sycl-impl-asynchronous-errors)) |
 | `check_group_count`, `check_global_range` | CUDA grid-limit check; on Metal the \f$2^{32} - 1\f$ global-range check |
 
-Kernel-level differences live in `src/sycl/sscp_target.hh`, `src/sycl/kernel_attrs.hh`,
+Kernel-level differences live in `include/batchlas/device/detail/sscp_target.hh`, `include/batchlas/device/detail/kernel_attrs.hh`,
 `src/sycl/local_mem.hh` and `include/batchlas/util/group-collectives.hh`; DPC++-only intrinsics and
 PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Every vendor call runs as
 `impl::run_native<impl::Native::Cuda>(*ctx, [=](auto s){ handle.setStream(s); ... })`.
 
 ### Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
 
-- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`src/sycl/sscp_target.hh`): `constexpr` from
+- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`include/batchlas/device/detail/sscp_target.hh`): `constexpr` from
   `__SYCL_DEVICE_ONLY__`/`__NVPTX__`/`__SYCL_CUDA_ARCH__` on DPC++; on acpp generic, which compiles
   one IR for every target and defines neither macro, JIT-reflection queries inside
   `__acpp_if_target_sscp`, and the JIT deletes the dead branch.
@@ -64,7 +64,7 @@ PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Ever
 - `sg_partition`'s `SscpBackend` (`backend_sscp.hh`) reuses `NvptxBackend` on PTX; its `__nvvm_*`
   names are asm labels on the LLVM intrinsics, so they keep `convergent`. Other targets take
   `GenericBackend`.
-- `src/sycl/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
+- `include/batchlas/device/detail/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
   and `BATCHLAS_UNROLL_FULL` is `clang loop unroll(full)` (SSCP unrolls a bare `#pragma unroll` only
   partially). `Device::supports_sub_group_size(n)` is true only for the device's single sub-group
   size, so `can_run`s that need sg 32 refuse other devices.
@@ -86,7 +86,7 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
 - **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the CUDA
   and HIP device passes too (`kExactWgReducePass`) only because acpp's multipass reduce, exact in
   probes, reads as racy (static scratch returned after the last barrier,
-  `generic/hiplike/group_functions.hpp:36-71`); `DeviceBlasTest.PortableWorkGroupDoubleSumIsExact`
+  `generic/hiplike/group_functions.hpp:36-71`); `GroupCollectivesTest.PortableWorkGroupDoubleSumIsExact`
   guards the replacement.
 - **Contraction:** `BATCHLAS_FP_CONTRACT` (default `on`) over the driver's `fast`
   ([build guide](../guide/build.md#guide_build_fp_contract)).
@@ -168,7 +168,7 @@ using-declaration of the `sycl::` function (md5-identical objects); under acpp i
 | Host `joint_reduce` without `init` on `const T*` does not compile | — | overload keeping SYCL's item-to-element mapping |
 
 Every floating `reduce_over_group`/`joint_reduce`/`joint_exclusive_scan` in `src/` goes through
-`portable::`. Guards: `DeviceBlasTest.PortableGroupReductionsAreExact`,
+`portable::`. Guards: `GroupCollectivesTest.PortableGroupReductionsAreExact`,
 `StedcDeflationScan.PortableJointExclusiveScanInPlaceAcrossChunks`.
 
 ## Compile-level differences: portable spellings {#sycl-impl-compile-differences}
@@ -346,7 +346,7 @@ dimension and \f$2^{32} - 1024\f$ work-items. `select::describe` hard-codes 8 an
 | No generic address space (a run-time local/global pointer choice is rejected) | one body per storage combination under `on_metal()` | `sytrd_sb2st_cta.cc`, `tridiag_solver.cc` |
 | No floating-point atomics on threadgroup memory | One/Inf norms give each sum to one work-item | `src/util/norm.cc` |
 | No static local memory | `wg_reduce_floating` uses AdaptiveCpp's reduce on Metal | `group-collectives.hh` |
-| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `vec4.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
+| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `include/batchlas/device/level3/packet.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
 | Float subnormals flush to zero; `info::device` claims denorms | tests needing a subnormal probe the device | `TrsmNativeSgLeft.NonFiniteReciprocalFallsBackToDivision` |
 | `logb(0)`, `logb(inf)` are finite | Annex G division special values may be wrong; untested | `annexg::div` |
 | arm64 hosts reject the `"l"` asm constraint | PTX L2-prefetch asm only on x86 hosts | `register_128x128.hh` |

@@ -179,18 +179,19 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: jacobi
             "src/ops/gesvd/kernels/gesvdj_cta.cc",
+            "src/sycl/inv_sqrt.hh",
             // family: cta
             "src/ops/gesvd/gebrd/gebrd_cta.cc",
             "src/ops/ormqr/kernels/ormqr_cta.cc",
@@ -203,6 +204,24 @@ public:
             "src/ops/gesvd/gesvd_native.hh",
             "src/ops/gesvd/gebrd/gebrd.cc",
             "src/ops/gesvd/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/gebrd.hh",
+            "include/batchlas/device/lapack/gesvd.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
@@ -212,10 +231,20 @@ public:
         // family: blocked "src/ops/syev/kernels/syev_blocked.cc" "src/ops/syev/sytrd/sytrd_blocked.cc" "src/ops/syev/sytrd/latrd_lower_panel.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_wg.cc"
         // family: blocked "src/ops/syev/stedc/stedc.cc" "src/ops/syev/stedc/stedc_merge_cta.cc" "src/ops/syev/stedc/stedc_merge_kernels.cc" "src/ops/syev/stedc/stedc_secular.cc" "src/ops/ormqr/kernels/ormqr_blocked.cc" "src/ops/syev/kernels/uplo_mirror.cc"
         // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
-        // family: blocked "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: blocked "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
         // blocked's own driver and sub-ops; its batch chunk comes from tuning_params.hh (blocked_chunk_items).
-        // family: blocked "src/ops/gesvd/kernels/gesvd_blocked.cc" "src/ops/gesvd/gebrd/gebrd_blocked.cc" "src/ops/gesvd/gebrd/gebrd.cc" "src/ops/gesvd/gebrd/larfg_real_beta.hh" "src/ops/gesvd/bdsqr/bdsqr.cc" "src/ops/gesvd/bdsdc/bdsdc.cc" "src/ops/gesvd/ormbr/ormbr.cc"
+        // family: blocked "src/ops/gesvd/kernels/gesvd_blocked.cc" "src/ops/gesvd/gebrd/gebrd_blocked.cc" "src/ops/gesvd/gebrd/gebrd.cc" "src/ops/gesvd/bdsqr/bdsqr.cc" "src/ops/gesvd/bdsdc/bdsdc.cc" "src/ops/gesvd/ormbr/ormbr.cc"
         // family: blocked "include/batchlas/tuning_params.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device/lapack/laed2.hh" "include/batchlas/device/lapack/laed3.hh"
+        // family: blocked "include/batchlas/device/lapack/laed4.hh" "include/batchlas/device/lapack/larft.hh"
+        // family: blocked "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: blocked "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: blocked "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: blocked "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
+        // family: blocked "include/batchlas/device/sg_partition.hh"
+        // family: cta "include/batchlas/device/sg_partition.hh"
+        // family: jacobi "include/batchlas/device/lapack/jacobi.hh" "include/batchlas/device/sg_partition.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }

@@ -4,9 +4,10 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gebrd.hh>
 
 #include <src/math-helpers.hh>
-#include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/select/vendor.hh>
@@ -103,6 +104,49 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
+namespace v2 = batchlas::device;
+
+// The complex labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
+constexpr int32_t kPanelWG = 128;
+using PanelEx = v2::WorkGroup<kPanelWG>;
+
+// One panel launch of the complex path (one work-group of kPanelWG per item).
+template <typename T>
+void labrd_panel_complex(Queue& ctx,
+                         MatrixView<T, MatrixFormat::Dense>& a,
+                         const VectorView<typename base_type<T>::type>& d_out,
+                         const VectorView<typename base_type<T>::type>& e_out,
+                         const VectorView<T>& tauq_out,
+                         const VectorView<T>& taup_out,
+                         const MatrixView<T, MatrixFormat::Dense>& x_mat,
+                         const MatrixView<T, MatrixFormat::Dense>& y_mat,
+                         const std::uint8_t* mask,
+                         int32_t nb, int32_t j0, int32_t ib) {
+    if (static_cast<int64_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()) < kPanelWG) {
+        throw batchlas::unsupported("gebrd_blocked: the complex panel kernel needs a work-group of 128");
+    }
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t batch = static_cast<int32_t>(a.batch_size());
+    ctx->submit([&](sycl::handler& h) {
+        auto A = a.kernel_view();
+        auto D = d_out;
+        auto E = e_out;
+        auto TAUQ = tauq_out;
+        auto TAUP = taup_out;
+        auto X = x_mat.kernel_view();
+        auto Y = y_mat.kernel_view();
+        auto work_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(2 * nb)), h);
+
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kPanelWG), sycl::range<1>(kPanelWG)),
+                                     [=](sycl::nd_item<1> item) {
+            const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
+            if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
+            v2::labrd_panel<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
+        });
+    });
+}
+
 // LAPACK ?labrd + the trailing gemm. Complex follows zlabrd: rows hold conj(u) on exit (unmbr 'P'
 // order), d and e are real, and between generating and storing a right reflector its row is
 // conjugated. For real T every conj() below is the identity.
@@ -117,7 +161,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                          int32_t block_size,
                          Span<const std::uint8_t> mask_span) {
     using Real = typename base_type<T>::type;
-    using gebrd_detail::conj;
+    using v2::conj;
     constexpr bool kComplex = detail::is_complex<T>::value;
 
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
@@ -157,7 +201,11 @@ Event gebrd_blocked_impl(Queue& ctx,
         (void)x_panel.fill_zeros(ctx);
         (void)y_panel.fill_zeros(ctx);
 
-        ctx->submit([&](sycl::handler& h) {
+        // Complex panels run on the v2 core (explicit complex arithmetic, 1.3x faster); real
+        // panels keep the legacy kernel below (the v2 port cost float REG 64 -> 80 and 4%).
+        if constexpr (kComplex)
+            labrd_panel_complex<T>(ctx, a, d_out, e_out, tauq_out, taup_out, x_mat, y_mat, mask, nb, j0, ib);
+        else ctx->submit([&](sycl::handler& h) {
             auto A = a.kernel_view();
             auto D = d_out;
             auto E = e_out;
@@ -207,7 +255,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        const auto scalars = gebrd_detail::larfg_real_beta(alpha, sycl::sqrt(sigma), m - gi);
+                        const auto scalars = v2::larfg_scalars<v2::conv::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
                         beta_q = scalars.beta;
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
@@ -295,7 +343,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        const auto scalars = gebrd_detail::larfg_real_beta(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        const auto scalars = v2::larfg_scalars<v2::conv::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
                         beta_p = scalars.beta;
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;

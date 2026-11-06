@@ -6,11 +6,13 @@
 #include <src/ops/geqrf/geqrf_native.hh>
 #include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
 #include <src/kernels/common/tiny_device.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -32,10 +34,11 @@ namespace {
 
 namespace gn = ::batchlas::geqrf_native;
 namespace tn = ::batchlas::tiny_native;
+namespace v2 = ::batchlas::device;
+namespace gd = ::batchlas::device::geqrf_detail;
 
-// THE LAUNCH GATES. The register table itself lives next to the chunk rule that reads it;
-// a second copy here is how a MODEL came to choose the chunk width while a PROBE gated the
-// launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
+// THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
+// copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
 template <typename T> using TinyDev = typename sycl_device::DevMap<T>::type;
 
 constexpr int geqrf_tiny_worst_regs() {
@@ -57,9 +60,8 @@ static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
               "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "
               "scripts/register_probe.sh before raising either operand");
 
-// GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM, so a
-// regression fails to COMPILE rather than quietly costing occupancy. GATE 3, in the same
-// breath: the chunk width each row was probed at still re-derives from that row.
+// GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM (a regression
+// fails to COMPILE). GATE 3: each row's probed chunk width still re-derives from that row.
 #define BATCHLAS_GEQRF_TINY_CELL_ASSERT(D, N)                                               \
     static_assert(gn::geqrf_tiny_cell_is_resident<D, N>(),                                  \
                   "geqrf tiny: this cell falls below R1's four-blocks-per-SM floor");       \
@@ -96,8 +98,7 @@ constexpr std::size_t geqrf_tiny_wg_bytes() {
            gn::geqrf_tiny_slm_elems(N, C) * sizeof(T);
 }
 
-// No request lands near the (47104, 49664] launch hole, so none of geqrf_cta.cc's
-// hole-padding machinery is carried here; these keep that true.
+// No request lands near the (47104, 49664] launch hole, so geqrf_cta.cc's padding is not carried.
 static_assert(geqrf_tiny_wg_bytes<std::complex<double>, 8>() < 47104,
               "tiny tile approaching the 48 KB launch hole");
 static_assert(geqrf_tiny_wg_bytes<double, 32>() < 47104,
@@ -111,7 +112,9 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     // Re-typed HERE: std::complex's Annex-G operator* is an isnan branch plus a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
+    using Ar = v2::Arith<D>;
+    using Fa = v2::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     constexpr int C = gn::geqrf_tiny_chunk<D, N>();
@@ -138,8 +141,9 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                               sycl::range<1>(static_cast<std::size_t>(WG))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
-                const auto part = make_partition<N>(sg);
-                const int lane = static_cast<int>(part.get_local_linear_id());
+                const v2::SgpPartition<N> ex{sg};
+                const auto& part = ex.part;
+                const int lane = ex.lid();
                 const int slot = tn::tiny_partition_id(sg, part);
                 const int prob = static_cast<int>(it.get_group_linear_id()) * M + slot;
 
@@ -168,89 +172,61 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 // evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
 #pragma clang loop unroll(full)
                 for (int j = 0; j < N; ++j) {
-                    // n is one scalar for the whole batch (can_run refuses a heterogeneous
-                    // view), so every predicate below is uniform and so is the barrier sequence.
+                    // n is one scalar per batch (can_run refuses a heterogeneous view): every
+                    // predicate below, and the barrier sequence, is uniform.
                     if (j >= n) continue;
 
-                    const D alpha = tn::tiny_bcast<D, N>(part, rA[j], static_cast<uint32_t>(j));
+                    const D alpha = ex.bcast(rA[j], static_cast<uint32_t>(j));
 
                     // Order-symmetric, so every lane leaves with a BIT-IDENTICAL smax and ssq
                     // and needs no publish/broadcast pair. Widening either leaks across
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
-                    R smax = (lane >= j) ? gn::dev_absmax<D>(rA[j]) : R(0);
-                    smax = gn::geqrf_tiny_reduce_fmax<N>(part, smax);
+                    R smax = (lane >= j) ? v2::abs_inf(rA[j]) : R(0);
+                    // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
+                    smax = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, smax, v2::op::FMax());
 
                     R ssq = R(0);
-                    if (lane > j && smax > R(0)) ssq = gn::dev_abs2_scaled<D>(rA[j], smax);
-                    ssq = gn::geqrf_tiny_reduce_sum<N>(part, ssq);
+                    if (lane > j && smax > R(0)) ssq = gd::abs2_scaled(rA[j], smax);
+                    ssq = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
 
-                    const gn::LarfgScalars<D> hh =
-                        gn::geqrf_larfg_scalars<D>(alpha, smax, ssq);
+                    const v2::ScaledSsq<R> nrm{smax, ssq};
+                    const v2::LarfgScalars<D> hh = v2::larfg_scalars<v2::conv::Lapack>(alpha, nrm);
 
                     // NO `if (hh.identity) continue;`: the identity case is arithmetically
-                    // inert (tau = 0, beta = alpha, vfactor = 1), and omitting the branch is
+                    // inert (tau = 0, beta = alpha, scale = 1), and omitting the branch is
                     // what keeps the barrier sequence sub-group-uniform.
                     if (lane == j) {
                         rA[j] = hh.beta;
                         my_tau = hh.tau;
                     } else if (lane > j) {
-                        rA[j] = hh.use_mul
-                                    ? sycl_device::dev_mul(rA[j], hh.vfactor)
-                                    : sycl_device::dev_div(rA[j], hh.vfactor);
+                        rA[j] = hh.use_mul ? Fa::mul(rA[j], hh.scale) : Fa::div(rA[j], hh.scale);
                     }
 
                     // One select drives the whole apply: it zeroes eliminated rows, supplies
                     // the implicit v(j) = 1, and removes every lane guard below. Dropping the
                     // `lane < j` term lets eliminated rows re-enter the reflector.
-                    const D vr = (lane < j)
-                                     ? D{}
-                                     : ((lane == j) ? sycl_device::dev_one<D>() : rA[j]);
-                    const D cvr = sycl_device::dev_conj(vr);
+                    const D vr = (lane < j) ? D{} : ((lane == j) ? Ar::one() : rA[j]);
+                    const D cvr = Ar::conj(vr);
                     // CONJ(tau): zgeqr2's convention, the one ormqr/orgqr/ormbr/sy2sb read.
                     // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
-                    const D ctau = sycl_device::dev_conj(hh.tau);
+                    const D ctau = Ar::conj(hh.tau);
 
+                    // larf by C-column chunks; the column sums run in ROW order (LAPACK's).
 #pragma clang loop unroll(full)
                     for (int k0 = 0; k0 < N; k0 += C) {
                         if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
                         if (k0 >= n) continue;          // wholly past the runtime cap
-
-                        // P1: the elementwise product into the tile.
-#pragma clang loop unroll(full)
-                        for (int kk = 0; kk < C; ++kk) {
-                            const int k = k0 + kk;
-                            const bool act = (k > j) && (k < n);
-                            sP[lane * SLDA + kk] =
-                                act ? sycl_device::dev_mul(cvr, rA[k]) : D{};
-                        }
+                        gd::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
                         sycl::group_barrier(sg);
-
-                        // P2: lane l sums column l in ROW order -- LAPACK's association.
-                        if (lane < C) {
-                            D acc = D{};
-BATCHLAS_UNROLL_FULL
-                            for (int r = 0; r < N; ++r) {
-                                if (r >= j) acc = gn::dev_add(acc, sP[r * SLDA + lane]);
-                            }
-                            sy[lane] = sycl_device::dev_mul(ctau, acc);
-                        }
+                        gd::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
                         sycl::group_barrier(sg);
-
-                        // P3: one address per column, a broadcast. The two barriers above
-                        // cover all three hazards ONLY because sy is a separate array; their
-                        // count and placement are guarded by source text, not numerically.
+                        // The two barriers above cover all three hazards ONLY because sy is a
+                        // separate array; their count and placement are guarded by source text.
                         // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
-#pragma clang loop unroll(full)
-                        for (int kk = 0; kk < C; ++kk) {
-                            const int k = k0 + kk;
-                            if ((k > j) && (k < n)) {
-                                rA[k] = sycl_device::dev_sub(
-                                    rA[k], sycl_device::dev_mul(vr, sy[kk]));
-                            }
-                        }
+                        gd::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
                     }
                     // No barrier between columns: column j+1's butterflies read rA[j+1], which
-                    // this lane updated itself in P3 -- a register-private dependence.
+                    // this lane updated itself in frag_rank1 -- a register-private dependence.
                 }
 
                 tn::tiny_store_full<D, N>(rA, ap + off, ld, lane, n, row_live);

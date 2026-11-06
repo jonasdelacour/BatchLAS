@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/device.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -30,6 +31,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device;
 
 // ---------------------------------------------------------------------------
 // WY block width for the panel back-transform. ormqr keys its block width on the
@@ -169,10 +172,9 @@ Event copy_band_lower(Queue& q,
                 const T* A = a_ptr + b * stride_a;
                 T* AB = ab_ptr + b * stride_ab;
 
+                // AB(0 : lk, j) = A(j : j + lk, j): the band part of column j.
                 const int lk = std::min(kd, n - 1 - j) + 1;
-                for (int r = 0; r < lk; ++r) {
-                    AB[r + j * ldab] = A[(j + r) + j * lda];
-                }
+                v2::copy(v2::Thread{}, v2::Vec<const T>{A, v2::Dyn{lk}, {}, j + j * lda}, v2::Vec<T>{AB, v2::Dyn{lk}, {}, j * ldab});
             });
     });
 
@@ -283,7 +285,7 @@ void two_sided_update_lower(Queue& ctx,
     const MV M2 = MV(s.m2.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
 
     (void)wy::pack_v_panel_batched<Sy2sbWyTag, T>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
-    (void)wy::larft_forward_columnwise_batched_t<Sy2sbWyTag, T, false>(
+    (void)wy::larft_forward_columnwise_batched<Sy2sbWyTag, T>(
         ctx, Tf.data_ptr(), Tf.ld(), Tf.stride(), V.data_ptr(), V.ld(), V.stride(), pn, pk,
         tau_panel.data(), /*tau_stride=*/pk, /*tau_offset=*/0, batch);
     (void)gemm<B>(ctx, V, Tf, P, GemmOptions<T>{});

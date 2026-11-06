@@ -672,16 +672,6 @@ members are skipped, a `k == 0` member is `C := beta·C`, and an all-skipped bat
 (`create_event_after_external_work()`, right for cuBLAS and rocBLAS; an MKL backend would need the queue's own event).
 The public `gemm` splits a heterogeneous batch before choosing; the backends' loops serve direct `gemm_vendor` callers.
 
-### The subgroup workspace budget
-
-`kSubgroupWorkspaceBudgetBytes` (`group_blas_subgroup_common.hh`) is `device_limits::subgroup_workspace_budget_bytes()`,
-generated from `cmake/device_limits.h.in` (`batchlas_subgroup_workspace_budget_bytes`, `cmake/BatchLASDetectSYCL.cmake`):
-the architecture's table local memory less a 4 KiB reserve, 16 KiB floor. NVIDIA 45,056; AMD and Intel 61,440;
-unrecognised GPU 28,672. It is deliberately not the device's real local memory (101,376 B on sm_89): five `if
-constexpr` workspace predicates read it, and `group_blas_rankk.hh` is shared by symm, herk, syrk and syr2k, so raising
-it retunes five ops. Run-time capacities query `DeviceProperty::LOCAL_MEM_SIZE` (`src/util/resident_capacity.hh`).
-No budget but the shipped one was ever timed; there is no override.
-
 ## GEMM: negative results
 
 | Alternative | Result | Verdict |

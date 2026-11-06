@@ -336,7 +336,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "7a97ed5b"}, {"potrf", "9010dde6"}, {"posv", "bac56224"}, {"trsm", "5aa39727"}};
+        {"gemm", "2e519582"}, {"potrf", "9b63379f"}, {"posv", "3a3c58c4"}, {"trsm", "0760c9e4"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -355,8 +355,8 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
-               p.rfind("src/kernels/common/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+        return p == "include/batchlas/device/detail/kernel_attrs.hh" || p == "include/batchlas/device/detail/sscp_target.hh" ||
+               p.rfind("include/batchlas/device/detail/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
     int specs = 0;
@@ -365,7 +365,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
         if (name.size() < 8 || name.substr(name.size() - 8) != "_spec.cc") continue;
         ++specs;
         const KernelBlock b = parse_kernel_block(read_file(entry.path()));
-        std::set<std::string> reached{"src/sycl/kernel_attrs.hh"}, seen;
+        std::set<std::string> reached{"include/batchlas/device/detail/kernel_attrs.hh"}, seen;
         std::vector<fs::path> todo;
         for (const auto& f : b.all) todo.push_back(repo / f);
         while (!todo.empty()) {

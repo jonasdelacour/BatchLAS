@@ -151,7 +151,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # without a system GTest the FetchContent clone makes an offline configure fail.
 option(BATCHLAS_BUILD_TESTS "Build BatchLAS tests" ${BATCHLAS_IS_TOP_LEVEL})
 option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
-option(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS "Build device_blas_* benchmark targets" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 # Tri-state on purpose. This used to be option(... OFF), and
 # BatchLASDetectSYCL.cmake then force-promoted it to ON in PARENT_SCOPE whenever

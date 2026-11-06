@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device.hh>
+#include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/extensions.hh>
@@ -33,21 +33,6 @@ namespace batchlas {
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Environment-variable dispatch helpers
-// ---------------------------------------------------------------------------
-
-// Returns true when BATCHLAS_SYTRD_IMPL=device, false otherwise (legacy default).
-// Latched, unlike its twin latrd_impl() which is re-read; the asymmetry is preserved.
-// evidence: docs/perf/sytrd.md#sytrd-the-latrd-implementation-selector
-inline bool use_device_sytrd() {
-    static const bool result = []() {
-        const char* v = batchlas::settings().selection.sytrd_impl.get();
-        return v && std::string(v) == "device";
-    }();
-    return result;
-}
-
 enum class SytrdTrailingUpdateMode {
     Gemm,
     Rank2k,
@@ -72,45 +57,11 @@ inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     return SytrdTrailingUpdateMode::Default;
 }
 
-// Used by the device sytrd_blocked_impl to allow per-run WG hint overrides.
-inline int32_t latrd_lower_panel_wg_hint_override(int32_t full_n, int32_t batch) {
-    (void)batch;
-    // 0 on the field means unset. The fallback is an n-bucketed tuning curve, so
-    // it stays here: a scalar default on the field would pin that curve at one
-    // point. Only {64,128,256} take effect, as before.
-    const int32_t fallback = tuning::latrd_lower_panel_wg_hint_for_n(full_n);
-    const int value = batchlas::settings().geometry.latrd_lower_panel_wg_hint;
-    if (value == 64 || value == 128 || value == 256) {
-        return value;
-    }
-    return fallback;
-}
-
 // ---------------------------------------------------------------------------
-// Helpers used exclusively by the device kernels
-// ---------------------------------------------------------------------------
-
-template <typename T>
-inline std::size_t sytrd_rank2k_local_size(const Queue& q) {
-    const std::size_t max_work_group_size = q.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
-    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
-        return std::min<std::size_t>(256, max_work_group_size);
-    }
-    return std::min<std::size_t>(128, max_work_group_size);
-}
-
-// ---------------------------------------------------------------------------
-// Kernel name tags — "Legacy" variants for the manual-loop kernels so both
-// implementations can coexist in the same translation unit without SYCL
-// kernel-name collisions.
+// Kernel name tags (the "Legacy" suffix is kept: renaming a kernel changes its SASS pairing).
 // ---------------------------------------------------------------------------
 template <typename T> class UpdateVWLowerSmallKernelLegacy;
 template <typename T> class SytrdLowerLocalSmallKernelLegacy;
-
-template <typename T> class UpdateVWLowerSmallKernel;
-template <typename T> class SytrdLowerLocalSmallKernel;
-
-// Shared between both paths (implementation is identical).
 template <typename T> class RestoreTridiagKernel;
 
 // ---------------------------------------------------------------------------
@@ -155,7 +106,7 @@ Event update_vw_lower_small_legacy(Queue& q,
                     const T vck = V[c + k * ldv];
                     const T wrk = W[r + k * ldw];
                     const T wck = W[c + k * ldw];
-                    acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
+                    acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                 }
 
                 A[r + c * lda] -= acc;
@@ -166,56 +117,6 @@ Event update_vw_lower_small_legacy(Queue& q,
                         A[r + c * lda] = T(x.real(), typename T::value_type(0));
                     }
                 }
-            });
-    });
-
-    return q.get_event();
-}
-
-// ---------------------------------------------------------------------------
-// update_vw_lower_small — device BLAS (her2k)
-// ---------------------------------------------------------------------------
-template <typename T>
-Event update_vw_lower_small_device(Queue& q,
-                                   const MatrixView<T, MatrixFormat::Dense>& v2,
-                                   const MatrixView<T, MatrixFormat::Dense>& w2,
-                                   const MatrixView<T, MatrixFormat::Dense>& a22,
-                                   const std::uint8_t* mask) {
-    const int batch = a22.batch_size();
-    const std::size_t local_size = sytrd_rank2k_local_size<T>(q);
-    const auto launch = batchlas::device::make_group_launch_info(static_cast<int>(local_size));
-    std::size_t workspace_elements = 0;
-
-    if (batch > 0) {
-        const int extent = a22.rows();
-        const int contract_extent = v2.cols();
-        workspace_elements = batchlas::device::her2k_workspace_elements<T,
-            batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-            launch, extent, contract_extent);
-    }
-
-    (void)q->submit([&](sycl::handler& h) {
-        const auto v_view = v2.kernel_view();
-        const auto w_view = w2.kernel_view();
-        const auto a_view = a22.kernel_view();
-
-        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
-        batchlas::impl::parallel_for<UpdateVWLowerSmallKernel<T>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size),
-                              sycl::range<1>(local_size)),
-            [=](sycl::nd_item<1> item) {
-                const int b = static_cast<int>(item.get_group(0));
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before her2k's barriers
-
-                const auto vb = v_view.batch_item(b);
-                const auto wb = w_view.batch_item(b);
-                const auto ab = a_view.batch_item(b);
-                T* workspace_ptr = workspace_elements == 0
-                    ? static_cast<T*>(nullptr)
-                    : batchlas::util::get_raw_ptr(workspace);
-                batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto,
-                                        Uplo::Lower, Transpose::NoTrans>(
-                    item.get_group(), vb, wb, ab, T(-1), T(1), workspace_ptr);
             });
     });
 
@@ -254,13 +155,14 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 T* A = a_ptr + b * stride_a;
                 T* Eb = e_ptr + b * stride_e;
                 T* Taub = tau_ptr + b * stride_tau;
 
                 const int ld_loc = n;
-                auto Al = [&](int r, int c) -> T& { return A_local[r + c * ld_loc]; };
+                auto Al = [&](int r, int c) BATCHLAS_DLA_BODY -> T& { return A_local[r + c * ld_loc]; };
 
                 if (lane < n) {
                     for (int c = 0; c < n; ++c) {
@@ -279,7 +181,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     if (lane >= x0 && lane < n) {
                         sumsq = detail::abs2_if_complex(Al(lane, k));
                     }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
+                    sumsq = ex.group_reduce(sumsq);
 
                     T alpha = T(0);
                     if (lane == alpha_row) {
@@ -349,9 +251,9 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     T dot_partial = T(0);
                     if (lane >= alpha_row && lane < n) {
                         const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        dot_partial = batchlas::device::detail::conj(vr) * W_local[lane];
+                        dot_partial = batchlas::device::conj(vr) * W_local[lane];
                     }
-                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
+                    const T dot = ex.group_reduce(dot_partial);
 
                     const T alpha2 = T(-0.5) * tau_k * dot;
                     if (lane >= alpha_row && lane < n) {
@@ -367,10 +269,10 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                             const T vc = (c == alpha_row) ? T(1) : Al(c, k);
                             const T wc = W_local[c];
                             T a_rc = Al(lane, c);
-                            a_rc -= vr * batchlas::device::detail::conj(wc) + wr * batchlas::device::detail::conj(vc);
+                            a_rc -= vr * batchlas::device::conj(wc) + wr * batchlas::device::conj(vc);
                             Al(lane, c) = a_rc;
                             if (lane != c) {
-                                Al(c, lane) = batchlas::device::detail::conj(a_rc);
+                                Al(c, lane) = batchlas::device::conj(a_rc);
                             } else if constexpr (detail::is_complex<T>::value) {
                                 Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
                             }
@@ -391,138 +293,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 }
 
 // ---------------------------------------------------------------------------
-// sytrd_lower_local_small — device BLAS (hemv + her2k)
-// ---------------------------------------------------------------------------
-template <typename T>
-Event sytrd_lower_local_small_device(Queue& q,
-                                     const MatrixView<T, MatrixFormat::Dense>& a,
-                                     const VectorView<T>& e,
-                                     const VectorView<T>& tau,
-                                     int n,
-                                     const std::uint8_t* mask) {
-    constexpr int WG = 64;
-    const int lda = a.ld();
-    const int stride_a = a.stride();
-    T* a_ptr = a.data_ptr();
-    T* e_ptr = e.data_ptr();
-    T* tau_ptr = tau.data_ptr();
-    const int stride_e = e.stride();
-    const int stride_tau = tau.stride();
-    const int batch = a.batch_size();
-    const auto launch = batchlas::device::make_group_launch_info(WG);
-    std::size_t workspace_elements = 0;
-
-    if (batch > 0 && n > 1) {
-        const int extent = n - 1;
-        workspace_elements = std::max(
-            workspace_elements,
-            batchlas::device::hemv_workspace_elements<T,
-                batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(launch, extent));
-        workspace_elements = std::max(
-            workspace_elements,
-            batchlas::device::her2k_workspace_elements<T,
-                batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
-                launch, extent, 1));
-    }
-
-    (void)q->submit([&](sycl::handler& h) {
-        auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(n)), h);
-        auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
-
-        batchlas::impl::parallel_for<SytrdLowerLocalSmallKernel<T>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
-
-                const int lane = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-                T* Al_ptr = A_local.template get_multi_ptr<sycl::access::decorated::no>().get();
-                T* W_ptr  = W_local.template get_multi_ptr<sycl::access::decorated::no>().get();
-                T* workspace_ptr = workspace_elements == 0
-                    ? static_cast<T*>(nullptr)
-                    : batchlas::util::get_raw_ptr(workspace);
-
-                T* A    = a_ptr   + b * stride_a;
-                T* Eb   = e_ptr   + b * stride_e;
-                T* Taub = tau_ptr + b * stride_tau;
-
-                const int ld_loc = n;
-                auto Al = [&](int r, int c) -> T& { return A_local[r + c * ld_loc]; };
-
-                if (lane < n) {
-                    for (int c = 0; c < n; ++c) {
-                        Al(lane, c) = A[lane + c * lda];
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                for (int k = 0; k < n - 1; ++k) {
-                    const int alpha_row = k + 1;
-                    const int x0 = k + 2;
-                    const int tail = n - alpha_row;
-                    const bool lane_in_tail = (lane >= alpha_row && lane < n);
-                    T alpha = Al(alpha_row, k);
-                    const T tau_k = detail::larfg(g, alpha,
-                        VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0));
-                    if (lane == 0) {
-                        Al(alpha_row, k) = T(1);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                        Al_ptr + alpha_row + alpha_row * ld_loc, tail, tail, ld_loc, ld_loc * n);
-                    auto v_view = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
-                    auto w_view = VectorView<T>(W_ptr + alpha_row, tail);
-                    batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
-                        g, trailing_view, v_view, w_view, tau_k, T(0), workspace_ptr);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    auto v_vec = VectorView<T>(Al_ptr + alpha_row + k * ld_loc, tail);
-                    auto w_vec = VectorView<T>(W_ptr + alpha_row, tail);
-                    const T dot = batchlas::device::dotc(g, v_vec, w_vec);
-
-                    const T alpha2 = T(-0.5) * tau_k * dot;
-                    batchlas::device::axpy(g, w_vec, v_vec, alpha2);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    auto v_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
-                        Al_ptr + alpha_row + k * ld_loc, tail, 1, ld_loc, ld_loc);
-                    auto w_matrix = KernelMatrixView<T, MatrixFormat::Dense>(
-                        W_ptr + alpha_row, tail, 1, tail, tail);
-                    batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto,
-                                            Uplo::Lower, Transpose::NoTrans>(
-                        g, v_matrix, w_matrix, trailing_view, T(-1), T(1), workspace_ptr);
-                    if constexpr (detail::is_complex<T>::value) {
-                        it.barrier(sycl::access::fence_space::local_space);
-                        if (lane_in_tail) {
-                            for (int c = alpha_row; c < lane; ++c) {
-                                Al(c, lane) = batchlas::device::detail::conj(Al(lane, c));
-                            }
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lane == 0) {
-                        Eb[k]   = alpha;
-                        Taub[k] = tau_k;
-                    }
-                }
-
-                if (lane < n) {
-                    for (int c = 0; c < n; ++c) {
-                        A[lane + c * lda] = Al(lane, c);
-                    }
-                }
-            });
-    });
-
-    return q.get_event();
-}
-
-// ---------------------------------------------------------------------------
-// restore_tridiag_lower — identical in both paths
+// restore_tridiag_lower
 // ---------------------------------------------------------------------------
 template <typename T>
 Event restore_tridiag_lower(Queue& q,
@@ -557,7 +328,7 @@ Event restore_tridiag_lower(Queue& q,
                 if (i < n - 1) {
                     const T ei = Eb[i];
                     A[(i + 1) + i * lda] = ei;
-                    A[i + (i + 1) * lda] = batchlas::device::detail::conj(ei);
+                    A[i + (i + 1) * lda] = batchlas::device::conj(ei);
                 }
             });
     });
@@ -651,8 +422,6 @@ Event sytrd_blocked_impl(Queue& ctx,
         throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
-    const bool is_legacy = !use_device_sytrd();
-
     if (n <= 32) {
         if (ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, T>(ctx, A, D, E, TAU, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
@@ -686,10 +455,7 @@ Event sytrd_blocked_impl(Queue& ctx,
         if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.local_small");
-                if (is_legacy)
-                    (void)sytrd_lower_local_small_legacy<T>(ctx, A, E, TAU, n, mask_p);
-                else
-                    (void)sytrd_lower_local_small_device<T>(ctx, A, E, TAU, n, mask_p);
+                (void)sytrd_lower_local_small_legacy<T>(ctx, A, E, TAU, n, mask_p);
             }
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.restore_tridiag");
@@ -709,9 +475,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const auto& fuse_env = batchlas::settings().selection.sytrd_fuse_panel_update;
     const bool fuse_override_on  = fuse_env.has_value() && *fuse_env;
     const bool fuse_override_off = fuse_env.has_value() && !*fuse_env;
-    const bool fuse_default = is_legacy
-        ? (select::native_gpu_backend<B> && (n == 256))
-        : tuning::sytrd_fuse_panel_update_for_n(n);
+    const bool fuse_default = select::native_gpu_backend<B> && (n == 256);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
     // A22 -= V W^H + W V^H as one triangle-only syr2k (float) or her2k (complex<float>),
     // instead of two full n2 x n2 GEMMs. Only where a batched kernel exists: every other
@@ -727,9 +491,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&
         (sytrd_trailing_update_mode() != SytrdTrailingUpdateMode::Gemm);
-    const int32_t latrd_wg_hint = is_legacy
-        ? tuning::latrd_lower_panel_wg_hint()
-        : latrd_lower_panel_wg_hint_override(n, batch);
+    const int32_t latrd_wg_hint = tuning::latrd_lower_panel_wg_hint();
 
     for (int j0 = 0; j0 < k; j0 += nb) {
         const int ib = std::min(nb, k - j0);
@@ -757,10 +519,7 @@ Event sytrd_blocked_impl(Queue& ctx,
 
             if (n2 <= 128) {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_small");
-                if (is_legacy)
-                    (void)update_vw_lower_small_legacy<T>(ctx, V2, W2, A22, mask_p);
-                else
-                    (void)update_vw_lower_small_device<T>(ctx, V2, W2, A22, mask_p);
+                (void)update_vw_lower_small_legacy<T>(ctx, V2, W2, A22, mask_p);
             } else {
                 bool rank2k_issued = false;
                 if constexpr (rank2k_trailing_update_supported) {

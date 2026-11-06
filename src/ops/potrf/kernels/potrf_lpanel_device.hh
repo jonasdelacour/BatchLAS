@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The native batched POTRF LPANEL kernel: LEFT-LOOKING, thread-per-row. Local memory holds
-// one \f$n \times NB\f$ panel, not the matrix; the columns to its left are re-read from global memory.
-// Four invariants a maintainer can silently break. (1) EVERY barrier is a WORK-GROUP barrier
-// at the top level, outside the `if` guarding its phase, and failure is a predicated skip,
-// never a `break` -- the schedule is then a function of (n, NB) alone, which is what makes
-// packing G matrices into one work-group legal, the opposite of potrf_cta_device.hh. (2) B6 is
-// not optional: the next panel's left-looking read is a GLOBAL read of the columns the store
-// just wrote, by different work-items. (3) Every global read and every store is guarded by
-// `row >= column`, so the other triangle is neither read nor written; ortho.cc depends on it.
-// (4) rp[], rS[] and rA[] must stay in registers -- never a parameter, never a dynamic index.
-// evidence: docs/perf/potrf.md#the-lpanel-tier
+// The native batched POTRF LPANEL kernel: LEFT-LOOKING, thread-per-row, on device LA v2 ops. Local
+// memory holds one `n x NB` panel; the columns to its left are re-read from global memory.
+// Invariants: (1) EVERY barrier is a top-level WORK-GROUP barrier and failure is a predicated skip,
+// so the schedule depends on (n, NB) alone -- what makes packing G matrices per work-group legal.
+// (2) B6 is not optional: the next panel GLOBALLY reads the columns just stored, by other items.
+// (3) Every global read and store is guarded by `row >= column` (ortho.cc depends on it).
+// (4) rp, rS and rA stay in registers. evidence: docs/perf/potrf.md#the-lpanel-tier
 
+#include <batchlas/device/lapack/potrf.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
+
+#include <batchlas/device/lapack_aux.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -23,10 +22,10 @@
 
 namespace batchlas::potrf_native {
 
-// The whole body for ONE matrix, Uplo::Lower; sA, sB, fail and Ag are already offset to it.
-// `L >= n` lanes: lane `r` owns row `r` for the whole call, because rp/rS/rA must survive the
-// k loop. `store` is false for a packed group's dead slots, which still run the WHOLE body --
-// the barrier count is work-group uniform -- with only the global stores suppressed.
+namespace dla = ::batchlas::device::potrf_detail;  // the LPANEL recurrence's pieces (public header)
+
+// ONE matrix, Uplo::Lower. `L >= n`: lane `r` owns row `r` for the whole call. `store` is false for
+// a packed group's dead slots, which run the WHOLE body (uniform barrier count), stores suppressed.
 template <typename D, typename R, int NB, bool Tag = false>  // Tag: one inlined instance per kernel
 inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               int tid, int L, bool store,
@@ -35,13 +34,16 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               int* __restrict fail,
                               D* __restrict Ag, int ldg,
                               int n) {
-    // Local-space views (generic cfloat reads were LD.E). evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
-    const auto sAl = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                              sycl::access::decorated::no>(sA);
-    const auto sBl = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                              sycl::access::decorated::no>(sB);
-    if (tid == 0) *fail = 0;
-    sycl::group_barrier(it.get_group());  // B0
+    namespace v2 = batchlas::device;
+    using Ar = v2::arith_t<v2::arith::Fma, D>;
+    const v2::Slot<> ex{tid, L};  // this matrix's slot of the packed work-group
+    const auto A = v2::mat_wide(Ag, n, n, ldg);
+    const auto P = dla::slm_mat(sA, n, NB, slda);  // local-space views: generic reads were LD.E
+    const auto B = dla::slm_tile<NB, NB>(sB);
+    auto bar = [&]() BATCHLAS_DLA_BODY { sycl::group_barrier(it.get_group()); };
+
+    if (ex.leader()) *fail = 0;
+    bar();  // B0
 
     const int row = tid;
     bool ok = true;  // matrix-uniform: every lane derives it from the same local pivot
@@ -51,141 +53,34 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
         const bool panel_ok = ok;
         const bool live = panel_ok && (row >= j) && (row < n);
 
-        // (1) prefetch; `row >= j + i` keeps the strictly upper diagonal block unread.
-        D rp[NB];
-        D rS[NB];
-BATCHLAS_UNROLL_FULL
-        for (int i = 0; i < NB; ++i) {
-            D v{};
-            if (live && i < ib && row >= j + i) {
-                v = Ag[row + static_cast<std::ptrdiff_t>(j + i) * ldg];
-                // A Hermitian diagonal's imaginary part is contractually ignored.
-                if (row == j + i) v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
-            }
-            rp[i] = v;
-            rS[i] = D{};
-        }
+        v2::Frag<D, NB> rp, rS;  // (1) prefetch row `row` of the panel's lower triangle
+        dla::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
+        v2::fill(rS, Ar::zero());
 
-        // (2) rS(row,i) = sum_{k<j} L(row,k)*conj(L(j+i,k)); (4) factors the result in local.
+        // (2) rS(row, i) = sum_{k<j} L(row, k) conj(L(j+i, k)) against the ZERO-padded broadcast
+        // block, so the FMA loop is a fully unrolled NB x NB with no inner bound test.
         for (int k = 0; k < j; k += NB) {
             const int kb = ((j - k) < NB) ? (j - k) : NB;
-
-            // Out-of-range entries are ZEROED, not skipped: the FMA loop below is then a
-            // fully unrolled \f$NB \times NB\f$ with no inner bound test.
-            for (int e = tid; e < NB * NB; e += L) {
-                const int i = e % NB;
-                const int kk = e / NB;
-                D v{};
-                if (i < ib && kk < kb) {
-                    v = sycl_device::dev_conj(
-                        Ag[(j + i) + static_cast<std::ptrdiff_t>(k + kk) * ldg]);
-                }
-                sBl[i + kk * NB] = v;
-            }
-            sycl::group_barrier(it.get_group());  // B1
-
+            dla::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+            bar();  // B1
             if (live) {
-                D rA[NB];
-BATCHLAS_UNROLL_FULL
-                for (int kk = 0; kk < NB; ++kk) {
-                    rA[kk] = (kk < kb)
-                                 ? Ag[row + static_cast<std::ptrdiff_t>(k + kk) * ldg]
-                                 : D{};
-                }
-                // Lane-uniform sB column as 16-byte local vectors; each rS[i] still sums kk
-                // in ascending order. evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
-                using V = sycl::vec<float, 4>;
-                constexpr int VW = 16 / static_cast<int>(sizeof(D));
-                static_assert((NB * sizeof(D)) % 16 == 0, "sB column must be whole vectors");
-                auto sBv = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                    sycl::access::decorated::no>(
-                    reinterpret_cast<V*>(sB));
-BATCHLAS_UNROLL_FULL
-                for (int kk = 0; kk < NB; ++kk) {
-                    D col[NB];
-BATCHLAS_UNROLL_FULL
-                    for (int v = 0; v < NB / VW; ++v) {
-                        const V x = sBv[(kk * NB) / VW + v];
-                        __builtin_memcpy(&col[v * VW], &x, 16);
-                    }
-BATCHLAS_UNROLL_FULL
-                    for (int i = 0; i < NB; ++i) {
-                        sycl_device::fma_acc(rS[i], rA[kk], col[i]);
-                    }
-                }
+                v2::Frag<D, NB> rA;
+                v2::load_row(rA, A.sub(0, k, n, kb), row, kb);
+                dla::gemv_n_slm_bcast<NB>(rS, rA, sB);  // evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
             }
-            sycl::group_barrier(it.get_group());  // B2 -- WAR on sB
+            bar();  // B2 -- WAR on sB
         }
 
-        // (3) publish; the strictly upper diagonal block is ZEROED, not left indeterminate.
-        if (live) {
-BATCHLAS_UNROLL_FULL
-            for (int i = 0; i < NB; ++i) {
-                if (i < ib) {
-                    D v{};
-                    if (row >= j + i) {
-                        v = sycl_device::dev_sub(rp[i], rS[i]);
-                        // fma_acc(x, conj(x)) leaves a residue in the imaginary part.
-                        if (row == j + i) {
-                            v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
-                        }
-                    }
-                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] = v;
-                }
-            }
+        if (live) {  // (3) publish rp - rS; the strictly upper diagonal block is ZEROED
+            dla::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) BATCHLAS_DLA_BODY { return Ar::sub(rp[i], rS[i]); });
         }
-        sycl::group_barrier(it.get_group());  // B3
+        bar();  // B3
 
-        for (int i = 0; i < ib; ++i) {
-            const R d = sycl_device::dev_real(sAl[(j + i) + static_cast<std::ptrdiff_t>(i) * slda]);
+        // (4) potf2 with B3b / B4 / B5 per column. evidence: docs/perf/potrf.md#the-pivot-cell-war-race
+        ok = v2::potf2_panel_rows<dla::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
 
-            // `!(d > 0)`, not `d <= 0`, so NaN is rejected too, as LAPACK does; every lane
-            // reads the same local cell, so `bad` needs no broadcast.
-            const bool bad = ok && !(d > R(0));
-            if (bad) {
-                ok = false;                             // sticky: FIRST FAILURE WINS
-                if (tid == 0) *fail = j + i + 1;        // 1-based GLOBAL column
-            }
-
-            // WAR: every lane READ this cell just above, lane j+i overwrites it below.
-            sycl::group_barrier(it.get_group());  // B3b, evidence: docs/perf/potrf.md#the-pivot-cell-war-race
-
-            if (ok) {
-                const R dkk = sycl::sqrt(d);
-                const R rs = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
-                if (row == j + i) {
-                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] =
-                        sycl_device::dev_from_real<D>(dkk);
-                } else if (row > j + i && row < n) {
-                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] = sycl_device::dev_mul_real(
-                        sAl[row + static_cast<std::ptrdiff_t>(i) * slda], rs);
-                }
-            }
-            sycl::group_barrier(it.get_group());  // B4
-
-            if (ok && row > j + i && row < n) {
-                const D lri = sAl[row + static_cast<std::ptrdiff_t>(i) * slda];
-                for (int c = i + 1; c < ib; ++c) {
-                    const D ljc = sAl[(j + c) + static_cast<std::ptrdiff_t>(i) * slda];
-                    sAl[row + static_cast<std::ptrdiff_t>(c) * slda] = sycl_device::dev_sub(
-                        sAl[row + static_cast<std::ptrdiff_t>(c) * slda],
-                        sycl_device::dev_mul(lri, sycl_device::dev_conj(ljc)));
-                }
-            }
-            sycl::group_barrier(it.get_group());  // B5
-        }
-
-        // (5) store. Guarded by the panel's ENTRY state, not by `ok`: a panel that failed
-        // part-way still holds finite numbers.
-        if (store && panel_ok && row < n) {
-            for (int i = 0; i < ib; ++i) {
-                if (row >= j + i) {
-                    Ag[row + static_cast<std::ptrdiff_t>(j + i) * ldg] =
-                        sAl[row + static_cast<std::ptrdiff_t>(i) * slda];
-                }
-            }
-        }
-        sycl::group_barrier(it.get_group());  // B6 -- the next panel READS these columns
+        if (store && panel_ok) v2::lacpy<v2::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));  // (5) ENTRY state: a failed panel is finite
+        bar();  // B6 -- the next panel READS these columns
     }
 }
 

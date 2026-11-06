@@ -166,7 +166,7 @@ Traps: a harness that shrinks the batch cannot ask the routing question; the two
 
 ## The shape of the GETRF device code
 
-`getf2_panel_device` (`getrf_cta_device.hh`) is ?GETF2 over a `Tile` with `at(r, c)`, instantiated on a `local_accessor` (CTA tier) and a global pointer (blocked leaf). Load-bearing spellings: the pivot search is a sub-group butterfly plus a scan over `kLuRedSlots = 32` slots, never `reduce_over_group`; the metric is LAPACK's `cabs1`; `info` is exact-zero, 1-based, global, first-failure-wins, with no epsilon floor; barriers B1..B4 sit at the top of the kernel-uniform `k` loop; `ld` is padded odd so a row exchange does not hit one bank.
+`getf2_panel_device` (`include/batchlas/device/lapack/getrf.hh`) is ?GETF2 over a device LA v2 `mat_wide` view (64-bit `r + c * ld` addressing) on a run-time-width `RtGroup`, instantiated on local memory (CTA tier) and a global pointer (blocked leaf). Load-bearing spellings: the pivot search is a sub-group butterfly plus a scan over `kLuRedSlots = 32` slots, never `reduce_over_group`; the metric is LAPACK's `cabs1`; `info` is exact-zero, 1-based, global, first-failure-wins, with no epsilon floor; barriers B1..B4 sit at the top of the kernel-uniform `k` loop; `ld` is padded odd so a row exchange does not hit one bank.
 
 ## LU: correctness findings
 
@@ -220,7 +220,7 @@ Older `experiments/` paths live at the tag `perf-evidence/vendor-independence` (
 
 ### One spelling per ceiling
 
-* `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; the generated `device_limits.hh` value (49,152) is wrong here and is on no decision path ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
+* `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; every decision re-reads the device ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
 * `getrf_cta_fits` is admission, occupancy-scaled; `getrf_leaf_fits` is residency, at the whole budget.
 * `getrf_tiny_max_n<T>()` is the one spelling of the tiny ceiling (compile-time, {4, 8, 16, 32} ladder).
 * `getrf_tiny_buffer_size` is not zero: a short caller `info` draws pool scratch.

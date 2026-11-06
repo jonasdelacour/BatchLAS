@@ -5,6 +5,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/device/lapack/sygst.hh>
 
 #include <algorithm>
 #include <cstddef>
@@ -20,13 +21,12 @@ inline constexpr std::size_t kDiagSlmCap = 32768;  ///< a group's shared memory 
 
 template <typename T>  /// F's leading dimension: whole 16-byte packs per line, plus one pack against bank conflicts
 constexpr int diag_ldf(int kb) {
-    const int v = sizeof(T) >= 16 ? 1 : static_cast<int>(16 / sizeof(T));
-    return (kb + v - 1) / v * v + v;
+    return ::batchlas::device::sygs2_ldf<T>(kb);
 }
 
 template <typename T>  /// shared-memory elements of one item: F and the transpose buffer (ld kb + 1)
 constexpr std::size_t diag_item_elems(int kb) {
-    return static_cast<std::size_t>(kb) * static_cast<std::size_t>(diag_ldf<T>(kb) + kb + 1);
+    return ::batchlas::device::sygs2_block_elems<T>(kb);
 }
 
 template <typename T>  /// items per work-group at order kb: as many as kDiagWg columns and kDiagSlmCap hold

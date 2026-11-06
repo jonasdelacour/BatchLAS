@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Native batched POTRF, the TINY tier: right-looking unblocked Cholesky with one matrix
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
-// barriers, every cross-lane value a sub-group shuffle; the shared load/pad/store helpers
-// are in tiny_device.hh. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
+// barriers, every cross-lane value a sub-group shuffle. The kernel is a thin launcher: its body
+// is device::potrf's tier::Reg body (include/batchlas/device/lapack/potrf.hh: reg_load_*,
+// potf2_reg, reg_store_*, the steps potrf_reg composes) with the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
 // device-code cluster. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
@@ -11,13 +12,15 @@
 // on masked SPIR-V, so a publish/read pair ordered only by it is not ordered everywhere.
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 
@@ -36,6 +39,8 @@ class PotrfTinyKernel;
 namespace sycl_potrf {
 
 namespace {
+
+namespace v2 = ::batchlas::device;
 
 using tiny_native::kTinySubGroupSize;
 using tiny_native::kTinySubGroups;
@@ -90,12 +95,12 @@ Event potrf_tiny_launch(Queue& ctx,
     const int stride_a = A.stride();
     int32_t* info_ptr = info.data();
 
-    const int wg_size = per_wg * N;
-    const int num_wg = (batch + per_wg - 1) / per_wg;
-
     // A Hermitian diagonal's imaginary part is contractually ignored; for a real type
     // the transform is the identity.
     constexpr bool real_diag = DM::is_complex;
+
+    const int wg_size = per_wg * N;
+    const int num_wg = (batch + per_wg - 1) / per_wg;
 
     ctx->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<PotrfTinyKernel<T, N, Masked>>(h,
@@ -115,77 +120,28 @@ Event potrf_tiny_launch(Queue& ctx,
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const bool row_live = live && (lane < n);
 
+                // The public tier::Reg body's three steps (potrf_detail::potrf_reg composes the same
+                // ones), spelled here so the captures, hence the kernel arguments, keep their order.
                 const D* __restrict Ag =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
 
-                D rA[N];
+                v2::Frag<D, N> rA;
                 if (upper) {
-                    tiny_native::tiny_load_upper<D, N>(rA, Ag, ld, lane, row_live, real_diag);
+                    v2::potrf_detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 } else {
-                    tiny_native::tiny_load_lower<D, N>(rA, Ag, ld, lane, row_live, real_diag);
+                    v2::potrf_detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 }
 
-                // `linfo` is partition-uniform because `akk` is a broadcast.
-                bool alive = live;
-                int32_t linfo = 0;
-
-                // The order guard is a PREDICATE, never a `break`: a runtime break
-                // defeats the unroll at N >= 16, after which rA[j] is a dynamic index.
-                // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < N; ++j) {
-                    const bool col_live = (j < n);
-
-                    const R akk = select_from_group(part, sycl_device::dev_real(rA[j]),
-                                                    static_cast<uint32_t>(j));
-
-                    // `!(akk > 0)`, not `akk <= 0`, so NaN is rejected too, as LAPACK does.
-                    const bool bad = !(akk > R(0));
-                    if (alive && col_live && bad) {
-                        linfo = j + 1;   // 1-based; sticky, so FIRST FAILURE WINS
-                        alive = false;
-                    }
-
-                    // EVERY failure effect below is a value substitution, never control
-                    // flow: `alive` is partition-uniform but NOT sub-group-uniform, so an
-                    // `if (alive) { ...shuffle... }` would wrap a collective in divergence.
-                    const bool act = alive && col_live;
-                    const R dkk = act ? sycl::sqrt(akk) : R(1);
-
-                    // NOT rsqrt: rsqrt.approx is not the reference.
-                    const R rinv = R(1) / dkk;
-
-                    // tiny_select, not `?:` -- see tiny_device.hh on why a ternary over a
-                    // 16-byte aggregate stops the array being promotable.
-                    rA[j] = tiny_native::tiny_select(
-                        act,
-                        tiny_native::tiny_select(lane == j,
-                                                 sycl_device::dev_from_real<D>(dkk),
-                                                 sycl_device::dev_mul_real(rA[j], rinv)),
-                        rA[j]);
-
-BATCHLAS_UNROLL_FULL
-                    for (int k = j + 1; k < N; ++k) {
-                        // The lane guard is INSIDE the collective, never around it.
-                        const D vk = tiny_native::tiny_bcast<D>(part, rA[j],
-                                                                static_cast<uint32_t>(k));
-                        const D upd = sycl_device::dev_sub(
-                            rA[k],
-                            sycl_device::dev_mul(rA[j], sycl_device::dev_conj(vk)));
-
-                        // `k <= lane` keeps rA[k] for k > lane exactly zero for the
-                        // kernel's whole life, which is what makes the padding inert.
-                        rA[k] = tiny_native::tiny_select(act && k < n && k <= lane,
-                                                         upd, rA[k]);
-                    }
-                }
+                // `linfo` is partition-uniform because the pivot is a broadcast.
+                const int32_t linfo =
+                    v2::potrf_detail::potf2_reg<D, N, N>(v2::wrap(part), rA, n, live, v2::bcast_policy::Shuffle{});
 
                 D* __restrict Aout =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
                 if (upper) {
-                    tiny_native::tiny_store_upper<D, N>(rA, Aout, ld, lane, row_live);
+                    v2::potrf_detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
                 } else {
-                    tiny_native::tiny_store_lower<D, N>(rA, Aout, ld, lane, row_live);
+                    v2::potrf_detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
                 }
 
                 if (live && part.leader()) info_ptr[prob_id] = linfo;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device/detail/group_blas_common.hh>
+#include <batchlas/device.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -7,20 +7,23 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <src/kernels/common/dla_v2_jacobi.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 #include <algorithm>
 #include <complex>
 #include <limits>
 #include <numeric>
+#include <type_traits>
 
 namespace batchlas {
 
@@ -38,83 +41,8 @@ class GesvdjCTAKernel;
 
 namespace {
 
-template <typename U>
-inline typename base_type<U>::type abs_if_complex_g(const U& x) {
-    if constexpr (detail::is_complex<U>::value) {
-        return sycl::hypot(x.real(), x.imag());
-    } else {
-        return sycl::fabs(x);
-    }
-}
-
-template <typename U>
-inline typename base_type<U>::type norm2_g(const U& x) {
-    using Real = typename base_type<U>::type;
-    if constexpr (detail::is_complex<U>::value) {
-        return x.real() * x.real() + x.imag() * x.imag();
-    } else {
-        return static_cast<Real>(x * x);
-    }
-}
-
-// permute_group_by_xor does not accept std::complex, so complex is shuffled as
-// two real halves.
-template <typename Group, typename U>
-inline U xor_shuffle_g(const Group& g, const U& v, uint32_t mask) {
-    if constexpr (detail::is_complex<U>::value) {
-        return U(permute_group_by_xor(g, v.real(), mask),
-                 permute_group_by_xor(g, v.imag(), mask));
-    } else {
-        return permute_group_by_xor(g, v, mask);
-    }
-}
-
-// Butterfly all-reduce, result replicated across the partition. Must be called
-// by every lane -- a non-participating lane poisons the result.
-template <typename Group, typename U>
-inline U part_sum_g(const Group& g, U v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-        v = v + xor_shuffle_g(g, v, offset);
-    }
-    return v;
-}
-
-template <typename Group, typename Real>
-inline Real part_max_g(const Group& g, Real v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-        v = sycl::fmax(v, permute_group_by_xor(g, v, offset));
-    }
-    return v;
-}
-
-template <typename Group, typename Real>
-inline Real part_min_g(const Group& g, Real v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-        v = sycl::fmin(v, permute_group_by_xor(g, v, offset));
-    }
-    return v;
-}
-
-// Round-robin pairing, identical to syev_jacobi_cta's: for even mp the mp-1
-// rounds of mp/2 disjoint pairs cover every index pair exactly once.
-inline void round_robin_pair_g(int32_t mp, int32_t t, int32_t k, int32_t& p, int32_t& q) {
-    const int32_t ring = mp - 1;
-    if (k == 0) {
-        p = 0;
-        q = (t % ring) + 1;
-    } else {
-        p = ((t + k) % ring) + 1;
-        q = (((t - k) % ring + ring) % ring) + 1;
-    }
-    if (p > q) {
-        const int32_t tmp = p;
-        p = q;
-        q = tmp;
-    }
-}
+namespace v2 = ::batchlas::device;
+namespace jac = ::batchlas::device::jacobi_detail;
 
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
@@ -228,9 +156,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // Relative threshold (LAWN 169 Remark 2.2); an absolute test would
         // forfeit the relative accuracy this kernel exists for.
-        const Real tol = params.tol_multiplier * static_cast<Real>(CC) * std::numeric_limits<Real>::epsilon();
-        const Real tiny = std::numeric_limits<Real>::min();
-        const Real tau_big = Real(1) / sycl::sqrt(std::numeric_limits<Real>::epsilon());
+        const auto thr = jac::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
         const Real zero_mult = params.zero_sigma_multiplier;
 
         Real* S = s_ptr;
@@ -242,9 +168,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
+        // BATCHLAS_DLA_BODY: direct view/lambda calls would leave the body outlined (SemaSYCL).
         batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+            [=](sycl::nd_item<1> it) BATCHLAS_DLA_BODY BATCHLAS_REQD_SG_SIZE(32) {
+                constexpr int kP = static_cast<int>(P);
+                constexpr int kC = static_cast<int>(C);
+                constexpr int K = static_cast<int>(kGramChunk);
+                using Rows = v2::Frag<T, static_cast<int>(kRPL)>;  // one column on this lane's rows
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
@@ -257,26 +188,17 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
-                    int32_t p = 0;
-                    int32_t q = 0;
-                    if (k < pairs_per_round) {
-                        round_robin_pair_g(mp, t, k, p, q);
-                    } else {
-                        p = static_cast<int32_t>(C);
-                        q = static_cast<int32_t>(C);
-                    }
-                    Pair_local[idx] = static_cast<int16_t>(p | (q << 8));
+                    Pair_local[idx] = jac::pack_pair(k < pairs_per_round ? jac::round_robin_pair(mp, t, k) : jac::PivotPair{kC, kC});
                 }
                 sycl::group_barrier(wg);
 
                 const auto sg = it.get_sub_group();
-                const auto part = make_partition<P>(sg);
-
+                const v2::SgpPartition<kP> ex{sg};
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
-                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
+                const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
+                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
-                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+                const int32_t lane = ex.lid();
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 // NO EARLY RETURN (I2): partitions share a sub-group's barriers, so a dead
                 // partition (a batch tail or an inactive item) solves a zero tile and stores nothing.
@@ -287,84 +209,58 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 auto U_prob = U_view.batch_item(pid);
                 auto Vh_prob = Vh_view.batch_item(pid);
 
-                const int32_t base_a = part_id * static_cast<int32_t>(kTileElems);
-                const int32_t base_v = ComputeV ? (part_id * static_cast<int32_t>(kTileElems)) : 0;
-                const int32_t base_n = part_id * static_cast<int32_t>(C);
+                using Tile = v2::Mat<T, v2::Ext<kC>, v2::Ext<kC>, v2::Ext<LD>, v2::Mem::Local, v2::Cyclic,
+                                     sycl::local_accessor<T, 1>>;
+                const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
+                const Tile A{A_local, {}, {}, {}, tile_off};
+                // Without V, V_local is never named, so the kernel does not capture it (an extra
+                // local accessor argument moves the shared-memory layout).
+                std::conditional_t<ComputeV, Tile, v2::None> V{};
+                if constexpr (ComputeV) V = Tile{V_local, {}, {}, {}, tile_off};
+                const auto nrm = v2::vec(Nrm_local, kC, part_id * kC);
+                const auto inv = v2::vec(Inv_local, kC, part_id * kC);
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-                const int32_t base_p = part_id * static_cast<int32_t>(C);
 
                 // ---- Load. lane = ROW (rows lane, lane+P, ...), coalesced. ----
                 // m < n is transposed at load time. The pad is exact zero so a
                 // padded pair's Gram is 0 and falls below any threshold.
                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                    const int32_t row = lane + rr * static_cast<int32_t>(P);
-                    for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
+                    const int32_t row = lane + rr * kP;
+                    for (int32_t c = 0; c < kC; ++c) {
                         T v = T(0);
                         if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
-                            v = transposed_f ? batchlas::device::detail::conj(A_prob(c, row)) : A_prob(row, c);
+                            v = transposed_f ? v2::conj(A_prob(c, row)) : A_prob(row, c);
                         }
-                        A_local[base_a + row + c * LD] = v;
-                        if constexpr (ComputeV) {
-                            V_local[base_v + row + c * LD] = (row == c && row < CC) ? T(1) : T(0);
-                        }
+                        A(row, c) = v;
+                        if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? T(1) : T(0);
                     }
                 }
-                group_barrier(part);
+                // The partition's barrier, not v2::sync (one per sub-group): see syev_jacobi_cta.
+                group_barrier(ex.part);
 
                 // ---- Exact column norms: lane c ends holding ||A_c||^2. ----
-                // P values over P lanes: 5 scatter steps, no all-reduce. x stays
-                // Real[P] (not Real[C]); C columns take C/P passes.
+                // P columns per pass reduce-scattered over P lanes (no all-reduce); C/P passes.
                 auto exact_norms = [&]() {
                     for (int32_t h = 0; h < static_cast<int32_t>(kRPL); ++h) {
-                        const int32_t col0 = h * static_cast<int32_t>(P);
-                        Real x[P];
-BATCHLAS_UNROLL_FULL
-                        for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                            Real acc = Real(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                acc += norm2_g(A_local[base_a + lane + rr * static_cast<int32_t>(P)
-                                                       + (col0 + c) * LD]);
-                            }
-                            x[c] = acc;
-                        }
-BATCHLAS_UNROLL_FULL
-                        for (int32_t step = 0; step < 5; ++step) {
-                            const uint32_t mask = static_cast<uint32_t>(P) >> (step + 1);
-                            if (mask == 0u) break;
-                            const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
-                            const int32_t half = static_cast<int32_t>(mask);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t j = 0; j < half; ++j) {
-                                const Real own = hi ? x[j + half] : x[j];
-                                const Real send = hi ? x[j] : x[j + half];
-                                x[j] = own + permute_group_by_xor(part, send, mask);
-                            }
-                        }
-                        Nrm_local[base_n + col0 + lane] = x[0];
+                        nrm(h * kP + lane) = v2::col_sumsq(ex, A.sub(0, h * kP, v2::Ext<kC>{}, v2::Ext<kP>{}));
                     }
                 };
 
                 exact_norms();
-                group_barrier(part);
+                group_barrier(ex.part);
 
                 // ---- Global rescale: ONE power-of-two factor, centred on the
                 // geometric mean. Per-column equilibration is not a factorisation
                 // of A. Only columns < P feed nmax/nmin (the C=64 rung's upper
-                // half does not); beta stays exact either way.
+                // half does not); beta stays exact either way. Zero input: beta = 1;
+                // completion fills U, V is identity.
                 // evidence: docs/design/gesvd.md#gesvdj_cta-global-power-of-two-scaling
-                Real my_n2 = (lane < CC) ? Nrm_local[base_n + lane] : Real(0);
-                const Real nmax = part_max_g(part, my_n2);
-                const Real nmin_in = (lane < CC && my_n2 > Real(0))
-                                         ? my_n2
-                                         : std::numeric_limits<Real>::max();
-                const Real nmin = part_min_g(part, nmin_in);
-
-                if (nmax == Real(0)) {
-                    // Zero input: beta = 1; completion fills U, V is identity.
-                }
+                const Real my_n2 = (lane < CC) ? nrm(lane) : Real(0);
+                const Real nmax = v2::allreduce(ex, my_n2, v2::op::FMax{});
+                const Real nmin = v2::allreduce(ex, (lane < CC && my_n2 > Real(0)) ? my_n2 : std::numeric_limits<Real>::max(),
+                                                 v2::op::FMin{});
                 Real beta = Real(1);
                 if (nmax > Real(0) && nmin <= nmax) {
                     const Real e = sycl::round(Real(0.25) * (sycl::log2(nmax) + sycl::log2(nmin)));
@@ -377,14 +273,12 @@ BATCHLAS_UNROLL_FULL
                 // evidence: docs/perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected
                 if (beta != Real(1)) {
                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                        const int32_t row = lane + rr * static_cast<int32_t>(P);
-                        for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
-                            A_local[base_a + row + c * LD] = A_local[base_a + row + c * LD] * T(beta);
-                        }
+                        const int32_t row = lane + rr * kP;
+                        for (int32_t c = 0; c < kC; ++c) A(row, c) = A(row, c) * T(beta);
                     }
-                    group_barrier(part);
+                    group_barrier(ex.part);
                     exact_norms();
-                    group_barrier(part);
+                    group_barrier(ex.part);
                 }
 
                 // ---- Sweeps. Terminate only after TWO consecutive zero-rotation
@@ -397,186 +291,96 @@ BATCHLAS_UNROLL_FULL
                     sweeps_used = sweep + 1;
                     if (sweep > 0) {
                         exact_norms();
-                        group_barrier(part);
+                        group_barrier(ex.part);
                     }
 
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const int32_t tab_base = t * static_cast<int32_t>(kRotSlots);
-
-                        // Chunks of kGramChunk pairs (two at C=64). Safe because
-                        // a round is a perfect matching: chunks touch disjoint
-                        // columns. Also caps live registers (80 T, not 160).
+                        // Chunks of K pairs (two at C=64). Safe because a round is a
+                        // perfect matching: chunks touch disjoint columns. Also caps
+                        // live registers (80 T, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
-                        const int32_t tab_base = t * static_cast<int32_t>(kRotSlots)
-                                               + ch * static_cast<int32_t>(kGramChunk);
+                        // Real T never names Rd_local, so the kernel does not capture it.
+                        std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
+                        if constexpr (kNeedPhase) rd = v2::vec(Rd_local, K, base_r + ch * K);
+                        const auto rnd = jac::rot_round<T>(v2::vec(Rcs_local, K, base_r + ch * K), rd,
+                                                          v2::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
-                        // Every index into pk/qk/ap/aq/g must be compile-time or
-                        // the arrays spill.
-                        int32_t pk[kGramChunk];
-                        int32_t qk[kGramChunk];
-                        T ap[kGramChunk][kRPL];
-                        T aq[kGramChunk][kRPL];
-                        T g[kGramChunk];
-
+                        // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
+                        // rows. Every index into pk/qk/ap/aq/g must be compile-time or they spill.
+                        // Plain arrays and one fused load+dot loop: a PivotPair array with split
+                        // load_owned / dotc_owned loops gave complex T +8..17 BRA.
+                        int32_t pk[K];
+                        int32_t qk[K];
+                        T ap[K][kRPL];
+                        T aq[K][kRPL];
+                        v2::Frag<T, K> g;
 BATCHLAS_UNROLL_FULL
-                        for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
-                            const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + k]);
-                            pk[k] = pq & 0xFF;
-                            qk[k] = (pq >> 8) & 0xFF;
+                        for (int32_t k = 0; k < K; ++k) {
+                            const jac::PivotPair pqk = rnd.pair(k);
+                            pk[k] = pqk.p;
+                            qk[k] = pqk.q;
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
-                            const int32_t ip = ok ? pk[k] : 0;
-                            const int32_t iq = ok ? qk[k] : 0;
-                            // conj(A_p)*A_q over this lane's rows, then across lanes.
-                            T acc = T(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                ap[k][rr] = A_local[base_a + row + ip * LD];
-                                aq[k][rr] = A_local[base_a + row + iq * LD];
-                                acc = acc + batchlas::device::detail::conj(ap[k][rr]) * aq[k][rr];
-                            }
+                            const T acc = v2::load_dotc_owned<static_cast<int>(kRPL)>(ex, A.col(ok ? pk[k] : 0),
+                                                                                     A.col(ok ? qk[k] : 0), ap[k], aq[k]);
                             g[k] = ok ? acc : T(0);
                         }
 
-                        // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32.
-                        // Five halving steps silently sum over half the rows.
+                        // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32: lane l ends
+                        // with a_{p q} of pair l >> 1. Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
-BATCHLAS_UNROLL_FULL
-                        for (int32_t step = 0; step < 4; ++step) {
-                            const uint32_t mask = static_cast<uint32_t>(kGramChunk) >> step;
-                            if (mask == 0u) break;
-                            const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
-                            const int32_t half = static_cast<int32_t>(mask) / 2;
-                            if (half == 0) break;
-BATCHLAS_UNROLL_FULL
-                            for (int32_t j = 0; j < half; ++j) {
-                                const T own = hi ? g[j + half] : g[j];
-                                const T send = hi ? g[j] : g[j + half];
-                                g[j] = own + xor_shuffle_g(part, send, mask);
-                            }
-                        }
-                        // Final ALL-REDUCE: g[0] = a_{p_k q_k}, k = lane>>1.
-                        g[0] = g[0] + xor_shuffle_g(part, g[0], 1u);
+                        const T apq = v2::reduce_scatter<K>(ex, g);
 
                         const int32_t k_of_lane = lane >> 1;
-                        const int32_t slot = ch * static_cast<int32_t>(kGramChunk) + k_of_lane;
-                        // Re-read from LDS: a runtime index into pk[] would spill it.
-                        const int32_t pq_l = static_cast<int32_t>(Pair_local[tab_base + k_of_lane]);
-                        const int32_t kp = pq_l & 0xFF;
-                        const int32_t kq = (pq_l >> 8) & 0xFF;
+                        const int32_t slot = ch * K + k_of_lane;
+                        // Re-read from LDS: a runtime index into pq[] would spill it.
+                        const jac::PivotPair kpq = rnd.pair(k_of_lane);
 
-                        bool active = (slot < pairs_per_round) && (kp < CC) && (kq < CC);
-
-                        Real c_rot = Real(1);
-                        Real s_rot = Real(0);
-                        T d_rot = T(1);
-                        Real tt = Real(0);
-                        Real gr = Real(0);
+                        bool active = (slot < pairs_per_round) && (kpq.p < CC) && (kpq.q < CC);
                         Real app = Real(0);
                         Real aqq = Real(0);
-
+                        jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
                         if (active) {
-                            app = Nrm_local[base_n + kp];
-                            aqq = Nrm_local[base_n + kq];
-                            const T apq = g[0];
-                            const Real g_abs = abs_if_complex_g(apq);
-                            const Real thresh = tol * sycl::sqrt(sycl::fabs(app) * sycl::fabs(aqq));
-
-                            if (g_abs > thresh && g_abs > tiny) {
-                                Real gv;
-                                if constexpr (detail::is_complex<T>::value) {
-                                    gv = g_abs;
-                                    d_rot = T(apq.real() / g_abs, -apq.imag() / g_abs);
-                                } else {
-                                    gv = apq;
-                                    d_rot = T(1);
-                                }
-                                gr = gv;
-                                const Real tau = (aqq - app) / (Real(2) * gv);
-                                if (sycl::fabs(tau) > tau_big) {
-                                    tt = Real(1) / (Real(2) * tau);
-                                } else {
-                                    tt = sycl::copysign(Real(1), tau)
-                                       / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
-                                }
-                                c_rot = Real(1) / sycl::sqrt(Real(1) + tt * tt);
-                                s_rot = tt * c_rot;
-                                // An identity rotation must not count, or every
-                                // problem burns all max_sweeps.
-                                if (s_rot == Real(0)) active = false;
-                            } else {
-                                active = false;
-                            }
+                            app = nrm(kpq.p);
+                            aqq = nrm(kpq.q);
+                            // An identity rotation must not count, or every problem burns all max_sweeps.
+                            jr = v2::sym_schur2<T>(app, aqq, apq, thr);
                         }
-
-                        if (!active) {
-                            c_rot = Real(1);
-                            s_rot = Real(0);
-                            d_rot = T(1);
-                        }
+                        active = jr.active;
 
                         // Analytic norm recurrence (as ?GESVJ's SVA), even lanes
                         // only. BOTH sides clamp at zero: a negative q side NaNs
                         // the rank sort into an out-of-bounds LDS index.
                         if (active && (lane % 2 == 0)) {
-                            Nrm_local[base_n + kp] = sycl::fmax(app - tt * gr, Real(0));
-                            Nrm_local[base_n + kq] = sycl::fmax(aqq + tt * gr, Real(0));
+                            const auto n2 = jac::rotated_norms2(jr, app, aqq);
+                            nrm(kpq.p) = n2.p;
+                            nrm(kpq.q) = n2.q;
                         }
+                        if (lane % 2 == 0 && slot < static_cast<int32_t>(kRotSlots)) rnd.store(k_of_lane, jr);
+                        group_barrier(ex.part);
 
-                        if (lane % 2 == 0 && slot < static_cast<int32_t>(kRotSlots)) {
-                            Rcs_local[base_r + slot] = sycl::vec<Real, 2>(c_rot, s_rot);
-                            if constexpr (kNeedPhase) {
-                                Rd_local[base_r + slot] = d_rot;
-                            }
-                        }
-                        group_barrier(part);
-
-                        // Every lane must execute this butterfly.
-                        const int32_t round_active =
-                            part_sum_g(part, (active && (lane % 2 == 0)) ? int32_t(1) : int32_t(0));
+                        // Every lane must take part in the count.
+                        const int32_t round_active = v2::allreduce(ex, (active && (lane % 2 == 0)) ? 1 : 0);
                         rot_count += round_active;
                         if (round_active == 0) continue;
 
                         // ---- A <- A*U, V <- V*U, reusing ap/aq from the Gram.
                         // Deliberately no A <- U^H A phase: that is two-sided.
 BATCHLAS_UNROLL_FULL
-                        for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
-                            const sycl::vec<Real, 2> cs =
-                                Rcs_local[base_r + ch * static_cast<int32_t>(kGramChunk) + k];
-                            const Real ck = cs[0];
-                            const Real sk = cs[1];
+                        for (int32_t k = 0; k < K; ++k) {
+                            const sycl::vec<Real, 2> cs = rnd.coef(k);
                             // Warp-uniform skip: converged pairs are free.
-                            if (sk == Real(0)) continue;
-
-                            T u11 = T(ck);
-                            T u12 = T(sk);
-                            T u21 = T(-sk);
-                            T u22 = T(ck);
-                            if constexpr (kNeedPhase) {
-                                const T dk = Rd_local[base_r + ch * static_cast<int32_t>(kGramChunk) + k];
-                                u21 = -(dk * T(sk));
-                                u22 = dk * T(ck);
-                            }
-
-BATCHLAS_UNROLL_FULL
-                            for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                A_local[base_a + row + pk[k] * LD] = ap[k][rr] * u11 + aq[k][rr] * u21;
-                                A_local[base_a + row + qk[k] * LD] = ap[k][rr] * u12 + aq[k][rr] * u22;
-
-                                if constexpr (ComputeV) {
-                                    const int32_t vp = base_v + row + pk[k] * LD;
-                                    const int32_t vq = base_v + row + qk[k] * LD;
-                                    const T vpv = V_local[vp];
-                                    const T vqv = V_local[vq];
-                                    V_local[vp] = vpv * u11 + vqv * u21;
-                                    V_local[vq] = vpv * u12 + vqv * u22;
-                                }
-                            }
+                            if (cs[1] == Real(0)) continue;
+                            const jac::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
+                            v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
+                                const jac::Pair2<T> r = jac::rot_right(u, ap[k][rr], aq[k][rr]);
+                                A(row, pk[k]) = r.x;
+                                A(row, qk[k]) = r.y;
+                                if constexpr (ComputeV) jac::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
+                            });
                         }
-                        group_barrier(part);
+                        group_barrier(ex.part);
                         }
                     }
 
@@ -588,11 +392,10 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 // ---- Epilogue. sigma comes from A, ALWAYS: the incremental
-                // Nrm_local only chooses rotations; reading sigma from it passes
+                // norms only choose rotations; reading sigma from them passes
                 // every test and reintroduces the normal-equations defect.
                 exact_norms();
-                group_barrier(part);
-
+                group_barrier(ex.part);
 
                 if (live && SW != nullptr && lane == 0) {
                     SW[prob_id] = sweeps_used;
@@ -607,75 +410,73 @@ BATCHLAS_UNROLL_FULL
                 // Rank sort, DESCENDING (the gesvd contract), ties on index. The
                 // identity seed makes a rank collision a wrong permutation, not
                 // a garbage LDS index. Here lane is a COLUMN index.
+                // Plain owned-column loops here: a for_each_owned_frag lambda is simplified and
+                // unrolled as its own function before inlining, which moved LDS/STS and REG.
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                    const int32_t col = lane + cc * static_cast<int32_t>(P);
-                    Inv_local[base_p + col] = static_cast<int16_t>(col);
+                    const int32_t col = lane + cc * kP;
+                    inv(col) = static_cast<int16_t>(col);
                 }
-                group_barrier(part);
+                group_barrier(ex.part);
 
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                    const int32_t col = lane + cc * static_cast<int32_t>(P);
-                    const Real sigma_col =
-                        (col < CC) ? (inv_beta * sycl::sqrt(Nrm_local[base_n + col])) : Real(0);
+                    const int32_t col = lane + cc * kP;
+                    const Real sigma_col = (col < CC) ? (inv_beta * sycl::sqrt(nrm(col))) : Real(0);
                     if (col < CC) {
                         int32_t rank = 0;
                         for (int32_t j = 0; j < CC; ++j) {
-                            const Real sj = inv_beta * sycl::sqrt(Nrm_local[base_n + j]);
+                            const Real sj = inv_beta * sycl::sqrt(nrm(j));
                             const bool before = (sj > sigma_col) || (sj == sigma_col && j < col);
                             if (before) ++rank;
                         }
-                        Inv_local[base_p + rank] = static_cast<int16_t>(col);
+                        inv(rank) = static_cast<int16_t>(col);
                     }
                     // Left columns CC..RR-1 park on the zero pad columns,
                     // disjoint from the rank slots 0..CC-1.
                     if (col >= CC && col < RR) {
-                        Inv_local[base_p + col] = static_cast<int16_t>(col);
+                        inv(col) = static_cast<int16_t>(col);
                     }
                 }
-                group_barrier(part);
+                group_barrier(ex.part);
 
-                const Real sigma_max = (CC > 0) ? (inv_beta * sycl::sqrt(Nrm_local[base_n + static_cast<int32_t>(Inv_local[base_p])])) : Real(0);
+                const Real sigma_max = (CC > 0) ? (inv_beta * sycl::sqrt(nrm(static_cast<int32_t>(inv(0))))) : Real(0);
                 // Relative to sigma_max only; eps*fmax(1, sigma_max) would zero
                 // every sigma of a uniformly small input.
                 const Real tol_zero = zero_mult * std::numeric_limits<Real>::epsilon() * sigma_max;
 
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                    const int32_t col = lane + cc * static_cast<int32_t>(P);
+                    const int32_t col = lane + cc * kP;
                     if (live && col < CC) {
-                        const int32_t src = static_cast<int32_t>(Inv_local[base_p + col]);
-                        S[static_cast<int64_t>(prob_id) * CC + col] =
-                            inv_beta * sycl::sqrt(Nrm_local[base_n + src]);
+                        const int32_t src = static_cast<int32_t>(inv(col));
+                        S[static_cast<int64_t>(prob_id) * CC + col] = inv_beta * sycl::sqrt(nrm(src));
                     }
                 }
 
                 // ---- Left factor: U_c = A_c / sigma_c ----
                 if (want_left_f) {
-                    // Normalise in place; A is fully consumed into sigma.
+                    // Normalise in place by the SCALED norm sqrt(n2_c), not sigma; A
+                    // is fully consumed into sigma.
                     for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                        const int32_t col = lane + cc * static_cast<int32_t>(P);
+                        const int32_t col = lane + cc * kP;
                         if (col >= CC) continue;
-                        const Real n2_c = Nrm_local[base_n + col];
+                        const Real n2_c = nrm(col);
                         const Real s_c = inv_beta * sycl::sqrt(n2_c);
                         if (s_c > tol_zero && n2_c > Real(0)) {
-                            // Divide by the SCALED norm sqrt(n2_c), not sigma.
                             const Real inv_s = Real(1) / sycl::sqrt(n2_c);
-                            for (int32_t r = 0; r < static_cast<int32_t>(C); ++r) {
-                                A_local[base_a + r + col * LD] = A_local[base_a + r + col * LD] * T(inv_s);
-                            }
+                            for (int32_t r = 0; r < kC; ++r) A(r, col) = A(r, col) * T(inv_s);
                         }
                     }
-                    group_barrier(part);
+                    group_barrier(ex.part);
 
                     // Completion of columns CC..RR-1 and any sigma <= tol_zero,
                     // behind a warp-uniform gate.
                     int32_t deficient_here = 0;
                     for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                        const int32_t col = lane + cc * static_cast<int32_t>(P);
-                        if (col < CC && inv_beta * sycl::sqrt(Nrm_local[base_n + col]) <= tol_zero) {
+                        const int32_t col = lane + cc * kP;
+                        if (col < CC && inv_beta * sycl::sqrt(nrm(col)) <= tol_zero) {
                             ++deficient_here;
                         }
                     }
-                    const int32_t any_def = part_sum_g(part, deficient_here);
+                    const int32_t any_def = v2::allreduce(ex, deficient_here);
 
                     // LC, not RR: Thin skips completion unless a column is deficient.
                     if (any_def > 0 || LC > CC) {
@@ -686,86 +487,60 @@ BATCHLAS_UNROLL_FULL
                         int32_t jcur = 0;
 
                         for (int32_t dst = 0; dst < LC; ++dst) {
-                            const int32_t cdst = static_cast<int32_t>(Inv_local[base_p + dst]);
+                            const int32_t cdst = static_cast<int32_t>(inv(dst));
                             bool needs = (dst >= CC);
                             if (!needs) {
-                                needs = (inv_beta * sycl::sqrt(Nrm_local[base_n + cdst])) <= tol_zero;
+                                needs = (inv_beta * sycl::sqrt(nrm(cdst))) <= tol_zero;
                             }
                             if (!needs) continue;
 
                             bool filled = false;
                             while (jcur < RR && !filled) {
                                 const int32_t j = jcur++;
-                                T v[kRPL];
-BATCHLAS_UNROLL_FULL
-                                for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                    const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                    v[rr] = (row == j) ? T(1) : T(0);
-                                }
+                                Rows v;
+                                v2::set_unit_owned(ex, j, v);
                                 // TWO CGS passes: one loses orthogonality exactly
                                 // in the near-deficient case that triggers this.
                                 for (int32_t pass = 0; pass < 2; ++pass) {
                                     for (int32_t d2 = 0; d2 < dst; ++d2) {
-                                        const int32_t c2 = static_cast<int32_t>(Inv_local[base_p + d2]);
-                                        T part_dot = T(0);
-                                        T qv[kRPL];
-BATCHLAS_UNROLL_FULL
-                                        for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                            const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                            qv[rr] = (row < RR) ? A_local[base_a + row + c2 * LD] : T(0);
-                                            part_dot = part_dot + batchlas::device::detail::conj(qv[rr]) * v[rr];
-                                        }
-                                        const T dot = part_sum_g(part, part_dot);
-BATCHLAS_UNROLL_FULL
-                                        for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                            v[rr] = v[rr] - qv[rr] * dot;
-                                        }
+                                        Rows qv;
+                                        v2::load_owned_masked(ex, A.col(static_cast<int32_t>(inv(d2))), RR, qv);
+                                        const T dot = v2::allreduce(ex, v2::dotc_owned(qv, v));
+                                        v2::sub_mul(v, qv, dot);
                                     }
                                 }
-                                Real part_n2 = Real(0);
-BATCHLAS_UNROLL_FULL
-                                for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                    const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                    if (row < RR) part_n2 += norm2_g(v[rr]);
-                                }
-                                const Real nrm2 = part_sum_g(part, part_n2);
+                                const Real nrm2 = v2::allreduce(ex, v2::sumsq_owned(ex, v, RR));
                                 if (nrm2 > accept_tol) {
-                                    const Real inv_nr = Real(1) / sycl::sqrt(nrm2);
-BATCHLAS_UNROLL_FULL
-                                    for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                                        const int32_t row = lane + rr * static_cast<int32_t>(P);
-                                        A_local[base_a + row + cdst * LD] = v[rr] * T(inv_nr);
-                                    }
+                                    const Real inv_nr = ::batchlas::sycl_device::inv_sqrt(nrm2);
+                                    v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
+                                        A(row, cdst) = v[rr] * T(inv_nr);
+                                    });
                                     filled = true;
                                 }
                             }
-                            group_barrier(part);
+                            group_barrier(ex.part);
                         }
                     }
-                    group_barrier(part);
+                    group_barrier(ex.part);
 
-                    // Writeback, each orientation coalescing its own output.
+                    // Writeback, each orientation coalescing its own output. Hand loops through
+                    // the v1 views: v2::copy/map over v2::mat(..).row() sub-views changed the
+                    // unrolling (STG +17..+36).
                     if (!transposed_f) {
-                        // U(lane, dst): dst is the output COLUMN, Thin truncates it.
+                        // U(lane, dst) = A(lane, inv(dst)): dst is the output COLUMN, Thin truncates it.
                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                            const int32_t row = lane + rr * static_cast<int32_t>(P);
+                            const int32_t row = lane + rr * kP;
                             if (!live || row >= RR) continue;
-                            for (int32_t dst = 0; dst < LC; ++dst) {
-                                const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
-                                U_prob(row, dst) = A_local[base_a + row + c * LD];
-                            }
+                            for (int32_t dst = 0; dst < LC; ++dst) U_prob(row, dst) = A(row, static_cast<int32_t>(inv(dst)));
                         }
                     } else {
-                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW,
-                        // so Thin bounds `lane`, never `r` (wrong shape, plausible
-                        // numbers).
+                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW, so Thin bounds
+                        // `lane`, never `r` (wrong shape, plausible numbers).
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                            const int32_t dst = lane + cc * static_cast<int32_t>(P);
+                            const int32_t dst = lane + cc * kP;
                             if (!live || dst >= LC) continue;
-                            const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
-                            for (int32_t r = 0; r < RR; ++r) {
-                                Vh_prob(dst, r) = batchlas::device::detail::conj(A_local[base_a + r + c * LD]);
-                            }
+                            const int32_t c = static_cast<int32_t>(inv(dst));
+                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = v2::conj(A(r, c));
                         }
                     }
                 }
@@ -775,22 +550,17 @@ BATCHLAS_UNROLL_FULL
                     if (!transposed_f) {
                         // Vh(lane, r) = conj(V(r, c_lane))
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
-                            const int32_t dst = lane + cc * static_cast<int32_t>(P);
+                            const int32_t dst = lane + cc * kP;
                             if (!live || dst >= CC) continue;
-                            const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
-                            for (int32_t r = 0; r < CC; ++r) {
-                                Vh_prob(dst, r) = batchlas::device::detail::conj(V_local[base_v + r + c * LD]);
-                            }
+                            const int32_t c = static_cast<int32_t>(inv(dst));
+                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = v2::conj(V(r, c));
                         }
                     } else {
                         // U = V' directly. Here lane is the output ROW.
                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
-                            const int32_t row = lane + rr * static_cast<int32_t>(P);
+                            const int32_t row = lane + rr * kP;
                             if (!live || row >= CC) continue;
-                            for (int32_t dst = 0; dst < CC; ++dst) {
-                                const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
-                                U_prob(row, dst) = V_local[base_v + row + c * LD];
-                            }
+                            for (int32_t dst = 0; dst < CC; ++dst) U_prob(row, dst) = V(row, static_cast<int32_t>(inv(dst)));
                         }
                     }
                 }

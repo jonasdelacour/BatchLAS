@@ -12,9 +12,8 @@
 #include <src/linalg-impl.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>  // level3/copy_async.hh
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -25,6 +24,10 @@
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
 
 // One row of the wide-scalar transposed dispatch table, in the shape RegTile
 // has for the float family. Structural, so it can be an NTTP.

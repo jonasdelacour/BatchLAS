@@ -40,9 +40,9 @@ Because of the last two, `tools/tune/getrf_spec.cc` and `potrf_spec.cc` list the
 potrf op hash pinned in `TuneHash.OpLevelHashUnchangedByFamilyPrefixes`.
 
 Production code calls the runtime accessors `<knob>_for_n(n)`. Each consults its `BATCHLAS_TUNE_*`
-override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins \f$n\f$ to 256 for the
-legacy path. `sytrd_fuse_panel_update_for_n` has no override; its control is
-`BATCHLAS_SYTRD_FUSE_PANEL_UPDATE`, which is tri-state (@ref design_environment).
+override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins \f$n\f$ to 256 (the only
+latrd kernel). `sytrd_fuse_panel_update_for_n` has no caller since the device sytrd path was deleted; the fuse
+control is `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE`, which is tri-state (@ref design_environment).
 
 ## tuning: how the constants were measured
 
@@ -95,7 +95,7 @@ in `src/util/settings.cc`, which accepts `"16x"`.
   geometry but cannot force auto. Likewise `STEDC_MERGE_VARIANT` 0 (`Auto`) is unreachable from the
   environment.
 
-Five of these sit under an older, outer variable for the same quantity, which wins. See
+Four of these sit under an older, outer variable for the same quantity, which wins. See
 [two variables for one quantity](../design/environment.md#environment-two-variables-for-one-quantity).
 
 ## tuning: regenerating the header
