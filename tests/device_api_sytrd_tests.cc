@@ -113,8 +113,9 @@ template <class T> class DeviceApiSytrdTest : public DeviceCoreTest<T> {
         std::vector<std::byte> none(1);
         (void)sytrd_cta<kB, T>(*dev.ctx, Av, dv_, ev, tv, ul, Span<std::byte>(none.data(), 1), 1);
         dev.ctx->wait();
-        return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch),
-                dev.down(tau, std::size_t(nm1) * kBatch), std::vector<int>(kBatch, 0)};
+        // e and tau come back with their NaN end pad: n = 1 would be a zero-byte copy, which Metal rejects.
+        return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch + 1),
+                dev.down(tau, std::size_t(nm1) * kBatch + 1), std::vector<int>(kBatch, 0)};
     }
 
     template <Uplo UL> Result device(int n, const std::vector<T>& a0, int ld) {
@@ -127,8 +128,8 @@ template <class T> class DeviceApiSytrdTest : public DeviceCoreTest<T> {
         int* info = dev.alloc<int>(kBatch, 7);
         dv::with_tier<Rt<UL>, T>(dev.q().get_device(), n,
                                  [&]<class Tier>(Tier) { launch_device<UL, Tier, T>(dev, A, n, ld, d, e, tau, info); });
-        return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch),
-                dev.down(tau, std::size_t(nm1) * kBatch), dev.down(info, kBatch)};
+        return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch + 1),
+                dev.down(tau, std::size_t(nm1) * kBatch + 1), dev.down(info, kBatch)};
     }
 };
 
