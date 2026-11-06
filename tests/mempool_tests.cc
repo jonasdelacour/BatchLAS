@@ -736,6 +736,35 @@ TEST_F(BumpAllocatorTest, MeasuredSizeSufficesForRealAllocation) {
     std::free(mem);
 }
 
+// The contract holds from a base of any alignment (acpp/Metal reports 512 B, allocates at 256 B),
+// and every slice still lands on the full alignment of its actual address.
+TEST_F(BumpAllocatorTest, MeasuredSizeSufficesFromAMisalignedBase) {
+    auto sizer = BumpAllocator::measuring();
+    replay_layout(sizer, device);
+    const size_t measured = sizer.required_bytes();
+    const size_t device_align = BumpAllocator::alignment<std::byte>(device);
+
+    const size_t outer = 2 * device_align;
+    void* mem = std::aligned_alloc(outer, ((measured + outer + outer - 1) / outer) * outer);
+    ASSERT_NE(mem, nullptr);
+    const std::vector<size_t> skews = {1, 16, 256, device_align - 16};
+    for (size_t skew : skews) {
+        if (skew == 0 || skew >= device_align) continue;
+        SCOPED_TRACE("base skew " + std::to_string(skew) + " of alignment " + std::to_string(device_align));
+        auto* base = static_cast<std::byte*>(mem) + skew;
+        ASSERT_NE(reinterpret_cast<std::uintptr_t>(base) % device_align, 0u);
+        BumpAllocator real(base, measured);
+        EXPECT_NO_THROW(replay_layout(real, device));
+
+        BumpAllocator check(base, measured);
+        auto f = check.allocate<float>(device, 97);
+        auto d = check.allocate<double>(device, 3);
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(f.data()) % device_align, 0u);
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(d.data()) % device_align, 0u);
+    }
+    std::free(mem);
+}
+
 // Callers add a callee's reported size into their own running total and then
 // re-serve it with allocate<std::byte>(), which rounds the request up. A sizing
 // result that is not itself an alignment multiple therefore under-provisions
@@ -752,11 +781,11 @@ TEST_F(BumpAllocatorTest, MeasuredSizeIsAnAlignmentMultiple) {
     auto one = BumpAllocator::measuring();
     one.allocate<float>(device, 5);
     EXPECT_EQ(one.required_bytes() % device_align, 0u);
-    EXPECT_EQ(one.required_bytes(), BumpAllocator::allocation_size<float>(device, 5));
+    EXPECT_EQ(one.required_bytes(), BumpAllocator::allocation_size<float>(device, 5) + device_align);
 }
 
-// ...and it is tight: what is left over is under a single alignment quantum,
-// so the figure is a real size and not a padded guess.
+// ...and it is tight: on an aligned base what is left over is under two alignment quanta (the
+// rounding plus the misaligned-base slack), so the figure is a real size and not a padded guess.
 TEST_F(BumpAllocatorTest, MeasuredSizeIsTight) {
     auto sizer = BumpAllocator::measuring();
     replay_layout(sizer, device);
@@ -768,14 +797,13 @@ TEST_F(BumpAllocatorTest, MeasuredSizeIsTight) {
 
     BumpAllocator real(reinterpret_cast<std::byte*>(mem), measured);
     replay_layout(real, device);
-    EXPECT_LT(real.remaining().size(), device_align);
+    EXPECT_LT(real.remaining().size(), 2 * device_align);
 
     std::free(mem);
 }
 
-// Sizing mode is never larger than the hand-summed allocation_size total that
-// the *_buffer_size functions use today, so converting a call site can only
-// shrink its workspace, never grow it.
+// Sizing mode is never larger than the hand-summed allocation_size total plus the one quantum
+// of base slack that a hand-summed total silently lacks.
 TEST_F(BumpAllocatorTest, MeasuredSizeNeverExceedsSummedAllocationSize) {
     const size_t n = 97, batch = 5;
     size_t summed = 0;
@@ -791,7 +819,7 @@ TEST_F(BumpAllocatorTest, MeasuredSizeNeverExceedsSummedAllocationSize) {
 
     auto sizer = BumpAllocator::measuring();
     replay_layout(sizer, device);
-    EXPECT_LE(sizer.required_bytes(), summed);
+    EXPECT_LE(sizer.required_bytes(), summed + BumpAllocator::alignment<std::byte>(device));
 }
 
 // Sizing mode hands out aligned, non-null, distinct, non-overlapping addresses
