@@ -58,7 +58,7 @@ BATCHLAS_DLA_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, con
 /// No trailing barrier: the caller syncs before it reads the outputs.
 template <class Ex, class D, class Z, class Q, class AbsX, class DAt, class RhoAt, class KeepAt, class KeepPtr, class PermAt, class MapAt,
           class PermLocal, class ScanInc, class ScanIncPtr, class ScanExc, class ScanExcPtr, class SetReduced>
-BATCHLAS_DLA_HELPER void laed2(const Ex& ex, std::int64_t n, const D& d, const Z& z, const Q& Qb, const AbsX& absx, const DAt& d_at,
+BATCHLAS_DLA_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, const Z& z, const Q& Qb, const AbsX& absx, const DAt& d_at,
                                const RhoAt& rho_at, const KeepAt& keep, const KeepPtr& keep_ptr, const PermAt& permutation,
                                const MapAt& perm_map, const PermLocal& perm_local, const ScanInc& scan_inc, const ScanIncPtr& scan_inc_ptr,
                                const ScanExc& scan_exc, const ScanExcPtr& scan_exc_ptr, const SetReduced& set_reduced) {

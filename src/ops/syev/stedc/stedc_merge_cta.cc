@@ -139,18 +139,20 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
 
+                // Named before the call: the kernel's captures (its parameter layout) keep the
+                // order of first use they had with this body inline (params, temp_lambdas, ...).
+                const int32_t max_iter = static_cast<int32_t>(params.max_sec_iter);
+                const auto on_root = [&](int32_t root_ix, const v2::laed4_root<T>& root) {
+                    temp_lambdas(root_ix, bid) = root.origin + root.tau;
+                    // This is the one merge arm that honours params.max_sec_iter, so it is also
+                    // the one a forced-non-convergence test can drive from the public StedcParams.
+                    if (!root.converged) {
+                        detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
+                    }
+                };
                 // One root per partition, then the rescale and the vectors with one index per
                 // partition: laed3 (no work-group reduction per index).
-                v2::laed3<T>(wex, pex, part_id, parts_per_wg, dd, d_prob, z_prob, abs_2rho, static_cast<int32_t>(params.max_sec_iter),
-                             do_rescale, Q, Q_bid, v, bid, [&](int32_t root_ix, const v2::laed4_root<T>& root) {
-                                 temp_lambdas(root_ix, bid) = root.origin + root.tau;
-                                 // This is the one merge arm that honours params.max_sec_iter, so it
-                                 // is also the one a forced-non-convergence test can drive from the
-                                 // public StedcParams.
-                                 if (!root.converged) {
-                                     detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
-                                 }
-                             });
+                v2::laed3<T>(wex, pex, part_id, parts_per_wg, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
             });
     });
 }
@@ -205,13 +207,15 @@ void stedc_merge_fused_wg(Queue& ctx,
 
                 // WG variant: the reference path, one root at a time over the whole group, then
                 // the rescale and the vectors sequentially over the index: laed3 with (0, 1).
-                v2::laed3<T>(ex, ex, 0, 1, dd, d_prob, z_prob, abs_2rho, static_cast<int32_t>(params.max_sec_iter), do_rescale, Q,
-                             Q_bid, v, bid, [&](int32_t root_ix, const v2::laed4_root<T>& root) {
-                                 temp_lambdas(root_ix, bid) = root.origin + root.tau;
-                                 if (!root.converged) {
-                                     detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
-                                 }
-                             });
+                // on_root named first: the capture order of the inline body (see the CTA kernel).
+                const int32_t max_iter = static_cast<int32_t>(params.max_sec_iter);
+                const auto on_root = [&](int32_t root_ix, const v2::laed4_root<T>& root) {
+                    temp_lambdas(root_ix, bid) = root.origin + root.tau;
+                    if (!root.converged) {
+                        detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
+                    }
+                };
+                v2::laed3<T>(ex, ex, 0, 1, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
             });
     });
 }

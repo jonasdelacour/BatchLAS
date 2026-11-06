@@ -20,8 +20,8 @@
 //   - eigenvalues only (J = NoEigenVectors) bit-identical to the vectors run's w
 //   - with_tier picks Blocked<1>, filters a 1 KB local memory and a sub-group size of 16, throws
 //     "stedc: no device tier admits n=0"; buffer_size equals the carve plan
-// Deliberate breaks, to run on the 4090 (one per axis; not run in the authoring session):
-//   laed2_merge_vector drops sign        -> StedcMatchesHostRoute (residual), stedc_tests
+// Deliberate breaks, one per axis, each red on the 4090 (2026-11-06):
+//   merge passes sign 1 to laed2_merge_vector -> StedcMatchesHostRoute (residual)
 //   merge skips the final rank sort      -> StedcMatchesHostRoute (values)
 //   bottom_up drops the - |e(i)| tear    -> StedcMatchesHostRoute (values, residual)
 //   dc_layout carves tmp onto qp         -> StedcMatchesHostRoute (residual)
@@ -99,8 +99,9 @@ struct Dev {
                                    ? std::optional<Queue>(std::in_place, Device::default_device())
                                    : std::nullopt;
     sycl::queue& q() { return sycl_queue(*ctx); }
+    // Shared USM: Check::eigen_residual / orthogonality read the views on the host.
     template <class T> T* up(const std::vector<T>& h) {
-        T* p = sycl::malloc_device<T>(std::max<std::size_t>(h.size(), 1), q());
+        T* p = sycl::malloc_shared<T>(std::max<std::size_t>(h.size(), 1), q());
         if (!h.empty()) q().memcpy(p, h.data(), h.size() * sizeof(T)).wait();
         ptrs.push_back(p);
         return p;
@@ -297,7 +298,8 @@ TYPED_TEST(DeviceApiStedc, StedcMatchesHostRoute) {
         }
 
         const auto H = run_host<T>(dev, P, 50, false);
-        const auto wh = dev.down(H.w, std::size_t(kBatch) * n), ih = dev.down(H.info, kBatch);
+        const auto wh = dev.down(H.w, std::size_t(kBatch) * n);
+        const auto ih = dev.down(H.info, kBatch);
         for (int r = 0; r < kPeriod; ++r) {
             ASSERT_EQ(ih[r], 0) << tag << " host item " << r;
             double err = 0;

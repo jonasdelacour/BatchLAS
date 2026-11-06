@@ -101,7 +101,7 @@ BATCHLAS_DLA_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::int
 /// d_prob, z_prob: the dd sorted poles and weights (any memory); abs_2rho = |2 rho|; Q_bid: Q
 /// by (i, j) for the rescale; v(i, bid) / v.batch_item(bid): the weights (written).
 template <class T, class WEx, class PEx, class DV, class QMat, class QBatch, class VView, class OnRoot>
-BATCHLAS_DLA_HELPER void laed3(const WEx& wex, const PEx& pex, std::int32_t first, std::int32_t stride, std::int32_t dd, const DV& d_prob,
+BATCHLAS_DLA_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t first, std::int32_t stride, std::int32_t dd, const DV& d_prob,
                                const DV& z_prob, T abs_2rho, std::int32_t max_iter, bool do_rescale, const QMat& Q, QBatch& Q_bid,
                                const VView& v, std::int32_t bid, const OnRoot& on_root) {
     for (std::int32_t root_ix = first; root_ix < dd; root_ix += stride) {
