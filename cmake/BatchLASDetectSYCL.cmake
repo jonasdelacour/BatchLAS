@@ -566,6 +566,20 @@ if(BATCHLAS_SYCL_TARGETS_STRING)
     )
 endif()
 
+# The Intel CPU runtime's ReduceCrossBarrierValues pass, run by opencl-aot on every
+# spir64_x86_64 device link, intermittently corrupts the heap on kernels with work-group
+# barriers (`malloc(): unsorted double linked list corrupted`, a segfault, SIGALRM, or a spin
+# of 40 min); it depends on the address layout, not on the link parallelism. The pass is an
+# optimisation (fewer values stored across a barrier per work-item), so every link runs with
+# it off. The variable reaches only that runtime: the GPU images are unchanged.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+list(FIND BATCHLAS_SYCL_TARGETS "spir64_x86_64" _x86_aot_idx)
+if(NOT _x86_aot_idx EQUAL -1 AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    get_property(_batchlas_launch_link GLOBAL PROPERTY RULE_LAUNCH_LINK)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK
+        "\"${CMAKE_COMMAND}\" -E env CL_CONFIG_LLVM_OPTIONS=-opt-disable=sycl-kernel-reduce-cross-barrier-values ${_batchlas_launch_link}")
+endif()
+
 if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
     batchlas_build_interface_option(_targets_no_cpu_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}")
     target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
