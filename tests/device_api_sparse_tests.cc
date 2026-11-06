@@ -635,7 +635,7 @@ template <class T> std::vector<LD<T>> ilu_solve_ref(const ILUKPreconditioner<T>&
     const auto ci = lu.col_indices();
     const std::size_t vb = std::size_t(b) * lu.matrix_stride(), rb = std::size_t(b) * lu.offset_stride();
     const int n = M.n;
-    std::vector<LD<T>> x(std::size_t(n));
+    std::vector<LD<T>> x(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
         LD<T> s = wide(rhs[i]);
         for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p)
