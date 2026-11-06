@@ -308,8 +308,13 @@ template <class T> constexpr bool kChaseCompiled = !std::is_same_v<T, std::compl
 template <class T> constexpr bool kChaseCompiled = true;
 #endif
 template <class T> bool chase_on_spir_device(Dev& dev) {
+#if BATCHLAS_SYCL_IMPL_ACPP  // no SPIR AOT image (and no such backend enumerators)
+    (void)dev;
+    return false;
+#else
     const sycl::backend be = dev.q().get_device().get_backend();
     return std::is_same_v<T, std::complex<double>> && (be == sycl::backend::opencl || be == sycl::backend::ext_oneapi_level_zero);
+#endif
 }
 
 template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem<T>& p) {
