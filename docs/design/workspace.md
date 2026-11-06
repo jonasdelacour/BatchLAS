@@ -89,10 +89,14 @@ away.
 ## workspace: BumpAllocator sizing mode
 
 `BumpAllocator::measuring()` runs the same bump arithmetic over a fictitious, unbounded region based at
-\f$2^{32}\f$ (aligned past any `MEM_BASE_ADDR_ALIGN`, unmapped). `required_bytes()` is the smallest real
-pool that serves the same sequence, with at most one alignment quantum to spare. This holds because
-every alignment is `max(device_align, alignof(T))`, one uniform value, so the layout depends only on
-offsets from the pool start.
+\f$2^{32}\f$ (aligned past any `MEM_BASE_ADDR_ALIGN`, unmapped). `required_bytes()` serves the same
+sequence from a real base of *any* alignment. A real pool aligns each slice from its actual cursor
+address, so it never runs ahead of a copy started at its first quantum-aligned address, under one
+quantum in. That copy replays the sizing pool exactly, because every alignment is
+`max(device_align, alignof(T))` and all of them divide the coarsest. So `required_bytes()` is the
+rounded high-water mark plus one quantum. The allocation's own alignment is never trusted:
+AdaptiveCpp on Metal reports 512 B (`MEM_BASE_ADDR_ALIGN`) and `malloc_device` returns 256 B-aligned
+pointers.
 
 - Sizing pointers are non-null and aligned; dereferencing one faults. Sizing code must not touch
   contents or launch kernels.
@@ -106,8 +110,9 @@ offsets from the pool start.
 the cursor by the raw extent, so summing the advances undersizes a pool. Sizing mode keeps the larger
 of the check's need and the data's need for each allocation and takes the high-water mark.
 
-`required_bytes()` rounds that mark to the coarsest alignment requested, because callers add a callee's
-size to their own total and re-serve it with `allocate<std::byte>()`, which rounds again. Size with
+`required_bytes()` rounds that mark to the coarsest alignment requested (then adds the base slack of
+one such quantum), because callers add a callee's size to their own total and re-serve it with
+`allocate<std::byte>()`, which rounds again. Size with
 `measuring()` and `required_bytes()`, never by hand, and make a `*_buffer_size` and its run path branch
 identically.
 
