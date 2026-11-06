@@ -32,6 +32,7 @@
 #include <batchlas/device/lapack/potrf.hh>
 #include <batchlas/device/lapack/potri.hh>
 #include <batchlas/device/lapack/potrs.hh>
+#include <batchlas/util/mempool.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
@@ -195,12 +196,19 @@ template <class F> void run_blocked(Dev& d, int batch, const dv::WorkspaceSize& 
 }
 
 // ---- the host routes, pinned -------------------------------------------------------------------
+// A host-route workspace at the BumpAllocator's base alignment (MEM_BASE_ADDR_ALIGN): AdaptiveCpp's
+// Metal device USM reports 512 bytes but does not honour it (malloc_device), so align by hand.
+inline std::byte* host_ws(Dev& d, std::size_t bytes) {
+    const std::size_t al = BumpAllocator::alignment<std::byte>(d.ctx->device());
+    std::byte* const p = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1) + al, std::byte{0});
+    return p + (al - reinterpret_cast<std::uintptr_t>(p) % al) % al;
+}
 template <class T> std::vector<std::int32_t> host_potrf(Dev& d, T* a, const Shape& s, Uplo uplo) {
     const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::PotrfChoice{ops::potrf::Blocked{}});
     Queue& ctx = *d.ctx;
     const auto V = view(a, s);
     const std::size_t bytes = batchlas::potrf_buffer_size(ctx, V, uplo);
-    std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
+    std::byte* ws = host_ws(d, bytes);
     std::int32_t* info = d.alloc<std::int32_t>(s.batch, -7);
     (void)batchlas::potrf(ctx, V, uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, s.batch));
     ctx.wait();
@@ -219,7 +227,7 @@ template <class T> std::vector<std::int32_t> host_posv(Dev& d, T* a, const Shape
     const auto A = view(a, sa);
     const auto B = view(b, sb);
     const std::size_t bytes = batchlas::posv_buffer_size(ctx, A, B, uplo);
-    std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
+    std::byte* ws = host_ws(d, bytes);
     std::int32_t* info = d.alloc<std::int32_t>(sa.batch, -7);
     (void)batchlas::posv(ctx, A, B, uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, sa.batch));
     ctx.wait();
@@ -230,7 +238,7 @@ template <class T> std::vector<std::int32_t> host_potri(Dev& d, T* a, const Shap
     Queue& ctx = *d.ctx;
     const auto V = view(a, s);
     const std::size_t bytes = batchlas::potri_buffer_size(ctx, V, uplo);
-    std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
+    std::byte* ws = host_ws(d, bytes);
     std::int32_t* info = d.alloc<std::int32_t>(s.batch, -7);
     (void)batchlas::potri(ctx, V, uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, s.batch));
     ctx.wait();
@@ -790,7 +798,7 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         {
             const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::PotrfChoice{ops::potrf::Blocked{}});
             const std::size_t wsb = batchlas::potrf_buffer_size(ctx, V, UL);
-            std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(wsb, 1), std::byte{0});
+            std::byte* ws = host_ws(d, wsb);
             host_potrf_ms = median_ms(ctx, [&]() {
                 reset(h0);
                 (void)batchlas::potrf(ctx, V, UL, Span<std::byte>(ws, wsb), Span<std::int32_t>(info, kTimeBatch));
@@ -805,7 +813,7 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         {
             const select::ScopedPin<ops::potri::PotriChoice> pin("potri", ops::potri::PotriChoice{ops::potri::Blocked{64}});
             const std::size_t wsb = batchlas::potri_buffer_size(ctx, V, UL);
-            std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(wsb, 1), std::byte{0});
+            std::byte* ws = host_ws(d, wsb);
             host_potri_ms = median_ms(ctx, [&]() {
                 reset(dfac);
                 (void)batchlas::potri(ctx, V, UL, Span<std::byte>(ws, wsb), Span<std::int32_t>(info, kTimeBatch));
