@@ -308,7 +308,9 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     // S13-14..16: w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
                     const auto v = vfull.tail(i + 1);
                     const auto w = wfull.tail(i + 1);
-                    v2::for_each_owned(ex, i + 1, n, [&](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
+                    // i by value: on AdaptiveCpp (Metal and its CPU device) a by-reference capture of this
+                    // barrier loop's counter gives NaN eigenvalues (syev_blocked Upper n = 96).
+                    v2::for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
                     v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(ex, v2::One{},
                         v2::trailing(Ab, i + 1, n), ex.publish(v2::trailing(vfull, i + 1)), v2::Zero{}, v2::trailing(wfull, i + 1));
 
