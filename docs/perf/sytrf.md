@@ -79,7 +79,7 @@ copy that order row for row (`transcribed-sytrs-d67ad754`; FP64 is not tuned on 
 
 ## sytrf: the reversal map
 
-The kernels implement `?sytf2` and `?sytrs` once, in lower form (`sytrf_device.hh`). Upper runs the
+The kernels implement `?sytf2` and `?sytrs` once, in lower form (`include/batchlas/device/lapack/sytrf.hh`). Upper runs the
 same code on the index-reversed matrix, logical \f$i\f$ = physical \f$n - 1 - i\f$: `?sytf2`'s upper loop becomes its
 lower loop step for step, the factor lands in the upper triangle and `ipiv` is written at the physical
 index. The one asymmetry is `I?AMAX`'s tie-break (first maximum in storage order): Upper takes the
@@ -125,7 +125,7 @@ ctest entries carry `TIMEOUT 1800`; the suite is heavy-tier.
 ## sytrs: the converted solve {#sytrs-the-converted-solve}
 
 `wg` is LAPACK `?sytrs` (interchanges one pivot at a time between eliminations). `cta` and `blocked`
-are `?sytrs2` (`sytrs_device.hh`): the factor is first **converted** (`?syconv`: each interchange
+are `?sytrs2` (`include/batchlas/device/lapack/sytrs.hh`): the factor is first **converted** (`?syconv`: each interchange
 applied to the rows of the earlier columns of \f$L\f$, \f$2 \times 2\f$ off-diagonals moved out of \f$L\f$), giving
 \f$A = P L D L^T P^T\f$ with one permutation \f$P\f$. The solve is gather \f$y = P^T b\f$, \f$L w = y\f$,
 \f$w := D^{-1} w\f$, \f$L^T z = w\f$, scatter \f$x = P z\f$, in logical lower form

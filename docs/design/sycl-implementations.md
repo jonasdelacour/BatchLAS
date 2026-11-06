@@ -346,7 +346,7 @@ dimension and \f$2^{32} - 1024\f$ work-items. `select::describe` hard-codes 8 an
 | No generic address space (a run-time local/global pointer choice is rejected) | one body per storage combination under `on_metal()` | `sytrd_sb2st_cta.cc`, `tridiag_solver.cc` |
 | No floating-point atomics on threadgroup memory | One/Inf norms give each sum to one work-item | `src/util/norm.cc` |
 | No static local memory | `wg_reduce_floating` uses AdaptiveCpp's reduce on Metal | `group-collectives.hh` |
-| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `vec4.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
+| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `include/batchlas/device/level3/packet.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
 | Float subnormals flush to zero; `info::device` claims denorms | tests needing a subnormal probe the device | `TrsmNativeSgLeft.NonFiniteReciprocalFallsBackToDivision` |
 | `logb(0)`, `logb(inf)` are finite | Annex G division special values may be wrong; untested | `annexg::div` |
 | arm64 hosts reject the `"l"` asm constraint | PTX L2-prefetch asm only on x86 hosts | `register_128x128.hh` |

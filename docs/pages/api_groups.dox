@@ -93,6 +93,13 @@ Which kernel runs for a shape is decided by flat kernel selection (developer doc
 
 Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_config_lowlevel.
 
+@defgroup api_device In-kernel BLAS and LAPACK (batchlas::device)
+@brief Device-side linear algebra for user kernels: `#include <batchlas/device.hh>` (core) and
+`<batchlas/device/lapack/<routine>.hh>`, namespace `batchlas::device`.
+
+Executors, tiers (`tier::Reg` / `Cta` / `Blocked`, chosen on the host by `with_tier`), the
+workspace protocol, info values and one example per family: @ref design_device_la_v2.
+
 @defgroup api_internal_helpers Kernel helpers (installed, not API)
 @brief Headers installed because public headers include them. Not a stable interface.
 

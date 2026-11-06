@@ -355,7 +355,7 @@ Vendor-free and under a `native` pin, the rows rank `tiny` second after `vendor`
 
 ### larft_wy.hh: why the WY helpers are shared
 
-One copy serves every caller; `larft` is the device LA v2 `v2::larft_forward_colwise` (`src/kernels/common/dla_v2_larft.hh`). It needs 32-wide sub-groups; elsewhere `larft_forward_columnwise_batched` throws `batchlas::unsupported`.
+One copy serves every caller; `larft` is the device LA `device::larft` (`include/batchlas/device/lapack/larft.hh`). It needs 32-wide sub-groups; elsewhere `larft_forward_columnwise_batched` throws `batchlas::unsupported`.
 
 ### larft_wy.hh: pack_v indexes the row fastest
 

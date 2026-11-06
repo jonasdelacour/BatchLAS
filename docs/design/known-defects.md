@@ -52,7 +52,7 @@ strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN 
 
 Fixed 2026-10-11. `LinearEpilogue` and `launch_direct` computed `alpha * acc + beta * prior` even at
 `beta == 0`, so a dirty workspace gave NaN; `LinearEpilogue::store`
-(`src/ops/gemm/kernels/epilogue_linear.hh`) now skips the load, and the geqrf/potrf zero fills that
+(now `include/batchlas/device/level3/epilogue.hh`) now skips the load, and the geqrf/potrf zero fills that
 hid it are deleted. Guard: `GemmCandidates.BetaZeroDoesNotReadC` (every pinned family, NaN `C`).
 
 ## Defect 12: vendor families accepted a heterogeneous batch
