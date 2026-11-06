@@ -94,19 +94,12 @@ template <Backend B, typename T> class StedcLevelUnpad;
 // Folds the per-leaf convergence status down onto the caller's per-item span.
 template <Backend B, typename T> class StedcLevelLeafStatus;
 
-// ---------------------------------------------------------------------------
-// One divide-and-conquer merge, applied to a *super-batch* of P size-uniform
-// sub-problems of size s whose halves are already solved. The recursive driver
-// passes P = batch_size; the level-synchronous one P = nodes_at_level * batch_size.
-//
+// One divide-and-conquer merge over a *super-batch* of P size-uniform sub-problems of size s
+// whose halves are solved (recursive driver: P = batch_size; level-synchronous: nodes * batch).
 //   eigenvalues  s x P, in/out: children's eigenvalues in, merged ones out
-//   eigvects     s x s x P, in/out: block-diagonal diag(Q_left, Q_right) in,
-//                merged eigenvectors out
-//   Qprime, temp_Q   s x s x P scratch
-//   rho          P signed rank-1 coefficients (the split off-diagonal element)
-//   m            size of the left half
+//   eigvects     s x s x P, in/out: diag(Q_left, Q_right) in, merged eigenvectors out
+//   Qprime, temp_Q   s x s x P scratch; rho  P signed tears; m  size of the left half
 // evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
-// ---------------------------------------------------------------------------
 // Select the even- or odd-indexed half of a batched view. Both halves stay
 // affine (stride doubles), so a level can write straight into its parent's two
 // diagonal sub-blocks with strided-batched GEMMs.
@@ -169,14 +162,9 @@ void stedc_merge_step(Queue& ctx,
             auto bid = item.get_group_linear_id();
             if (!v.active(bid)) return;  // I1, no barrier
             const v2::RtGroup<> ex{item};
-            // z = [last row of Q1, sign(rho) first row of Q2] / sqrt(2). The rank-1 term is
-            // |rho| u u^T with u = e_{m-1} + sign(rho) e_m (the diagonal corrections are -|rho|),
-            // so the Q2 half carries sign(rho); without it the eigenvectors mix Q1 and Q2 with
-            // inconsistent signs and fail A z = lambda z.
             const T v_sign2 = (rho[bid] >= T(0)) ? T(1) : T(-1);
             const auto z = v2::vec(v.batch_item(bid));
-            v2::map(ex, z.head(m), [](T q) { return q / std::sqrt(T(2)); }, v2::mat(E1view.batch_item(bid)).row(m - 1));
-            v2::map(ex, z.tail(m), [=](T q) { return v_sign2 * q / std::sqrt(T(2)); }, v2::mat(E2view.batch_item(bid)).row(0));
+            v2::laed2_merge_vector(ex, z, m, v2::mat(E1view.batch_item(bid)).row(m - 1), v2::mat(E2view.batch_item(bid)).row(0), v_sign2);
         });
     });
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -196,7 +184,6 @@ void stedc_merge_step(Queue& ctx,
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for<StedcDeflation<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        auto cta = item.get_group();
         const v2::RtGroup<> ex{item};
         // I1, before any barrier. n_reduced = 0 is neutral: later kernels stop at it, dd_max ignores it.
         if (!v.active(bid)) {
@@ -208,91 +195,12 @@ void stedc_merge_step(Queue& ctx,
         const auto z = v2::vec(v.batch_item(bid));
         const auto Qb = v2::mat(Q.data() + static_cast<int64_t>(bid) * Q.stride(), nn, nn, Q.ld());
         const auto absx = v2::vec<v2::Mem::Local>(util::get_raw_ptr(norm_mem), nn);
-        const auto abs_of = [](T x) { return std::abs(x); };
-
-        v2::for_each_owned(ex, nn, [&](int k) {
-            keep_indices(k, bid) = 0;
-            scan_mem_exclude[k] = 0;
-            permutation(k, bid) = -1;
-            perm_local[k] = perm_map(k, bid);
-        });
-
-        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-
-        // LAPACK-style ABSOLUTE tolerance 8 eps max(|D|_inf, |z|_inf), before the Givens loop so proximity
-        // deflation uses it too; a relative one under-deflates clustered small eigenvalues.
-        // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
-        v2::map(ex, absx, abs_of, d);
-        const T eig_max = stedc_v2::fold(ex, absx, sycl::maximum<T>());
-        v2::map(ex, absx, abs_of, z);
-        const T v_max_pre = stedc_v2::fold(ex, absx, sycl::maximum<T>());
-        const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
-
-        for (int j = 0; j < n - 1; j++) {
-            if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
-                const T f = z(j + 1), g = z(j);
-                auto [c, s, r] = v2::lartg(f, g);
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-                if (ex.leader()) {
-                    z(j) = T(0.0);
-                    z(j + 1) = r;
-                }
-                const int32_t pj = perm_local[j];
-                const int32_t pj1 = perm_local[j + 1];
-                if (pj >= 0 && pj < n && pj1 >= 0 && pj1 < n) {
-                    v2::rot(ex, v2::Givens<T>{c, s}, Qb.col(pj1), Qb.col(pj));
-                }
-                // The leader's z(j), z(j+1) must be visible before the next Givens pair reads z(j+1).
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-            }
-        }
-
-        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-        //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
-
-        v2::map(ex, absx, abs_of, d);
-        const T eig_max2 = stedc_v2::fold(ex, absx, sycl::maximum<T>());
-
-        const T v_norm = v2::nrm2<v2::alg::Blue>(ex, z);
-        v2::map(ex, absx, [=](T x) { return std::abs(x / v_norm); }, z);
-        const T v_max = stedc_v2::fold(ex, absx, sycl::maximum<T>());
-        auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max2, v_max);
-
-        v2::for_each_owned(ex, nn, [&](int k) {
-            if (std::abs(rho[bid] * absx(k)) > tol ) {
-                keep_indices(k, bid) = 1;
-            } else {
-                scan_mem_exclude[k] = 1;
-            }
-        });
-
-        v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-
-        //Exclusive scan to determine the indices to keep
-        batchlas::portable::joint_exclusive_scan(cta,
-                       keep_indices.batch_item(bid).data_ptr(),
-                       keep_indices.batch_item(bid).data_ptr() + n,
-                       util::get_raw_ptr(scan_mem_include),
-                       0,
-                       sycl::plus<int32_t>());
-        batchlas::portable::joint_exclusive_scan(cta,
-                       util::get_raw_ptr(scan_mem_exclude),
-                       util::get_raw_ptr(scan_mem_exclude) + n,
-                       util::get_raw_ptr(scan_mem_exclude),
-                       0,
-                       sycl::plus<int32_t>());
-
-        v2::for_each_owned(ex, nn, [&](int k) {
-            if (keep_indices(k, bid) == 1) {
-                permutation(scan_mem_include[k], bid) = k;
-            } else {
-                permutation(n - 1 - scan_mem_exclude[k], bid) = k;
-            }
-        });
-
-        if (ex.leader()) {
-            n_reduced[bid] = scan_mem_include[n - 1] + keep_indices(n - 1, bid);
-        }
+        v2::laed2(  // the batched views' own element expressions
+            ex, n, d, z, Qb, absx, [&](auto j) { return eigenvalues(j, bid); }, [&]() { return rho[bid]; },
+            [&](auto k) -> int32_t& { return keep_indices(k, bid); }, [&]() { return keep_indices.batch_item(bid).data_ptr(); },
+            [&](auto k) -> int32_t& { return permutation(k, bid); }, [&](auto k) { return perm_map(k, bid); }, perm_local,
+            scan_mem_include, [&]() { return util::get_raw_ptr(scan_mem_include); }, scan_mem_exclude,
+            [&]() { return util::get_raw_ptr(scan_mem_exclude); }, [&](int32_t reduced) { n_reduced[bid] = reduced; });
 
         });
     });

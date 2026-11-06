@@ -5,58 +5,10 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/ops/syev/stedc/stedc_v2.hh>
+#include <batchlas/device/lapack/laed3.hh>
 #include <sycl/sycl.hpp>
 
 namespace batchlas {
-
-// Löwner rescale on executor `ex` (v2::RtGroup or v2::SgpPartition<P>): `first`/`stride`
-// select the eigen-indices it owns, (0, 1) every index (WG reference variant), (part_id,
-// parts_per_wg) one per partition with no work-group barrier. Iteration `eid` reads row `eid`
-// of Q (never written here) and writes only v(eid). The product MUST be device::prod_scaled:
-// narrow partitions lengthen each serial product and the naive one leaves float range at n=64.
-// evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
-template <typename T, typename Ex, typename QBatch, typename VView>
-inline void maybe_rescale_vectors(bool do_rescale,
-                                  const Ex& ex,
-                                  int32_t first,
-                                  int32_t stride,
-                                  int32_t dd,
-                                  QBatch& Q_bid,
-                                  const VectorView<T>& d_prob,
-                                  const VView& v,
-                                  int32_t bid) {
-    if (!do_rescale) {
-        return;
-    }
-
-    // One trip count for every reduction group, work masked: the reductions are sub-group
-    // shuffles, and a partition that left the loop early makes them read garbage.
-    const int32_t iters = (dd + stride - 1) / stride;
-
-    for (int32_t it = 0; it < iters; ++it) {
-        const int32_t eid = first + it * stride;
-        const bool active = (eid < dd);
-        const T Di = active ? d_prob(eid) : T(0);
-        // |z_eid|^2 = prod_j Q(eid, j) / (D_eid - D_j), the j == eid factor Q(eid, eid) itself
-        const auto prod = device::prod_scaled(ex, active ? dd : 0, [&](int32_t j) {
-            const T q_elem = Q_bid(eid, j);
-            T ratio;
-            if (j == eid) {
-                ratio = q_elem;
-            } else {
-                const T denom = Di - d_prob(j);
-                ratio = q_elem / denom;
-            }
-            return ratio;
-        });
-        if (active && ex.leader()) {
-            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-            v(eid, bid) = sgn * device::sqrt_scaled(prod);
-        }
-        if constexpr (stedc_v2::is_group_v<Ex>) device::sync<device::scope::Group>(ex, device::Mem::Global);
-    }
-}
-
 
 template <Backend B, typename T>
 void stedc_merge_fused(Queue& ctx,
