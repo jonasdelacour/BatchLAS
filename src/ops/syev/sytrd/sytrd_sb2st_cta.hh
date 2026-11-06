@@ -6,6 +6,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta_instantiations.hh>
+#include <batchlas/device/lapack/sb2st.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -17,149 +18,9 @@ namespace batchlas {
 namespace detail {
 
 // The band-to-tridiagonal (xSBTRD/xHBTRD) rotation kernels of sytrd_sb2st.cc and sytrd_sb2st_cta.cc:
-// the Rot policy of device::largv / lartv / lar2v and device::sb2st_givens_chase (lapack/sb2st.hh).
-template <typename T, bool IsComplex = detail::is_complex<T>::value>
-struct btrd_givens_ops;
-
-// Real/symmetric variant (DSBTRD-style primitives).
+// device::sb2st_rot (lapack/sb2st.hh), the Rot of device::sb2st_givens_chase.
 template <typename T>
-struct btrd_givens_ops<T, false> {
-    using Real = typename base_type<T>::type;
-
-    static inline void lartg(const T& f_in, const T& g_in, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = detail::lartg(f_in, g_in);
-        c = ct;
-        s = T(st);
-        r = T(rt);
-    }
-
-    static inline void rot_pair(T& x, T& y, Real c, const T& s_in) {
-        const Real s = static_cast<Real>(s_in);
-        const Real xt = static_cast<Real>(x);
-        const Real yt = static_cast<Real>(y);
-        x = T(c * xt + s * yt);
-        y = T(c * yt - s * xt);
-    }
-
-    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si_in) {
-        const Real xi = static_cast<Real>(x);
-        const Real yi = static_cast<Real>(y);
-        const Real zi = static_cast<Real>(z);
-        const Real si = static_cast<Real>(si_in);
-
-        const Real t1 = si * zi;
-        const Real t2 = ci * zi;
-        const Real t3 = t2 - si * xi;
-        const Real t4 = t2 + si * yi;
-        const Real t5 = ci * xi + t1;
-        const Real t6 = ci * yi - t1;
-
-        x = T(ci * t5 + si * t4);
-        y = T(ci * t6 - si * t3);
-        z = T(ci * t4 - si * t5);
-    }
-
-    static inline void finalize_tridiag(const KernelMatrixView<T, MatrixFormat::Dense>& AB,
-                                        int n,
-                                        VectorView<Real> D,
-                                        VectorView<Real> E,
-                                        VectorView<T> TAU) {
-        auto diag = AB(int32_t(0), Slice{});
-        auto sub = AB(int32_t(1), Slice{});
-        for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(diag[j]);
-            if (j < n - 1) {
-                E[j] = static_cast<Real>(sub[j]);
-                TAU[j] = T(0);
-            }
-        }
-    }
-};
-
-// Complex/Hermitian variant (ZHBTRD-style primitives).
-template <typename T>
-struct btrd_givens_ops<T, true> {
-    using Real = typename base_type<T>::type;
-
-    static inline void lartg(const T& f, const T& g, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = detail::lartg(f, g);
-        c = ct;
-        s = st;
-        r = rt;
-    }
-
-    static inline void rot_pair(T& x, T& y, Real c, const T& s) {
-        const T xt = x;
-        const T yt = y;
-        x = T(c) * xt + s * yt;
-        y = T(c) * yt - batchlas::device::conj(s) * xt;
-    }
-
-    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si) {
-        // Exact port of Netlib LAPACK CLAR2V logic.
-        const Real xi = static_cast<Real>(x.real());
-        const Real yi = static_cast<Real>(y.real());
-        const T zi = z;
-
-        const Real zir = static_cast<Real>(zi.real());
-        const Real zii = static_cast<Real>(zi.imag());
-
-        const Real sir = static_cast<Real>(si.real());
-        const Real sii = static_cast<Real>(si.imag());
-
-        const Real t1r = sir * zir - sii * zii;
-        const Real t1i = sir * zii + sii * zir;
-
-        const T t2 = T(ci * zir, ci * zii);
-        const T t3 = t2 - batchlas::device::conj(si) * T(xi, Real(0));
-        const T t4 = batchlas::device::conj(t2) + si * T(yi, Real(0));
-
-        const Real t5 = ci * xi + t1r;
-        const Real t6 = ci * yi - t1r;
-
-        const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
-        const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
-        const T znew = T(ci) * t3 + batchlas::device::conj(si) * T(t6, t1i);
-
-        x = T(xnew, Real(0));
-        y = T(ynew, Real(0));
-        z = znew;
-    }
-
-    static inline void finalize_tridiag(KernelMatrixView<T, MatrixFormat::Dense> AB,
-                                        int n,
-                                        VectorView<Real> D,
-                                        VectorView<Real> E,
-                                        VectorView<T> TAU) {
-        auto diag = AB(int32_t(0), Slice{});
-        auto sub = AB(int32_t(1), Slice{});
-
-        // Make diagonal real.
-        for (int j = 0; j < n; ++j) {
-            diag[j] = batchlas::device::force_real(diag[j]);
-        }
-
-        // Make subdiagonal real (phase chaining) and extract D/E.
-        for (int j = 0; j < n - 1; ++j) {
-            const T t = sub[j];
-            const Real a = detail::abs(t);
-            E[j] = a;
-            T phase = T(1);
-            if (a != Real(0)) {
-                phase = t / T(a);
-            }
-            sub[j] = T(a, Real(0));
-            if (j < n - 2) {
-                sub[j + 1] *= phase;
-            }
-            TAU[j] = T(0);
-        }
-
-        for (int j = 0; j < n; ++j) {
-            D[j] = static_cast<Real>(real_part(diag[j]));
-        }
-    }
-};
+using btrd_givens_ops = ::batchlas::device::sb2st_rot<T>;
 
 template <typename T>
 Event btrd_lower_inplace_subgroup_dispatch(Queue& q,

@@ -153,66 +153,21 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     return ab_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (ldab_l * n);
                 };
 
-                auto zero_cw = [&](Real* C, T* WORK) BATCHLAS_DLA_BODY {
-                    v2::for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
-                        C[i] = Real(0);
-                        WORK[i] = T(0);
-                    });
-                    group_barrier(partition);
+                // The body of device::sb2st's tiers (lapack/sb2st.hh) with this route's run-time storage:
+                // AB staged when the band fits, C/WORK local when they fit. On Metal each C/WORK storage
+                // is its own body (no pointer merged across address spaces; givens_on does the same for AB).
+                auto body = [&](std::pair<Real*, T*> cw) BATCHLAS_DLA_BODY {
+                    v2::sb2st_detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
                 };
-                // Copy (r,c) between global (ld = ABv.ld()) and tight-packed local (ld = kd+1) storage.
-                auto stage_ab = [&](T* ABl, bool to_local) BATCHLAS_DLA_BODY {
-                    if (!to_local) group_barrier(partition);
-                    const int ab_elems_l = ldab_l * n;
-                    v2::for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
-                        const int ccol = t / ldab_l;
-                        const int rrow = t - ccol * ldab_l;
-                        if (to_local) ABl[t] = ABg[rrow + ccol * ABv.ld()];
-                        else ABg[rrow + ccol * ABv.ld()] = ABl[t];
-                    });
-                    group_barrier(partition);
-                };
-
-                // The bulge chase proper (device::sb2st_givens_chase), on whichever storage AB/C/WORK
-                // point at; indexing is identical.
-                auto chase = [&](T* AB, const int ldab, Real* C, T* WORK) BATCHLAS_DLA_BODY {
-                    v2::sb2st_givens_chase<Ops>(pex, n, kd, AB, ldab, C, WORK);
-                };
-
-                // TRAP (Metal): no generic address space, so a pointer chosen between local and global
-                // memory at run time is rejected ("Conflicting address space information in PHI node").
-                // There the chase is instantiated once per storage combination; elsewhere the pointers are
-                // selected once and the chase is emitted once, as before.
                 if (sycl_impl::on_metal()) {
-                    auto run = [&](std::pair<Real*, T*> cw) BATCHLAS_DLA_BODY {
-                        zero_cw(cw.first, cw.second);
-                        if (use_local_ab) {
-                            T* const ABl = local_ab();
-                            stage_ab(ABl, true);
-                            chase(ABl, ldab_l, cw.first, cw.second);
-                            stage_ab(ABl, false);
-                        } else {
-                            chase(ABg, ABv.ld(), cw.first, cw.second);
-                        }
-                    };
-                    if (use_local_cw) run(local_cw());
-                    else run(global_cw());
+                    if (use_local_cw) body(local_cw());
+                    else body(global_cw());
                 } else {
-                    const auto cw = use_local_cw ? local_cw() : global_cw();
-                    zero_cw(cw.first, cw.second);
-                    T* AB = ABg;
-                    int ldab = ABv.ld();
-                    if (use_local_ab) {
-                        AB = local_ab();
-                        ldab = ldab_l;
-                        stage_ab(AB, true);
-                    }
-                    chase(AB, ldab, cw.first, cw.second);
-                    if (use_local_ab) stage_ab(AB, false);
+                    body(use_local_cw ? local_cw() : global_cw());
                 }
 
                 invoke_one(partition, [&]() {
-                    if (live) Ops::finalize_tridiag(ABv, n, D, E, TAU);
+                    if (live) v2::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
                 });
             });
     });

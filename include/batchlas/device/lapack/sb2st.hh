@@ -15,14 +15,25 @@
 //   rot_by<Rot>      one rotation through Rot::rot_pair
 // Each element is the C++ expression of the kernel it was lifted from (std::complex operators,
 // one expression per FMA chain), so a strict port stays bit-identical.
+//
+// Public op (v22 design C.2/C.4, host sytrd_sb2st): sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws)
+// on one SgpPartition<P> per matrix, any n, any kd >= 0; ab (kd + 1 rows, lower band) is
+// overwritten. Tiers: Cta<N> (band and rotation scratch in local memory, n <= N) and Blocked<NB>
+// (band chased in place, scratch in the caller's global slice; NB unused: a band chase has no
+// panel). Sizes: sb2st_buffer_size<UL, Tier, T>(n, kd); with_tier: routine::sb2st<UL, KDMax>.
+// The rotation kernels are sb2st_rot<T>; the host sub-group route runs the same body
+// (sb2st_detail::givens_on + finalize_tridiag) with its run-time storage choice.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
 #include <sycl/sycl.hpp>
 
 #include <batchlas/device.hh>
+#include <batchlas/device/detail/sscp_target.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <batchlas/util/group-invoke.hh>
 
 namespace batchlas::device::inline v2 {
@@ -479,6 +490,349 @@ BATCHLAS_DLA_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const sb
             }
         }
     }
+}
+
+// ---- the band-to-tridiagonal rotation kernels -------------------------------------------------
+// xSBTRD / xHBTRD's scalar steps in T's own operators: the Rot of sb2st_givens_chase and of core
+// largv / lartv / lar2v. complex<float> forms its rotations in double except on Metal (no fp64),
+// as src/math-helpers.hh lartg does.
+template <class T, bool = Arith<T>::is_complex> struct sb2st_rot;
+
+template <class T> struct sb2st_rot<T, false> {
+    using Real = real_t<T>;
+
+    static inline void lartg(const T& f_in, const T& g_in, Real& c, T& s, T& r) {
+        auto [ct, st, rt] = ::batchlas::device::lartg(f_in, g_in);
+        c = ct;
+        s = T(st);
+        r = T(rt);
+    }
+
+    static inline void rot_pair(T& x, T& y, Real c, const T& s_in) {
+        const Real s = static_cast<Real>(s_in);
+        const Real xt = static_cast<Real>(x);
+        const Real yt = static_cast<Real>(y);
+        x = T(c * xt + s * yt);
+        y = T(c * yt - s * xt);
+    }
+
+    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si_in) {
+        const Real xi = static_cast<Real>(x);
+        const Real yi = static_cast<Real>(y);
+        const Real zi = static_cast<Real>(z);
+        const Real si = static_cast<Real>(si_in);
+
+        const Real t1 = si * zi;
+        const Real t2 = ci * zi;
+        const Real t3 = t2 - si * xi;
+        const Real t4 = t2 + si * yi;
+        const Real t5 = ci * xi + t1;
+        const Real t6 = ci * yi - t1;
+
+        x = T(ci * t5 + si * t4);
+        y = T(ci * t6 - si * t3);
+        z = T(ci * t4 - si * t5);
+    }
+};
+
+template <class T> struct sb2st_rot<T, true> {
+    using Real = real_t<T>;
+
+    static __attribute__((always_inline)) inline LartgResult<T> rotation(const T& f, const T& g) {
+        if constexpr (std::is_same_v<Real, float>) {
+            if (::batchlas::sycl_impl::on_metal()) return ::batchlas::device::lartg<float>(f, g);
+            return ::batchlas::device::lartg<double>(f, g);
+        } else {
+            return ::batchlas::device::lartg(f, g);
+        }
+    }
+
+    static inline void lartg(const T& f, const T& g, Real& c, T& s, T& r) {
+        auto [ct, st, rt] = rotation(f, g);
+        c = ct;
+        s = st;
+        r = rt;
+    }
+
+    static inline void rot_pair(T& x, T& y, Real c, const T& s) {
+        const T xt = x;
+        const T yt = y;
+        x = T(c) * xt + s * yt;
+        y = T(c) * yt - ::batchlas::device::conj(s) * xt;
+    }
+
+    // Netlib CLAR2V / ZLAR2V, expression for expression.
+    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si) {
+        const Real xi = static_cast<Real>(x.real());
+        const Real yi = static_cast<Real>(y.real());
+        const T zi = z;
+
+        const Real zir = static_cast<Real>(zi.real());
+        const Real zii = static_cast<Real>(zi.imag());
+
+        const Real sir = static_cast<Real>(si.real());
+        const Real sii = static_cast<Real>(si.imag());
+
+        const Real t1r = sir * zir - sii * zii;
+        const Real t1i = sir * zii + sii * zir;
+
+        const T t2 = T(ci * zir, ci * zii);
+        const T t3 = t2 - ::batchlas::device::conj(si) * T(xi, Real(0));
+        const T t4 = ::batchlas::device::conj(t2) + si * T(yi, Real(0));
+
+        const Real t5 = ci * xi + t1r;
+        const Real t6 = ci * yi - t1r;
+
+        const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
+        const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
+        const T znew = T(ci) * t3 + ::batchlas::device::conj(si) * T(t6, t1i);
+
+        x = T(xnew, Real(0));
+        y = T(ynew, Real(0));
+        z = znew;
+    }
+};
+
+namespace sb2st_detail {
+
+// Re x read through the reference (no copy of the imaginary part).
+template <class T> inline real_t<T> re_of(const T& x) {
+    if constexpr (Arith<T>::is_complex) return static_cast<real_t<T>>(x.real());
+    else return static_cast<real_t<T>>(x);
+}
+
+// kd <= 1 needs no chase (xSBTRD's KD = 0 / KD = 1 exits): d = Re diag; e = 0 (KD = 0) or
+// |AB(1, i)| (KD = 1: the chained phase only matters for Q, which no caller forms); tau = 0.
+template <int KD, class AB, class D, class E, class Tau>
+inline void extract_narrow(int n, const AB& ab, const D& d, const E& e, const Tau& tau) {
+    static_assert(KD == 0 || KD == 1, "sb2st::extract_narrow: KD is 0 or 1");
+    using T = std::remove_cvref_t<decltype(ab(0, 0))>;
+    using Real = real_t<T>;
+    if constexpr (KD == 0) {
+        for (int i = 0; i < n; ++i) {
+            d(i) = re_of(ab(0, i));
+            if (i < n - 1) {
+                e(i) = Real(0);
+                tau(i) = T(0);
+            }
+        }
+    } else {
+        for (int i = 0; i < n; ++i) d(i) = re_of(ab(0, i));
+        for (int i = 0; i < n - 1; ++i) {
+            const T t = ab(1, i);
+            const Real a = modulus(t);
+            e(i) = a;
+            tau(i) = T(0);
+        }
+    }
+}
+
+// The chase's exit (one item): d = Re diag, e = the subdiagonal, tau = 0, from the band's rows 0
+// (diag) and 1 (sub). Complex makes the diagonal real and the subdiagonal real by chaining phases
+// (ZHBTRD: e(j) = |sub(j)|, sub(j + 1) *= sub(j) / |sub(j)|); both rows are written back.
+template <class Diag, class Sub, class D, class E, class Tau>
+inline void finalize_tridiag(int n, const Diag& diag, const Sub& sub, const D& d, const E& e, const Tau& tau) {
+    using T = std::remove_cvref_t<decltype(diag(0))>;
+    using Real = real_t<T>;
+    if constexpr (!Arith<T>::is_complex) {
+        for (int j = 0; j < n; ++j) {
+            d(j) = static_cast<Real>(diag(j));
+            if (j < n - 1) {
+                e(j) = static_cast<Real>(sub(j));
+                tau(j) = T(0);
+            }
+        }
+    } else {
+        for (int j = 0; j < n; ++j) diag(j) = force_real(diag(j));
+        for (int j = 0; j < n - 1; ++j) {
+            const T t = sub(j);
+            const Real a = modulus(t);
+            e(j) = a;
+            T phase = T(1);
+            if (a != Real(0)) phase = t / T(a);
+            sub(j) = T(a, Real(0));
+            if (j < n - 2) sub(j + 1) *= phase;
+            tau(j) = T(0);
+        }
+        for (int j = 0; j < n; ++j) d(j) = re_of(diag(j));
+    }
+}
+
+// One band on one sub-group partition (kd >= 2): the rotation scratch c / work (n + kd + 2 each)
+// zeroed; with stage, the band (abg, ldg) copied to the packed local copy abl() (ld kd + 1), chased
+// there and copied back, else chased in place. abl is called only when staging: a pointer computed
+// up front stays live across the zeroing (+2 registers, 8 -> 7 blocks/SM for the double P = 32 host
+// kernel). TRAP (Metal): no generic address space, so a pointer chosen between local and global
+// memory at run time is rejected ("Conflicting address space information in PHI node"); there each
+// storage gets its own chase, elsewhere the pointer is selected once and the chase emitted once.
+// The caller picks c / work the same way.
+template <class Rot, class Ex, class T, class AbL, class R>
+BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, const AbL& abl, bool stage, R* c, T* work) {
+    const auto& partition = pex.part;
+    const int ldab_l = kd + 1;
+    const int cw_len = n + kd + 2;
+    for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
+        c[i] = R(0);
+        work[i] = T(0);
+    });
+    group_barrier(partition);
+    // (r, c) between the band (ld ldg) and the packed local copy (ld kd + 1).
+    auto stage_ab = [&](T* ABl, bool to_local) BATCHLAS_DLA_BODY {
+        if (!to_local) group_barrier(partition);
+        const int ab_elems_l = ldab_l * n;
+        for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
+            const int ccol = t / ldab_l;
+            const int rrow = t - ccol * ldab_l;
+            if (to_local) ABl[t] = abg[rrow + ccol * ldg];
+            else abg[rrow + ccol * ldg] = ABl[t];
+        });
+        group_barrier(partition);
+    };
+    if (::batchlas::sycl_impl::on_metal()) {
+        if (stage) {
+            T* const ab_l = abl();
+            stage_ab(ab_l, true);
+            sb2st_givens_chase<Rot>(pex, n, kd, ab_l, ldab_l, c, work);
+            stage_ab(ab_l, false);
+        } else {
+            sb2st_givens_chase<Rot>(pex, n, kd, abg, ldg, c, work);
+        }
+    } else {
+        T* ab = abg;
+        int ldab = ldg;
+        if (stage) {
+            ab = abl();
+            ldab = ldab_l;
+            stage_ab(ab, true);
+        }
+        sb2st_givens_chase<Rot>(pex, n, kd, ab, ldab, c, work);
+        if (stage) stage_ab(ab, false);
+    }
+}
+
+// The executor the chase is written for: a SgpPartition<P> (its .part is a SubGroupPartition).
+template <class Ex> inline constexpr bool is_sgp_v = false;
+template <int P, bool M> inline constexpr bool is_sgp_v<Partition<P, M, SubGroupPartition<static_cast<std::size_t>(P), M>>> = true;
+
+template <class Tier> inline constexpr bool is_cta_v = false;
+template <int N, class A> inline constexpr bool is_cta_v<tier::Cta<N, A>> = true;
+template <class Tier> inline constexpr bool is_blocked_v = false;
+template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
+
+// The workspace of one matrix (kd >= 2), carved by the op and summed by sb2st_buffer_size: the
+// rotation scratch c (real) and work, n + kd + 2 each, then (Cta) the packed band (kd + 1) x n,
+// all local; Blocked: c and work in the caller's global slice, nothing local.
+template <class T> struct Layout {
+    ws::Slot<real_t<T>> c;
+    ws::Slot<T> work;
+    ws::Slot<T> ab;
+    WorkspaceSize size;
+};
+template <class Tier, class T> constexpr Layout<T> layout(int n, int kd) {
+    static_assert(is_cta_v<Tier> || is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
+    constexpr ws::Space sp = is_cta_v<Tier> ? ws::Space::Local : ws::Space::Global;
+    Plan p;
+    const std::size_t cw = static_cast<std::size_t>(n + kd + 2);
+    const auto c = p.take<real_t<T>>(sp, cw);
+    const auto w = p.take<T>(sp, cw);
+    ws::Slot<T> ab{ws::Space::Local, 0, 0};
+    if constexpr (is_cta_v<Tier>) ab = p.take<T>(ws::Space::Local, static_cast<std::size_t>(kd + 1) * static_cast<std::size_t>(n));
+    return {c, w, ab, p.size()};
+}
+
+template <class M> BATCHLAS_DLA_INLINE int band_ld(const M& a) {
+    if constexpr (requires { a.ld(); }) return static_cast<int>(a.ld());
+    else return static_cast<int>(a.ld);
+}
+
+}  // namespace sb2st_detail
+
+// Bytes of ONE matrix's workspace for sb2st<UL, Tier> at (n, kd); zero when no chase runs
+// (n <= 0 or kd <= 1).
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sb2st_buffer_size(int n, int kd) {
+    static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
+    if (n <= 0 || kd <= 1) return {};
+    return sb2st_detail::layout<Tier, T>(n, kd).size;
+}
+
+namespace routine {
+// with_tier's tag: KDMax bounds the band width the tier filter sizes local memory for.
+template <Uplo UL, int KDMax = 32> struct sb2st {
+    static_assert(KDMax >= 0, "routine::sb2st: KDMax >= 0");
+    static constexpr const char* name = "sb2st";
+    static constexpr int kd_max = KDMax;
+    static constexpr int kd_at(int n) { return n - 1 < KDMax ? (n - 1 < 0 ? 0 : n - 1) : KDMax; }
+};
+}  // namespace routine
+
+template <Uplo UL, int KDMax, int N, class A, class T> struct tier_info<routine::sb2st<UL, KDMax>, tier::Cta<N, A>, T> {
+    static constexpr int wg_size = 32, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sb2st_buffer_size<UL, tier::Cta<N, A>, T>(n, routine::sb2st<UL, KDMax>::kd_at(n)); }
+};
+template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sb2st<UL, KDMax>, tier::Blocked<NB, A>, T> {
+    static constexpr int wg_size = 32, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sb2st_buffer_size<UL, tier::Blocked<NB, A>, T>(n, routine::sb2st<UL, KDMax>::kd_at(n)); }
+};
+template <Uplo UL, int KDMax, class T> struct tiers<routine::sb2st<UL, KDMax>, T> {
+    using type = tier::list<tier::Cta<4096>, tier::Blocked<32>>;
+};
+
+// sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws): the lower band ab (kd + 1 rows used, ld >= kd + 1,
+// n = ab.cols()) of one Hermitian (real: symmetric) matrix -> the real tridiagonal (d, e), n and
+// n - 1 elements, tau (n - 1) = 0, by xSBTRD / xHBTRD's Givens bulge chase on one SgpPartition<P>
+// (any P; every lane calls it with the same arguments; inputs visible on entry). ab is
+// overwritten: rows 0 and 1 hold the tridiagonal (complex: made real), the rest is scratch. ws:
+// this matrix's slice of sb2st_buffer_size<UL, Tier, T>(n, kd) (Cta: local; Blocked: global).
+// Returns 0, or -i for a bad i-th argument after the executor (1 ab: rows < kd + 1, or n > N for
+// Cta<N>; 2 d, 3 e, 4 tau: too short; 5 kd < 0), uniform. Outputs are visible on return.
+template <Uplo UL, class Tier, class Ex, class AB, class D, class E, class Tau>
+BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& e, const Tau& tau, int kd, const Workspace& ws) {
+    static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
+    static_assert(sb2st_detail::is_sgp_v<Ex>, "sb2st: the executor is a SgpPartition<P>");
+    static_assert(sb2st_detail::is_cta_v<Tier> || sb2st_detail::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
+    using T = std::remove_cvref_t<decltype(ab(0, 0))>;
+    const int n = ab.cols();
+    const int nm1 = n > 0 ? n - 1 : 0;
+    if (kd < 0) return -5;
+    if (ab.rows() < kd + 1) return -1;
+    if constexpr (sb2st_detail::is_cta_v<Tier>) {
+        if (n > Tier::n_max) return -1;
+    }
+    if (d.size() < n) return -2;
+    if (e.size() < nm1) return -3;
+    if (tau.size() < nm1) return -4;
+    if (n <= 0) return 0;
+
+    const auto& partition = pex.part;
+    if (kd <= 1) {
+        ::batchlas::invoke_one(partition, [&]() {
+            if (kd == 0) sb2st_detail::extract_narrow<0>(n, ab, d, e, tau);
+            else sb2st_detail::extract_narrow<1>(n, ab, d, e, tau);
+        });
+        group_barrier(partition);
+        return 0;
+    }
+
+    T* const abg = &ab(0, 0);
+    const int ldg = sb2st_detail::band_ld(ab);
+    const auto lay = sb2st_detail::layout<Tier, T>(n, kd);
+    if constexpr (sb2st_detail::is_cta_v<Tier>) {
+        auto abl = [&]() BATCHLAS_DLA_BODY { return carve_local(ws, lay.ab).get_raw(); };
+        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
+                                              carve_local(ws, lay.work).get_raw());
+    } else {
+        auto no_abl = []() BATCHLAS_DLA_BODY { return static_cast<T*>(nullptr); };
+        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
+                                              carve_global(ws, lay.work));
+    }
+    group_barrier(partition);
+    ::batchlas::invoke_one(partition, [&]() {
+        sb2st_detail::finalize_tridiag(n, vec(abg, n, ldg), vec(abg + 1, n, ldg), d, e, tau);
+    });
+    group_barrier(partition);
+    return 0;
 }
 
 }  // namespace batchlas::device::inline v2
