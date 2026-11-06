@@ -15,7 +15,8 @@
 // local-memory / work-group / fp64 filters and its op-named throw; buffer_size against the layout
 // by hand; the -i argument returns; and a deliberate break (op(Q) checked against the OTHER
 // Trans's reference must fail the same bound, so the comparison can fail).
-// Red set: not recorded yet (the file was written without a GPU run).
+// Red set (RTX 4090): larfb's Right trmm given the other op(T) fails exactly
+// OrmqrBlockedAllSidesAndTrans for all four types; the other 15 cases stay green.
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/functions/geqrf.hh>
@@ -495,28 +496,37 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
     const auto av = kview(a, A);
     const dv::WorkspaceSize sz = dv::orgqr_buffer_size<Blk<T>, T>(m, n);
     Launch<T> L(d, sz, 1);
-    int* out = d.alloc<int>(6, 0);
-    L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-        const dv::Workspace none{ws.local, nullptr};
-        const auto flat = dv::mat(a, n, m, n);  // n x m: orgqr's m < n
-        const int r0 = dv::geqrf<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
-        const int r1 = dv::geqrf<Blk<T>>(ex, dv::item(av, 0), tp, none);
-        const int r2 = dv::orgqr<Blk<T>>(ex, flat, tp, ws);
-        const int r3 = dv::orgqr<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
-        const int r4 = dv::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), flat, tp, ws);
-        const int r5 = dv::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), dv::item(av, 0), dv::vec(tp, n - 1), ws);
-        if (ex.leader()) {
-            out[0] = r0, out[1] = r1, out[2] = r2, out[3] = r3, out[4] = r4, out[5] = r5;
-        }
-        return 0;
-    });
-    const auto r = d.down(out, 6);
-    EXPECT_EQ(r[0], -2) << "geqrf: tau shorter than k";
-    EXPECT_EQ(r[1], -3) << "geqrf: no global workspace";
-    EXPECT_EQ(r[2], -1) << "orgqr: m < n";
-    EXPECT_EQ(r[3], -2) << "orgqr: tau shorter than n";
-    EXPECT_EQ(r[4], -1) << "ormqr: A.rows() is not C.rows()";
-    EXPECT_EQ(r[5], -1) << "ormqr Right: A.rows() is not C.cols()";
+    // One call per kernel: the six calls inlined into one kernel crash the spir64_x86_64 AOT
+    // compiler (opencl-aot, pass sycl-kernel-reduce-cross-barrier-values, clang 22 e79d489d).
+    const auto flat = dv::mat(a, n, m, n);  // n x m: orgqr's m < n
+    auto first = [](const std::vector<int>& v) { return v.at(0); };
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
+                  return dv::geqrf<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
+              })),
+              -2)
+        << "geqrf: tau shorter than k";
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
+                  return dv::geqrf<Blk<T>>(ex, dv::item(av, 0), tp, dv::Workspace{ws.local, nullptr});
+              })),
+              -3)
+        << "geqrf: no global workspace";
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) { return dv::orgqr<Blk<T>>(ex, flat, tp, ws); })), -1)
+        << "orgqr: m < n";
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
+                  return dv::orgqr<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
+              })),
+              -2)
+        << "orgqr: tau shorter than n";
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
+                  return dv::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), flat, tp, ws);
+              })),
+              -1)
+        << "ormqr: A.rows() is not C.rows()";
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
+                  return dv::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), dv::item(av, 0), dv::vec(tp, n - 1), ws);
+              })),
+              -1)
+        << "ormqr Right: A.rows() is not C.cols()";
     const auto after = d.down(a, A.h.size());
     int changed = 0;
     for (std::size_t e = 0; e < after.size(); ++e) changed += !same_bits(after[e], A.h[e]);
