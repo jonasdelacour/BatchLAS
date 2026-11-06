@@ -341,4 +341,140 @@ inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, c
     }
 }
 
+// ---- public device API (v22 design C): sytrs<UL, Tier>(ex, A, B, ipiv, ws) ----------------------
+// Tiers (one per kernel; with_tier picks one on the host for a run-time n):
+//   tier::Cta<N>, N <= 128  the converted factor in local memory, one sub-group per right-hand
+//                           side, x in registers (R = ceil(N / 32) per lane); the host `cta`
+//                           launch's buckets are Cta<32>, Cta<64>, Cta<128>
+//   tier::Blocked<1>        any n: ?sytrs on the factor in global memory, one column at a time
+//                           (host `wg`'s body, sytrs_col); ex at most 256 items. Its sums
+//                           reduce in an order fixed by ex's width: bit-identical to `wg` at
+//                           the host's width min(256, roundup32(n)).
+
+namespace routine {
+template <Uplo UL> struct sytrs {
+    static_assert(UL == Uplo::Lower || UL == Uplo::Upper, "sytrs: Uplo::Lower or Uplo::Upper");
+    static constexpr const char* name = "sytrs";
+};
+}  // namespace routine
+
+namespace sytrs_detail {
+
+template <class T> struct SytrsCtaPlan {
+    ws::Slot<T> tile;   // the n x n factor at ld n | 1, then e (n)
+    ws::Slot<int> idx;  // ps, perm, kind (n each), the validity flag
+    WorkspaceSize size;
+};
+template <class T> constexpr SytrsCtaPlan<T> sytrs_cta_plan(int n) {
+    Plan p;
+    const auto un = static_cast<std::size_t>(n);
+    const auto tile = p.take<T>(ws::Space::Local, un * static_cast<std::size_t>(n | 1) + un);
+    const auto idx = p.take<int>(ws::Space::Local, 3 * un + 1);
+    return {tile, idx, p.size()};
+}
+template <class R> struct SytrsWgPlan {
+    ws::Slot<R> red;  // SumScratch: re then im, one slot per sub-group
+    WorkspaceSize size;
+};
+template <class R> constexpr SytrsWgPlan<R> sytrs_wg_plan() {
+    Plan p;
+    const auto red = p.take<R>(ws::Space::Local, 2 * (sytrf_detail::sytrf_wg_max / 32));
+    return {red, p.size()};
+}
+
+// LAPACK's argument numbers (?sytrs and ?sysv): -2 (N: A not square or outside the tier),
+// -5 (LDA), -7 (B: not n rows), -8 (LDB < max(1, n)); -1 the executor as sytrf's.
+template <class Tier, class Ex, class MA, class MB> BATCHLAS_DLA_INLINE int sytrs_check(const Ex& ex, const MA& a, const MB& b) {
+    if (const int e = sytrf_detail::sytrf_exec_check<Tier>(ex); e != 0) return e;
+    const int n = a.rows(), lo = n > 1 ? n : 1;
+    if (a.cols() != n || !detail::bound_admits<Tier>(n)) return -2;
+    if (sytrf_detail::sytrf_ld(a) < lo) return -5;
+    if (b.rows() != n) return -7;
+    if (sytrf_detail::sytrf_ld(b) < lo) return -8;
+    return 0;
+}
+
+// sytrs `cta`'s solve on a factor staged in local memory (sytrs `cta`; the second half of sysv
+// `cta`): S's logical ipiv from `raw` (LAPACK's, physical order), ?syconv, then every column of
+// B (ld ldb) on sub-group sgid of nsg. `flag`: one int of local memory. No trailing barrier.
+template <int R, class All, typename D>
+BATCHLAS_DLA_INLINE void sytrs_cta_solve(const All& all, const sycl::sub_group& sg, int lane, int sgid, int nsg, const Staged<D>& S,
+                                         const int* raw, bool rev, int* flag, D* bb, std::ptrdiff_t ldb, int nrhs) {
+    const int n = S.n;
+    for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY { S.ps[k] = logical_piv(raw[rev ? n - 1 - k : k], n, rev); });
+    sync<scope::Group>(all, Mem::Global);
+    const bool ok = syconv<D>(S, n, S.ps, S.perm, S.kind, S.e, all, flag);
+    sytrs_cols<R>(sg, lane, sgid, nsg, S, ok, rev, bb, ldb, nrhs);
+}
+
+template <Uplo UL, int N, class Ex, class MA, class MB>
+BATCHLAS_DLA_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    constexpr bool rev = UL == Uplo::Upper;
+    const int n = A.rows(), ldt = n | 1;
+    const auto pl = sytrs_cta_plan<D>(n);
+    D* const tp = carve_local(ws, pl.tile).get_raw();
+    int* const im = carve_local(ws, pl.idx).get_raw();
+    const Staged<D> S{tp, ldt, n, tp + static_cast<std::size_t>(n) * ldt, im, im + n, im + 2 * n};
+    lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(ex, sytrf_detail::sytrf_view(A, rev), S);
+    sytrs_cta_solve<(N + 31) / 32>(ex, ex.sub(), ex.lane(), sytrf_detail::sytrf_team(ex), sytrf_detail::sytrf_nteams(ex), S, ipiv,
+                                   rev, im + 3 * n, &B(0, 0), sytrf_detail::sytrf_ld(B), B.cols());
+    sync<scope::Group>(ex, Mem::Global);
+}
+
+template <Uplo UL, class Ex, class MA, class MB>
+BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using Rl = real_t<D>;
+    constexpr bool rev = UL == Uplo::Upper;
+    constexpr auto pl = sytrs_wg_plan<Rl>();
+    Rl* const red = carve_local(ws, pl.red).get_raw();
+    const int n = A.rows(), nrhs = B.cols();
+    const auto G = sytrf_detail::sytrf_view(A, rev);
+    D* const b0 = &B(0, 0);
+    const std::ptrdiff_t ldb = sytrf_detail::sytrf_ld(B);
+    // sytrs_col ends on a barrier: the scratch is free for the next column, B visible at the end.
+    for (int c = 0; c < nrhs; ++c)
+        sytrs_col(G, n, rev, sytrf_detail::RevVec<D>{b0 + c * ldb, n, rev}, ex,
+                  sytrf_detail::SumScratch<Rl>{red, red + sytrf_detail::sytrf_wg_max / 32}, [&](int k) { return ipiv[k]; });
+}
+
+}  // namespace sytrs_detail
+
+template <Uplo UL, class T> struct tiers<routine::sytrs<UL>, T> {
+    using type = tier::list<tier::Cta<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<1>>;
+};
+template <Uplo UL, int N, class T> struct tier_info<routine::sytrs<UL>, tier::Cta<N>, T> {
+    static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
+    static constexpr int wg_size = 32, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0 && n <= N; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sytrs_detail::sytrs_cta_plan<T>(n).size; }
+};
+template <Uplo UL, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, T> {
+    static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int) { return sytrs_detail::sytrs_wg_plan<real_t<T>>().size; }
+};
+
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrs_buffer_size(int n) {
+    using Rt = routine::sytrs<UL>;
+    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
+}
+
+// ?sytrs of one matrix inside a kernel: B := A^-1 B from sytrf's factor (A and ipiv as sytrf
+// left them for the same UL). Collective as sytrf; B visible to every item on return. A pivot
+// list sytrf cannot have written leaves that B all NaN (the host routes' contract). Returns 0, or
+// a negative LAPACK argument number (sytrs_check), the same on every item.
+template <Uplo UL, class Tier, class Ex, class MA, class MB>
+inline int sytrs(const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    static_assert(std::is_same_v<D, std::remove_cv_t<typename MB::value_type>>, "sytrs: A and B of one scalar type");
+    using Tr = resolve_tier_t<routine::sytrs<UL>, D, Tier>;
+    static_assert(sytrf_detail::sytrf_exec_ok<Ex>(), "sytrs: an executor of whole 32-wide sub-groups");
+    const int chk = sytrs_detail::sytrs_check<Tr>(ex, A, B);
+    if (chk != 0 || A.rows() == 0 || B.cols() == 0) return chk;
+    sytrs_detail::sytrs_run<UL>(Tr{}, ex, A, B, ipiv, ws);
+    return 0;
+}
+
 }  // namespace batchlas::device

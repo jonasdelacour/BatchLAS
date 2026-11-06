@@ -413,4 +413,172 @@ inline void lasyf_undo(const sytrf_detail::RevMat<D>& S, int start, int end, con
     }
 }
 
+// ---- public device API (v22 design C): sytrf<UL, Tier>(ex, A, ipiv, ws) -------------------------
+// Tiers (one per kernel; with_tier picks one on the host for a run-time n):
+//   tier::Cta<N>, N <= 32   A's logical lower triangle in local memory; sub-group 0 of ex factors
+//   tier::Blocked<1>        any n: ?sytf2 in place in global memory (LAPACK's NB = 1, unblocked);
+//                           ex at most 256 items (the arg-max scratch's eight sub-groups)
+// The host routes `cta` and `wg` run the same bodies (sytrf_cta_factor, sytf2) with uplo a
+// run-time flag: the reversal map makes Upper an index transform, so one kernel per T serves
+// both and the kernel names stay.
+
+namespace routine {
+template <Uplo UL> struct sytrf {
+    static_assert(UL == Uplo::Lower || UL == Uplo::Upper, "sytrf: Uplo::Lower or Uplo::Upper");
+    static constexpr const char* name = "sytrf";
+};
+}  // namespace routine
+
+namespace sytrf_detail {
+
+inline constexpr int sytrf_wg_max = 256;
+
+template <int N, class T> struct SytrfCtaPlan {
+    ws::Slot<T> tile;
+    WorkspaceSize size;
+};
+// The Cta tier's (N + 1) x N tile: the host launch's odd ld.
+template <int N, class T> constexpr SytrfCtaPlan<N, T> sytrf_cta_plan() {
+    Plan p;
+    const auto tile = p.take<T>(ws::Space::Local, static_cast<std::size_t>(N + 1) * N);
+    return {tile, p.size()};
+}
+template <class R> struct SytrfWgPlan {
+    ws::Slot<R> v;
+    ws::Slot<int> i;
+    WorkspaceSize size;
+};
+template <class R> constexpr SytrfWgPlan<R> sytrf_wg_plan() {
+    Plan p;
+    const auto v = p.take<R>(ws::Space::Local, sytrf_wg_max / 32);
+    const auto i = p.take<int>(ws::Space::Local, sytrf_wg_max / 32);
+    return {v, i, p.size()};
+}
+
+// Whole sub-groups of 32 (a compile-time width a multiple of 32): the butterflies are 32-lane.
+template <class Ex> constexpr bool sytrf_exec_ok() {
+    if constexpr (!requires { Ex::sg_size; }) return false;
+    else if constexpr (is_runtime_v<Ex>) return Ex::sg_size == 32;
+    else return Ex::sg_size == 32 && Ex::size % 32 == 0;
+}
+// -1 when a run-time width is not whole sub-groups or exceeds Blocked<1>'s scratch, else 0.
+template <class Tier, class Ex> BATCHLAS_DLA_INLINE int sytrf_exec_check(const Ex& ex) {
+    constexpr bool wg = std::is_same_v<Tier, tier::Blocked<1>>;
+    if constexpr (is_runtime_v<Ex>) {
+        const int w = detail::size_of(ex);
+        return w % 32 != 0 || (wg && w > sytrf_wg_max) ? -1 : 0;
+    } else {
+        static_assert(!wg || Ex::size <= sytrf_wg_max, "tier::Blocked<1>: an executor of at most 256 items");
+        return 0;
+    }
+}
+// Sub-group index and count inside ex: a whole-sub-group executor (SubGroup, Teams, a 32-item
+// group) is one sub-group whatever its team() says.
+template <class Ex> BATCHLAS_DLA_INLINE int sytrf_team(const Ex& ex) {
+    if constexpr (Ex::sub_whole) return 0;
+    else return ex.team();
+}
+template <class Ex> BATCHLAS_DLA_INLINE int sytrf_nteams(const Ex& ex) {
+    if constexpr (Ex::sub_whole) return 1;
+    else return detail::nteams_of(ex);
+}
+template <class MA> BATCHLAS_DLA_INLINE std::ptrdiff_t sytrf_ld(const MA& a) { return static_cast<int>(a.ld); }
+// A dense column-major operand (A(i, j) an lvalue, a member ld) as the routine's logical view.
+template <class MA> BATCHLAS_DLA_INLINE auto sytrf_view(const MA& a, bool rev) {
+    return rev_mat(&a(0, 0), sytrf_ld(a), a.rows(), rev);
+}
+// LAPACK's argument numbers: -2 (N: A not square or outside the tier), -4 (LDA < max(1, n)).
+template <class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int sytrf_check(const Ex& ex, const MA& a) {
+    if (const int e = sytrf_exec_check<Tier>(ex); e != 0) return e;
+    const int n = a.rows();
+    if (a.cols() != n || !detail::bound_admits<Tier>(n)) return -2;
+    if (sytrf_ld(a) < (n > 1 ? n : 1)) return -4;
+    return 0;
+}
+
+// The Cta tier's factor (sytrf `cta`; the first half of sysv `cta`): every item of `all` copies
+// the logical lower triangle of G into the local tile S; then the factoring sub-group g (the
+// items with `factors`) runs ?sytf2 on S, copies the factor back to G, and its leader calls
+// info_out(info). Returns ?sytf2's info on g, 0 elsewhere. No trailing barrier.
+template <class All, class Sub, typename D, typename R, typename PivOut, typename InfoOut>
+BATCHLAS_DLA_INLINE int sytrf_cta_factor(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
+                                         bool rev, ArgMaxScratch<R> am, PivOut&& piv_out, InfoOut&& info_out) {
+    lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
+    sync<scope::Group>(all, Mem::Global);
+    int st = 0;
+    if (factors) {
+        st = sytf2(S, n, rev, g, am, piv_out);
+        lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(g, S, G);
+        if (g.leader()) info_out(st);
+    }
+    return st;
+}
+
+template <Uplo UL, int N, class Ex, class MA>
+BATCHLAS_DLA_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using R = real_t<D>;
+    constexpr bool rev = UL == Uplo::Upper;
+    constexpr auto pl = sytrf_cta_plan<N, D>();
+    const int n = A.rows();
+    const RevMat<D> S = rev_mat(carve_local(ws, pl.tile).get_raw(), N + 1, n, false);
+    const SubGroup<32> g{ex.sub()};
+    // One sub-group factors: its arg-max never reaches the cross-sub-group scratch.
+    const int st = sytrf_cta_factor(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev, ArgMaxScratch<R>{nullptr, nullptr},
+                                    [&](int k, int v) { ipiv[k] = v; }, NoOp{});
+    sync<scope::Group>(ex, Mem::Global);
+    if constexpr (Ex::sub_whole) return st;
+    else return ex.uniform(st);
+}
+
+template <Uplo UL, class Ex, class MA>
+BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using R = real_t<D>;
+    constexpr bool rev = UL == Uplo::Upper;
+    constexpr auto pl = sytrf_wg_plan<R>();
+    const ArgMaxScratch<R> am{carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw()};
+    // sytf2's verdicts are uniform and each step ends on a barrier: info is uniform, A visible.
+    return sytf2(sytrf_view(A, rev), A.rows(), rev, ex, am, [&](int k, int v) { ipiv[k] = v; });
+}
+
+}  // namespace sytrf_detail
+
+template <Uplo UL, class T> struct tiers<routine::sytrf<UL>, T> {
+    using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
+};
+template <Uplo UL, int N, class T> struct tier_info<routine::sytrf<UL>, tier::Cta<N>, T> {
+    static_assert(N <= 32, "sytrf tier::Cta<N>: N <= 32 (one sub-group factors)");
+    static constexpr int wg_size = 32, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0 && n <= N; }
+    static constexpr WorkspaceSize buffer_size(int) { return sytrf_detail::sytrf_cta_plan<N, T>().size; }
+};
+template <Uplo UL, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<1>, T> {
+    static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int) { return sytrf_detail::sytrf_wg_plan<real_t<T>>().size; }
+};
+
+// The workspace of one matrix: local bytes for the tier's tile / scratch, no global part.
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrf_buffer_size(int n) {
+    using Rt = routine::sytrf<UL>;
+    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
+}
+
+// ?sytrf of one matrix inside a kernel: A := its Bunch-Kaufman factor in LAPACK's storage for UL,
+// ipiv[0, n) := LAPACK's ipiv (1-based int32; a 2 x 2 block negative at both of its rows).
+// Collective: every item of ex calls it with the same arguments, A and ipiv's memory visible to
+// all on entry; both are visible to every item on return. Returns LAPACK's info, the same on
+// every item: 0; k > 0 (D(k, k) is exactly zero; the factor is complete); -2 (A not square, or n
+// outside the tier); -4 (ld < max(1, n)); -1 (ex: a run-time width that is not whole 32-wide
+// sub-groups, or wider than Blocked<1>'s 256). The executor needs sub-group size 32.
+template <Uplo UL, class Tier, class Ex, class MA> inline int sytrf(const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using Tr = resolve_tier_t<routine::sytrf<UL>, D, Tier>;
+    static_assert(sytrf_detail::sytrf_exec_ok<Ex>(), "sytrf: an executor of whole 32-wide sub-groups");
+    const int chk = sytrf_detail::sytrf_check<Tr>(ex, A);
+    if (chk != 0 || A.rows() == 0) return chk;
+    return sytrf_detail::sytrf_run<UL>(Tr{}, ex, A, ipiv, ws);
+}
+
 }  // namespace batchlas::device
