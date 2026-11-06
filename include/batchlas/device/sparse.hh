@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Device LA sparse operands, CSR row products (Sparse BLAS naming: us*) and the public in-kernel
-// sparse ops: spmm and iluk_apply (v22 design C, decision F-D5). Each op runs one batch item on
-// one executor for any extent; the host routes launch the same bodies (spmm_detail units, the
-// iluk_apply solve). Element expressions match the hand kernels they replaced (int64 offsets
-// where those used them), so the host kernels keep their SASS.
+// sparse ops: spmm, iluk_factorize and iluk_apply (v22 design C, decision F-D5). Each op runs one
+// batch item on one executor for any extent; the host routes launch the same bodies (spmm_detail
+// units, the iluk_detail row elimination, the iluk_apply solve). Element expressions match the
+// hand kernels they replaced (int64 offsets where those used them), so the host kernels keep
+// their SASS.
 //   spmm<TA, TB, Tier>(ex, A, B, C, alpha, beta[, ws])     C := alpha op(A) op(B) + beta C
+//   iluk_factorize<Tier>(ex, A, plan, M, opts[, ws])       M := ILU(k) of A in plan's pattern
 //   iluk_apply<Tier>(ex, M, rhs, out[, ws])                out := (L U)^{-1} rhs, one column
 // Tiers: tier::Blocked<NC> for spmm (NC = the column block of one item's accumulators) and
-// tier::Blocked<1> for iluk_apply (the level-scheduled solve); both hold every operand in global
-// memory, admit any n and need no workspace (*_buffer_size == {}).
+// tier::Blocked<1> for the two ILU ops (level-scheduled, a barrier per level); all admit any n,
+// read and write their operands where the caller put them (global, or local memory the caller
+// sized) and need no workspace (*_buffer_size == {}).
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 
 #include <sycl/sycl.hpp>
@@ -224,6 +228,9 @@ template <Transpose TA, Transpose TB> struct spmm {
 struct iluk_apply {
     static constexpr const char* name = "iluk_apply";
 };
+struct iluk_factorize {
+    static constexpr const char* name = "iluk_factorize";
+};
 }  // namespace routine
 
 // 64 bytes of accumulators per item: the column block shrinks as the scalar widens.
@@ -398,11 +405,13 @@ template <class Tier, class T> constexpr WorkspaceSize iluk_apply_buffer_size(in
 }
 
 namespace iluk_detail {
-// |x| for the pivot tests: modulus for complex; std::abs for a real T (sass_parity strict: core
-// modulus's sycl::fabs folds the comparisons differently, ILUKApplyKernel float/double moves).
+// |x| for the drop and pivot tests of the factorization and the solve: std::abs for a real T,
+// hypot of the parts read through the reference for complex (not std::abs: a libm cabs call the
+// native_cpu device link cannot resolve). sass_parity strict: core modulus's sycl::fabs folds
+// the real comparisons differently, and its by-value parts swap complex registers.
 template <class T> inline real_t<T> pivot_modulus(const T& x) {
-    if constexpr (Arith<T>::is_complex) return modulus(x);
-    else return std::abs(x);
+    if constexpr (Arith<T>::is_complex) return sycl::hypot(x.real(), x.imag());
+    else return static_cast<real_t<T>>(std::abs(x));
 }
 
 // U's diagonal as the solve uses it (host and device): the stored pivot when it beats the shift,
@@ -458,6 +467,200 @@ BATCHLAS_DLA_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, const R
         sync(ex, Mem::Global);
     }
     return 0;
+}
+
+// ---- iluk_factorize ------------------------------------------------------------------------
+// The numeric rules of an ILU(k) factorization: ILUKParams without levels_of_fill (the plan's).
+template <class T> struct IlukOptions {
+    T diagonal_shift;
+    real_t<T> drop_tolerance;
+    real_t<T> fill_factor;
+    real_t<T> diag_pivot_threshold;
+    bool modified_ilu;
+};
+template <class P> auto iluk_options(const P& p) {
+    using T = std::remove_cv_t<decltype(p.diagonal_shift)>;
+    return IlukOptions<T>{p.diagonal_shift, p.drop_tolerance, p.fill_factor, p.diag_pivot_threshold, p.modified_ilu};
+}
+
+// The batch-shared symbolic plan of ILU(k) on one sorted CSR pattern with every diagonal stored,
+// as the host's symbolic phase builds it (the iluk host route; src/ops/iluk/iluk_plan.hh). Plain
+// device-visible index arrays, captured by value. Slots 0 .. nnz are item-local positions in the
+// factor's pattern (ro, col, diag: L strict lower and U upper with diagonal, rows sorted).
+//   a_to_slot[p]  the slot A's entry p lands in (-1: none);  row_nnz[i]  A's row count (fill quota)
+//   row i runs steps [step_ptr[i], step_ptr[i + 1]): step e divides slot step_target[e] by the
+//   diagonal slot step_pivot[e], then updates slot upd_dst[u] -= l * slot upd_src[u] for u in
+//   [step_upd_ptr[e], step_upd_ptr[e + 1])
+//   level_ptr / level_rows  the elimination levels (also the L-solve levels); u_*  the U-solve levels
+struct IlukPlan {
+    int n, a_nnz, nnz, levels, u_levels;
+    const int* ro;
+    const int* col;
+    const int* diag;
+    const int* row_nnz;
+    const int* a_to_slot;
+    const int* step_ptr;
+    const int* step_target;
+    const int* step_pivot;
+    const int* step_upd_ptr;
+    const int* upd_src;
+    const int* upd_dst;
+    const int* level_ptr;
+    const int* level_rows;
+    const int* u_level_ptr;
+    const int* u_rows;
+    // The factor iluk_factorize left at lu (one item's nnz slots) as iluk_apply's operand.
+    template <class T> BATCHLAS_DLA_INLINE IlukFactor<T> factor(const T* lu, const T& diag_shift) const {
+        return {{lu, 0}, {col, 0}, levels, level_ptr, level_rows, ro, 0, u_levels, u_level_ptr, u_rows, diag, 0, diag_shift};
+    }
+};
+
+template <class T> struct tiers<routine::iluk_factorize, T> {
+    using type = tier::list<tier::Blocked<1>>;
+};
+template <class T> struct tier_info<routine::iluk_factorize, tier::Blocked<1>, T> {
+    static constexpr int wg_size = 128, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int) { return {}; }
+};
+template <class Tier, class T> constexpr WorkspaceSize iluk_factorize_buffer_size(int n) {
+    return tier_info<routine::iluk_factorize, resolve_tier_t<routine::iluk_factorize, T, Tier>, T>::buffer_size(n);
+}
+
+namespace iluk_detail {
+// A usable pivot (kernel-safe: an unusable one sets *status and returns 1, nothing throws): the
+// pivot when it clears max(|shift|, diag_pivot_threshold * max(scale, 1)) and is nonzero, else
+// pivot + shift, else the shift, else the threshold itself.
+template <class T>
+inline T stabilize_pivot(const T& pivot, real_t<T> scale, const T& diagonal_shift, real_t<T> diag_pivot_threshold, std::int32_t* status) {
+    using R = real_t<T>;
+    const auto shift_mag = pivot_modulus(diagonal_shift);
+    const auto pivot_mag = pivot_modulus(pivot);
+    const auto one = R(1);
+    const auto scaled = diag_pivot_threshold * (scale > one ? scale : one);
+    const auto threshold = shift_mag > scaled ? shift_mag : scaled;
+
+    if (pivot_mag >= threshold && pivot_mag > R(0)) return pivot;
+    if (shift_mag > R(0)) {
+        const T shifted = pivot + diagonal_shift;
+        if (pivot_modulus(shifted) >= threshold && pivot_modulus(shifted) > R(0)) return shifted;
+        if (shift_mag >= threshold) return diagonal_shift;
+    }
+    if (threshold > R(0)) return T(threshold);
+    if (status != nullptr) *status = 1;
+    return T(1);
+}
+
+// Row i of the factorization in place on the slots at(s) (lvalues; rows of earlier levels done):
+// IKJ elimination by the plan's steps, the relative drop (MILU folds dropped entries into the
+// diagonal), the fill quota (largest ceil(fill_factor * row_nnz[i]) - 1 off-diagonals survive;
+// on a magnitude tie the later slot drops) and the stabilised pivot. Native arithmetic, hand
+// loops over absolute slots (sass_parity strict: a v2-owned loop from 0 moved LLVM's runtime
+// unroll remainder, LDG 38->66, and arith::Native msub as a call costs complex<float> +4 REG).
+// Arguments in the order the body reads them: a launcher's capture layout follows it.
+template <class T, class W>
+BATCHLAS_DLA_INLINE void eliminate_row(const W& at, int i, const int* step_ptr, const int* step_target, const int* step_pivot,
+                                       const int* step_upd_ptr, const int* upd_dst, const int* upd_src, const int* sym_ro,
+                                       const int* diag_abs, real_t<T> drop_tolerance, bool modified_ilu, real_t<T> fill_factor,
+                                       const int* orig_nnz, const T& diagonal_shift, real_t<T> diag_pivot_threshold, std::int32_t* st) {
+    using R = real_t<T>;
+    for (int e = step_ptr[i]; e < step_ptr[i + 1]; ++e) {
+        const T lij = at(step_target[e]) / at(step_pivot[e]);
+        at(step_target[e]) = lij;
+        for (int u = step_upd_ptr[e]; u < step_upd_ptr[e + 1]; ++u) {
+            at(upd_dst[u]) -= lij * at(upd_src[u]);
+        }
+    }
+
+    const int rs = sym_ro[i];
+    const int re = sym_ro[i + 1];
+    const int dg = diag_abs[i];
+    R scale = R(0);
+    for (int p = rs; p < re; ++p) {
+        const auto m = modulus(at(p));
+        if (m > scale) scale = m;
+    }
+    const auto one = R(1);
+    const auto threshold = drop_tolerance * (scale > one ? scale : one);
+
+    int kept = 0;
+    for (int p = rs; p < re; ++p) {
+        if (p == dg) continue;
+        if (pivot_modulus(at(p)) <= threshold) {
+            if (modified_ilu) at(dg) += at(p);
+            at(p) = T(0);
+        } else {
+            ++kept;
+        }
+    }
+
+    // Dropping the smallest survivor until the quota holds is sorting and truncating without
+    // per-row scratch; at the default fill_factor the loop does not run.
+    const int quota_raw = static_cast<int>(sycl::ceil(fill_factor * static_cast<R>(orig_nnz[i]))) - 1;
+    const int quota = quota_raw > 0 ? quota_raw : 0;
+    while (kept > quota) {
+        int victim = -1;
+        R smallest = R(0);
+        for (int p = rs; p < re; ++p) {
+            if (p == dg) continue;
+            const auto m = pivot_modulus(at(p));
+            if (m == R(0)) continue;
+            if (victim < 0 || m < smallest || (m == smallest && p > victim)) {
+                victim = p;
+                smallest = m;
+            }
+        }
+        if (victim < 0) break;
+        if (modified_ilu) at(dg) += at(victim);
+        at(victim) = T(0);
+        --kept;
+    }
+
+    R final_scale = R(0);
+    for (int p = rs; p < re; ++p) {
+        const auto m = modulus(at(p));
+        if (m > final_scale) final_scale = m;
+    }
+    at(dg) = stabilize_pivot(at(dg), final_scale, diagonal_shift, diag_pivot_threshold, st);
+}
+}  // namespace iluk_detail
+
+// M := the ILU(k) factor of one batch item's A in plan's pattern, on executor ex (any n).
+//   A  the item's values in A's own CSR order (A(p), p < plan.a_nnz; the pattern is plan's).
+//   M  plan.nnz slots M(s), lvalues, distinct from A (global, or local memory of nnz elements).
+// Zeroes M, scatters A, then one level per barrier: the rows of a level split over the items.
+// Every slot of the pattern is written; a dropped entry is +0, so M is the host route's factor
+// expanded to the symbolic pattern (the host keeps the union of the items' survivors), bit for
+// bit: both run iluk_detail::eliminate_row. Returns the smallest 1-based row whose pivot was
+// unusable (no shift and a zero pivot: the host route throws convergence_error), else 0,
+// uniform across the executor; elimination continues past it with pivot 1. Collective.
+template <class Tier, class Ex, class AV, class MV, class T>
+BATCHLAS_DLA_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukPlan& plan, const MV& M, const IlukOptions<T>& opts,
+                                       const Workspace& = {}) {
+    static_assert(std::is_same_v<resolve_tier_t<routine::iluk_factorize, T, Tier>, tier::Blocked<1>>,
+                  "iluk_factorize: the tier is tier::Blocked<1>");
+    for_each_owned(ex, plan.nnz, [&](int s) { M(s) = T(0); });
+    sync(ex, Mem::Global);
+    for_each_owned(ex, plan.a_nnz, [&](int p) {
+        const int s = plan.a_to_slot[p];
+        if (s >= 0) M(s) = static_cast<T>(A(p));
+    });
+    sync(ex, Mem::Global);
+    int bad = std::numeric_limits<int>::max();
+    for (int lv = 0; lv < plan.levels; ++lv) {
+        const int begin = plan.level_ptr[lv];
+        for_each_owned(ex, plan.level_ptr[lv + 1] - begin, [&](int t) {
+            const int i = plan.level_rows[begin + t];
+            std::int32_t st = 0;
+            iluk_detail::eliminate_row(M, i, plan.step_ptr, plan.step_target, plan.step_pivot, plan.step_upd_ptr, plan.upd_dst,
+                                       plan.upd_src, plan.ro, plan.diag, opts.drop_tolerance, opts.modified_ilu, opts.fill_factor,
+                                       plan.row_nnz, opts.diagonal_shift, opts.diag_pivot_threshold, &st);
+            if (st != 0 && i + 1 < bad) bad = i + 1;
+        });
+        sync(ex, Mem::Global);
+    }
+    bad = ex.group_reduce(bad, sycl::minimum<int>());
+    return bad == std::numeric_limits<int>::max() ? 0 : bad;
 }
 
 }  // namespace batchlas::device
