@@ -32,6 +32,7 @@ set(TEST_TARGETS
     device_api_getrf_tests
     device_api_l3_tests
     device_api_potrf_tests
+    device_api_qr_tests
     device_api_sb2st_tests
     device_api_sparse_tests
     device_api_stebz-stein_tests
@@ -267,6 +268,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_api_getrf_tests
     device_api_l3_tests
     device_api_potrf_tests
+    device_api_qr_tests
     device_api_sparse_tests
     device_api_stebz-stein_tests
     device_api_svd_tests
