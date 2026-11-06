@@ -453,15 +453,16 @@ TYPED_TEST(DeviceApiSytrdBlockedTest, ImaginaryDiagonalIsDropped) {
     }
 }
 
-// The negative control: the residual against a moved A0 must fail.
+// The negative control: the residual against a moved A0 must fail. A shift of 1 in A(n-1, 0)
+// gives ~1e-2 relative (10-20x the float tol); 1e-2 gave ~1e-4, under it.
 TYPED_TEST(DeviceApiSytrdBlockedTest, ResidualSeesAWrongMatrix) {
     using T = TypeParam;
     const int n = 65, ld = n + 3, batch = 3;
     const auto a0 = input_lower<T>(n, ld, batch, false);
     const auto g = blocked_device<T>(this->dev, n, ld, batch, a0);
     auto a = herm_of<T>(a0, n, ld, 0);
-    a[(n - 1) + 0] += LD<T>(1e-2L);
-    a[std::size_t(n - 1) * n] += LD<T>(1e-2L);
+    a[(n - 1) + 0] += LD<T>(1);
+    a[std::size_t(n - 1) * n] += LD<T>(1);
     EXPECT_GT(residual(g, a, n, ld, 0).first, tol<T>(n));
 }
 
