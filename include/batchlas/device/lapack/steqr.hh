@@ -142,6 +142,84 @@ template <class R> inline R eig2x2_closest(const R& a, const R& b, const R& c) {
     return std::abs(l1 - c) < std::abs(l2 - c) ? l1 : l2;
 }
 
+// ---- the work-group solver's sweep (host steqr_wg and steqr<J, tier::Blocked<1>>) ---------------
+// Core lae2 / laev2 with the operands bound by reference: by value costs the wg Francis kernel 3
+// LDG and 4 REG on sm_89 (src/math-helpers.hh keeps the same binding).
+template <class R> BATCHLAS_DLA_INLINE auto lae2_cref(const R& a, const R& b, const R& c) { return lae2(a, b, c); }
+template <class R> BATCHLAS_DLA_INLINE auto laev2_cref(const R& a, const R& b, const R& c) { return laev2(a, b, c); }
+
+// {c, -s} of lartg(a, b): the work-group chase's rotation convention.
+template <class R> inline std::array<R, 2> wg_givens(const R& a, const R& b) {
+    const auto [c_l, s_l, r] = lartg(a, b);
+    (void)r;
+    return std::array<R, 2>{c_l, -s_l};
+}
+
+// An unreduced 2 x 2 block (n_local == 2) in closed form, e(0) := 0. With vectors, rot(g) takes
+// the rotation {c, -s} of laev2's eigenvector (applied as rotation 0, forward order).
+template <class R, class D, class E, class Rot> BATCHLAS_DLA_INLINE void wg_solve_2x2(const D& d_, const E& e_, bool vecs, Rot&& rot) {
+    if (vecs) {
+        auto [rt1, rt2, c, s] = laev2_cref(d_(0), e_(0), d_(1));
+        d_(0) = rt1;
+        d_(1) = rt2;
+        e_(0) = R(0);
+        rot(Givens<R>{c, -s});
+    } else {
+        auto [rt1, rt2] = lae2_cref(d_(0), e_(0), d_(1));
+        d_(0) = rt1;
+        d_(1) = rt2;
+        e_(0) = R(0);
+    }
+}
+
+// The sweep converges the end the shift is taken from (virtual index n_local - 1), so orient
+// that end at the SMALLER |d|, as dsteqr does: true = QR (forward), false = QL.
+template <class D, class N> BATCHLAS_DLA_INLINE bool wg_forward(const D& d_, N n_local) { return std::abs(d_(n_local - 1)) < std::abs(d_(0)); }
+
+// One implicit QR (QL when !QR) sweep of an unreduced block (d_, e_), n_local >= 3: scale into
+// [ssfmin, ssfmax], Wilkinson shift from the far end, chase the bulge with lartg rotations
+// (rot(j, g) receives rotation j), the split test, unscale. True when an e(j) became negligible.
+template <class R, class D, class E, class N, class Rot>
+BATCHLAS_DLA_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, Rot&& rot) {
+    const Thread th{};
+    const SplitTol<R> tol{eps2<R>(), safmin<R>()};
+    const R anorm = lanst_max(th, d_, e_);
+    if (anorm > ssfmax<R>()) {
+        const R s = ssfmax<R>() / anorm;
+        v2::scal(th, s, d_);
+        v2::scal(th, s, e_);
+    } else if (anorm < ssfmin<R>() && anorm != R(0)) {
+        const R s = ssfmin<R>() / anorm;
+        v2::scal(th, s, d_);
+        v2::scal(th, s, e_);
+    }
+
+    const auto shift = eig2x2_closest(virt_get<R, 1>(d_, QR, n_local, n_local - 2), virt_get<R, 2>(e_, QR, n_local, n_local - 2),
+                                      virt_get<R, 1>(d_, QR, n_local, n_local - 1));
+
+    auto [c0, s0] = wg_givens(virt_get<R, 1>(d_, QR, n_local, 0) - shift, virt_get<R, 2>(e_, QR, n_local, 0));
+    rot(std::size_t{0}, Givens<R>{c0, s0});
+    auto bulge = tridiag_rot(th, d_, e_, R(0), std::size_t{0}, std::size_t{1}, Givens<R>{c0, s0}, QR);
+    for (std::size_t j = 1; j < n_local - 1; ++j) {
+        auto [cj, sj] = wg_givens(virt_get<R, 2>(e_, QR, n_local, j - 1), bulge);
+        rot(j, Givens<R>{cj, sj});
+        bulge = tridiag_rot(th, d_, e_, bulge, j, j + 1, Givens<R>{cj, sj}, QR);
+    }
+
+    const bool deflatable = tridiag_split(th, d_, e_, tol);
+
+    if (anorm > ssfmax<R>()) {
+        const R s = anorm / ssfmax<R>();
+        v2::scal(th, s, d_);
+        v2::scal(th, s, e_);
+    } else if (anorm < ssfmin<R>() && anorm != R(0)) {
+        const R s = anorm / ssfmin<R>();
+        v2::scal(th, s, d_);
+        v2::scal(th, s, e_);
+    }
+    return deflatable;
+}
+
 // ---- the CTA solver --------------------------------------------------------------------------
 // Compile-time selectable shared-memory cache for Q, column-major:
 // Q_local[base_q + row + col*LDQ] = Q(row, col). LDQ == P suits row-indexed use;
@@ -1023,6 +1101,123 @@ template <bool Vecs, int N, class T> struct cta_plan {
     constexpr cta_plan() : q(plan.take<T>(ws::Space::Local, Vecs ? static_cast<std::size_t>(N) * N : 0)) {}
 };
 
+// ---- the Blocked tier: one problem per work-group, any n ------------------------------------------
+// One unreduced block [lo, hi) of a pass: its orientation (qr: 1 forward), run (still sweeping)
+// and rot (rotations produced in the current sweep, rotation j of it at rot[lo + j]).
+struct WgBlock {
+    std::int32_t lo, hi, qr, run, rot;
+};
+
+template <class Tier> inline constexpr bool is_blocked_v = false;
+template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
+
+// The Blocked tier's workspace, all global: one sweep's rotations (n - 1, with vectors) and the
+// block table (at most n / 2 + 1 blocks of length >= 2).
+template <bool Vecs, class T> struct wg_plan {
+    Plan plan{};
+    ws::Slot<Givens<T>> rot{};
+    ws::Slot<WgBlock> blk{};
+    constexpr explicit wg_plan(int n)
+        : rot(plan.take<Givens<T>>(ws::Space::Global, Vecs && n > 1 ? static_cast<std::size_t>(n - 1) : 0)),
+          blk(plan.take<WgBlock>(ws::Space::Global, static_cast<std::size_t>(n / 2 + 1))) {}
+};
+
+// The host steqr_wg algorithm inside one work-group: n - 1 passes (none after one that finds no
+// unreduced block: later passes would find none either); each pass lists the blocks split at
+// e(j) == 0 (the leader, serially), then every block sweeps (wg_sweep / wg_solve_2x2, one item
+// per block) until its first deflation or max_sweeps. With vectors the blocks sweep in lockstep:
+// after each sweep every item applies that sweep's rotations to its rows of z (core lasr, the
+// host rotation kernel's), so z sees each block's rotations in the host's order. Returns the
+// number of e(j) != 0 left (LAPACK's info), uniform.
+template <bool Vecs, int WG, class T, class D, class E, class Z>
+BATCHLAS_DLA_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, const E& e, const Z& z, int n, int max_sweeps, const Workspace& ws) {
+    const wg_plan<Vecs, T> plan(n);
+    Givens<T>* const rot = carve_global(ws, plan.rot);
+    WgBlock* const blk = carve_global(ws, plan.blk);
+    const int lid = ex.lid();
+    for (int pass = 0; pass < n - 1; ++pass) {
+        int nblk = 0;
+        if (ex.leader()) {
+            int ix = 0;
+            while (ix < n - 1) {
+                const int start = ix;
+                if (e(ix) != T(0)) {
+                    for (ix = ix + 1; ix < n - 1; ++ix)
+                        if (e(ix) == T(0)) break;
+                } else {
+                    ++ix;
+                    continue;
+                }
+                blk[nblk++] = WgBlock{start, ix + 1, 1, 1, 0};
+            }
+        }
+        nblk = ex.bcast(nblk, 0);
+        ex.barrier(Mem::Global);
+        if (nblk == 0) break;
+        for (int s = lid; s < nblk; s += WG) {
+            WgBlock& b = blk[s];
+            const int len = b.hi - b.lo;
+            if (len > 2) b.qr = wg_forward(d.tail(b.lo).head(len), len) ? 1 : 0;
+        }
+        if constexpr (!Vecs) {
+            const auto noop = [](auto&&...) BATCHLAS_DLA_BODY {};
+            for (int s = lid; s < nblk; s += WG) {
+                const WgBlock b = blk[s];
+                const int len = b.hi - b.lo;
+                const auto d_ = d.tail(b.lo).head(len);
+                const auto e_ = e.tail(b.lo).head(len - 1);
+                if (len == 2) {
+                    wg_solve_2x2<T>(d_, e_, false, noop);
+                    continue;
+                }
+                for (int k = 0; k < max_sweeps; ++k)
+                    if (wg_sweep<T>(d_, e_, len, b.qr != 0, noop)) break;
+            }
+            ex.barrier(Mem::Global);
+        } else {
+            for (int k = 0; k < max_sweeps; ++k) {
+                int live = 0;
+                for (int s = lid; s < nblk; s += WG) {
+                    WgBlock& b = blk[s];
+                    b.rot = 0;
+                    if (!b.run) continue;
+                    const int len = b.hi - b.lo;
+                    const auto d_ = d.tail(b.lo).head(len);
+                    const auto e_ = e.tail(b.lo).head(len - 1);
+                    Givens<T>* const r = rot + b.lo;
+                    if (len == 2) {
+                        wg_solve_2x2<T>(d_, e_, true, [&](const Givens<T>& g) BATCHLAS_DLA_BODY { r[0] = g; });
+                        b.run = 0;
+                    } else if (wg_sweep<T>(d_, e_, len, b.qr != 0, [&](std::size_t j, const Givens<T>& g) BATCHLAS_DLA_BODY { r[j] = g; })) {
+                        b.run = 0;
+                    }
+                    b.rot = 1;
+                    live += b.run;
+                }
+                ex.barrier(Mem::Global);
+                for (int s = 0; s < nblk; ++s) {
+                    const WgBlock b = blk[s];
+                    if (!b.rot) continue;
+                    const int ncols = b.hi - b.lo;
+                    const bool fwd = b.qr != 0;
+                    for (int row = lid; row < z.rows(); row += WG) {
+                        // Row `row` of z in the sweep's virtual column order (dlasr SIDE = R).
+                        const auto q_row = [&](int v) -> decltype(auto) { return z(row, b.lo + (fwd ? v : ncols - 1 - v)); };
+                        const auto rots = [&](int j) { return rot[b.lo + j]; };
+                        lasr<rot_conv::Transposed>(Thread{}, ncols, rots, q_row);
+                    }
+                }
+                live = ex.group_reduce(live);
+                ex.barrier(Mem::Global);
+                if (live == 0) break;
+            }
+        }
+    }
+    int left = 0;
+    for (int j = lid; j < n - 1; j += WG) left += e(j) != T(0) ? 1 : 0;
+    return ex.group_reduce(left);
+}
+
 }  // namespace steqr_detail
 
 namespace routine {
@@ -1032,7 +1227,8 @@ template <JobType J> struct steqr {
 };
 }  // namespace routine
 
-// The run-time knobs of the CTA solve (the host SteqrParams fields of the same meaning).
+// The run-time knobs of the solve (the host SteqrParams fields of the same meaning). The Blocked
+// tier reads max_sweeps only (steqr_wg's shift and update, as the host route).
 struct steqr_opts {
     int max_sweeps = 50;
     SteqrShiftStrategy shift = SteqrShiftStrategy::Lapack;
@@ -1049,41 +1245,63 @@ template <JobType J, int N, class Alg, class T> struct tier_info<routine::steqr<
         return steqr_detail::cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size();
     }
 };
+// tier::Blocked<1>: no panel (the chase is serial per block, z's rows parallel), any n.
+template <JobType J, int NB, class Alg, class T> struct tier_info<routine::steqr<J>, tier::Blocked<NB, Alg>, T> {
+    static_assert(NB == 1, "steqr: tier::Blocked<1> (the work-group solver has no panel width)");
+    static_assert(!Arith<T>::is_complex, "steqr: d and e are real");
+    static constexpr int wg_size = 256;  // one problem per work-group, the size sytrd's Blocked tier runs at
+    static constexpr int sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 1; }
+    static constexpr WorkspaceSize buffer_size(int n) { return steqr_detail::wg_plan<J == JobType::EigenVectors, T>(n).plan.size(); }
+};
 template <JobType J, class T> struct tiers<routine::steqr<J>, T> {
-    using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
+    using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<1>>;
 };
 
-// Bytes of ONE problem's workspace (local: Q with vectors; global: none).
+// Bytes of ONE problem's workspace (Cta: local Q with vectors; Blocked: global rotations and the
+// block table).
 template <JobType J, class Tier, class T> constexpr WorkspaceSize steqr_buffer_size(int n) {
     return tier_info<routine::steqr<J>, resolve_tier_t<routine::steqr<J>, T, Tier>, T>::buffer_size(n);
 }
 
-// xSTEQR on one problem per SgpPartition<N>: d (n = d.size()), e (n - 1) and, for EigenVectors,
-// z (n x n, the matrix the rotations accumulate into: the identity, or sytrd's Q) are
-// overwritten; eigenvalues UNSORTED in d (the host route sorts in a separate pass). ws.local:
-// steqr_buffer_size bytes. COLLECTIVE over the whole sub-group (every lane calls with its
-// partition's problem). Returns 0; 1 when a block did not converge within opts.max_sweeps
-// (uniform); -2 when n is outside [1, N].
+// xSTEQR on one problem: d (n = d.size()), e (n - 1) and, for EigenVectors, z (n x n, the matrix
+// the rotations accumulate into: the identity, or sytrd's Q) are overwritten; eigenvalues
+// UNSORTED in d (the host route sorts in a separate pass).
+//   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
+//                     (every lane calls with its partition's problem); ws.local. Returns 1 when a
+//                     block did not converge within opts.max_sweeps.
+//   tier::Blocked<1>  any n, one problem per WorkGroup<256>, COLLECTIVE; the host steqr_wg
+//                     algorithm (same sweep body, same pass order); ws.global. Returns the number
+//                     of e(j) != 0 left (LAPACK's info). z may be complex (real rotations).
+// Returns 0 on success (uniform); -2 when n is outside [1, N].
 template <JobType J, class Tier, class Ex, class D, class E, class Z>
 BATCHLAS_DLA_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
                               const steqr_opts& opts = {}) {
     using T = std::remove_cv_t<elem_t<D>>;
     using R = routine::steqr<J>;
     using Tr = resolve_tier_t<R, T, Tier>;
-    static_assert(HasTier<R, Tr, T>, "steqr: the routine has no such tier (tier::Cta<N> only)");
-    constexpr int N = Tr::n_max;
-    constexpr std::size_t P = N;
+    static_assert(HasTier<R, Tr, T>, "steqr: the routine has no such tier (tier::Cta<N>, tier::Blocked<1>)");
     constexpr bool kVecs = J == JobType::EigenVectors;
-    static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
-                  "steqr: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
-    const int n = d.size();
-    if (n < 1 || n > N) return -2;
-    using LP = typename local_mptr<T>::pointer;  // decorated: a generic pointer costs generic LD/ST
-    const steqr_detail::cta_plan<kVecs, N, T> plan{};
-    steqr_detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
-    const bool failed = steqr_detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
-                                                                 opts.shift, opts.update, true);
-    return failed ? 1 : 0;
+    if constexpr (steqr_detail::is_blocked_v<Tr>) {
+        constexpr int WG = tier_info<R, Tr, T>::wg_size;
+        static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "steqr: tier::Blocked<1> runs on device::WorkGroup<256> (one problem per work-group)");
+        const int n = d.size();
+        if (n < 1) return -2;
+        return steqr_detail::steqr_wg_run<kVecs, WG, T>(ex, d, e, z, n, opts.max_sweeps, ws);
+    } else {
+        constexpr int N = Tr::n_max;
+        constexpr std::size_t P = N;
+        static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
+                      "steqr: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+        const int n = d.size();
+        if (n < 1 || n > N) return -2;
+        using LP = typename local_mptr<T>::pointer;  // decorated: a generic pointer costs generic LD/ST
+        const steqr_detail::cta_plan<kVecs, N, T> plan{};
+        steqr_detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
+        const bool failed = steqr_detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
+                                                                     opts.shift, opts.update, true);
+        return failed ? 1 : 0;
+    }
 }
 
 }  // namespace batchlas::device

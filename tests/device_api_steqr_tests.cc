@@ -13,7 +13,8 @@
 //     and one at 16x the dsteqr negligibility bound, one exact zero);
 //   - Q with ld = n + 3, NaN in the pad rows (untouched) and a non-identity start matrix (the
 //     rotations accumulate into it: back_transform = true on the host);
-//   - with_tier picks Cta<4|8|16|32> and throws "steqr: ..." past 32; buffer_size equals N^2 T
+//   - with_tier picks Cta<4|8|16|32>, then Blocked<1> past 32 (the Blocked section below), and
+//     throws "steqr: ..." without sub-group size 32; buffer_size equals N^2 T
 //     with vectors and 0 without; n > N returns -2 and writes nothing.
 // Deliberate break (a negative control that runs every time): the device call with the other
 // shift strategy must differ from the host route, so the comparison can see a wrong knob.
@@ -59,14 +60,14 @@ constexpr Case kCases[] = {{SteqrShiftStrategy::Lapack, SteqrUpdateScheme::EXP, 
                            {SteqrShiftStrategy::Lapack, SteqrUpdateScheme::EXP, 1}};
 
 // Representative r of item b (b % kPeriod): 0 uniform, 1 graded, 2 the split straddle.
-template <class T> void fill(int n, std::vector<T>& d, std::vector<T>& e, std::vector<T>& q, int ld) {
+template <class T> void fill(int n, std::vector<T>& d, std::vector<T>& e, std::vector<T>& q, int ld, int batch = kBatch) {
     const int nm1 = n > 1 ? n - 1 : 0;
-    d.assign(std::size_t(n) * kBatch, T(0));
-    e.assign(std::size_t(nm1) * kBatch + 1, T(0));
-    q.assign(std::size_t(ld) * n * kBatch, nan_v<T>());
+    d.assign(std::size_t(n) * batch, T(0));
+    e.assign(std::size_t(nm1) * batch + 1, T(0));
+    q.assign(std::size_t(ld) * n * batch, nan_v<T>());
     // dsteqr's EPS2 (eps = lamch('E') = epsilon / 2), the negligibility bound's scale.
     const T eps = std::numeric_limits<T>::epsilon() / 2;
-    for (int b = 0; b < kBatch; ++b) {
+    for (int b = 0; b < batch; ++b) {
         const int r = b % kPeriod;
         const std::uint64_t s = std::uint64_t(r) * 1000003u;
         T* db = d.data() + std::size_t(b) * n;
@@ -161,8 +162,11 @@ template <class T> class DeviceApiSteqrTest : public DeviceCoreTest<T> {
         T* e = dev.up(e0);
         T* q = dev.up(q0);
         int* info = dev.alloc<int>(kBatch, 7);
-        dv::with_tier<Rt<J>, T>(dev.q().get_device(), n,
-                                [&]<class Tier>(Tier) { launch_device<J, Tier, T>(dev, n, ld, d, e, q, info, o); });
+        // Every listed tier is instantiated; n <= 32 must reach a Cta one (Blocked is tested below).
+        dv::with_tier<Rt<J>, T>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            if constexpr (Tier::n_max > 0) launch_device<J, Tier, T>(dev, n, ld, d, e, q, info, o);
+            else ADD_FAILURE() << "with_tier picked tier::Blocked for n = " << n;
+        });
         return {dev.down(d, std::size_t(n) * kBatch), dev.down(q, q0.size()), dev.down(info, kBatch)};
     }
 };
@@ -232,19 +236,24 @@ TYPED_TEST(DeviceApiSteqrTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
     EXPECT_EQ(bitdiff(dev.down(q, q0.size()), q0), 0);
 }
 
-TEST(DeviceApiSteqrTier, WithTierPicksTheSmallestCtaAndThrowsPast32) {
+TEST(DeviceApiSteqrTier, WithTierPicksTheSmallestCtaThenBlocked) {
     const dv::DeviceLimits lim{48 * 1024, {32}, 1024, true};
-    for (int n = 1; n <= 32; ++n) {
+    for (int n : {1, 4, 5, 8, 9, 16, 17, 31, 32, 33, 1000}) {
         int got = 0;
         dv::with_tier<Rt<JobType::EigenVectors>, double>(lim, n, [&]<class Tier>(Tier) { got = Tier::n_max; });
-        EXPECT_EQ(got, n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : 32) << "n=" << n;
+        EXPECT_EQ(got, n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : n <= 32 ? 32 : -1) << "n=" << n;  // -1: Blocked<1>
     }
+    // A device without 32-wide sub-groups has no tier at all.
+    const dv::DeviceLimits sg16{48 * 1024, {16}, 1024, true};
     try {
-        dv::with_tier<Rt<JobType::NoEigenVectors>, float>(lim, 33, [&]<class Tier>(Tier) {});
-        ADD_FAILURE() << "with_tier admitted n = 33";
+        dv::with_tier<Rt<JobType::NoEigenVectors>, float>(sg16, 33, [&]<class Tier>(Tier) {});
+        ADD_FAILURE() << "with_tier admitted n = 33 without sub-group size 32";
     } catch (const batchlas::invalid_argument& e) {
         EXPECT_NE(std::string(e.what()).find("steqr: no device tier admits n=33"), std::string::npos) << e.what();
     }
+    // Work-groups capped below 256: the Blocked tier is filtered out.
+    const dv::DeviceLimits wg128{48 * 1024, {32}, 128, true};
+    EXPECT_THROW((dv::with_tier<Rt<JobType::EigenVectors>, float>(wg128, 33, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
     // No fp64: a double problem has no tier.
     const dv::DeviceLimits no64{48 * 1024, {32}, 1024, false};
     EXPECT_THROW((dv::with_tier<Rt<JobType::EigenVectors>, double>(no64, 4, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
@@ -257,6 +266,162 @@ TEST(DeviceApiSteqrTier, BufferSizeIsQOnlyWithVectors) {
     EXPECT_EQ((dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<8>, float>(8).global_bytes), 0u);
     static_assert(dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::upto<9>, float>(9) ==
                   dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<16>, float>(9));
+}
+
+// ---- tier::Blocked<1>: the host steqr_wg algorithm inside one work-group, any n -----------------
+// Against the host steqr route, which takes steqr_wg for n > 32 (steqr.cc should_use_cta: no
+// choice.hh, nothing to pin), the multi-kernel pipeline over the same sweep body
+// (steqr_detail::wg_sweep / wg_solve_2x2) and the same rotation kernel (core lasr):
+//   - eigenvalues and info bit-identical (memcmp), both jobz, n = 33 (just past the Cta
+//     ceiling), 64, 97, the full and a one-sweep budget (info > 0 must occur: straddled);
+//   - Q equal value for value (an identity rotation the host applies to a finished block can
+//     only flip a zero's sign), ld = n + 3 with NaN pads untouched, a non-identity start Q;
+//   - period-3 items (uniform, graded, split straddle), each bit-identical to its representative;
+//   - buffer_size: global (n - 1) rotations with vectors plus the n / 2 + 1 block table, no local.
+// Deliberate break (runs every time): a one-ulp change of e(0) on the device side must be seen.
+constexpr int kBlockedBatch = 48;
+
+template <JobType J, class T> class ApiSteqrBlockedKernel;
+
+template <JobType J, class T>
+void launch_blocked(Dev& dev, int n, int ld, int batch, T* d, T* e, T* q, int* info, dv::steqr_opts opts) {
+    using Tier = dv::tier::Blocked<1>;
+    constexpr int WG = dv::tier_info<Rt<J>, Tier, T>::wg_size;
+    const dv::WorkspaceSize sz = dv::steqr_buffer_size<J, Tier, T>(n);
+    EXPECT_EQ(sz.local_bytes, 0u);
+    std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
+    dev.q().submit([&](sycl::handler& h) {
+           h.parallel_for<ApiSteqrBlockedKernel<J, T>>(
+               sycl::nd_range<1>(std::size_t(batch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                   const dv::WorkGroup<WG> ex{it};
+                   const int b = static_cast<int>(it.get_group_linear_id());
+                   const dv::Workspace ws{{}, dv::global_slice(g, sz, b)};
+                   const int nm1 = n > 1 ? n - 1 : 0;
+                   const int r = dv::steqr<J, Tier>(ex, dv::vec(d + std::size_t(b) * n, n), dv::vec(e + std::size_t(b) * nm1, nm1),
+                                                    dv::mat(q + std::size_t(b) * ld * n, n, n, ld), ws, opts);
+                   if (ex.leader()) info[b] = r;
+               });
+       }).wait_and_throw();
+}
+
+// x == y value for value: +0 equals -0, NaN equals a NaN of the same bits.
+template <class T> int valdiff(const std::vector<T>& x, const std::vector<T>& y) {
+    int k = 0;
+    for (std::size_t i = 0; i < x.size() && i < y.size(); ++i) k += !(x[i] == y[i]) && !same_bits(x[i], y[i]);
+    return k + static_cast<int>(x.size() != y.size());
+}
+
+template <class T> class DeviceApiSteqrBlockedTest : public DeviceCoreTest<T> {
+  protected:
+    void SetUp() override {
+        DeviceCoreTest<T>::SetUp();
+        if (this->IsSkipped()) return;
+        // kB's host route is built for the GPU targets; a CPU queue would not find its kernels.
+        if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "the host steqr route under test runs on GPUs";
+    }
+
+  public:
+    using Result = typename DeviceApiSteqrTest<T>::Result;
+
+    Result host(int n, int ld, JobType jobz, int max_sweeps, const std::vector<T>& d0, const std::vector<T>& e0, const std::vector<T>& q0) {
+        Dev& dev = this->dev;
+        const int nm1 = n > 1 ? n - 1 : 0;
+        T* d = dev.up(d0);
+        T* e = dev.up(e0);
+        T* q = dev.up(q0);
+        T* w = dev.alloc<T>(std::size_t(n) * kBlockedBatch, nan_v<T>());
+        int* info = dev.alloc<int>(kBlockedBatch, 7);
+        VectorView<T> dv_(d, n, kBlockedBatch, 1, n), ev(e, nm1, kBlockedBatch, 1, nm1), wv(w, n, kBlockedBatch, 1, n);
+        MatrixView<T, MatrixFormat::Dense> Qv(q, n, n, ld, ld * n, kBlockedBatch);
+        SteqrParams<T> p;
+        p.sort = false;
+        p.back_transform = true;
+        p.max_sweeps = static_cast<std::size_t>(max_sweeps);
+        const std::size_t bytes = steqr_buffer_size<T>(*dev.ctx, dv_, ev, wv, jobz, p);
+        std::byte* ws = dev.alloc<std::byte>(bytes, std::byte{0});
+        (void)steqr<kB, T>(*dev.ctx, dv_, ev, wv, Span<std::byte>(ws, bytes), jobz, p, Qv, Span<int32_t>(info, kBlockedBatch));
+        dev.ctx->wait();
+        return {dev.down(w, std::size_t(n) * kBlockedBatch), dev.down(q, q0.size()), dev.down(info, kBlockedBatch)};
+    }
+
+    template <JobType J>
+    Result device(int n, int ld, int max_sweeps, const std::vector<T>& d0, const std::vector<T>& e0, const std::vector<T>& q0) {
+        Dev& dev = this->dev;
+        T* d = dev.up(d0);
+        T* e = dev.up(e0);
+        T* q = dev.up(q0);
+        int* info = dev.alloc<int>(kBlockedBatch, 7);
+        launch_blocked<J, T>(dev, n, ld, kBlockedBatch, d, e, q, info, dv::steqr_opts{max_sweeps});
+        return {dev.down(d, std::size_t(n) * kBlockedBatch), dev.down(q, q0.size()), dev.down(info, kBlockedBatch)};
+    }
+
+    std::vector<int> sizes() const { return {33, 64, 97}; }
+};
+TYPED_TEST_SUITE(DeviceApiSteqrBlockedTest, RealTypes);
+
+template <class T> int period_diff(const std::vector<T>& g, std::size_t per, int batch) {
+    int k = 0;
+    for (std::size_t b = kPeriod; b < std::size_t(batch); ++b)
+        for (std::size_t i = 0; i < per; ++i) k += !same_bits(g[b * per + i], g[(b % kPeriod) * per + i]);
+    return k;
+}
+
+template <class T, JobType J, class TF> void blocked_parity(TF& t) {
+    for (int sweeps : {50, 1}) {
+        int failures = 0;
+        for (int n : t.sizes()) {
+            SCOPED_TRACE("n=" + std::to_string(n) + " sweeps=" + std::to_string(sweeps));
+            const int ld = n + 3;
+            std::vector<T> d0, e0, q0;
+            fill<T>(n, d0, e0, q0, ld, kBlockedBatch);
+            const auto h = t.host(n, ld, J, sweeps, d0, e0, q0);
+            const auto g = t.template device<J>(n, ld, sweeps, d0, e0, q0);
+            EXPECT_EQ(bitdiff(g.w, h.w), 0);
+            EXPECT_EQ(bitdiff(g.info, h.info), 0);
+            EXPECT_EQ(period_diff(g.w, std::size_t(n), kBlockedBatch), 0);
+            if constexpr (J == JobType::EigenVectors) {
+                EXPECT_EQ(valdiff(g.q, h.q), 0);  // pads included
+                EXPECT_EQ(period_diff(g.q, std::size_t(ld) * n, kBlockedBatch), 0);
+            } else {
+                EXPECT_EQ(bitdiff(g.q, q0), 0);  // z never touched
+            }
+            for (int x : h.info) failures += x > 0;
+        }
+        if (sweeps == 1) EXPECT_GT(failures, 0);
+        else EXPECT_EQ(failures, 0);
+    }
+}
+
+TYPED_TEST(DeviceApiSteqrBlockedTest, BlockedMatchesHostWgRouteVectors) { blocked_parity<TypeParam, JobType::EigenVectors>(*this); }
+TYPED_TEST(DeviceApiSteqrBlockedTest, BlockedMatchesHostWgRouteValues) { blocked_parity<TypeParam, JobType::NoEigenVectors>(*this); }
+
+TYPED_TEST(DeviceApiSteqrBlockedTest, PerturbedOffDiagonalIsSeen) {
+    using T = TypeParam;
+    const int n = 33, ld = n + 3;
+    std::vector<T> d0, e0, q0;
+    fill<T>(n, d0, e0, q0, ld, kBlockedBatch);
+    const auto h = this->host(n, ld, JobType::EigenVectors, 50, d0, e0, q0);
+    std::vector<T> e1 = e0;
+    for (int b = 0; b < kBlockedBatch; ++b) {
+        T& x = e1[std::size_t(b) * (n - 1)];
+        x = std::nextafter(x, std::numeric_limits<T>::infinity());
+    }
+    const auto g = this->template device<JobType::EigenVectors>(n, ld, 50, d0, e1, q0);
+    EXPECT_GT(bitdiff(g.w, h.w), 0);
+}
+
+TEST(DeviceApiSteqrTier, BlockedBufferSizeIsRotationsAndBlockTable) {
+    const auto round16 = [](std::size_t b) { return (b + 15) / 16 * 16; };
+    for (int n : {1, 2, 33, 100}) {
+        const std::size_t table = std::size_t(n / 2 + 1) * 5 * sizeof(std::int32_t);
+        const auto v = dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Blocked<1>, double>(n);
+        EXPECT_EQ(v.global_bytes, round16(round16(std::size_t(n - 1) * 2 * sizeof(double)) + table)) << "n=" << n;
+        EXPECT_EQ(v.local_bytes, 0u);
+        const auto nv = dv::steqr_buffer_size<JobType::NoEigenVectors, dv::tier::Blocked<1>, float>(n);
+        EXPECT_EQ(nv.global_bytes, round16(table)) << "n=" << n;
+    }
+    static_assert(dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::upto<4096>, float>(4096) ==
+                  dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Blocked<1>, float>(4096));
 }
 
 }  // namespace
