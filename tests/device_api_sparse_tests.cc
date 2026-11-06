@@ -11,8 +11,14 @@
 // block; complex data with Im != 0 and ConjTrans on both operands; beta == 0 over NaN C and
 // alpha == 0 over NaN A; ILU n = 150 > the work-group (one level split over items, several levels);
 // WG 1024 is the launch at the ceiling; with_tier, upto and buffer_size per routine.
+// iluk_factorize runs the host route's row elimination (iluk_detail::eliminate_row): its factor in
+// the plan's symbolic pattern is BIT-IDENTICAL to the host route's (device path, batch 1024) slot
+// by slot, +0 where every item dropped; drop tolerance and fill quota straddled (both kept and
+// dropped fill), padded item strides with poison, info = the first unusable pivot row (the host
+// throws), uniform over the work-group; vs the host CPU path (another implementation) by
+// tolerance; factorize + apply in one user kernel vs a long-double solve with the host factor.
 // Deliberate breaks, run in-process so the comparators are seen to fail: spmm with alpha negated,
-// iluk_apply with the L solve skipped (l_levels = 0).
+// iluk_apply with the L solve skipped (l_levels = 0), iluk_factorize with no levels eliminated.
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/functions/iluk.hh>
@@ -21,11 +27,14 @@
 #include <batchlas/device/sparse.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
+#include <src/ops/iluk/iluk_plan.hh>
 #include <src/ops/spmm/choice.hh>
 #include <src/select/select.hh>
 #include <tests/test_support/coverage_rows.hh>
 
+#include <array>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <vector>
@@ -445,6 +454,326 @@ TYPED_TEST(DeviceApiSparse, IlukApplyBreakIsSeenByBothComparators) {
     EXPECT_FALSE(batchlas::verify::within<T>(Check::solve, Iluk<T>::n, iluk_worst(d, d.out_dev))) << "skipping the L solve passed the reference";
 }
 
+// ---- iluk_factorize -------------------------------------------------------------------------
+// A batch of n x n diagonally dominant CSR matrices on one sorted pattern with ILU(1) fill: rows
+// < 60 couple only upward (one elimination level of 60 rows, split over a 32-item work-group);
+// row i >= 60 also couples to i - 7, whose U entries fill (i, i - 4) and (i, i + 4) (about 23
+// levels). Item strides padded by `pad`: values poison, indices and offsets in range (0).
+template <class T> struct IlukA {
+    static constexpr int n = 150;
+    int nnz = 0, ms = 0, os = 0;
+    UnifiedVector<T> val;
+    UnifiedVector<int> ro, ci;
+    MatrixView<T, MatrixFormat::CSR> view(int batch) const {
+        return MatrixView<T, MatrixFormat::CSR>(val.data(), ro.data(), ci.data(), n, n, NonZeros{nnz}, ms, os, batch);
+    }
+};
+
+// zero_pivot_row >= 0: that row's diagonal is exactly 0 in the items b % kPeriod == 1.
+template <class T> IlukA<T> make_iluk_a(int pad, int zero_pivot_row = -1) {
+    constexpr int n = IlukA<T>::n;
+    std::vector<int> ro1{0}, ci1;
+    for (int i = 0; i < n; ++i) {
+        for (int j : {i - 7, i, i + 3, i + 11})
+            if (j >= 0 && j < n && (j != i - 7 || i >= 60)) ci1.push_back(j);
+        ro1.push_back(static_cast<int>(ci1.size()));
+    }
+    IlukA<T> d;
+    d.nnz = static_cast<int>(ci1.size());
+    d.ms = d.nnz + pad;
+    d.os = n + 1 + pad;
+    d.val = UnifiedVector<T>(std::size_t(d.ms) * kBatch);
+    d.ci = UnifiedVector<int>(std::size_t(d.ms) * kBatch);
+    d.ro = UnifiedVector<int>(std::size_t(d.os) * kBatch);
+    for (int b = 0; b < kBatch; ++b) {
+        const int q = b % kPeriod;
+        for (int e = 0; e < d.os; ++e) d.ro[std::size_t(b) * d.os + e] = e <= n ? ro1[e] : 0;
+        for (int p = d.nnz; p < d.ms; ++p) {
+            d.val[std::size_t(b) * d.ms + p] = poison_v<T>();
+            d.ci[std::size_t(b) * d.ms + p] = 0;
+        }
+        for (int i = 0; i < n; ++i)
+            for (int p = ro1[i]; p < ro1[i + 1]; ++p) {
+                const std::size_t at = std::size_t(b) * d.ms + p;
+                const T v = val<T>(700001u * (q + 1) + 13u * p);
+                d.ci[at] = ci1[p];
+                d.val[at] = ci1[p] != i ? v : (i == zero_pivot_row && q == 1 ? T(0) : v + T(real_of<T>(6)));
+            }
+    }
+    return d;
+}
+
+// BATCHLAS_ILUK_DEVICE pins the host route's numeric path: '0' the CPU path, '1' the device kernels.
+char iluk_pin() {
+    const char* v = std::getenv("BATCHLAS_ILUK_DEVICE");
+    return v != nullptr ? v[0] : '\0';
+}
+
+// device iluk_factorize of every item in a user-style kernel: M at item stride mst, the value
+// every work-item returned at info[b * WG + lid].
+template <int WG, class T>
+void device_iluk_factorize(sycl::queue& q, const IlukA<T>& d, const dv::IlukPlan& plan, const dv::IlukOptions<T>& opts, T* mv, int mst,
+                           int* info) {
+    const T* av = d.val.data();
+    const int ms = d.ms;
+    launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
+        const int b = static_cast<int>(it.get_group(0));
+        const dv::WorkGroup<WG> ex{it};
+        const int r = dv::iluk_factorize<dv::tier::Blocked<1>>(ex, dv::BasedVec<const T>{av, b * ms}, plan, dv::BasedVec<T>{mv, b * mst}, opts);
+        info[std::size_t(b) * WG + ex.lid()] = r;
+    });
+}
+
+// The device factor (plan's slots, item stride mst) against a host factor M (its own pattern)
+// over items [0, batch): `want` is M's value where M stores the slot, else +0.
+struct FactorCmp {
+    int bits = 0, unmatched = 0, pads = 0;
+    double worst = 0;  // max over items of max |dev - want| / max |want|
+};
+template <class T> FactorCmp compare_factor(const dv::IlukPlan& plan, const T* dev, int mst, const ILUKPreconditioner<T>& M, int batch) {
+    FactorCmp r;
+    const auto lu = M.lu.view();
+    const T* hv = lu.data_ptr();
+    const auto hro = lu.row_offsets();
+    const auto hci = lu.col_indices();
+    for (int b = 0; b < batch; ++b) {
+        const std::size_t vb = std::size_t(b) * lu.matrix_stride(), rb = std::size_t(b) * lu.offset_stride(), db = std::size_t(b) * mst;
+        long double num = 0, den = 0;
+        for (int i = 0; i < plan.n; ++i) {
+            int hp = hro[rb + i];
+            const int he = hro[rb + i + 1];
+            int matched = 0;
+            for (int s = plan.ro[i]; s < plan.ro[i + 1]; ++s) {
+                while (hp < he && hci[vb + hp] < plan.col[s]) ++hp;
+                const bool stored = hp < he && hci[vb + hp] == plan.col[s];
+                const T want = stored ? hv[vb + hp] : T(0);
+                matched += stored;
+                r.bits += !same_bits(dev[db + s], want);
+                num = std::max<long double>(num, std::abs(wide(dev[db + s]) - wide(want)));
+                den = std::max<long double>(den, std::abs(wide(want)));
+            }
+            r.unmatched += (he - hro[rb + i]) - matched;
+        }
+        for (int e = plan.nnz; e < mst; ++e) r.pads += !same_bits(dev[db + e], poison_v<T>());
+        r.worst = std::max(r.worst, std::isnan(num) ? std::numeric_limits<double>::infinity() : static_cast<double>(num / den));
+    }
+    return r;
+}
+
+// Over the representatives: {fill slots kept, fill slots dropped} (fill = no entry of A lands there).
+template <class T> std::array<int, 2> fill_split(const dv::IlukPlan& plan, const T* dev, int mst) {
+    std::vector<char> from_a(std::size_t(plan.nnz), 0);
+    for (int p = 0; p < plan.a_nnz; ++p)
+        if (plan.a_to_slot[p] >= 0) from_a[std::size_t(plan.a_to_slot[p])] = 1;
+    std::array<int, 2> out{0, 0};
+    for (int q = 0; q < kPeriod; ++q)
+        for (int s = 0; s < plan.nnz; ++s)
+            if (!from_a[std::size_t(s)]) ++out[same_bits(dev[std::size_t(q) * mst + s], T(0)) ? 1 : 0];
+    return out;
+}
+
+template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, const ILUKParams<T>& params) {
+    const IlukA<T> d = make_iluk_a<T>(/*pad=*/5);
+    const auto A = d.view(kBatch);
+    const auto host = iluk_factorize(*dev.ctx, A, params);
+    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const dv::IlukPlan plan = storage.plan();
+    ASSERT_GT(plan.nnz, d.nnz) << what << ": the symbolic pattern has no fill";
+    ASSERT_GT(plan.levels, 2) << what;
+    const int mst = plan.nnz + 3;
+    UnifiedVector<T> m(std::size_t(mst) * kBatch);
+    UnifiedVector<int> info(std::size_t(kBatch) * 1024);
+    const auto opts = dv::iluk_options(params);
+    auto check = [&](int wg, const char* how) {
+        const FactorCmp c = compare_factor(plan, m.data(), mst, host, kBatch);
+        EXPECT_EQ(c.bits, 0) << what << ", " << how << ": device iluk_factorize != host route";
+        EXPECT_EQ(c.unmatched, 0) << what << ", " << how << ": a host entry outside the symbolic pattern";
+        EXPECT_EQ(c.pads, 0) << what << ", " << how << ": wrote past plan.nnz";
+        int nonzero_info = 0;
+        for (std::size_t e = 0; e < std::size_t(kBatch) * wg; ++e) nonzero_info += info[e] != 0;
+        EXPECT_EQ(nonzero_info, 0) << what << ", " << how << ": info on a usable factorization";
+        const auto split = fill_split(plan, m.data(), mst);
+        EXPECT_GT(split[0], 0) << what << ": no fill survived (threshold not straddled)";
+        EXPECT_GT(split[1], 0) << what << ": no fill dropped (threshold not straddled)";
+    };
+    auto reset = [&] {
+        for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<T>();
+        for (std::size_t e = 0; e < info.size(); ++e) info[e] = -7;
+    };
+    reset();
+    device_iluk_factorize<128>(dev.q(), d, plan, opts, m.data(), mst, info.data());
+    check(128, "WG 128");
+    reset();
+    device_iluk_factorize<32>(dev.q(), d, plan, opts, m.data(), mst, info.data());
+    check(32, "WG 32 (a level wider than the work-group)");
+    if (!fits_wg(dev.q(), 1024)) return;
+    reset();
+    device_iluk_factorize<1024>(dev.q(), d, plan, opts, m.data(), mst, info.data());
+    check(1024, "WG 1024 (the ceiling)");
+}
+
+TYPED_TEST(DeviceApiSparse, IlukFactorizeIsTheHostFactorBitForBit) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    if (iluk_pin() == '0') GTEST_SKIP() << "BATCHLAS_ILUK_DEVICE=0 pins the host route to its CPU path";
+    ILUKParams<T> drop;
+    drop.levels_of_fill = 1;
+    drop.drop_tolerance = R(0.005);  // ~0.03 against the row scale ~6: fill and l = a / u are ~0.04
+    expect_iluk_factorize_thin(this->dev, "drop + MILU", drop);
+    ILUKParams<T> quota = drop;
+    quota.drop_tolerance = R(0);
+    quota.fill_factor = R(1);  // A's off-diagonal count survives: every filled row drops its two smallest
+    quota.modified_ilu = false;
+    expect_iluk_factorize_thin(this->dev, "fill quota", quota);
+}
+
+// x = U^{-1} L^{-1} rhs in long double from item b's host factor (the stored, stabilised diagonal).
+template <class T> std::vector<LD<T>> ilu_solve_ref(const ILUKPreconditioner<T>& M, int b, const T* rhs) {
+    const auto lu = M.lu.view();
+    const T* v = lu.data_ptr();
+    const auto ro = lu.row_offsets();
+    const auto ci = lu.col_indices();
+    const std::size_t vb = std::size_t(b) * lu.matrix_stride(), rb = std::size_t(b) * lu.offset_stride();
+    const int n = M.n;
+    std::vector<LD<T>> x(std::size_t(n));
+    for (int i = 0; i < n; ++i) {
+        LD<T> s = wide(rhs[i]);
+        for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p)
+            if (ci[vb + p] < i) s -= wide(v[vb + p]) * x[std::size_t(ci[vb + p])];
+        x[std::size_t(i)] = s;
+    }
+    for (int i = n - 1; i >= 0; --i) {
+        LD<T> s = x[std::size_t(i)], dg = LD<T>(1);
+        for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p) {
+            if (ci[vb + p] > i) s -= wide(v[vb + p]) * x[std::size_t(ci[vb + p])];
+            if (ci[vb + p] == i) dg = wide(v[vb + p]);
+        }
+        x[std::size_t(i)] = s / dg;
+    }
+    return x;
+}
+
+TYPED_TEST(DeviceApiSparse, IlukFactorizeMatchesTheCpuPathAndSolvesInOneKernel) {
+    using T = TypeParam;
+    constexpr int n = IlukA<T>::n, WG = 128;
+    ILUKParams<T> params;
+    params.levels_of_fill = 1;
+    const IlukA<T> d = make_iluk_a<T>(/*pad=*/0);
+    const auto A = d.view(kBatch);
+    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const dv::IlukPlan plan = storage.plan();
+    const auto opts = dv::iluk_options(params);
+    const int mst = plan.nnz + 3;
+    UnifiedVector<T> m(std::size_t(mst) * kBatch);
+    UnifiedVector<int> info(std::size_t(kBatch) * WG);
+    if (iluk_pin() != '1') {
+        // batch kPeriod < 32 takes the host CPU path: row by row with a sorted quota, another implementation.
+        const auto cpu = iluk_factorize(*this->dev.ctx, d.view(kPeriod), params);
+        for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<T>();
+        device_iluk_factorize<WG>(this->dev.q(), d, plan, opts, m.data(), mst, info.data());
+        const FactorCmp c = compare_factor(plan, m.data(), mst, cpu, kPeriod);
+        EXPECT_EQ(c.unmatched, 0) << "a CPU-path entry outside the symbolic pattern";
+        EXPECT_VERIFY(T, Check::factorization, n, c.worst) << "device factor vs the host CPU path";
+    }
+    // factorize + apply in ONE user kernel; rhs / out at item stride n + 3 (pads poison).
+    const auto host = iluk_factorize(*this->dev.ctx, A, params);
+    const int ld = n + 3;
+    UnifiedVector<T> rhs(std::size_t(ld) * kBatch), out(std::size_t(ld) * kBatch);
+    for (int b = 0; b < kBatch; ++b)
+        for (int i = 0; i < ld; ++i) {
+            rhs[std::size_t(b) * ld + i] = i < n ? val<T>(90001u * (b % kPeriod) + i) : poison_v<T>();
+            out[std::size_t(b) * ld + i] = poison_v<T>();
+        }
+    const T* av = d.val.data();
+    const T* rp = rhs.data();
+    T* mp = m.data();
+    T* yp = out.data();
+    int* ip = info.data();
+    const int ms = d.ms;
+    launch<WG>(this->dev.q(), kBatch, [=](sycl::nd_item<1> it) {
+        const int b = static_cast<int>(it.get_group(0));
+        const dv::WorkGroup<WG> ex{it};
+        int r = dv::iluk_factorize<dv::tier::Blocked<1>>(ex, dv::BasedVec<const T>{av, b * ms}, plan, dv::BasedVec<T>{mp, b * mst}, opts);
+        r |= dv::iluk_apply<dv::tier::Blocked<1>>(ex, plan.factor<T>(mp + std::size_t(b) * mst, opts.diagonal_shift),
+                                                  dv::BasedVec<const T>{rp, b * ld}, dv::BasedVec<T>{yp, b * ld});
+        if (ex.leader()) ip[b] = r;
+    });
+    double worst = 0;
+    int pads = 0, rep = 0, bad_info = 0;
+    for (int q = 0; q < kPeriod; ++q) {
+        const auto x = ilu_solve_ref(host, q, rhs.data() + std::size_t(q) * ld);
+        long double num = 0, den = 0;
+        for (int i = 0; i < n; ++i) {
+            num = std::max<long double>(num, std::abs(wide(out[std::size_t(q) * ld + i]) - x[std::size_t(i)]));
+            den = std::max<long double>(den, std::abs(x[std::size_t(i)]));
+        }
+        worst = std::max(worst, std::isnan(num) ? std::numeric_limits<double>::infinity() : static_cast<double>(num / den));
+    }
+    for (int b = 0; b < kBatch; ++b) {
+        bad_info += info[std::size_t(b)] != 0;
+        for (int i = 0; i < ld; ++i) {
+            const T got = out[std::size_t(b) * ld + i];
+            if (i >= n) pads += !same_bits(got, poison_v<T>());
+            else rep += !same_bits(got, out[std::size_t(b % kPeriod) * ld + i]);
+        }
+    }
+    EXPECT_VERIFY(T, Check::solve, n, worst) << "in-kernel factorize + apply vs the long-double solve with the host factor";
+    EXPECT_EQ(pads, 0) << "wrote past n";
+    EXPECT_EQ(rep, 0) << "items differ from their representative";
+    EXPECT_EQ(bad_info, 0);
+}
+
+TYPED_TEST(DeviceApiSparse, IlukFactorizeInfoIsTheFirstUnusablePivot) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    constexpr int bad_row = 5;  // < 60: no L entries, its pivot is A's stored zero
+    ILUKParams<T> params;
+    params.levels_of_fill = 1;
+    params.diagonal_shift = T(0);
+    params.diag_pivot_threshold = R(0);
+    params.drop_tolerance = R(0);
+    params.modified_ilu = false;
+    const IlukA<T> d = make_iluk_a<T>(/*pad=*/5, bad_row);
+    const auto A = d.view(kBatch);
+    EXPECT_THROW((void)iluk_factorize(*this->dev.ctx, A, params), batchlas::convergence_error);
+    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const dv::IlukPlan plan = storage.plan();
+    const int mst = plan.nnz;
+    UnifiedVector<T> m(std::size_t(mst) * kBatch);
+    UnifiedVector<int> info(std::size_t(kBatch) * 128);
+    auto expect_info = [&](int wg, const char* how) {
+        int wrong = 0;
+        for (int b = 0; b < kBatch; ++b)
+            for (int l = 0; l < wg; ++l) wrong += info[std::size_t(b) * wg + l] != (b % kPeriod == 1 ? bad_row + 1 : 0);
+        EXPECT_EQ(wrong, 0) << how << ": info is not row " << bad_row + 1 << " on the failing items (0 elsewhere) on every item";
+    };
+    device_iluk_factorize<128>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    expect_info(128, "WG 128");
+    device_iluk_factorize<32>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    expect_info(32, "WG 32");
+}
+
+TYPED_TEST(DeviceApiSparse, IlukFactorizeBreakIsSeenByBothComparators) {
+    using T = TypeParam;
+    if (iluk_pin() == '0') GTEST_SKIP() << "BATCHLAS_ILUK_DEVICE=0 pins the host route to its CPU path";
+    ILUKParams<T> params;
+    params.levels_of_fill = 1;
+    const IlukA<T> d = make_iluk_a<T>(/*pad=*/5);
+    const auto A = d.view(kBatch);
+    const auto host = iluk_factorize(*this->dev.ctx, A, params);
+    const auto storage = sycl_iluk::iluk_plan(A, params);
+    dv::IlukPlan plan = storage.plan();
+    plan.levels = 0;  // the break: A scattered into the pattern, nothing eliminated
+    const int mst = plan.nnz + 3;
+    UnifiedVector<T> m(std::size_t(mst) * kBatch);
+    UnifiedVector<int> info(std::size_t(kBatch) * 128);
+    for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<T>();
+    device_iluk_factorize<128>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    const FactorCmp c = compare_factor(plan, m.data(), mst, host, kBatch);
+    EXPECT_GT(c.bits, 0) << "no elimination passed the bit comparison";
+    EXPECT_FALSE(batchlas::verify::within<T>(Check::factorization, IlukA<T>::n, c.worst)) << "no elimination passed the tolerance";
+}
+
 // ---- tiers and workspace --------------------------------------------------------------------
 TYPED_TEST(DeviceApiSparse, WithTierPicksTheOneTierAndNoWorkspace) {
     using T = TypeParam;
@@ -455,18 +784,25 @@ TYPED_TEST(DeviceApiSparse, WithTierPicksTheOneTierAndNoWorkspace) {
     static_assert(dv::spmm_block_v<T> * sizeof(T) == 64);
     static_assert(dv::spmm_buffer_size<N, Cj, dv::tier::upto<1>, T>(4096) == dv::WorkspaceSize{});
     static_assert(dv::iluk_apply_buffer_size<dv::tier::Blocked<1>, T>(4096) == dv::WorkspaceSize{});
+    static_assert(dv::iluk_factorize_buffer_size<dv::tier::upto<100000>, T>(100000) == dv::WorkspaceSize{});
+    static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::iluk_factorize, T, dv::tier::upto<1>>, dv::tier::Blocked<1>>);
     for (int n : {0, 1, 150, 100000}) {
-        std::string spmm_tier = "none", iluk_tier = "none";
+        std::string spmm_tier = "none", iluk_tier = "none", ilu_fac_tier = "none";
         dv::with_tier<S, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) { spmm_tier = std::is_same_v<Tier, Blk> ? "blocked" : "other"; });
         dv::with_tier<dv::routine::iluk_apply, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
             iluk_tier = std::is_same_v<Tier, dv::tier::Blocked<1>> ? "blocked" : "other";
         });
+        dv::with_tier<dv::routine::iluk_factorize, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            ilu_fac_tier = std::is_same_v<Tier, dv::tier::Blocked<1>> ? "blocked" : "other";
+        });
         EXPECT_EQ(spmm_tier, "blocked") << "n=" << n;
         EXPECT_EQ(iluk_tier, "blocked") << "n=" << n;
+        EXPECT_EQ(ilu_fac_tier, "blocked") << "n=" << n;
     }
     dv::DeviceLimits none = dv::DeviceLimits::of(this->dev.q().get_device());
     none.sub_group_sizes = {8};
     EXPECT_THROW((dv::with_tier<S, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
+    EXPECT_THROW((dv::with_tier<dv::routine::iluk_factorize, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
 }
 
 }  // namespace
