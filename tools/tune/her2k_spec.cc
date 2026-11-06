@@ -112,12 +112,33 @@ public:
             // common
             "src/ops/her2k/choice.hh",
             "src/ops/her2k/route.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/her2k/her2k.cc"
         // her2k fold calls the public gemm: its native kernels and can_run count too.
         // family: fold "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: fold "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: fold "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: fold "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: fold "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/her2k_spec.cc"; }

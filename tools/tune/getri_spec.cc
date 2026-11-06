@@ -106,12 +106,22 @@ public:
             // common
             "src/ops/getri/getri_native.hh",
             "src/ops/getri/choice.hh",
+            "include/batchlas/util/group-collectives.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/getri/getri.cc"
         // blocked calls the public trsm: its native kernels count too.
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: blocked "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: blocked "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: blocked "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: blocked "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: blocked "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: blocked "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: blocked "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getri_spec.cc"; }

@@ -105,12 +105,28 @@ public:
             "src/ops/sygvd/sygvd_native.hh",
             // family: vendor
             "src/backends/cusolver_sygvd.cc",
+            // common
+            "include/batchlas/util/group-collectives.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/sygvd/sygvd.cc"
         // compose calls the public potrf, sygst, syev, trsm and trmm, each selecting its own kernel.
         // family: compose "src/ops/sygvd/kernels/sygvd_compose.cc" "src/ops/sygst/sygst.cc" "src/ops/sygst/kernels/sygst_blocked.cc" "src/ops/sygst/kernels/sygst_twosided.cc" "src/ops/syev/syev.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: compose "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: compose "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: compose "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: compose "include/batchlas/device/lapack/sygst.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: compose "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: compose "include/batchlas/device/level3.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: compose "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: compose "include/batchlas/device/level3/group.hh" "include/batchlas/device/level3/mma.hh"
+        // family: compose "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: compose "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
+        // family: compose "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: compose "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: compose "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/sygvd_spec.cc"; }
