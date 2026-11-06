@@ -162,7 +162,9 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                 T* Taub = tau_ptr + b * stride_tau;
 
                 const int ld_loc = n;
-                auto Al = [&](int r, int c) -> T& { return A_local[r + c * ld_loc]; };
+                // BATCHLAS_DLA_BODY: SemaSYCL already force-inlines Al (the first operator() the
+                // kernel calls); the attribute states it, so the body choice cannot change.
+                auto Al = [&](int r, int c) BATCHLAS_DLA_BODY -> T& { return A_local[r + c * ld_loc]; };
 
                 if (lane < n) {
                     for (int c = 0; c < n; ++c) {
