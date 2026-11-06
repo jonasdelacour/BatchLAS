@@ -17,13 +17,14 @@
 //     item owns two (the launch at the work-group ceiling)
 //   - with_tier picks Blocked<1> and throws "<op>: no device tier admits n=0"; buffer_size
 //     equals the carve plan
-// Deliberate breaks to run when this first builds (one per axis, expected red set):
-//   stebz drops the descending flip               -> StebzMatchesHostRoute (Index)
-//   stebz sets m = found[1]                       -> StebzMatchesHostRoute (Value, m)
-//   stein iterate drops the j * 104729 seed term  -> SteinMatchesHostRoute
-//   stein iterate skips zeroing columns past kb   -> SteinMatchesHostRoute (counts)
-//   stein layout takes piv before x (offsets move, sizes equal) -> none: the plan is internal
-//     (recorded as an accepted blind spot; the carve test pins total and alignment only)
+// Deliberate breaks, run on the 4090 (one per axis, red set observed):
+//   stebz drops the descending flip               -> StebzMatchesHostRoute (float, double)
+//   stebz sets m = found[1]                       -> StebzMatchesHostRoute (float, double)
+//   stein iterate skips zeroing columns past kb   -> SteinMatchesHostRoute (float, double)
+//   stein scratch() carves dd onto dl (op only)   -> SteinMatchesHostRoute (float, double)
+//   stein iterate drops the j * 104729 seed term  -> none: the host route shares the body and
+//     the vectors stay valid (accepted blind spot, as is a layout that moves offsets but keeps
+//     sizes: the carve test pins total and alignment only)
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -104,9 +105,13 @@ struct Dev {
         return h;
     }
     int max_wg() { return static_cast<int>(ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)); }
+    // Frees every buffer allocated since ptrs.size() was mark (n = 300 in double holds ~9 GB).
+    void release(std::size_t mark) {
+        for (std::size_t i = mark; i < ptrs.size(); ++i) sycl::free(ptrs[i], q());
+        ptrs.resize(mark);
+    }
     ~Dev() {
-        if (ctx)
-            for (void* p : ptrs) sycl::free(p, q());
+        if (ctx) release(0);
     }
     std::vector<void*> ptrs;
 };
@@ -339,6 +344,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinMatchesHostRoute) {
         const VectorView<T> dview(d, n, kBatch, kInc, P.sd);
         const VectorView<T> eview(e, std::max(n - 1, 0), kBatch, kInc, P.se);
         for (const Sel s : {Sel{EigenRangeType::All, SortOrder::Ascending}, Sel{EigenRangeType::Value, SortOrder::Ascending}}) {
+            const std::size_t mark = dev.ptrs.size();
             const bool with_counts = s.range == EigenRangeType::Value;
             const int k = n, sw = n + 3, ld = n + 3, sz = ld * k + 5;
             T* w = dev.up(std::vector<T>(std::size_t(kBatch) * sw, T(0)));
@@ -381,6 +387,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinMatchesHostRoute) {
                         else if (j >= kb) ASSERT_EQ(got, T(0)) << tag << " column " << j << " past kb, item " << b;
                     }
             }
+            dev.release(mark);
         }
     }
 }

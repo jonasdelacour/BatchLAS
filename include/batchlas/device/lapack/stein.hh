@@ -65,24 +65,35 @@ template <class R> constexpr Layout<R> layout(int n, int k) {
     return {norm, dl, dd, du, du2, x, piv, p.size()};
 }
 
+// The phases' scratch as pointers: the broadcast slot, and vector j's LU rows and pivot flags
+// at (first + j) * n. device::stein carves it from its workspace (scratch(ws, L), first = 0); the
+// host route points it into batch-wide arrays, first = b * k, so its addressing is the legacy one.
+template <class R> struct Scratch {
+    local_mptr<R> norm;
+    R* dl;
+    R* dd;
+    R* du;
+    R* du2;
+    R* x;
+    unsigned char* piv;
+    std::int64_t first;  // this matrix's first vector slot in the arrays
+};
+template <class R> BATCHLAS_DLA_INLINE Scratch<R> scratch(const Workspace& ws, const Layout<R>& L) {
+    return {carve_local(ws, L.norm), carve_global(ws, L.dl), carve_global(ws, L.dd), carve_global(ws, L.du),
+            carve_global(ws, L.du2), carve_global(ws, L.x), carve_global(ws, L.piv), 0};
+}
+
 // Phase 1. Vectors j < kb: inverse iteration on T - w(j) I from a pseudo-random start, an
 // exactly repeated eigenvalue nudged by eps ||T|| j; z(:, j) = the normalised result. Columns
 // [kb, k) of z are written as zero (callers back-transform all k). No barrier inside the
 // vector loop: items diverge freely. Needs only z(i, j) and z.cols() of z.
 template <class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Workspace& ws,
+BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Scratch<R>& s,
                                  const Params<R>& p) {
     using T = R;
     const std::int64_t n = d.size();
     const std::int64_t k = z.cols();
-    const auto L = layout<T>(static_cast<int>(n), static_cast<int>(k));
-    const auto norm_local = carve_local(ws, L.norm);
-    T* const dl_ptr = carve_global(ws, L.dl);
-    T* const dd_ptr = carve_global(ws, L.dd);
-    T* const du_ptr = carve_global(ws, L.du);
-    T* const du2_ptr = carve_global(ws, L.du2);
-    T* const xb_ptr = carve_global(ws, L.x);
-    unsigned char* const piv_ptr = carve_global(ws, L.piv);
+    const auto norm_local = s.norm;
 
     // ||T||_inf, used for the pivot floor and the perturbation scale. The broadcast through
     // local memory is the legacy one (the reduction is already uniform).
@@ -101,13 +112,13 @@ BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& 
             continue;
         }
 
-        const std::int64_t base = j * n;
-        T* my_dl = dl_ptr + base;
-        T* my_dd = dd_ptr + base;
-        T* my_du = du_ptr + base;
-        T* my_du2 = du2_ptr + base;
-        T* x = xb_ptr + base;
-        unsigned char* my_piv = piv_ptr + base;
+        const std::int64_t base = (s.first + j) * n;
+        T* my_dl = s.dl + base;
+        T* my_dd = s.dd + base;
+        T* my_du = s.du + base;
+        T* my_du2 = s.du2 + base;
+        T* x = s.x + base;
+        unsigned char* my_piv = s.piv + base;
 
         // Separate exactly-degenerate eigenvalues so their shifted systems differ; phase 2
         // then has independent vectors to work with.
@@ -168,10 +179,9 @@ BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& 
 // Gram-Schmidt) and renormalised. Stopping at kb, not k, is a cost bound. Needs z.col(j).
 template <class Ex, class D, class E, class W, class Z, class R>
 BATCHLAS_DLA_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z,
-                                         const Workspace& ws, const Params<R>& p) {
+                                         const Scratch<R>& s, const Params<R>& p) {
     using T = R;
-    const auto L = layout<T>(d.size(), z.cols());
-    const auto scratch = carve_local(ws, L.norm);
+    const auto scratch = s.norm;
     const T tnorm = sycl::max(lanst<NormType::Inf>(ex, d, e), std::numeric_limits<T>::min());
     const T gap_tol = p.ortho_threshold * tnorm;
 
@@ -230,9 +240,10 @@ BATCHLAS_DLA_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, 
                               const stein_detail::Params<R>& p) {
     static_assert(std::is_same_v<elem_t<D>, R>, "stein: params of the matrix's real type");
     static_assert(std::is_same_v<resolve_tier_t<routine::stein, R, Tier>, tier::Blocked<1>>, "stein: tier::Blocked<1>");
-    stein_detail::iterate(ex, d, e, w, kb, z, ws, p);
+    const auto s = stein_detail::scratch(ws, stein_detail::layout<R>(d.size(), z.cols()));
+    stein_detail::iterate(ex, d, e, w, kb, z, s, p);
     sync(ex, Mem::Global);  // phase 2 reads the vectors other items wrote
-    stein_detail::reorthogonalize(ex, d, e, w, kb, z, ws, p);
+    stein_detail::reorthogonalize(ex, d, e, w, kb, z, s, p);
     return 0;
 }
 

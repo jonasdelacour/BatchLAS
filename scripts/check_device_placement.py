@@ -156,6 +156,9 @@ def classify(head, has_body):
     m = re.match(r"(?:enum\s+(?:class\s+|struct\s+)?|(?:struct|class|union)\s+)(?:alignas\s*\([^)]*\)\s*|[A-Z_]+\s+)*"
                  r"([A-Za-z_]\w*)", head)
     if m:
+        # `struct X<...>`: a specialization (tier_info / tiers per routine) names nothing new.
+        if head[m.end():].lstrip().startswith("<"):
+            return None
         return ("type", m.group(1), None) if has_body else None
     eq = top_level(head, "=")
     if eq >= 0 and eq < (top_level(head, "(") if top_level(head, "(") >= 0 else len(head)) + 1:

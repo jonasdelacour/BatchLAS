@@ -66,12 +66,16 @@ Event stein(Queue& ctx,
     // is exactly the counts-less overload's behaviour.
     const int32_t* counts_ptr = counts.empty() ? nullptr : counts.data();
 
-    // Thin launchers (design C.8): each phase's body is the public device::stein's phase; the
-    // global workspace is one stein_buffer_size slice per matrix.
-    using Tier = v2::tier::Blocked<1>;
-    const v2::WorkspaceSize wsz = v2::stein_buffer_size<Tier, T>(static_cast<int>(n), static_cast<int>(k));
+    // Thin launchers (design C.8): each phase's body is the public device::stein's phase. Its
+    // scratch points into five length-n arrays plus the pivot flags per (batch, vector).
     auto pool = BumpAllocator(ws);
-    auto slices = pool.allocate<std::byte>(ctx, wsz.global_bytes * static_cast<size_t>(batch_size));
+    const size_t slots = static_cast<size_t>(n * k * batch_size);
+    auto dl = pool.allocate<T>(ctx, slots);
+    auto dd = pool.allocate<T>(ctx, slots);
+    auto du = pool.allocate<T>(ctx, slots);
+    auto du2 = pool.allocate<T>(ctx, slots);
+    auto xb = pool.allocate<T>(ctx, slots);
+    auto piv = pool.allocate<unsigned char>(ctx, slots);
 
     const int32_t max_iter = std::max<int32_t>(1, params.max_iterations);
     const T ortho_threshold = params.ortho_threshold;
@@ -81,12 +85,17 @@ Event stein(Queue& ctx,
         std::min<size_t>(256, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)),
         static_cast<size_t>(std::max<int64_t>(k, 1)));
 
-    std::byte* const gws = slices.data();
+    auto* dl_ptr = dl.data();
+    auto* dd_ptr = dd.data();
+    auto* du_ptr = du.data();
+    auto* du2_ptr = du2.data();
+    auto* xb_ptr = xb.data();
+    auto* piv_ptr = piv.data();
     auto Zv = Z.kernel_view();
 
     // Phase 1: independent inverse iteration per eigenvector.
     auto iterate_evt = ctx->submit([&](sycl::handler& h) {
-        auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
+        auto norm_local = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
         batchlas::impl::parallel_for<SteinIterateKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_iter},
@@ -101,11 +110,10 @@ Event stein(Queue& ctx,
                 const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
                 const v2::stein_detail::Params<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
                 const int b = static_cast<int>(bid);
+                const v2::stein_detail::Scratch<T> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
+                                                     dl_ptr, dd_ptr, du_ptr, du2_ptr, xb_ptr, piv_ptr, bid * k};
                 v2::stein_detail::iterate(ex, v2::item(d, b), v2::item(e, b), v2::item(w, b), kb,
-                                          v2::item(Zv, b, int(n), int(k)),
-                                          v2::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
-                                                        v2::global_slice(gws, wsz, bid)},
-                                          p);
+                                          v2::item(Zv, b, int(n), int(k)), s, p);
             });
     });
 
@@ -117,7 +125,7 @@ Event stein(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         // Phase 2 reads what phase 1 wrote; do not rely on queue ordering.
         h.depends_on(iterate_evt);
-        auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
+        auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
         batchlas::impl::parallel_for<SteinOrthoKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_ortho},
@@ -136,9 +144,9 @@ Event stein(Queue& ctx,
                 // phase 1's kb bound is the one that protects correctness.
                 // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
                 const v2::stein_detail::Params<T> p{max_iter, ortho_threshold, seed};
-                v2::stein_detail::reorthogonalize(ex, dv, ev, v2::item(w, static_cast<int>(bid)), kb, Zb,
-                                                  v2::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr},
-                                                  p);
+                const v2::stein_detail::Scratch<T> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
+                                                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0};
+                v2::stein_detail::reorthogonalize(ex, dv, ev, v2::item(w, static_cast<int>(bid)), kb, Zb, s, p);
             });
     });
 
@@ -162,8 +170,11 @@ Event stein(Queue& ctx,
 template <Backend B, typename T>
 size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, SteinParams<T> params) {
     (void)params;
-    const auto wsz = device::stein_buffer_size<device::tier::Blocked<1>, T>(static_cast<int>(n), static_cast<int>(k));
-    return BumpAllocator::allocation_size<std::byte>(ctx, wsz.global_bytes * batch_size);
+    const size_t slots = n * k * batch_size;
+    size_t bytes = 0;
+    bytes += BumpAllocator::allocation_size<T>(ctx, slots) * 5;
+    bytes += BumpAllocator::allocation_size<unsigned char>(ctx, slots);
+    return bytes;
 }
 
 #define STEIN_INSTANTIATE(back, fp) \
