@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The ILU(k) / SpMM private v2 ops (src/kernels/common/dla_v2_sparse.hh) against host references,
+// The ILU(k) / SpMM v2 ops (include/batchlas/device/sparse.hh) against host references,
 // each in its kernel's shape; core ops are covered by device_blas_v2_tests. Guards (agent guide
 // section 8): CSR item strides above nnz, ld above the extent, offset bases, slot-major storage,
 // complex data with nonzero imaginary parts, NoTrans / Trans / ConjTrans as a runtime argument,
@@ -20,7 +20,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
-#include <src/kernels/common/dla_v2_sparse.hh>
+#include <batchlas/device/sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>

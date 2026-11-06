@@ -6,7 +6,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/blas/functions/iluk.hh>
-#include <src/kernels/common/dla_v2_sparse.hh>
+#include <batchlas/device/sparse.hh>
 #include <batchlas/util/mempool.hh>
 #include <optional>
 #include <cstdlib>
@@ -84,30 +84,6 @@ inline T stabilize_pivot_or_mark(const T& pivot,
 }
 
 template <typename T>
-inline T stabilize_pivot_or_mark(const T& pivot,
-                                 const T& diagonal_shift,
-                                 int32_t* status) {
-    const auto shift_mag = abs_value(diagonal_shift);
-    const auto pivot_mag = abs_value(pivot);
-    if (pivot_mag > shift_mag) {
-        return pivot;
-    }
-
-    if (shift_mag > RealT<T>(0)) {
-        const T shifted = pivot + diagonal_shift;
-        if (abs_value(shifted) > shift_mag) {
-            return shifted;
-        }
-        return diagonal_shift;
-    }
-
-    if (status != nullptr) {
-        *status = 1;
-    }
-    return T(1);
-}
-
-template <typename T>
 bool u_diagonals_are_usable(const T* vals,
                             const int* diag_positions,
                             int n,
@@ -118,7 +94,7 @@ bool u_diagonals_are_usable(const T* vals,
         if (host_mask != nullptr && host_mask[b] == 0) continue;  // an inactive item's factor is scratch
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
-            (void)stabilize_pivot_or_mark(vals[diag_positions[b * n + i]], diagonal_shift, &status);
+            (void)v2::iluk_detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
             if (status != 0) return false;
         }
     }
@@ -1466,50 +1442,18 @@ Event iluk_apply(Queue& ctx,
         const int col = linear % nrhs;
         if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
         const v2::WorkGroup<wg_size> ex{item};
-        using Ar = v2::arith_t<v2::arith::Native, T>;  // the base kernel's operators: Annex-G complex kept
 
+        // Thin launcher over the device iluk_apply. The operands are formed in the order the solve
+        // reads them, so the kernel's capture layout (its parameter order) is the hand kernel's.
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
         const v2::BasedVec<const T> lu_val{lu_vals, lu_base};
         const v2::BasedVec<const int> lu_col{lu_ci, lu_base};
         const v2::BasedVec<const T> rhs_col{rhs_data, b * rhs_kv.stride_ + col * rhs_kv.ld_};
         const v2::BasedVec<T> y{out_data, b * out_kv.stride_ + col * out_kv.ld_};
-
-        // y := L^{-1} rhs (unit lower: the strict lower part of each sorted row), level by level;
-        // the rows of a level are independent, so only a barrier separates levels.
-        for (int lv = 0; lv < l_levels; ++lv) {
-            const int begin = l_level_ptr[lv];
-            v2::for_each_owned(ex, l_level_ptr[lv + 1] - begin, [&](int k) {
-                const int i = l_rows[begin + k];
-                const T sum = rhs_col(i);
-                const auto row = v2::sp_row(lu_val, lu_col, lu_ro[ro_base + i], lu_ro[ro_base + i + 1]);
-                y(i) = v2::usdot_sub_below<Ar>(v2::Thread{}, sum, row, y, i);
-            });
-            ex.barrier(v2::Mem::Global);
-        }
-
-        // y := U^{-1} y, level by level. The level loop and the row residual stay in this body
-        // (sass_parity strict): inside an inlined op or a for_each_owned lambda the residual loop's
-        // exit block is laid out after the loop body, the latch branch flips, and ptxas then unrolls
-        // the residual 4x (float: LDG 26->68, total +40%).
-        for (int lv = 0; lv < u_levels; ++lv) {
-            const int begin = u_level_ptr[lv];
-            for (int k = ex.lid(), nk = u_level_ptr[lv + 1] - begin; k < nk; k += ex.size) {
-                const int i = u_rows[begin + k];
-                const T sum = y(i);
-                const int diag_abs = diag_pos[b * n + i];
-                const int re = lu_ro[ro_base + i + 1];
-                // Usability of every U diagonal was established when the factor was
-                // built; this only substitutes the shifted value.
-                const T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
-                // Columns are sorted ascending: the strict upper part starts one past the diagonal.
-                const auto row = v2::sp_row(lu_val, lu_col, diag_abs - lu_base + 1, re);
-                T acc = sum;
-                for (int p = row.begin; p < row.end; ++p) Ar::msub(acc, row.val(p), y(row.idx(p)));
-                y(i) = Ar::div(acc, diag);
-            }
-            ex.barrier(v2::Mem::Global);
-        }
+        const v2::IlukFactor<T> factor{lu_val,   lu_col,      l_levels, l_level_ptr, l_rows, lu_ro,     ro_base,
+                                       u_levels, u_level_ptr, u_rows,   diag_pos,    b * n,  diag_shift};
+        (void)v2::iluk_apply<v2::tier::Blocked<1>>(ex, factor, rhs_col, y);
     });
 
     // No host sync here: the caller owns synchronization, so repeated applications
