@@ -11,6 +11,7 @@
 // tier::Blocked<1> for iluk_apply (the level-scheduled solve); both hold every operand in global
 // memory, admit any n and need no workspace (*_buffer_size == {}).
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -397,17 +398,24 @@ template <class Tier, class T> constexpr WorkspaceSize iluk_apply_buffer_size(in
 }
 
 namespace iluk_detail {
+// |x| for the pivot tests: modulus for complex; std::abs for a real T (sass_parity strict: core
+// modulus's sycl::fabs folds the comparisons differently, ILUKApplyKernel float/double moves).
+template <class T> inline real_t<T> pivot_modulus(const T& x) {
+    if constexpr (Arith<T>::is_complex) return modulus(x);
+    else return std::abs(x);
+}
+
 // U's diagonal as the solve uses it (host and device): the stored pivot when it beats the shift,
 // else pivot + shift when that does, else the shift; with no shift a zero pivot sets *status
 // (when given) and returns 1. The factorization established usability, so the solve passes null.
 template <class T> inline T shifted_pivot(const T& pivot, const T& diagonal_shift, std::int32_t* status) {
     using R = real_t<T>;
-    const R shift_mag = modulus(diagonal_shift);
-    const R pivot_mag = modulus(pivot);
+    const R shift_mag = pivot_modulus(diagonal_shift);
+    const R pivot_mag = pivot_modulus(pivot);
     if (pivot_mag > shift_mag) return pivot;
     if (shift_mag > R(0)) {
         const T shifted = pivot + diagonal_shift;
-        if (modulus(shifted) > shift_mag) return shifted;
+        if (pivot_modulus(shifted) > shift_mag) return shifted;
         return diagonal_shift;
     }
     if (status != nullptr) *status = 1;
