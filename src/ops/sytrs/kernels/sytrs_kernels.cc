@@ -98,7 +98,8 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 const v2::RtGroup<> all(it);
                 const Tile<D> G = rev_mat(const_cast<D*>(ap) + b * stra, lda, n, rev);
                 v2::lacpy<v2::Part::Lower, Transpose::NoTrans, v2::alg::DivMod>(all, G, S);
-                v2::sytrs_detail::sytrs_cta_solve<R>(all, sg, lane, sgid, nsg, S, piv + b * n, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
+                const int* const gp = piv + b * n;  // before nsg: keeps the base closure layout
+                v2::sytrs_detail::sytrs_cta_solve<R>(all, sg, lane, sgid, nsg, S, gp, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
