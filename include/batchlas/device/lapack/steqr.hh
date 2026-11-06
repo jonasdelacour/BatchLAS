@@ -188,7 +188,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
 
     inline void apply(int32_t col0, int32_t col1, T c, T s) {
         const int32_t pN = static_cast<int32_t>(LDQ);
-        device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
+        device::rot<device::rot_conv::Transposed, T, T, T>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
                         Q_local[base_q + lane + col1 * pN]);
     }
 
@@ -987,12 +987,19 @@ inline bool steqr_cta_solve(const Partition& partition,
                                         cta_shift_strategy, cta_update_scheme);
 }
 
-// The CTA tier's one body (the host steqr_cta kernel's too): load Q, d, e; solve; store. live ==
-// false (a dead chunk, a masked-off item) solves zeros, so every lane reaches every collective,
-// and writes nothing. True when a block did not converge within max_sweeps.
-template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache>
+// No report between the solve and the stores (the device op returns the flag instead).
+struct NoReport {
+    BATCHLAS_DLA_INLINE void operator()(bool) const {}
+};
+
+// The CTA tier's one body (the host steqr_cta kernel's too): load Q, d, e; solve; report(failed);
+// store. live == false (a dead chunk, a masked-off item) solves zeros, so every lane reaches every
+// collective, and writes nothing. True when a block did not converge within max_sweeps.
+template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache,
+          typename Report = NoReport>
 BATCHLAS_DLA_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
-                                       int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live) {
+                                       int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live,
+                                       Report report = {}) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
     if constexpr (ComputeVecs) {
         if (live) qcache.load(z);  // lane-private; a dead tile is never read
@@ -1000,6 +1007,7 @@ BATCHLAS_DLA_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z
     T diag = (live && lane < n) ? d(lane) : T(0);
     T offdiag = (live && lane < (n - 1)) ? e(lane) : T(0);
     const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, shift, update);
+    report(failed);
     if (live && lane < n) d(lane) = diag;
     if (live && lane < (n - 1)) e(lane) = offdiag;
     if constexpr (ComputeVecs) {

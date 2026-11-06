@@ -104,23 +104,27 @@ namespace batchlas {
                     // I2: an inactive item is a dead chunk, solved on zeros and never stored.
                     const bool live = prob_id < static_cast<int32_t>(batch_size) && d.active(prob_id);
                     const int32_t b = live ? prob_id : 0;
+                    // d, e before Q_local: the capture order, so the parameter layout, of the hand kernel.
+                    auto d_prob = d.batch_item(b);
+                    auto e_prob = e.batch_item(b);
 
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     using QLocalAccT = decltype(Q_local);
                     device::steqr_detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
-                    // Thin launcher: device::steqr<J, tier::Cta<P>>'s body on the accessor-based Q cache.
-                    const bool failed = device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
-                        partition, d.batch_item(b), e.batch_item(b), Q_view.batch_item(b), qcache, n,
-                        static_cast<int32_t>(max_sweeps), cta_shift_strategy, cta_update_scheme, live);
-                    if (live && failed && lane == 0) {
-                        // We cannot throw from device code; the host decides how to
-                        // handle it. info_report is an atomic fetch_max, not a store:
-                        // when `status` is the caller's span this kernel is one of
-                        // several writers to the same item (stedc runs a leaf solve per
-                        // half), and it must never lower a failure already recorded.
-                        detail::info_report(status, prob_id, 1);
-                    }
+                    // Thin launcher: device::steqr<J, tier::Cta<P>>'s body; info is written before the stores.
+                    device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
+                        partition, d_prob, e_prob, Q_view.batch_item(b), qcache, n, static_cast<int32_t>(max_sweeps),
+                        cta_shift_strategy, cta_update_scheme, live, [&](bool failed) BATCHLAS_DLA_BODY {
+                            if (live && failed && lane == 0) {
+                                // We cannot throw from device code; the host decides how to
+                                // handle it. info_report is an atomic fetch_max, not a store:
+                                // when `status` is the caller's span this kernel is one of
+                                // several writers to the same item (stedc runs a leaf solve per
+                                // half), and it must never lower a failure already recorded.
+                                detail::info_report(status, prob_id, 1);
+                            }
+                        });
                 });
         });
 
