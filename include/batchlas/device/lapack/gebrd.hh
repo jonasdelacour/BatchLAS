@@ -4,8 +4,9 @@
 // gebd2_real / gebd2_complex on one matrix per work-item (the unblocked route), gebd2_tile on one
 // problem's n x n tile in local memory (the CTA route, GebrdCTAKernel).
 // gebd2_detail::larfg_lanes is xLARFG on a lane-held vector whose leader forms the scalars and
-// broadcasts them (core larfg's lane form replicates the scalars instead). labrd_panel is the
-// complex xLABRD panel of the blocked route (real d, e: ZLARFG's real beta), on core gemv_acc.
+// broadcasts them (core larfg's lane form replicates the scalars instead). labrd is xLABRD on one
+// matrix (real d, e: ZLARFG's real beta), on core gemv_acc: the host's complex panel (labrd_panel)
+// and the panel of gebrd<tier::Blocked<NB>>, whose trailing update is the in-group L3 gemm.
 
 #include <algorithm>
 #include <cstdint>
@@ -14,7 +15,9 @@
 
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/lapack_aux.hh>
+#include <batchlas/device/interop.hh>
 #include <batchlas/device/level2.hh>
+#include <batchlas/device/level3/group.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/scalar.hh>
 #include <batchlas/device/tier.hh>
@@ -237,6 +240,29 @@ template <int P, class T> constexpr CtaPlan<T> cta_plan() {
     return {tile, p.size()};
 }
 template <int P> inline constexpr bool cta_width_v = P == 4 || P == 8 || P == 16 || P == 32;
+
+// tier::Blocked<NB>: one matrix per WorkGroup<256>; the trailing update's L3 configuration (its
+// threads fix the work-group), labrd's two NB-long products and the trailing gemm's tiles in local
+// memory, X (m x NB) and Y (n x NB) in the caller's global slice.
+template <class T> using BlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+inline constexpr int blocked_wg = 256;
+inline constexpr int blocked_nb = 16;  // the default panel width (the host's gebrd_block_size)
+template <class Tier> inline constexpr bool is_blocked_v = false;
+template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
+template <class T> struct BlockedPlan {
+    ws::Slot<T> work;  // local: wa (NB), wx (NB)
+    ws::Slot<T> smem;  // local: l3::Smem<BlockedCfg<T>>
+    ws::Slot<T> x, y;  // global: X (ld m), Y (ld n)
+    WorkspaceSize size;
+};
+template <int NB, class T> constexpr BlockedPlan<T> labrd_plan(int m, int n) {
+    Plan p;
+    const ws::Slot<T> work = p.take<T>(ws::Space::Local, std::size_t(2) * NB);
+    const ws::Slot<T> smem = p.take<T>(ws::Space::Local, std::size_t(l3::smem_elems<BlockedCfg<T>>()));
+    const ws::Slot<T> x = p.take<T>(ws::Space::Global, std::size_t(m) * NB);
+    const ws::Slot<T> y = p.take<T>(ws::Space::Global, std::size_t(n) * NB);
+    return {work, smem, x, y, p.size()};
+}
 }  // namespace gebrd_detail
 
 // tier::Cta<P>, P in {4, 8, 16, 32}: one matrix per P-lane partition (SgpPartition<P>) of a
@@ -249,15 +275,29 @@ template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
     static constexpr bool admits(int n) { return !Arith<T>::is_complex && n >= 1 && n <= P; }
     static constexpr WorkspaceSize buffer_size(int) { return gebrd_detail::cta_plan<P, T>().size; }
 };
+// tier::Blocked<NB> (1 <= NB <= 64, the panel width): any m >= n, every T, on a WorkGroup<256, 32>.
+// buffer_size(n) is the square problem's; gebrd_buffer_size<Tier, T>(m, n) any other.
+template <int NB, class A, class T> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, T> {
+    static_assert(NB >= 1 && NB <= 64, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64 (the host panel's bound)");
+    static constexpr int wg_size = gebrd_detail::blocked_wg, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 1; }
+    static constexpr WorkspaceSize buffer_size(int n) { return gebrd_detail::labrd_plan<NB, T>(n, n).size; }
+};
 template <class T> struct tiers<routine::gebrd, T> {
-    using type = std::conditional_t<Arith<T>::is_complex, tier::list<>,
-                                    tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>>;
+    using type = std::conditional_t<Arith<T>::is_complex, tier::list<tier::Blocked<gebrd_detail::blocked_nb>>,
+                                    tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>,
+                                               tier::Blocked<gebrd_detail::blocked_nb>>>;
 };
 
-// Local / global bytes of ONE matrix for gebrd<Tier> at order n (the work-group's local
-// buffer holds one such slice per partition).
+// Local / global bytes of ONE matrix for gebrd<Tier> at order n (Cta: the work-group's local
+// buffer holds one such slice per partition), and of an m x n matrix for tier::Blocked.
 template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int n) {
     return tier_info<routine::gebrd, resolve_tier_t<routine::gebrd, T, Tier>, T>::buffer_size(n);
+}
+template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int m, int n) {
+    using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
+    static_assert(gebrd_detail::is_blocked_v<Tr>, "gebrd_buffer_size(m, n): tier::Blocked (Cta is square)");
+    return gebrd_detail::labrd_plan<Tr::nb, T>(m, n).size;
 }
 
 // xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
@@ -289,22 +329,18 @@ BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA
     return 0;
 }
 
-// zlabrd on panel columns j0 .. j0+ib-1 of item b (one work-group; ex a WorkGroup whose size is a
-// compile-time constant, so every Cyclic loop strides by a constant). Rows hold conj(u) on exit,
-// d and e are real (ZLARFG's real beta). wa / wx hold the negated small products, so every
-// update below is one gemv_acc: y := y0 + alpha (sum of the terms). A function, not the kernel
-// lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
-template <typename T, typename Ex, typename AV, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
-                                        const RV& E, const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work,
-                                        int32_t m, int32_t n, int32_t nb, int32_t j0, int32_t ib) {
+// xLABRD on panel columns j0 .. j0+ib-1 of ONE m x n matrix A (m >= n), its X (m x nb) and Y
+// (n x nb) indexed by A's global rows; ex a WorkGroup whose size is a compile-time constant, so
+// every Cyclic loop strides by a constant. Rows hold conj(u) on exit, d and e are real (ZLARFG's
+// real beta; real T: every conj is the identity). wa / wx (nb each, local) hold the negated small
+// products, so every update below is one gemv_acc: y := y0 + alpha (sum of the terms). The body of
+// the host's complex panel (labrd_panel) and of gebrd<tier::Blocked>.
+template <typename T, typename Ex, typename MA, typename MX, typename MY, typename RV, typename TV, typename WV>
+BATCHLAS_DLA_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const MY& Yb, const RV& d, const RV& e, const TV& tauq,
+                               const TV& taup, const WV& wa, const WV& wx, int32_t j0, int32_t ib) {
     using Real = device::real_t<T>;
     constexpr auto C = Transpose::ConjTrans;
-    const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
-    const auto Xb = device::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
-    const auto Yb = device::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
-    const auto wa = device::vec(work, nb, 0);   // -A^H v, then -Y^H u
-    const auto wx = device::vec(work, nb, nb);  // -X^H v, then -A u
+    const int32_t m = Ab.rows(), n = Ab.cols();
     const auto pub = [](auto x) { return device::assume_published(x); };  // written before the last barrier
     // -0 everywhere: as gemv_acc's y0 the add folds (-0 + x == x; +0 + -0 would be +0).
     const auto zero = device::fn_vec(n, [](int) { return device::Arith<T>::make(-Real(0), -Real(0)); });
@@ -326,8 +362,8 @@ BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const
         const Real sigma = device::sumsq<device::alg::Unfused>(ex, xq);
         const auto hq = device::larfg_scalars<device::conv::RealBeta>(alpha_q, sycl::sqrt(sigma), mt);
         if (ex.leader()) {
-            D(gi, b) = device::Arith<T>::re(hq.beta);
-            TAUQ(gi, b) = hq.tau;
+            d(gi) = device::Arith<T>::re(hq.beta);
+            tauq(gi) = hq.tau;
             Ab(gi, gi) = T(1);
         }
         if (hq.tau != T(0)) device::scal(ex, hq.scale, xq);
@@ -361,8 +397,8 @@ BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const
         const Real sigma_r = device::sumsq<device::alg::Unfused>(ex, xp);
         const auto hp = device::larfg_scalars<device::conv::RealBeta>(alpha_p, sycl::sqrt(sigma_r), nt);
         if (ex.leader()) {
-            E(gi, b) = device::Arith<T>::re(hp.beta);
-            TAUP(gi, b) = hp.tau;
+            e(gi) = device::Arith<T>::re(hp.beta);
+            taup(gi) = hp.tau;
             Ab(gi, gi + 1) = T(1);
         }
         if (hp.tau != T(0)) device::scal(ex, hp.scale, xp);
@@ -382,8 +418,69 @@ BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const
     }
 
     if (ex.leader() && n > 0) {
-        TAUP(n - 1, b) = T(0);
+        taup(n - 1) = T(0);
     }
+}
+
+// zlabrd on panel columns j0 .. j0+ib-1 of item b of the host's batched views: labrd over the
+// item's operands (A, X, Y rebased by b, d / e / tau through item(), the v1 address).
+template <typename T, typename Ex, typename AV, typename RV, typename TV>
+BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
+                                     const RV& E, const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work,
+                                     int32_t m, int32_t n, int32_t nb, int32_t j0, int32_t ib) {
+    const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
+    const auto Xb = device::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
+    const auto Yb = device::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
+    labrd<T>(ex, Ab, Xb, Yb, device::item(D, b), device::item(E, b), device::item(TAUQ, b), device::item(TAUP, b),
+             device::vec(work, nb, 0), device::vec(work, nb, nb), j0, ib);
+}
+
+// xGEBRD of ONE m x n matrix A (m >= n, any n) on the work-group ex (WorkGroup<256, 32>), host
+// order (A, d, e, tauq, taup, ws): LAPACK's blocked loop, one labrd panel of NB columns, then
+// A22 -= V Y^H + X U with the in-group L3 gemm (the host route's two gemm calls), then d / e back
+// on A's diagonal and superdiagonal (gebrd_blocked's restore). A is a Mat over T* in global memory
+// (device::mat), d / e real vectors of n / n - 1, tauq / taup vectors of n. COLLECTIVE: every item
+// calls with the same arguments, A visible on entry; outputs visible on return. Workspace:
+// gebrd_buffer_size<Tier, T>(m, n), ws.global this matrix's slice. Returns 0, or -1 when m < n
+// (the host's rows >= cols precondition; nothing is written).
+template <class Tier, class Ex, class MA, class RV, class TV>
+    requires gebrd_detail::is_blocked_v<resolve_tier_t<routine::gebrd, typename MA::value_type, Tier>>
+BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup, const Workspace& ws) {
+    using T = typename MA::value_type;
+    using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
+    using Cfg = gebrd_detail::BlockedCfg<T>;
+    constexpr int NB = Tr::nb;
+    static_assert(HasTier<routine::gebrd, Tr, T>, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64");
+    static_assert(is_work_group_v<Ex> && Ex::size == Cfg::threads, "gebrd: tier::Blocked runs on a WorkGroup<256, 32>");
+    const int m = A.rows(), n = A.cols();
+    if (m < n) return -1;
+    const auto plan = gebrd_detail::labrd_plan<NB, T>(m, n);
+    const auto Xb = device::mat(carve_global(ws, plan.x), m, NB, m);
+    const auto Yb = device::mat(carve_global(ws, plan.y), n, NB, n);
+    const local_mptr<T> work = carve_local(ws, plan.work);
+    const Vec<T, Dyn, Unit, Mem::Local, Cyclic, local_mptr<T>> wa{work, Dyn{NB}}, wx{work, Dyn{NB}, Unit{}, NB};
+    const l3::Smem<Cfg> smem{carve_local(ws, plan.smem).get_raw()};
+    for (int j0 = 0; j0 < n; j0 += NB) {
+        const int ib = sycl::min(NB, n - j0);
+        laset(ex, Zero{}, Zero{}, Xb.sub(j0, 0, m - j0, ib));
+        laset(ex, Zero{}, Zero{}, Yb.sub(j0, 0, n - j0, ib));
+        ex.barrier(Mem::Global);
+        labrd<T>(ex, A, Xb, Yb, d, e, tauq, taup, wa, wx, j0, ib);
+        const int j2 = j0 + ib;
+        if (j2 < n) {
+            const auto a22 = A.sub(j2, j2, m - j2, n - j2);
+            device::gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, A.sub(j2, j0, m - j2, ib), Yb.sub(j2, 0, n - j2, ib), a22,
+                                                                        NegOne{}, One{}, smem);
+            device::gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, Xb.sub(j2, 0, m - j2, ib), A.sub(j0, j2, ib, n - j2), a22,
+                                                                      NegOne{}, One{}, smem);
+        }
+    }
+    for_each_owned(ex, n, [&](int i) {
+        A(i, i) = static_cast<T>(d(i));
+        if (i < n - 1) A(i, i + 1) = static_cast<T>(e(i));
+    });
+    ex.barrier(Mem::Global);
+    return 0;
 }
 
 }  // namespace batchlas::device
