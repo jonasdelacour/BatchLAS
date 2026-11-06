@@ -319,11 +319,11 @@ TYPED_TEST(DeviceApiSb2stTest, WideBandMatchesTheWorkGroupRoute) {
 // ---- host-side: the workspace plan and with_tier --------------------------------------------
 using Lower8 = dv::routine::sb2st<Uplo::Lower, 8>;
 
-constexpr auto kCta = dv::sb2st_detail::layout<dv::tier::Cta<64>, std::complex<double>>(37, 5);
+constexpr auto kCta = dv::sb2st_detail::band_layout<dv::tier::Cta<64>, std::complex<double>>(37, 5);
 static_assert(kCta.c.offset == 0 && kCta.work.offset % 16 == 0 && kCta.work.offset >= kCta.c.count * sizeof(double));
 static_assert(kCta.ab.offset % 16 == 0 && kCta.ab.offset >= kCta.work.offset + kCta.work.count * sizeof(std::complex<double>));
 static_assert(kCta.size.local_bytes >= kCta.ab.offset + kCta.ab.count * sizeof(std::complex<double>) && kCta.size.global_bytes == 0);
-constexpr auto kBlk = dv::sb2st_detail::layout<dv::tier::Blocked<32>, float>(37, 5);
+constexpr auto kBlk = dv::sb2st_detail::band_layout<dv::tier::Blocked<32>, float>(37, 5);
 static_assert(kBlk.size.local_bytes == 0 && kBlk.size.global_bytes >= (37 + 5 + 2) * 2 * sizeof(float));
 static_assert(dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Cta<64>, float>(10, 1) == dv::WorkspaceSize{});
 static_assert(dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Blocked<32>, float>(0, 5) == dv::WorkspaceSize{});

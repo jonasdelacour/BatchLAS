@@ -728,7 +728,7 @@ template <class T> struct Layout {
     ws::Slot<T> ab;
     WorkspaceSize size;
 };
-template <class Tier, class T> constexpr Layout<T> layout(int n, int kd) {
+template <class Tier, class T> constexpr Layout<T> band_layout(int n, int kd) {
     static_assert(is_cta_v<Tier> || is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
     constexpr ws::Space sp = is_cta_v<Tier> ? ws::Space::Local : ws::Space::Global;
     Plan p;
@@ -752,7 +752,7 @@ template <class M> BATCHLAS_DLA_INLINE int band_ld(const M& a) {
 template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sb2st_buffer_size(int n, int kd) {
     static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
     if (n <= 0 || kd <= 1) return {};
-    return sb2st_detail::layout<Tier, T>(n, kd).size;
+    return sb2st_detail::band_layout<Tier, T>(n, kd).size;
 }
 
 namespace routine {
@@ -817,7 +817,7 @@ BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& 
 
     T* const abg = &ab(0, 0);
     const int ldg = sb2st_detail::band_ld(ab);
-    const auto lay = sb2st_detail::layout<Tier, T>(n, kd);
+    const auto lay = sb2st_detail::band_layout<Tier, T>(n, kd);
     if constexpr (sb2st_detail::is_cta_v<Tier>) {
         auto abl = [&]() BATCHLAS_DLA_BODY { return carve_local(ws, lay.ab).get_raw(); };
         sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
