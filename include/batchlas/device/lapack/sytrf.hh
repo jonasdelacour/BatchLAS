@@ -83,8 +83,10 @@ template <class R> BATCHLAS_DLA_HELPER bool argmax_beats(R ov, int oi, R bv, int
 
 template <class Ex, class R> BATCHLAS_DLA_HELPER void argmax_reduce(const Ex& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
     auto sg = ex.sub();
+    // Member by member: AdaptiveCpp's Metal backend miscompiles a select of the whole struct.
     const ArgMax<R> m = butterfly<1, 32>(sg, ArgMax<R>{idx, v}, [&](const ArgMax<R>& a, const ArgMax<R>& o) {
-        return argmax_beats(o.value, o.index, a.value, a.index, prefer_low) ? o : a;
+        const bool take = argmax_beats(o.value, o.index, a.value, a.index, prefer_low);
+        return ArgMax<R>{take ? o.index : a.index, take ? o.value : a.value};
     });
     v = m.value;
     idx = m.index;

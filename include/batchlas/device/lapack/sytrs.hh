@@ -148,7 +148,8 @@ BATCHLAS_DLA_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* k
         if (t >= n) continue;
         const int kd = kind[t];
         const int p = kd == 1 ? t + 1 : kd == 2 ? t - 1 : t;
-        const T off = kd == 1 ? e[t] : kd == 2 ? e[t - 1] : arith_t<arith::Fma, T>::one();
+        // One load at a selected index: a select of two local pointers fails Metal compilation.
+        const T off = kd == 0 ? arith_t<arith::Fma, T>::one() : e[kd == 1 ? t : t - 1];
         x[r] = ldl_dsolve_row(kd, x[r], select(kd == 1, up[r], dn[r]), d(t, t), d(p, p), off);
     }
 }
@@ -157,7 +158,8 @@ BATCHLAS_DLA_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* k
 
 // ?SYCONV on column j of a staged lower factor (one item): the interchanges of the steps after j
 // in step order (a 2 x 2 step at k swaps row k + 1), and the 2 x 2 off-diagonal of a block
-// starting at j moved to e[j] (when e is set). ps is the logical ipiv (+(p + 1) / -(p + 1)).
+// starting at j moved to e[j]. ps is the logical ipiv (+(p + 1) / -(p + 1)). e is never null:
+// a null test on a local e breaks AdaptiveCpp's Metal address-space inference.
 template <class T, class ML> BATCHLAS_DLA_HELPER void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
     for (int k = 0; k < n;) {
         const int v = ps[k];
@@ -166,7 +168,7 @@ template <class T, class ML> BATCHLAS_DLA_HELPER void syconv_col(const ML& l, co
             k += 1;
         } else {
             if (k == j) {
-                if (e != nullptr) e[j] = l(j + 1, j);
+                e[j] = l(j + 1, j);
                 l(j + 1, j) = arith_t<arith::Fma, T>::zero();
             }
             if (k > j) std::swap(l(k + 1, j), l(-v - 1, j));
