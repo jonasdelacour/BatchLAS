@@ -2,8 +2,8 @@
 #pragma once
 // Device LA reductions and lane exchanges (v22 design A.2 reduce.hh): one complex-aware xor
 // shuffle, ONE butterfly (any mask range, either order, any associative op), the leader-only
-// shift fold, the ArgMax pair with its merge rule, and the Group-scope allreduce of any op
-// through Scratch. A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).
+// shift fold, the reduce-scatter, the ArgMax pair with its merge rule, and the Group-scope
+// allreduce of any op through Scratch. A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).
 
 #include <climits>
 #include <cstdint>
@@ -112,6 +112,49 @@ BATCHLAS_DLA_HELPER T shift_reduce(const Part& part, T v, Op op = {}) {
 #pragma unroll
     for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(d)));
     return v;
+}
+
+namespace detail {
+template <int N> constexpr int ilog2() {
+    int r = 0;
+    for (int v = N; v > 1; v >>= 1) ++r;
+    return r;
+}
+}  // namespace detail
+
+// Reduce-scatter of K values over the P = Ex::size lanes of a partition executor (K | P, both
+// powers of two; x a Frag<T, K> or T[K]): lane l returns the sum over all lanes of x[l / (P / K)].
+// log2(K) halving steps over the xor masks P/2 .. P/K, then an all-reduce over the low
+// log2(P / K) lane bits. Consumes x. (The one-sided Jacobi Gram and column-norm passes.)
+template <int K, class Ex, class X> BATCHLAS_DLA_INLINE auto reduce_scatter(const Ex& ex, X& x) {
+    using T = std::remove_cvref_t<decltype(x[0])>;
+    constexpr int P = Ex::size;
+    static_assert(Ex::sub_whole && detail::is_pow2(K) && K <= P, "reduce_scatter: K | P on a partition executor");
+    constexpr int kSteps = detail::ilog2<K>();
+    constexpr int kAll = detail::ilog2<P>();
+    const std::uint32_t lane = static_cast<std::uint32_t>(ex.lid());
+#pragma unroll
+    for (int st = 0; st < kSteps; ++st) {
+        const int mask = P >> (st + 1);
+        const int half = K >> (st + 1);
+        const bool hi = (lane & static_cast<std::uint32_t>(mask)) != 0u;
+#pragma unroll
+        for (int j = 0; j < half; ++j) {
+            // Copy both slots first: `hi ? x[a] : x[b]` is an lvalue, a lane-dependent slot index
+            // that turns x into a stack array or compare/select chains (float 8x8 +73% instructions).
+            const T lo = x[j];
+            const T up = x[j + half];
+            const T own = hi ? up : lo;
+            const T send = hi ? lo : up;
+            x[j] = Arith<T>::add(own, shuffle_xor(ex, send, static_cast<std::uint32_t>(mask)));
+        }
+    }
+#pragma unroll
+    for (int st = kSteps; st < kAll; ++st) {
+        const std::uint32_t mask = static_cast<std::uint32_t>(P >> (st + 1));
+        x[0] = Arith<T>::add(x[0], shuffle_xor(ex, x[0], mask));
+    }
+    return T(x[0]);
 }
 
 // The better of two ArgMax candidates under one tie and NaN rule (the merge of every argmax

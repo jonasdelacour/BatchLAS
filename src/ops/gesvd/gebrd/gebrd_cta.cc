@@ -25,6 +25,15 @@ namespace v2 = batchlas::device;
 template <typename T, size_t P>
 class GebrdCTAKernel;
 
+// The hand kernel's operand (A_view.batch_item(b), addressed by its own operator()) with the host
+// n as its order: v2::item would re-form the batch term per element (+2% SASS here).
+template <typename T> struct ItemOfOrder {
+    KernelMatrixView<T, MatrixFormat::Dense> v;
+    int32_t n;
+    T& operator()(int i, int j) const { return v(i, j); }
+    int rows() const { return n; }
+};
+
 template <typename T, size_t P>
 inline void gebrd_cta_impl(Queue& ctx,
                            MatrixView<T, MatrixFormat::Dense>& a,
@@ -80,8 +89,13 @@ inline void gebrd_cta_impl(Queue& ctx,
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
+        using Tier = v2::tier::Cta<static_cast<int>(P)>;
+        // One matrix's local slice (P x P of T); the accessor holds probs_per_wg of them.
+        constexpr int32_t kSlice = static_cast<int32_t>(v2::gebrd_buffer_size<Tier, T>(static_cast<int>(P)).local_bytes);
+        static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(T)), "gebrd_cta: the tile slice is P x P of T");
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
+        // A thin launcher over device::gebrd<tier::Cta<P>> (lapack/gebrd.hh).
         impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
@@ -101,17 +115,18 @@ inline void gebrd_cta_impl(Queue& ctx,
                                   (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(pid);
-                auto D_prob = D_view.batch_item(pid);
-                auto E_prob = E_view.batch_item(pid);
-                auto TAUQ_prob = TAUQ_view.batch_item(pid);
-                auto TAUP_prob = TAUP_view.batch_item(pid);
-
-                // The problem's P x P tile in local memory, addressed through the accessor
-                // (A_local[base + i + j * P], the shared address space kept).
-                const v2::Mat<T, v2::Dyn, v2::Dyn, v2::Ext<static_cast<int>(P)>, v2::Mem::Local, v2::Cyclic, sycl::local_accessor<T, 1>> tile{
-                    A_local, {n}, {n}, {}, part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P)};
-                v2::gebd2_tile<T>(ex, it, tile, A_prob, D_prob, E_prob, TAUQ_prob, TAUP_prob, n, live);
+                // The operands of the hand kernel this replaced (batch_item views, the host n), in
+                // its capture order (A_view .. TAUP_view, A_local, n): the kernel parameters match.
+                const auto A_prob = A_view.batch_item(pid);
+                const auto D_prob = D_view.batch_item(pid);
+                const auto E_prob = E_view.batch_item(pid);
+                const auto TAUQ_prob = TAUQ_view.batch_item(pid);
+                const auto TAUP_prob = TAUP_view.batch_item(pid);
+                // The work-group's accessor; gebrd indexes this partition's slice by part_id.
+                const v2::Workspace ws{v2::local_mptr<std::byte>(reinterpret_cast<v2::local_mptr<std::byte>::pointer>(
+                                           A_local.template get_multi_ptr<sycl::access::decorated::yes>().get_decorated())),
+                                       nullptr};
+                v2::gebrd<Tier>(ex, it, ItemOfOrder<T>{A_prob, n}, D_prob, E_prob, TAUQ_prob, TAUP_prob, ws, live);
             });
     });
 }

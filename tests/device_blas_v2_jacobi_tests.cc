@@ -314,7 +314,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         for (; sweeps < 30 && !conv; ++sweeps) {
             int rot = 0;
             for (int t = 0; t < m - 1; ++t) {
-                const auto rnd = v2::rot_round<T>(v2::vec<v2::Mem::Local>(rcs, kSlots), v2::vec<v2::Mem::Local>(rd, kSlots),
+                const auto rnd = jac::rot_round<T>(v2::vec<v2::Mem::Local>(rcs, kSlots), v2::vec<v2::Mem::Local>(rd, kSlots),
                                                   v2::vec<v2::Mem::Local>(pairs + t * (m / 2), m / 2));
                 jac::PivotPair pq{0, 0};
                 bool active = false;
@@ -329,9 +329,9 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
                 const int cnt = v2::allreduce(ex, jr.active ? 1 : 0);
                 rot += cnt;
                 if (cnt == 0) continue;
-                if (lane < n) v2::rot_round_right<Ops>(rnd, m / 2, lane, A, Z);
+                if (lane < n) jac::rot_round_right<Ops>(rnd, m / 2, lane, A, Z);
                 group_barrier(ex.part);
-                if (lane < n) v2::rot_round_left_hermitian<Ops>(rnd, m / 2, lane, A);
+                if (lane < n) jac::rot_round_left_hermitian<Ops>(rnd, m / 2, lane, A);
                 group_barrier(ex.part);
             }
             conv = (rot == 0);
@@ -538,12 +538,12 @@ TYPED_TEST(DeviceBlasV2JacobiTest, FragmentOpsAndRotationsMatchHost) {
         v2::set_unit_owned(ex, j, E);
         const T dn = v2::allreduce(ex, v2::dotc_owned(X, Y));
         const T de = v2::allreduce(ex, v2::dotc_owned<EOps>(X, Y));
-        const v2::Rot2<T> ur = v2::rot2<false>(c, s, d), ul = v2::rot2<true>(c, s, d);
-        const v2::Rot2<T> uer = v2::rot2<false, EOps>(c, s, d), uel = v2::rot2<true, EOps>(c, s, d);
+        const jac::Rot2<T> ur = jac::rot2<false>(c, s, d), ul = jac::rot2<true>(c, s, d);
+        const jac::Rot2<T> uer = jac::rot2<false, EOps>(c, s, d), uel = jac::rot2<true, EOps>(c, s, d);
         T* ob = o + std::ptrdiff_t(b) * per;
         v2::for_each_owned_frag<Rows>(ex, [&](int k, int r) {
-            const v2::Pair2<T> r1 = v2::rot_right(ur, X[k], Y[k]), r2 = v2::rot_right<EOps>(uer, X[k], Y[k]);
-            const v2::Pair2<T> l1 = v2::rot_left(ul, X[k], Y[k]), l2 = v2::rot_left<EOps>(uel, X[k], Y[k]);
+            const jac::Pair2<T> r1 = jac::rot_right(ur, X[k], Y[k]), r2 = jac::rot_right<EOps>(uer, X[k], Y[k]);
+            const jac::Pair2<T> l1 = jac::rot_left(ul, X[k], Y[k]), l2 = jac::rot_left<EOps>(uel, X[k], Y[k]);
             T* row = ob + r * kRowSlots;
             row[kRx] = r1.x, row[kRy] = r1.y, row[kRxE] = r2.x, row[kRyE] = r2.y;
             row[kLx] = l1.x, row[kLy] = l1.y, row[kLxE] = l2.x, row[kLyE] = l2.y;

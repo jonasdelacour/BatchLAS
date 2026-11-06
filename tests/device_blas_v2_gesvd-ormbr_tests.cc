@@ -363,17 +363,17 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BidiagonalOps) {
         const KernelMatrixView<T, MatrixFormat::Dense> vk(v, k, k, ldv, sv, kBatch);
         this->dev.line(order, [=](int b, int i) {
             if (i < k)
-                glue::bdgram<Side::Right>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdrv, b, k),
+                v2::gesvd_detail::bdgram<Side::Right>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdrv, b, k),
                                           glue::item_n(terv, b, k - 1));
-            glue::bdgram<Side::Left>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdlv, b, order),
+            v2::gesvd_detail::bdgram<Side::Left>(v2::Grid1D<true>{i}, glue::item_n(dv, b, k), glue::item_n(ev, b, k - 1), glue::item_n(tdlv, b, order),
                                      glue::item_n(telv, b, order - 1));
         });
         this->dev.template run<64>([=](sycl::nd_item<1> it, int b) {
             const v2::WorkGroup<64> ex{it};
-            glue::bdgram<Side::Left>(ex, v2::vec(d + b * k, k), v2::vec(e + b * (k - 1), k - 1), v2::vec(tdw + b * order, order),
+            v2::gesvd_detail::bdgram<Side::Left>(ex, v2::vec(d + b * k, k), v2::vec(e + b * (k - 1), k - 1), v2::vec(tdw + b * order, order),
                                      v2::vec(tew + b * (order - 1), order - 1));
             if (ex.leader())
-                glue::bdmv_div(v2::Thread{}, v2::vec(d + b * k, k), v2::vec(e + b * (k - 1), k - 1), glue::col_of(v2::item(vk, b, k, k), 5),
+                v2::gesvd_detail::bdmv_div(v2::Thread{}, v2::vec(d + b * k, k), v2::vec(e + b * (k - 1), k - 1), glue::col_of(v2::item(vk, b, k, k), 5),
                                sig[b], T(1e-3), v2::vec(u + b * order, order));
         });
         const auto gtdr = this->dev.down(tdr, std::size_t(kBatch) * k), gter = this->dev.down(ter, std::size_t(kBatch) * (k - 1));
@@ -430,7 +430,7 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, SignScan) {
         T* e = this->dev.up(he);
         T* sg = this->dev.up(poisoned<T>(std::size_t(kBatch) * (n + 2)));
         const VectorView<T> evw(e, n - 1, kBatch), sgv(sg, n + 2, kBatch);
-        this->dev.line(1, [=](int b, int) { glue::tridiag_abs_offdiag(v2::Thread{}, glue::item_n(evw, b, n - 1), glue::item_n(sgv, b, n)); });
+        this->dev.line(1, [=](int b, int) { v2::gesvd_detail::tridiag_abs_offdiag(v2::Thread{}, glue::item_n(evw, b, n - 1), glue::item_n(sgv, b, n)); });
         const auto ge = this->dev.down(e, he.size()), gs = this->dev.down(sg, std::size_t(kBatch) * (n + 2));
         int bad = 0;
         for (int b = 0; b < kBatch; ++b) {

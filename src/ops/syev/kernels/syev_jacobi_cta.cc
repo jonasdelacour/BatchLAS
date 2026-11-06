@@ -213,7 +213,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const auto rnd = v2::rot_round<T>(v2::vec(Rcs_local, kRotSlots, base_r), rd,
+                        const auto rnd = jac::rot_round<T>(v2::vec(Rcs_local, kRotSlots, base_r), rd,
                                                           v2::vec(Pair_local, pairs_per_round, t * pairs_per_round));
 
                         jac::PivotPair pq{0, 0};
@@ -239,14 +239,14 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                         // Lane owns row `lane`; the pairs touch disjoint columns.
                         if (row_lane) {
-                            if constexpr (ComputeVectors) v2::rot_round_right(rnd, pairs_per_round, lane, A, Z);
-                            else v2::rot_round_right(rnd, pairs_per_round, lane, A);
+                            if constexpr (ComputeVectors) jac::rot_round_right(rnd, pairs_per_round, lane, A, Z);
+                            else jac::rot_round_right(rnd, pairs_per_round, lane, A);
                         }
                         group_barrier(ex.part);
 
                         // Lane now owns column `lane`; the pivots are stored exactly (zeros,
                         // real diagonal) so the convergence test does not chase rounding noise.
-                        if (row_lane) v2::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
+                        if (row_lane) jac::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
                         group_barrier(ex.part);
                     }
 
