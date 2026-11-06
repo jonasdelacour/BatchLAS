@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <src/select/coverage.hh>
+#include <src/select/select.hh>
 
 #include <algorithm>
 #include <cstdlib>
@@ -125,6 +126,42 @@ std::vector<std::string> coverage_lines(Run&& run) {
         return lines;
     }
     return captured_lines(std::forward<Run>(run));
+}
+
+/// Puts the embedded tuned tables back when a test that loaded synthetic ones ends.
+struct TableGuard {
+    ~TableGuard() { batchlas::select::testing::use_embedded_tables(); }
+};
+
+/// The first `op` select-trace line (`<op> ... -> <choice> ...`) `run` prints with the trace on, or
+/// `<no <op> trace line in: ...>`; `all` receives the whole captured stderr.
+template <typename F>
+std::string traced_line(const std::string& op, F&& run, std::string* all = nullptr) {
+    const batchlas::ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+    ::testing::internal::CaptureStderr();
+    try {
+        run();
+    } catch (...) {
+        (void)::testing::internal::GetCapturedStderr();
+        throw;
+    }
+    const std::string err = ::testing::internal::GetCapturedStderr();
+    if (all) *all = err;
+    const std::string prefix = op + " ";
+    std::istringstream in(err);
+    for (std::string line; std::getline(in, line);)
+        if (line.rfind(prefix, 0) == 0 && line.find(" -> ") != std::string::npos) return line;
+    return "<no " + op + " trace line in: " + err + ">";
+}
+
+/// The choice traced_line's line names (the word after ` -> `), or the line itself if it has none.
+template <typename F>
+std::string traced_choice(const std::string& op, F&& run, std::string* all = nullptr) {
+    const std::string line = test_support::traced_line(op, std::forward<F>(run), all);
+    const auto arrow = line.find(" -> ");
+    if (arrow == std::string::npos) return line;
+    const std::string tail = line.substr(arrow + 4);
+    return tail.substr(0, tail.find(' '));
 }
 
 }  // namespace test_support

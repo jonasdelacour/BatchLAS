@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <src/ops/syr2k/choice.hh>
 
@@ -49,10 +50,7 @@ using Pin = select::ScopedPin<C>;
 template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 const char* uplo_s(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
 const char* trans_s(Transpose t) { return t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C"); }
@@ -173,33 +171,14 @@ void expect_syr2k(Queue& ctx, const Prob<T>& p, const std::string& what) {
 // The outermost syr2k trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("syr2k ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no syr2k trace line in: " + err + ">";
+    return test_support::traced_line("syr2k", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("syr2k", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 // A heterogeneous operand has no route on any backend: the tile launch has one (n, k, ld, stride),
 // and

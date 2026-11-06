@@ -84,9 +84,7 @@ std::string traced_choice(F&& run) {
     return "<no potrs trace line in: " + err + ">";
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename Config>
 class PotrsTest : public test_utils::BatchLASTest<Config> {

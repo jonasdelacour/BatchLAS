@@ -19,6 +19,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -59,10 +60,7 @@ using MVof = MatrixView<T, MatrixFormat::Dense>;
 template <typename T>
 constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 // A batch with a padded ld, a stride that is not ld*n and poisoned padding: a large finite value
 // any kernel would accept, so a kernel that reads or writes the pad shows it.
@@ -194,34 +192,11 @@ void expect_rect_factored(Queue& ctx, const Rect<T>& p, const std::string& what,
 
 // The choice the outermost getrf trace line names for whatever `run` calls.
 template <typename F>
-std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("getrf ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no getrf trace line in: " + err + ">";
-}
-template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("getrf", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

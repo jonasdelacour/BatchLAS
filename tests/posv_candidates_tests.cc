@@ -25,6 +25,7 @@
 #include <src/util/resident_capacity.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -57,10 +58,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 // Hermitian, strictly diagonally dominant (condition number below 8); every off-diagonal
 // entry has a nonzero imaginary part.
@@ -190,9 +188,7 @@ std::string traced_choice(F&& run, std::string* all = nullptr) {
 }
 
 // Restores the embedded tables on scope exit, whatever a test installed.
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 template <typename T, Backend B>
 struct Cfg {

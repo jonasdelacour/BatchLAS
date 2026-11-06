@@ -23,6 +23,7 @@
 #include <src/ops/ormqr/choice.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -56,10 +57,7 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
+using test_support::same_bits;
 
 const char* side_s(Side s) { return s == Side::Left ? "L" : "R"; }
 const char* trans_s(Transpose t) { return t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C"); }
@@ -202,33 +200,14 @@ void expect_applied(Queue& ctx, const Apply<T>& p, const std::string& what) {
 // The outermost ormqr trace line for whatever `run` calls, and the choice it names.
 template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
-    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    ::testing::internal::CaptureStderr();
-    try {
-        run();
-    } catch (...) {
-        (void)::testing::internal::GetCapturedStderr();
-        throw;
-    }
-    const std::string err = ::testing::internal::GetCapturedStderr();
-    if (all) *all = err;
-    std::istringstream in(err);
-    for (std::string line; std::getline(in, line);)
-        if (line.rfind("ormqr ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
-    return "<no ormqr trace line in: " + err + ">";
+    return test_support::traced_line("ormqr", std::forward<F>(run), all);
 }
 template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
-    const std::string line = traced_line(std::forward<F>(run), all);
-    const auto arrow = line.find(" -> ");
-    if (arrow == std::string::npos) return line;
-    const std::string tail = line.substr(arrow + 4);
-    return tail.substr(0, tail.find(' '));
+    return test_support::traced_choice("ormqr", std::forward<F>(run), all);
 }
 
-struct TableGuard {
-    ~TableGuard() { select::testing::use_embedded_tables(); }
-};
+using test_support::TableGuard;
 
 // A table set with this device's ormqr table for `dtype` replaced by `text`.
 void install_table(const std::string& dtype, const std::string& dev, const std::string& rows) {
