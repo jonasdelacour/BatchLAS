@@ -231,7 +231,8 @@ BATCHLAS_DLA_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower, st
         else sd::fat<Inverse>(fs, c, row) = Arith<D>::conj(bv);
     });
     const int g = t / kb, j = t - g * kb;
-    const bool active = g < ipw && !dead(first + g);
+    // t < ipw * KB, not g < ipw: at ipw == 1 that becomes g == 0, never folded back to t < KB.
+    const bool active = (KB ? t < ipw * KB : g < ipw) && !dead(first + g);
     const D* const f = fbase + (active ? g * fper : 0);
     const SMat s{sd::Slm<D>{sbase + (active ? g * sper : 0)}, kn, kn, Dyn{lds}};
     sync(ex);
