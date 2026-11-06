@@ -83,7 +83,7 @@ void stedc_merge_fused(Queue& ctx,
                 });
                 v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
-                maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
+                v2::laed3_detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
                 v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.
