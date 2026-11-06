@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The device LA ops getrs / getri / gesv run on (the private ones in src/ops/getrs/getrs_v2.hh
-// and src/ops/gesv/gesv_v2.hh, and the core ones they took over: SafeRecip, laswp_index,
+// The device LA ops getrs / getri / gesv run on (getrs_detail in lapack/getrs.hh
+// and gesv_detail in lapack/gesv.hh, and the core ones they took over: SafeRecip, laswp_index,
 // AtomicMinSlot, shift_reduce, conj_if, op_view) against host references, as the LU kernels call
 // them; RtGroup, lacpy, laswp, select and Partition::bcast are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): SafeRecip bit for bit against getf2's
@@ -27,15 +27,16 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/arith.hh>
-#include <src/ops/gesv/gesv_v2.hh>
-#include <src/ops/getrs/getrs_v2.hh>
+#include <batchlas/device/lapack/gesv.hh>
+#include <batchlas/device/lapack/getrs.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
-namespace lu = batchlas::device::lu;
+namespace lu = batchlas::device::getrs_detail;
+namespace lug = batchlas::device::gesv_detail;
 namespace sd = batchlas::sycl_device;
 using batchlas::verify::Check;
 
@@ -560,7 +561,7 @@ TYPED_TEST(DeviceBlasV2LuTest, GerFragBcastRowUpdate) {
         const D* L = reinterpret_cast<const D*>(in) + (std::size_t(item) * P + lane) * NC;
         D g[NC];
         for (int k = 0; k < NC; ++k) g[k] = L[k];
-        lu::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
+        lug::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
         D* O = reinterpret_cast<D*>(out) + (std::size_t(item) * P + lane) * NC;
         for (int k = 0; k < NC; ++k) O[k] = g[k];
     });

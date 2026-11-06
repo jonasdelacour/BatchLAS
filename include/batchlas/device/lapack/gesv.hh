@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// The gesv tiny tier's rank-1 row update by the broadcast pivot row (two roundings, a source
-// lane, a start column: core ger_row takes none of them yet); everything else is core.
+// ?GESV's tiny-tier step: the rank-1 row update by the broadcast pivot row (two roundings, a
+// source lane, a start column), in gesv_detail until core ger_row takes them.
 
 #include <cstdint>
 
@@ -9,7 +9,7 @@
 #include <batchlas/device/arith.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::inline v2::lu {
+namespace batchlas::device::inline v2::gesv_detail {
 
 // x[k] -= m * x[k]@src, k0 <= k < min(N, kend), where act; collective: every lane reaches every k.
 template <int N, class Px, class T>
@@ -23,4 +23,4 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-}  // namespace batchlas::device::lu
+}  // namespace batchlas::device::gesv_detail

@@ -73,7 +73,6 @@ src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue:
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::tri
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::tri_expand
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::v2::glue::trimask
-src-device src/ops/gesv/gesv_v2.hh batchlas::device::v2::lu::ger_frag_bcast
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::ColOf
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::RowOf
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::SubOf
@@ -84,9 +83,6 @@ src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::ite
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::row_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::sub_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::tridiag_abs_offdiag
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::gemm_nr
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::lapmr_copy
-src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::trsm_lane
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::Interval
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::bisect_eig
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::detail::refl2_one

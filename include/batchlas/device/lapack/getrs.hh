@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2 ops private to the LU solves (getrs fused and composed tiers) until core Level 3
-// has their forms. Everything else comes from core (RtGroup, for_each_owned, lacpy, laswp,
-// conj_if, op_view, shift_reduce, select, arith::Fma):
+// ?GETRS's device steps (the fused and composed host tiers run them), in getrs_detail until core
+// Level 3 / lapack_aux has SASS-identical forms of them. Everything else comes from core
+// (RtGroup, for_each_owned, lacpy, laswp, conj_if, op_view, shift_reduce, select, arith::Fma):
 //   trsm_lane          op(A)^{-1} Y, one sub-group, lane i owns row i, shuffles only
 //   gemm_nr            C -= op(A) X with X.cols() <= NR accumulators
 //   lapmr_copy         B(i, :) := A(perm(i), :), out of place, 0-based perm, Alg walk
@@ -15,7 +15,7 @@
 #include <batchlas/device/arith.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::inline v2::lu {
+namespace batchlas::device::inline v2::getrs_detail {
 
 // Y(:, c) := op(A)^{-1} Y(:, c) for c = c0, c0 + cs, ... < Y.cols(), lane i owning row i (rows
 // >= A.rows() idle). Lower runs forward, Upper backward; Unit skips the last pivot, which
@@ -79,7 +79,7 @@ BATCHLAS_DLA_INLINE void gemm_nr(const Ex& ex, NegOne, const MA& a, const MX& x,
             });
         });
     } else {
-        static_assert(TA == Transpose::Trans, "lu::gemm_nr: ConjTrans is Trans of conj_if(A, true)");
+        static_assert(TA == Transpose::Trans, "getrs: gemm_nr ConjTrans is Trans of conj_if(A, true)");
         constexpr int SG = Ex::sg_size;
         const int m = c.rows(), k = a.rows();
         const int lane = ex.lane();
@@ -110,4 +110,4 @@ BATCHLAS_DLA_INLINE void lapmr_copy(const Ex& ex, const MA& a, const P& perm, co
     for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int c) BATCHLAS_DLA_BODY { b(i, c) = a(perm(i), c); });
 }
 
-}  // namespace batchlas::device::lu
+}  // namespace batchlas::device::getrs_detail

@@ -27,7 +27,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/gesv/gesv_v2.hh>
+#include <batchlas/device/lapack/gesv.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -270,8 +270,8 @@ BATCHLAS_UNROLL_FULL
                     }
                 }
             } else {
-                v2::lu::ger_frag_bcast(px, rA[j], rA, pl, j + 1, n, act);
-                v2::lu::ger_frag_bcast(px, rA[j], rB, pl, 0, nrhs, act);   // nrhs: kernel-uniform
+                v2::gesv_detail::ger_frag_bcast(px, rA[j], rA, pl, j + 1, n, act);
+                v2::gesv_detail::ger_frag_bcast(px, rA[j], rB, pl, 0, nrhs, act);   // nrhs: kernel-uniform
             }
         }
 

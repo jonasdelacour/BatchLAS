@@ -27,6 +27,7 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
+    device_api_getrf_tests
     device_api_potrf_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
@@ -252,6 +253,7 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     cond_tests
     group_collectives_tests
+    device_api_getrf_tests
     device_api_potrf_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
