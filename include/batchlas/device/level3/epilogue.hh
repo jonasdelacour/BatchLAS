@@ -2,6 +2,7 @@
 #pragma once
 // Level 3 C epilogues (v22 design B.2), moved from the tuned gemm kernels unchanged:
 //   LinearEpilogue          C := alpha acc + beta C, beta compared with 0 at run time
+//   NoMask, TriMask         which elements of a tile the epilogue writes
 //   store_tile_staged       a register tile through local memory to C, coalesced at any ldc
 // C := alpha acc + beta C with a host beta_zero flag is core store<epi::MulMac, Ops> with
 // MaybeZero beta (arith.hh).
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <type_traits>
 
+#include <batchlas/blas/enums.hh>
 #include <batchlas/device/arith.hh>
 #include <batchlas/device/core.hh>
 #include <batchlas/device/operand.hh>
@@ -28,14 +30,33 @@ struct LinearEpilogue {
     }
 };
 
+// Which elements of an output tile an epilogue writes (the Mask of design B.2). NoMask: every
+// element inside the matrix. TriMask<UL, HermDiag>: the UL triangle of C (row >= col for Lower),
+// and with HermDiag a real diagonal (herk / her2k: Im C(i, i) := 0, as zherk does).
+struct NoMask {};
+template <Uplo UL, bool HermDiag = false> struct TriMask {
+    BATCHLAS_DLA_INLINE bool keep(int row, int col) const { return UL == Uplo::Lower ? row >= col : row <= col; }
+    template <class T> BATCHLAS_DLA_INLINE T fix(int row, int col, T v) const {
+        using A = Arith<T>;
+        if constexpr (HermDiag && A::is_complex) {
+            if (row == col) return A::make(A::re(v), typename A::real_t(0));
+        }
+        return v;
+    }
+};
+
 // C(m0 + r, n0 + c) := alpha acc + beta C for a TileM x TileN tile whose item (local_row,
 // local_col) holds rows local_row * TR + i, cols local_col * TC + j. Columns pass through local
 // memory (lo: LoElems, then hi: HiElems; odd stride TileM + 1), then lane = row stores run down
 // C's columns (coalesced at any ldc), Batch priors in flight per item. Precondition: the caller's
-// last read of lo and hi ended before a barrier. beta == 0 never reads C.
-template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ex, class T, int TR, int TC>
+// last read of lo and hi ended before a barrier. beta == 0 never reads C. Ops = arith::Native is
+// the tuned expression (LinearEpilogue); another Ops forms alpha v + beta prior through Arith
+// (no std::complex operator*). mask drops the elements it does not keep (design B.2 Mask).
+template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ops = arith::Native, class Ex, class T,
+          int TR, int TC, class Mask = NoMask>
 BATCHLAS_DLA_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<T, TR, TC>& acc,
-                                           T* lo, T* hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta) {
+                                           T* lo, T* hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta,
+                                           [[maybe_unused]] Mask mask = {}) {
     constexpr int CS = TileM + 1;
     constexpr int LoCols = LoElems / CS;
     constexpr int HiCols = HiElems / CS;
@@ -78,7 +99,19 @@ BATCHLAS_DLA_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row,
                 const std::ptrdiff_t off = at(e, ok);
                 if (!ok) continue;
                 const T v = *slot(e / TileM, e % TileM);
-                c_item[off] = beta_zero ? alpha * v : LinearEpilogue<T>::apply(alpha, beta, v, prior[b]);
+                T out;
+                if constexpr (std::is_same_v<Ops, arith::Native>) {
+                    out = beta_zero ? alpha * v : LinearEpilogue<T>::apply(alpha, beta, v, prior[b]);
+                } else {
+                    using Ar = arith_t<Ops, T>;
+                    out = beta_zero ? Ar::mul(alpha, v) : Ar::add(Ar::mul(alpha, v), Ar::mul(beta, prior[b]));
+                }
+                if constexpr (std::is_same_v<Mask, NoMask>) {
+                    c_item[off] = out;
+                } else {
+                    const int row = m0 + e % TileM, col = n0 + c0 + e / TileM;
+                    if (mask.keep(row, col)) c_item[off] = mask.fix(row, col, out);
+                }
             }
         }
         if (pass + 1 < Passes) ex.barrier();
