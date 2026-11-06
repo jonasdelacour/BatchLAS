@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
-#include <src/math-helpers.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -15,6 +14,7 @@
 
 #include <src/util/template-instantiations.hh>
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/ritz_values.hh>
 
 namespace batchlas {
     namespace dla = device;
@@ -60,7 +60,8 @@ namespace batchlas {
             last_event = spmm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
         }
 
-        // Ritz values (v_j^H A v_j) / (v_j^H v_j), one work-group per (item, column).
+        // Ritz values (v_j^H A v_j) / (v_j^H v_j), one work-group per (item, column):
+        // device::ritz_values_quotient on the gemm / spmm product.
         auto [global_size, local_size, use_grid_stride] = compute_batched_nd_range_sizes(
             batch_size * k * n, ctx.device(), KernelType::ELEMENTWISE, batch_size, n);
 
@@ -82,9 +83,9 @@ namespace batchlas {
                         // Column j of item b (no local lambda: SemaSYCL would take it as the kernel body).
                         const auto v = dla::vec(V_view.data() + static_cast<int64_t>(b) * V_view.stride() + j * V_view.ld(), n);
                         const auto av = dla::vec(AV_view.data() + static_cast<int64_t>(b) * AV_view.stride() + j * AV_view.ld(), n);
-                        const T num = dla::dotc(ex, v, av);
-                        const real_t den = dla::sumsq<dla::alg::Fused>(ex, v);
-                        if (ex.leader()) ritz_vals(j, b) = dla::Arith<T>::re(num) / den;
+                        // The public device op's per-column step (a thin launcher over it).
+                        const real_t q = dla::ritz_values_quotient(ex, v, av);
+                        if (ex.leader()) ritz_vals(j, b) = q;
                     }
                 }
             );
