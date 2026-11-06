@@ -21,6 +21,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/options.hh>
 #include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/device/lapack/sytrd.hh>
