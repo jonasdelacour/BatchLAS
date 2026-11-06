@@ -13,7 +13,7 @@
 // columns that one Gram-Schmidt pass leaves non-orthogonal in float; workspace sizes against bytes
 // written out here. Deliberate breaks this catches (red sets): norm reading ld padding (Max, all
 // types); ritz_values_quotient with dot for dotc (the complex types); ortho with one pass
-// (OrthoNearDependent, float); ortho's Cta tier without the k > N refusal (OrthoPastCeiling).
+// (OrthoNearDependent, all types); ortho Cta without the k > N refusal (OrthoPastCeiling, all).
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/extensions.hh>
