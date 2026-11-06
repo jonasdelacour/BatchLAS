@@ -3,7 +3,10 @@
 // LAPACK ?sygst / ?hegst in a kernel: the reduction of A x = lambda B x (itype 1), A B x = lambda x
 // (2) and B A x = lambda x (3) to a standard Hermitian problem, from B's Cholesky factor F (L for
 // Lower, U^H for Upper): itype 1 C = F^-1 A F^-H, itypes 2, 3 C = F^H A F, uplo triangles only.
-//   sygst<Itype, UL, tier::Cta<N>>(ex, A, B, ws)  one matrix per WorkGroup, n <= N <= 32
+//   sygst<Itype, UL, tier::Cta<N>>(ex, A, B, ws)      one matrix per WorkGroup, n <= N <= 32
+//   sygst<Itype, UL, tier::Blocked<NB>>(ex, A, B, ws) any n: LAPACK's ?sygst schedule in one
+//                                                 work-group, NB <= 32 diagonal blocks by
+//                                                 sygs2_group, the rest by the in-group L3
 //   sygs2_group<Inverse, KB, NF>(...)             ?sygs2 on ipw diagonal blocks per work-group:
 //                                                 the one body; sygst's host blocked route
 //                                                 launches it for every kb x kb diagonal block
@@ -19,6 +22,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/level3/group.hh>
 
 namespace batchlas::device::inline v2 {
 
@@ -266,22 +270,53 @@ template <int Itype, Uplo UL> struct sygst {
 };
 }  // namespace routine
 
-// One tier: tier::Cta<N>, N <= 32 (the column of the block in one item's registers). A larger
-// order is the host blocked route today (design C.7 B5: the Blocked tier is not written yet).
+// tier::Cta<N>, N <= 32 (the column of the block in one item's registers), then tier::Blocked<NB>
+// for any n; Blocked<16> is the fallback where Blocked<32>'s diagonal block does not fit (complex
+// double on 32 KB of local memory).
 template <int Itype, Uplo UL, class T> struct tiers<routine::sygst<Itype, UL>, T> {
-    using type = tier::list<tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
+    using type = tier::list<tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>, tier::Blocked<16>>;
 };
 
 namespace sygst_detail {
 template <class Tier> inline constexpr bool is_cta_v = false;
 template <int N, class Alg> inline constexpr bool is_cta_v<tier::Cta<N, Alg>> = N >= 1 && N <= 32;
+template <class Tier> inline constexpr bool is_blocked_v = false;
+template <int NB, class Alg> inline constexpr bool is_blocked_v<tier::Blocked<NB, Alg>> = NB >= 1 && NB <= 32;
+template <class Tier> inline constexpr bool is_tier_v = is_cta_v<Tier> || is_blocked_v<Tier>;
+
+// The Blocked tier's Level 3 tile: device_api_l3's 32 x 32 x 8 preset, 256 items.
+template <class D> using blocked_cfg_t = l3::cfg::RegTiled<D, 32, 32, 8, 2, 2>;
+
+// One Blocked matrix: local, the ?sygs2 block of order min(n, NB) and the L3 staging, both at
+// offset 0 (never live at once); global (n > NB only), H, the whole Hermitian diagonal block
+// (NB x NB, ld NB), and for itypes 2, 3 W, the n x NB panel product of the out-of-place trmm.
+template <class D> struct BlockedPlan {
+    WorkspaceSize size;
+    ws::Slot<D> h, w;
+};
+template <class D, int NB, int Itype> constexpr BlockedPlan<D> blocked_plan(int n) {
+    Plan p(16);
+    const int kb = n < NB ? n : NB;
+    const std::size_t blk = sygs2_block_elems<D>(kb) * sizeof(D), stage = l3::smem_bytes<blocked_cfg_t<D>>();
+    p.take<std::byte>(ws::Space::Local, blk > stage ? blk : stage);
+    BlockedPlan<D> r{};
+    if (n > NB) {
+        r.h = p.take<D>(ws::Space::Global, static_cast<std::size_t>(NB) * NB);
+        if (Itype != 1) r.w = p.take<D>(ws::Space::Global, static_cast<std::size_t>(n) * NB);
+    }
+    r.size = p.size();
+    return r;
+}
 }  // namespace sygst_detail
 
-/// Local and global bytes of one matrix of order n <= N (global: none); Tier may be tier::upto.
+/// Local and global bytes of one matrix of order n (Cta: n <= N, global none; Blocked: any n);
+/// Tier may be tier::upto.
 template <int Itype, Uplo UL, class Tier, class T> constexpr WorkspaceSize sygst_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::sygst<Itype, UL>, std::remove_cv_t<T>, Tier>;
-    static_assert(sygst_detail::is_cta_v<Tr>, "sygst: tier::Cta<N>, N <= 32, is the only tier");
-    return sygst_detail::cta_plan<std::remove_cv_t<T>>(n).plan.size();
+    using D = std::remove_cv_t<T>;
+    using Tr = resolve_tier_t<routine::sygst<Itype, UL>, D, Tier>;
+    static_assert(sygst_detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
+    if constexpr (sygst_detail::is_cta_v<Tr>) return sygst_detail::cta_plan<D>(n).plan.size();
+    else return sygst_detail::blocked_plan<D, Tr::nb, Itype>(n).size;
 }
 
 template <int Itype, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<Itype, UL>, tier::Cta<N, Alg>, T> {
@@ -290,32 +325,167 @@ template <int Itype, Uplo UL, int N, class Alg, class T> struct tier_info<routin
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<Itype, UL, tier::Cta<N, Alg>, T>(n); }
 };
+template <int Itype, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<Itype, UL>, tier::Blocked<NB, Alg>, T> {
+    static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
+    static constexpr int wg_size = sygst_detail::blocked_cfg_t<std::remove_cv_t<T>>::threads, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<Itype, UL, tier::Blocked<NB, Alg>, T>(n); }
+};
+
+namespace sygst_detail {
+
+template <class T> BATCHLAS_DLA_INLINE l3::Global<T> gsub(const l3::Global<T>& g, int r0, int c0, int m, int n) {
+    return {g.p + r0 + c0 * g.ld, g.ld, m, n};
+}
+
+// C := alpha X Y^H + conj(alpha) Y X^H + C (Tr: X^H Y + ...) on C's UL triangle: her2k, or syr2k
+// for a real T (the host route's sym_r2k).
+template <Uplo UL, bool Tr, class Cfg, class Ex, class X, class Y, class C, class AS>
+BATCHLAS_DLA_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, AS alpha, l3::Smem<Cfg> sm) {
+    if constexpr (Arith<typename Cfg::value_type>::is_complex)
+        her2k<UL, Tr ? Transpose::ConjTrans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
+    else syr2k<UL, Tr ? Transpose::Trans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
+}
+
+// LAPACK's dsygst / zhegst on the UL triangles of one matrix in global memory, the step order of
+// the host blocked route (kernels/sygst_blocked.cc) at nb = NB: per block the ?sygs2 diagonal
+// reduction (sygs2_group, one block, in `lmem`), then trsm (itype 1) or trmm (2, 3), the gemm
+// with the mirrored diagonal block H (LAPACK's hemm) and her2k / syr2k on the panel and trailing
+// parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
+template <int Itype, Uplo UL, int NB, class Ex, class D, class DB>
+BATCHLAS_DLA_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
+    using Cfg = blocked_cfg_t<D>;
+    using Ar = Arith<D>;
+    using R = typename Ar::real_t;
+    constexpr bool lower = UL == Uplo::Lower;
+    constexpr Transpose TH = Ar::is_complex ? Transpose::ConjTrans : Transpose::Trans;
+    constexpr Transpose NT = Transpose::NoTrans;
+    const l3::Smem<Cfg> sm{lmem};
+    auto lift = [](R x) BATCHLAS_DLA_BODY {
+        if constexpr (Ar::is_complex) return Ar::make(x, R(0));
+        else return D(x);
+    };
+    const D half = lift(R(0.5)), mhalf = lift(R(-0.5));
+    const int n = a.n;
+    // Reduce the kb x kb diagonal block at `at`; with `full`, the whole Hermitian result goes to H.
+    auto diag = [&](int at, int kb, bool full) BATCHLAS_DLA_BODY {
+        const int ldf = sygs2_ldf<D>(kb), lds = kb + 1;
+        const auto ab = mat(a.p + at + at * a.ld, kb, kb, a.ld);
+        const auto bb = mat(b.p + at + at * b.ld, kb, kb, b.ld);
+        sygs2_group<Itype == 1, 0, NB>(
+            ex, ex.lid(), kb, lower, std::size_t(0), 1, lmem, kb * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return ab; }, kb * lds,
+            lds, Ex::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; }, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return bb; },
+            ldf, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DLA_BODY {
+                if (full) h[r + c * NB] = v;
+            });
+        sync(ex, Mem::Global);
+    };
+    // H := the whole Hermitian kb x kb block whose UL triangle A holds at `at` (real diagonal).
+    auto mirror = [&](int at, int kb) BATCHLAS_DLA_BODY {
+        lacpy(ex, herm_view<UL, true>(mat(a.p + at + at * a.ld, kb, kb, a.ld)), mat(h, kb, kb, NB));
+        sync(ex, Mem::Global);
+    };
+    for (int k = 0; k < n; k += NB) {
+        const int kb = n - k < NB ? n - k : NB, m = n - k - kb, r = k + kb;
+        const l3::Global<D> hm{h, NB, kb, kb};
+        if constexpr (Itype == 1) {
+            diag(k, kb, m > 0);
+            if (m == 0) break;
+            const auto f11 = gsub(b, k, k, kb, kb);
+            const auto f22 = gsub(b, r, r, m, m);
+            const auto a22 = gsub(a, r, r, m, m);
+            if constexpr (lower) {  // A21 := L22^-1 (A21 L11^-H - L21 C11), A22 -= P L21^H + L21 P^H
+                const auto p = gsub(a, r, k, m, kb);
+                const auto l21 = gsub(b, r, k, m, kb);
+                trsm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
+                r2k<UL, false>(ex, p, l21, a22, NegOne{}, sm);
+                gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
+                trsm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
+            } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
+                const auto p = gsub(a, k, r, kb, m);
+                const auto u12 = gsub(b, k, r, kb, m);
+                trsm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
+                r2k<UL, true>(ex, p, u12, a22, NegOne{}, sm);
+                gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
+                trsm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
+            }
+            continue;
+        }
+        if (k > 0) {  // itypes 2, 3: extend the reduced leading k x k block by this block row/column
+            const auto a11 = gsub(a, 0, 0, k, k);
+            const auto f11 = gsub(b, 0, 0, k, k);
+            const auto f22 = gsub(b, k, k, kb, kb);
+            mirror(k, kb);
+            if constexpr (lower) {  // W = A21 L11 + A22 L21 / 2, A11 += W^H L21 + L21^H W, A21 = L22^H (W + A22 L21 / 2)
+                const auto p = gsub(a, k, 0, kb, k);
+                const auto l21 = gsub(b, k, 0, kb, k);
+                const l3::Global<D> wm{w, NB, kb, k};
+                trmm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
+                r2k<UL, true>(ex, wm, l21, a11, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
+                trmm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
+            } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
+                const auto p = gsub(a, 0, k, k, kb);
+                const auto u12 = gsub(b, 0, k, k, kb);
+                const l3::Global<D> wm{w, n, k, kb};
+                trmm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
+                r2k<UL, false>(ex, wm, u12, a11, One{}, sm);
+                gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
+                trmm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
+            }
+        }
+        diag(k, kb, false);
+    }
+}
+
+}  // namespace sygst_detail
 
 /// C := F^-1 A F^-H (Itype 1) or F^H A F (2, 3) on one matrix, in A's UL triangle (the other
-/// triangle is not touched); B holds F in its UL triangle (read only). Tier: tier::Cta<N> or
-/// tier::upto<N>. COLLECTIVE over a WorkGroup of at least N items (item j < n owns column j);
-/// A and B visible to every item on entry, A's result on return. ws.local:
-/// sygst_buffer_size<Itype, UL, Tier, T>(n).local_bytes, 16-byte aligned. Returns 0, or -2 (A not
-/// square or n > N), -3 (B smaller than n x n); uniform over the executor.
+/// triangle is not touched); B holds F in its UL triangle (read only). Tier: tier::Cta<N>,
+/// tier::Blocked<NB> or tier::upto<N>. COLLECTIVE over a WorkGroup: Cta, at least N items (item
+/// j < n owns column j); Blocked, tier_info's wg_size (256) items, A and B in global memory (a
+/// Mat over T*, device::item or l3::Global) and B's diagonal real (potrf's factor: the trsm / trmm
+/// steps read it as stored, as LAPACK's do). A and B visible to every item on entry, A's result on
+/// return. ws: sygst_buffer_size<Itype, UL, Tier, T>(n), 16-byte aligned (Blocked, n > NB: a
+/// global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller than n x n);
+/// uniform over the executor.
 template <int Itype, Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DLA_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Tr = resolve_tier_t<routine::sygst<Itype, UL>, D, Tier>;
-    static_assert(sygst_detail::is_cta_v<Tr>, "sygst: tier::Cta<N>, N <= 32, is the only tier");
-    constexpr int N = Tr::n_max;
-    static_assert(is_work_group_v<Ex> && Ex::size >= N, "sygst<tier::Cta<N>>: a WorkGroup of at least N items");
-    const int n = a.cols();
-    if (a.rows() != n || n > N) return -2;
-    if (b.rows() < n || b.cols() < n) return -3;
-    if (n == 0) return 0;
-    const int ldf = sygs2_ldf<D>(n), lds = n + 1;
-    D* const f = reinterpret_cast<D*>(carve_local(ws, sygst_detail::cta_plan<D>(n).block).get_raw());
-    sygs2_group<Itype == 1, 0, N>(
-        ex, ex.lid(), n, UL == Uplo::Lower, std::size_t(0), 1, f, n * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return a; },
-        n * lds, lds, Ex::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; },
-        [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return b; }, ldf, [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DLA_BODY {});
-    sync(ex, Mem::Global);  // A's result visible to every item
-    return 0;
+    static_assert(sygst_detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
+    if constexpr (sygst_detail::is_cta_v<Tr>) {
+        constexpr int N = Tr::n_max;
+        static_assert(is_work_group_v<Ex> && Ex::size >= N, "sygst<tier::Cta<N>>: a WorkGroup of at least N items");
+        const int n = a.cols();
+        if (a.rows() != n || n > N) return -2;
+        if (b.rows() < n || b.cols() < n) return -3;
+        if (n == 0) return 0;
+        const int ldf = sygs2_ldf<D>(n), lds = n + 1;
+        D* const f = reinterpret_cast<D*>(carve_local(ws, sygst_detail::cta_plan<D>(n).block).get_raw());
+        sygs2_group<Itype == 1, 0, N>(
+            ex, ex.lid(), n, UL == Uplo::Lower, std::size_t(0), 1, f, n * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return a; },
+            n * lds, lds, Ex::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; },
+            [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return b; }, ldf, [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DLA_BODY {});
+        sync(ex, Mem::Global);  // A's result visible to every item
+        return 0;
+    } else {
+        static_assert(is_work_group_v<Ex> && Ex::size == sygst_detail::blocked_cfg_t<D>::threads,
+                      "sygst<tier::Blocked<NB>>: a WorkGroup of tier_info's wg_size items");
+        const int n = a.cols();
+        if (a.rows() != n) return -2;
+        if (b.rows() < n || b.cols() < n) return -3;
+        if (n == 0) return 0;
+        const auto plan = sygst_detail::blocked_plan<D, Tr::nb, Itype>(n);
+        sygst_detail::blocked<Itype, UL, Tr::nb>(ex, l3::global_of(a), l3::global_of(b), reinterpret_cast<D*>(ws.local.get_raw()),
+                                                 carve_global(ws, plan.h), carve_global(ws, plan.w));
+        sync(ex, Mem::Global);
+        return 0;
+    }
 }
 
 }  // namespace batchlas::device
