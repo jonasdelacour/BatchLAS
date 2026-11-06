@@ -350,6 +350,12 @@ inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, c
 //                           (host `wg`'s body, sytrs_col); ex at most 256 items. Its sums
 //                           reduce in an order fixed by ex's width: bit-identical to `wg` at
 //                           the host's width min(256, roundup32(n)).
+//   tier::Blocked<NB>, NB>1 any n: ?sytrs2 in one work-group (the host `blocked` route's steps):
+//                           ?syconv as a gather into the caller's global workspace, P^T B
+//                           gathered there too, the in-group trsm (NB-wide diagonal blocks) twice
+//                           around D^-1, then the scatter; ex = WorkGroup<256, 32>. Not in tiers_t
+//                           (as sytrf's Blocked<NB>). Its global part grows with nrhs:
+//                           sytrs_buffer_size<UL, Tier, T>(n, nrhs).
 
 namespace routine {
 template <Uplo UL> struct sytrs {
@@ -380,6 +386,24 @@ template <class R> constexpr SytrsWgPlan<R> sytrs_wg_plan() {
     Plan p;
     const auto red = p.take<R>(ws::Space::Local, 2 * (sytrf_detail::sytrf_wg_max / 32));
     return {red, p.size()};
+}
+template <class T> struct SytrsBlockedPlan {
+    ws::Slot<int> flag;  // local: the pivot list's validity
+    ws::Slot<T> smem;    // local: the in-group trsm's tiles
+    ws::Slot<T> l;       // global: the converted factor, n x n at ld n (the strict triangle)
+    ws::Slot<T> y;       // global: P^T B, n x nrhs at ld n
+    ws::Slot<int> idx;   // global: ps, perm, kind, sig, inv (n each)
+    WorkspaceSize size;
+};
+template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int nrhs) {
+    Plan p;
+    const auto un = static_cast<std::size_t>(n);
+    const auto flag = p.take<int>(ws::Space::Local, 1);
+    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<sytrf_detail::sytrf_l3_cfg<T>>());
+    const auto l = p.take<T>(ws::Space::Global, un * un);
+    const auto y = p.take<T>(ws::Space::Global, un * static_cast<std::size_t>(nrhs));
+    const auto idx = p.take<int>(ws::Space::Global, 5 * un);
+    return {flag, sm, l, y, idx, p.size()};
 }
 
 // LAPACK's argument numbers (?sytrs and ?sysv): -2 (N: A not square or outside the tier),
@@ -439,6 +463,74 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& A, 
                   sytrf_detail::SumScratch<Rl>{red, red + sytrf_detail::sytrf_wg_max / 32}, [&](int k) { return ipiv[k]; });
 }
 
+// The host `blocked` route's ?sytrs2 in one work-group: the logical ipiv, its validity and the
+// composed permutation; ?syconv as a gather (syconv_gather) into L; y := P^T B; L y = y; D y = y
+// (the diagonal blocks read from A); L^T y = y; B := P y. Physical row t of y holds logical row
+// t (Lower) or n - 1 - t (Upper), so L is stored as the physical triangle UL of the converted
+// factor and each trsm takes UL. An invalid list gives an all-NaN X, as every sytrs route.
+template <Uplo UL, int NB, class Ex, class MA, class MB>
+    requires(NB > 1)
+BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using Cfg = sytrf_detail::sytrf_l3_cfg<D>;
+    static_assert(!is_runtime_v<Ex> && Ex::size == Cfg::threads, "sytrs tier::Blocked<NB>: a WorkGroup<256, 32> executor");
+    constexpr bool rev = UL == Uplo::Upper;
+    const int n = A.rows(), nrhs = B.cols();
+    const auto pl = sytrs_blocked_plan<D>(n, nrhs);
+    int* const flag = carve_local(ws, pl.flag).get_raw();
+    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    D* const lw = carve_global(ws, pl.l);
+    D* const y = carve_global(ws, pl.y);
+    int* const ps = carve_global(ws, pl.idx);
+    int* const perm = ps + n;
+    int* const kind = ps + 2 * n;
+    const auto G = sytrf_detail::sytrf_view(A, rev);
+    D* const bb = &B(0, 0);
+    const int ldb = static_cast<int>(sytrf_detail::sytrf_ld(B));
+    const int total = n * nrhs;
+    for_each_owned(ex, n, [&](int k) BATCHLAS_DLA_BODY { ps[k] = logical_piv(ipiv[rev ? n - 1 - k : k], n, rev); });
+    sync<scope::Group>(ex, Mem::Global);
+    if (ex.leader()) {
+        const bool valid = piv_list_valid(ps, n);
+        *flag = valid ? 1 : 0;
+        if (valid) build_perm(ps, n, perm, kind);
+    }
+    sync<scope::Group>(ex, Mem::Global);
+    if (*flag == 0) {
+        for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { bb[e % n + (e / n) * ldb] = qnan<D>(); });
+        sync<scope::Group>(ex, Mem::Global);
+        return;
+    }
+    syconv_gather<D>(sytrf_detail::rev_mat(lw, n, n, rev), G, n, ps, kind, ps + 3 * n, ps + 4 * n, ex);
+    // The row of B that physical row t of y comes from and goes back to.
+    auto src = [&](int t) {
+        const int lt = rev ? n - 1 - t : t;
+        return rev ? n - 1 - perm[lt] : perm[lt];
+    };
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { y[e] = bb[src(e % n) + (e / n) * ldb]; });
+    sync<scope::Group>(ex, Mem::Global);
+    constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
+    const l3::Global<D> L{lw, n, n, n}, Y{y, n, n, nrhs};
+    trsm<Side::Left, tri, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY {
+        const int t = e % n;  // logical: x reads through the reversal
+        const int kd = kind[t];
+        if (kd == 2) return;  // the first row of its block writes both
+        const sytrf_detail::RevVec<D> x{y + (e / n) * n, n, rev};
+        if (kd == 0) {
+            x(t) = ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
+            return;
+        }
+        const D x0 = x(t), x1 = x(t + 1), d0 = G(t, t), d1 = G(t + 1, t + 1), off = G(t + 1, t);
+        x(t) = ldl_dsolve_row(1, x0, x1, d0, d1, off);
+        x(t + 1) = ldl_dsolve_row(2, x1, x0, d1, d0, off);
+    });
+    sync<scope::Group>(ex, Mem::Global);
+    trsm<Side::Left, tri, Transpose::Trans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { bb[src(e % n) + (e / n) * ldb] = y[e]; });
+    sync<scope::Group>(ex, Mem::Global);
+}
+
 }  // namespace sytrs_detail
 
 template <Uplo UL, class T> struct tiers<routine::sytrs<UL>, T> {
@@ -448,17 +540,24 @@ template <Uplo UL, int N, class T> struct tier_info<routine::sytrs<UL>, tier::Ct
     static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sytrs_detail::sytrs_cta_plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int = 1) { return sytrs_detail::sytrs_cta_plan<T>(n).size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, T> {
     static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int) { return sytrs_detail::sytrs_wg_plan<real_t<T>>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return sytrs_detail::sytrs_wg_plan<real_t<T>>().size; }
+};
+// Its local part does not depend on nrhs, so with_tier's buffer_size(n) filter is exact.
+template <Uplo UL, int NB, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, T> {
+    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return sytrs_detail::sytrs_blocked_plan<T>(n, nrhs).size; }
 };
 
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrs_buffer_size(int n) {
+// The workspace of one matrix with nrhs right-hand sides (only Blocked<NB>'s global part uses it).
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrs_buffer_size(int n, int nrhs = 1) {
     using Rt = routine::sytrs<UL>;
-    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
+    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n, nrhs);
 }
 
 // ?sytrs of one matrix inside a kernel: B := A^-1 B from sytrf's factor (A and ipiv as sytrf

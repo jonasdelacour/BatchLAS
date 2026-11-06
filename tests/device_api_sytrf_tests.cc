@@ -13,7 +13,14 @@
 // RtGroup; a canary past buffer_size(n) in local memory must survive every tier, and a deliberately
 // shifted workspace must break it (the guard's red case, run every time); argument errors return
 // the same code on every item and leave A untouched.
-// Red set: not yet recorded (written without a build, wave 1); the gate round makes each break once.
+// Blocked<31> (the in-group blocked tiers, wave 2) runs another summation order than the host
+// `blocked` routes, so it is compared within tolerance: every item's info (uniform), the ipiv and
+// info that pairs / singular items force by exact zeros (an oracle, also held against the host),
+// and each solve's residual against the full matrix; n straddles every panel end and a 2 x 2 block
+// crosses the first; a 1024-item batch of one problem is bit-identical to item 0; a global canary
+// after each matrix's slice must survive, and a slice shifted into it must break it (red case).
+// Red set: not yet recorded (written without a build, waves 1 and 2); the gate round makes each
+// break once (Blocked<31>: the trailing update's rank e - k0 forced to NB; lasyf_undo dropped).
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/sysv.hh>
@@ -25,6 +32,7 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <tests/test_support/coverage_rows.hh>
 #include <tests/test_support/storage.hh>
@@ -38,6 +46,7 @@
 #include <src/select/select.hh>
 
 #include <algorithm>
+#include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +85,15 @@ static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Cta<32>, float>(5).lo
 static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<1>, std::complex<float>>(9).local_bytes == 16 * 4);
 static_assert(dv::sysv_buffer_size<Uplo::Upper, dv::tier::Cta<32>, double>(3).local_bytes == 9232);  // 1088 doubles, 130 ints
 static_assert(dv::sysv_buffer_size<Uplo::Lower, dv::tier::Blocked<1>, float>(3).local_bytes == 64);
+// Blocked<31>: local = the arg-max scratch (8 R, 8 int) then the L3 tile (552 T); global = W.
+static_assert(dv::sytrf_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(100) == dv::WorkspaceSize{2272, 100 * 32 * 4, 16});
+static_assert(dv::sytrf_buffer_size<Uplo::Upper, dv::tier::Blocked<31>, std::complex<double>>(10) == dv::WorkspaceSize{8928, 5120, 16});
+// sytrs: local = flag, the L3 tile; global = L (n n), y (n nrhs), five int vectors (n each).
+static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(10, 3) == dv::WorkspaceSize{2224, 736, 16});
+static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(1000, 1).local_bytes == 2224);
+static_assert(dv::sysv_buffer_size<Uplo::Upper, dv::tier::Blocked<31>, float>(10, 3) == dv::WorkspaceSize{2272, 1280, 16});
+// The default lists never hold Blocked<NB> (no measured win; design F6): upto stays on Blocked<1>.
+static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sysv<Uplo::Upper>, float, dv::tier::upto<4096>>, dv::tier::Blocked<1>>);
 
 // ---- data ---------------------------------------------------------------------------------------
 template <typename T>
@@ -117,18 +135,81 @@ Matrix<T> stored(const Matrix<T>& full, Uplo uplo) {
 }
 
 template <typename T>
-Matrix<T> rhs(int n, int nrhs, unsigned seed) {
-    Matrix<T> src(n, nrhs, kBatch);
+Matrix<T> rhs(int n, int nrhs, unsigned seed, int batch = kBatch) {
+    Matrix<T> src(n, nrhs, batch);
     std::mt19937 g(seed);
-    for (int b = 0; b < kBatch; ++b)
+    for (int b = 0; b < batch; ++b)
         for (int c = 0; c < nrhs; ++c)
             for (int i = 0; i < n; ++i) src(i, c, b) = draw<T>(g);
-    Matrix<T> m = ts::padded<T>(n, nrhs, kBatch, 2, 5);
+    Matrix<T> m = ts::padded<T>(n, nrhs, batch, 2, 5);
     ts::store<T>(m, src);
     return m;
 }
 
+// Blocked<NB> data, item b's kind from b % 8. pairs: logical 2 x 2 pairs [[0, c], [c, 0]] at
+// (2i, 2i + 1), nothing else (odd n: the last diagonal n + 2), so every even logical k takes a
+// 2 x 2 block without interchange, one of them at 30 (across the first panel's end for NB = 31);
+// singular: a dominant leading logical m x m block, the rest exactly zero, so no step interchanges
+// and logical column m is the first zero one (m from singular_m: inside a panel, at its last
+// column, past it); nan: random with a NaN at logical (1, 0); random: uniform in [-1, 1]. pairs and
+// singular decide every pivot by an exact zero, so their ipiv and info hold whatever the rounding.
+enum class BKind { random, pairs, singular, nan };
+inline BKind kind_of(int b) {
+    const int k = b % 8;
+    return k == 3 ? BKind::pairs : k == 5 ? BKind::singular : k == 7 ? BKind::nan : BKind::random;
+}
+inline int singular_m(int b, int n) {
+    const int choice[4] = {n / 3, 30, 31, 62};
+    return std::min(choice[(b / 8) % 4], n - 1);
+}
+inline int phys_of(Uplo uplo, int n, int i) { return uplo == Uplo::Upper ? n - 1 - i : i; }
+
+template <typename T>
+Matrix<T> blocked_batch(int n, int batch, Uplo uplo, unsigned seed) {
+    Matrix<T> full(n, n, batch);
+    std::mt19937 g(seed);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (int b = 0; b < batch; ++b) {
+        const BKind kd = kind_of(b);
+        const int m = singular_m(b, n);
+        for (int j = 0; j < n; ++j)
+            for (int i = j; i < n; ++i) {  // logical lower triangle
+                T v = draw<T>(g);
+                if (kd == BKind::pairs) {
+                    const bool pair = i == j + 1 && j % 2 == 0, last = i == j && j == n - 1 && n % 2 == 1;
+                    v = pair ? MV<T>::make(n + 2.0 + j, 0.5) : last ? MV<T>::make(n + 2.0, 0.5) : T{};
+                }
+                if (kd == BKind::singular) {
+                    if (i >= m || j >= m) v = T{};
+                    else if (i == j) v = MV<T>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
+                }
+                const int pi = phys_of(uplo, n, i), pj = phys_of(uplo, n, j);
+                full(pi, pj, b) = full(pj, pi, b) = v;
+            }
+        if (kd == BKind::nan && n >= 2) {
+            const int p1 = phys_of(uplo, n, 1), p0 = phys_of(uplo, n, 0);
+            full(p1, p0, b) = full(p0, p1, b) = MV<T>::make(nan, nan);
+        }
+    }
+    return full;
+}
+
+// The ipiv a pairs or singular item forces, in LAPACK's physical order.
+inline std::vector<int32_t> forced_ipiv(BKind kd, int n, Uplo uplo) {
+    std::vector<int32_t> p(static_cast<std::size_t>(n));
+    for (int k = 0; k < n; ++k) p[phys_of(uplo, n, k)] = phys_of(uplo, n, k) + 1;
+    if (kd == BKind::pairs)
+        for (int j = 0; j + 1 < n; j += 2) p[phys_of(uplo, n, j)] = p[phys_of(uplo, n, j + 1)] = -(phys_of(uplo, n, j + 1) + 1);
+    return p;
+}
+
 // ---- comparisons --------------------------------------------------------------------------------
+template <typename T>
+bool has_nan(const T& v) {
+    if constexpr (std::is_floating_point_v<T>) return std::isnan(v);
+    else return std::isnan(v.real()) || std::isnan(v.imag());
+}
+
 template <typename T>
 ::testing::AssertionResult same_storage(const Matrix<T>& x, const Matrix<T>& y, const char* what) {
     if (x.stride() != y.stride() || x.batch_size() != y.batch_size()) return ::testing::AssertionFailure() << what << ": layouts differ";
@@ -147,7 +228,8 @@ template <typename T>
 
 // Every item of work-group b returned the same value, equal to want[b] (want null: 0).
 ::testing::AssertionResult uniform_returns(const UnifiedVector<int32_t>& r, int wg, const int32_t* want) {
-    for (int b = 0; b < kBatch; ++b) {
+    const int batch = static_cast<int>(r.size() / std::size_t(wg));
+    for (int b = 0; b < batch; ++b) {
         const int32_t w = want ? want[b] : 0;
         for (int l = 0; l < wg; ++l)
             if (r.data()[std::size_t(b) * wg + l] != w)
@@ -158,7 +240,8 @@ template <typename T>
 }
 
 ::testing::AssertionResult canary_intact(const UnifiedVector<unsigned char>& c) {
-    for (int b = 0; b < kBatch; ++b)
+    const int batch = static_cast<int>(c.size() / kCanary);
+    for (int b = 0; b < batch; ++b)
         for (std::size_t k = 0; k < kCanary; ++k)
             if (c.data()[std::size_t(b) * kCanary + k] != static_cast<unsigned char>(0xA5 ^ k))
                 return ::testing::AssertionFailure() << "local byte buffer_size + " << k << " of item " << b << " was written";
@@ -178,22 +261,50 @@ template <class Run>
 }
 
 // ---- the user kernels ---------------------------------------------------------------------------
-// `kBatch` work-groups of wg items at sub-group size 32 with `local` bytes of local memory.
+// `batch` work-groups of wg items at sub-group size 32 with `local` bytes of local memory.
 template <class F>
-void launch(sycl::queue& q, int wg, std::size_t local, F f) {
+void launch(sycl::queue& q, int wg, std::size_t local, F f, int batch = kBatch) {
     q.submit([&](sycl::handler& h) {
          sycl::local_accessor<unsigned char, 1> lm(sycl::range<1>(std::max<std::size_t>(local, 16)), h);
-         h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * wg, std::size_t(wg)), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+         h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * wg, std::size_t(wg)), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
              f(it, batchlas::util::get_raw_ptr(lm));
          });
      }).wait_and_throw();
 }
 
-inline dv::Workspace local_ws(unsigned char* lm, std::size_t offset) {
+inline dv::Workspace local_ws(unsigned char* lm, std::size_t offset, std::byte* global = nullptr) {
     return {sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                 reinterpret_cast<std::byte*>(lm + offset)),
-            nullptr};
+            global};
 }
+
+// A caller's global workspace: `bytes` (buffer_size's global part) per matrix, each slice followed
+// by kCanary canary bytes (a slice stride the caller may choose: it stays 16-byte aligned). `shift`
+// moves every matrix's slice that far into its canary (the guard's red case).
+struct Gws {
+    std::byte* base = nullptr;
+    std::size_t stride = 0;
+    std::size_t shift = 0;
+    std::byte* at(std::size_t b) const { return base == nullptr ? nullptr : base + b * stride + shift; }
+};
+struct GlobalWs {
+    std::size_t bytes, stride;
+    int batch;
+    UnifiedVector<std::byte> mem;
+    GlobalWs(std::size_t bytes_, int batch_)
+        : bytes(bytes_), stride(bytes_ + kCanary), batch(batch_), mem(std::max<std::size_t>(stride * std::size_t(batch_), 1)) {
+        for (int b = 0; b < batch; ++b)
+            for (std::size_t k = 0; k < kCanary; ++k) mem.data()[b * stride + bytes + k] = static_cast<std::byte>(0x5A ^ k);
+    }
+    Gws view(std::size_t shift = 0) { return {mem.data(), stride, shift}; }
+    ::testing::AssertionResult intact() const {
+        for (int b = 0; b < batch; ++b)
+            for (std::size_t k = 0; k < kCanary; ++k)
+                if (mem.data()[b * stride + bytes + k] != static_cast<std::byte>(0x5A ^ k))
+                    return ::testing::AssertionFailure() << "global byte buffer_size + " << k << " of item " << b << " was written";
+        return ::testing::AssertionSuccess();
+    }
+};
 
 // The canary: kCanary bytes right after the op's buffer_size, set before and read back after.
 inline void canary_set(sycl::nd_item<1> it, unsigned char* lm, std::size_t need) {
@@ -219,53 +330,62 @@ struct Outs {
 };
 
 template <Uplo UL, class Tier, int WG, typename T>
-void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0) {
+void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0, Gws gw = {}) {
     const int n = a.rows();
     const std::size_t need = dv::sytrf_buffer_size<UL, Tier, T>(n).local_bytes;
     const auto av = a.kernel_view();
-    launch(q, wg, need + kCanary, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const int b = static_cast<int>(it.get_group_linear_id());
-        canary_set(it, lm, need);
-        with_exec<WG>(it, [&](const auto& ex) {
-            o.ret[std::size_t(b) * wg + it.get_local_linear_id()] =
-                dv::sytrf<UL, Tier>(ex, dv::item(av, b, n, n), ipiv + std::size_t(b) * n, local_ws(lm, ws_offset));
-        });
-        canary_get(it, lm, need, o.canary);
-    });
+    launch(
+        q, wg, need + kCanary,
+        [=](sycl::nd_item<1> it, unsigned char* lm) {
+            const int b = static_cast<int>(it.get_group_linear_id());
+            canary_set(it, lm, need);
+            with_exec<WG>(it, [&](const auto& ex) {
+                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] =
+                    dv::sytrf<UL, Tier>(ex, dv::item(av, b, n, n), ipiv + std::size_t(b) * n, local_ws(lm, ws_offset, gw.at(b)));
+            });
+            canary_get(it, lm, need, o.canary);
+        },
+        a.batch_size());
 }
 
 template <Uplo UL, class Tier, int WG, typename T>
-void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const int32_t* ipiv, Outs o, int wg) {
+void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = dv::sytrs_buffer_size<UL, Tier, T>(n).local_bytes;
+    const std::size_t need = dv::sytrs_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
-    launch(q, wg, need + kCanary, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const int b = static_cast<int>(it.get_group_linear_id());
-        canary_set(it, lm, need);
-        with_exec<WG>(it, [&](const auto& ex) {
-            o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sytrs<UL, Tier>(
-                ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0));
-        });
-        canary_get(it, lm, need, o.canary);
-    });
+    launch(
+        q, wg, need + kCanary,
+        [=](sycl::nd_item<1> it, unsigned char* lm) {
+            const int b = static_cast<int>(it.get_group_linear_id());
+            canary_set(it, lm, need);
+            with_exec<WG>(it, [&](const auto& ex) {
+                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sytrs<UL, Tier>(
+                    ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
+            });
+            canary_get(it, lm, need, o.canary);
+        },
+        a.batch_size());
 }
 
 template <Uplo UL, class Tier, int WG, typename T>
-void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* ipiv, Outs o, int wg) {
+void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = dv::sysv_buffer_size<UL, Tier, T>(n).local_bytes;
+    const std::size_t need = dv::sysv_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
-    launch(q, wg, need + kCanary, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const int b = static_cast<int>(it.get_group_linear_id());
-        canary_set(it, lm, need);
-        with_exec<WG>(it, [&](const auto& ex) {
-            o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sysv<UL, Tier>(
-                ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0));
-        });
-        canary_get(it, lm, need, o.canary);
-    });
+    launch(
+        q, wg, need + kCanary,
+        [=](sycl::nd_item<1> it, unsigned char* lm) {
+            const int b = static_cast<int>(it.get_group_linear_id());
+            canary_set(it, lm, need);
+            with_exec<WG>(it, [&](const auto& ex) {
+                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sysv<UL, Tier>(
+                    ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
+            });
+            canary_get(it, lm, need, o.canary);
+        },
+        a.batch_size());
 }
 
 // The host routes' work-group width for `wg` / Blocked<1> parity (sytrf_kernels.cc group_width).
@@ -399,6 +519,167 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
         const auto& d = select::describe(this->ctx->device(), Bk, false);
         return n <= sycl_sytrf::kSytrsCtaMaxN && static_cast<int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
     }
+
+    // ---- Blocked<NB> (NB > 1): a different summation order from the host `blocked` route, so the
+    // comparison is info and forced-ipiv parity plus each solve's residual against the full matrix.
+
+    // Item b's ipiv (int32, physical) and info as the kind forces them; false for random / nan.
+    static bool forced(int b, int n, Uplo uplo, std::vector<int32_t>& ipiv, int32_t& info) {
+        const BKind kd = kind_of(b);
+        if (kd != BKind::pairs && kd != BKind::singular) return false;
+        ipiv = forced_ipiv(kd, n, uplo);
+        const int m = singular_m(b, n);
+        info = kd == BKind::singular ? (uplo == Uplo::Lower ? m + 1 : n - m) : 0;
+        return true;
+    }
+
+    static ::testing::AssertionResult forced_parity(const int32_t* ipiv, const int32_t* info, int n, int batch, Uplo uplo, const char* who) {
+        std::vector<int32_t> want;
+        int32_t want_info = 0;
+        for (int b = 0; b < batch; ++b) {
+            if (!forced(b, n, uplo, want, want_info)) continue;
+            if (info[b] != want_info)
+                return ::testing::AssertionFailure() << who << " item " << b << ": info " << info[b] << ", forced " << want_info;
+            for (int k = 0; k < n; ++k)
+                if (ipiv[std::size_t(b) * n + k] != want[k])
+                    return ::testing::AssertionFailure() << who << " item " << b << ": ipiv[" << k << "] " << ipiv[std::size_t(b) * n + k]
+                                                         << ", forced " << want[k];
+        }
+        return ::testing::AssertionSuccess();
+    }
+
+    // Items with info 0 and finite data: the ones whose solve has a residual to check.
+    static std::vector<int> solvable(const int32_t* info, int batch, int skip = -1) {
+        std::vector<int> r;
+        for (int b = 0; b < batch; ++b)
+            if (info[b] == 0 && kind_of(b) != BKind::nan && b != skip) r.push_back(b);
+        return r;
+    }
+
+    double residual(const Matrix<T>& full, const Matrix<T>& x, const Matrix<T>& b0, const std::vector<int>& items) {
+        return MV<T>::solve_residual(*this->ctx, full, x, b0, items);
+    }
+
+    // Host sytrf `blocked` vs the device call: every item's info (uniform over the executor), the
+    // forced ipiv, A's poison, both canaries, and the device factor solving through sytrs `wg`.
+    template <Uplo UL, int NB>
+    void sytrf_blocked_case(int n, int batch) {
+        using Tier = dv::tier::Blocked<NB>;
+        constexpr int wg = dv::tier_info<dv::routine::sytrf<UL>, Tier, T>::wg_size;
+        const Matrix<T> full = blocked_batch<T>(n, batch, UL, 8000u + unsigned(n));
+        Matrix<T> ah = stored(full, UL), ad = ah.clone();
+        UnifiedVector<int64_t> hp(std::size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
+        UnifiedVector<int32_t> hi(batch, -12345);
+        ASSERT_TRUE(reached({{"sytrf", "blocked"}}, [&] {
+            const select::ScopedPin<ops::sytrf::SytrfChoice> pin("sytrf", ops::sytrf::SytrfChoice{ops::sytrf::Blocked{}});
+            host_sytrf(ah, UL, hp, hi);
+        }));
+        UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * wg, -12345);
+        UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
+        GlobalWs gw(dv::sytrf_buffer_size<UL, Tier, T>(n).global_bytes, batch);
+        dev_sytrf<UL, Tier, wg>(q(), ad, dp.data(), Outs{ret.data(), can.data()}, wg, 0, gw.view());
+        const int32_t* hpi = reinterpret_cast<const int32_t*>(hp.data());
+        EXPECT_TRUE(uniform_returns(ret, wg, hi.data())) << "n " << n;
+        EXPECT_TRUE(forced_parity(dp.data(), hi.data(), n, batch, UL, "device")) << "n " << n;
+        EXPECT_TRUE(forced_parity(hpi, hi.data(), n, batch, UL, "host blocked")) << "n " << n;
+        EXPECT_TRUE(canary_intact(can)) << "n " << n;
+        EXPECT_TRUE(gw.intact()) << "n " << n;
+        EXPECT_TRUE(ts::unwritten_outside<T>(ad, Live::triangle(UL))) << "n " << n;
+        // The device factor solves: sytrs `wg` (Blocked<1>'s twin) on it, residual vs the full A.
+        UnifiedVector<int64_t> dp64(std::size_t(n) * batch, 0);
+        std::copy(dp.data(), dp.data() + dp.size(), reinterpret_cast<int32_t*>(dp64.data()));
+        Matrix<T> x = rhs<T>(n, 2, 9000u + unsigned(n), batch);
+        const Matrix<T> b0 = x.clone();
+        {
+            const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", ops::sytrs::SytrsChoice{ops::sytrs::Wg{}});
+            host_sytrs(ad, x, UL, dp64);
+        }
+        const auto ok = solvable(hi.data(), batch);
+        ASSERT_FALSE(ok.empty());
+        EXPECT_VERIFY(T, verify::Check::solve, n, residual(full, x, b0, ok)) << "n " << n;
+    }
+
+    // Host sytrs `blocked` vs the device call on one host `wg` factor: A read only, B's poison, an
+    // invalid list (item 1) all NaN on both sides, the residual of both solves.
+    template <Uplo UL, int NB>
+    void sytrs_blocked_case(int n, int nrhs, int batch) {
+        using Tier = dv::tier::Blocked<NB>;
+        constexpr int wg = dv::tier_info<dv::routine::sytrs<UL>, Tier, T>::wg_size;
+        const Matrix<T> full = blocked_batch<T>(n, batch, UL, 6000u + unsigned(n));
+        Matrix<T> a = stored(full, UL);
+        UnifiedVector<int64_t> hp(std::size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
+        UnifiedVector<int32_t> hi(batch, -12345);
+        {
+            const select::ScopedPin<ops::sytrf::SytrfChoice> pin("sytrf", ops::sytrf::SytrfChoice{ops::sytrf::Wg{}});
+            host_sytrf(a, UL, hp, hi);
+        }
+        int32_t* const hpi = reinterpret_cast<int32_t*>(hp.data());
+        std::fill(hpi + n, hpi + 2 * n, 0);  // item 1: a list sytrf cannot write
+        const Matrix<T> a0 = a.clone();
+        Matrix<T> bh = rhs<T>(n, nrhs, 7000u + unsigned(n), batch), bd = bh.clone();
+        const Matrix<T> b0 = bh.clone();
+        ASSERT_TRUE(reached({{"sytrs", "blocked"}}, [&] {
+            const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", ops::sytrs::SytrsChoice{ops::sytrs::Blocked{}});
+            host_sytrs(a, bh, UL, hp);
+        }));
+        UnifiedVector<int32_t> ret(std::size_t(batch) * wg, -12345);
+        UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
+        GlobalWs gw(dv::sytrs_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
+        dev_sytrs<UL, Tier, wg>(q(), a, bd, hpi, Outs{ret.data(), can.data()}, wg, gw.view());
+        EXPECT_TRUE(same_storage(a0, a, "A (read only)")) << "n " << n;
+        EXPECT_TRUE(ts::unwritten_outside<T>(bd, Live::block())) << "n " << n;
+        EXPECT_TRUE(uniform_returns(ret, wg, nullptr)) << "n " << n;
+        EXPECT_TRUE(canary_intact(can)) << "n " << n;
+        EXPECT_TRUE(gw.intact()) << "n " << n;
+        for (int c = 0; c < nrhs; ++c)
+            for (int i = 0; i < n; ++i) {
+                EXPECT_TRUE(has_nan(bd(i, c, 1))) << "device: item 1 row " << i << " col " << c << " not NaN";
+                EXPECT_TRUE(has_nan(bh(i, c, 1))) << "host: item 1 row " << i << " col " << c << " not NaN";
+            }
+        const auto ok = solvable(hi.data(), batch, 1);
+        ASSERT_FALSE(ok.empty());
+        EXPECT_VERIFY(T, verify::Check::solve, n, residual(full, bd, b0, ok)) << "device n " << n << " nrhs " << nrhs;
+        EXPECT_VERIFY(T, verify::Check::solve, n, residual(full, bh, b0, ok)) << "host n " << n << " nrhs " << nrhs;
+    }
+
+    // Host sysv `compose` over sytrf / sytrs `blocked` vs the device call: info parity, forced
+    // ipiv, a singular item's B as given (bit for bit), the residual of every solvable item.
+    template <Uplo UL, int NB>
+    void sysv_blocked_case(int n, int nrhs, int batch) {
+        using Tier = dv::tier::Blocked<NB>;
+        constexpr int wg = dv::tier_info<dv::routine::sysv<UL>, Tier, T>::wg_size;
+        const Matrix<T> full = blocked_batch<T>(n, batch, UL, 10000u + unsigned(n));
+        Matrix<T> ah = stored(full, UL), ad = ah.clone();
+        Matrix<T> bh = rhs<T>(n, nrhs, 11000u + unsigned(n), batch), bd = bh.clone();
+        const Matrix<T> b0 = bh.clone();
+        UnifiedVector<int64_t> hp(std::size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
+        UnifiedVector<int32_t> hi(batch, -12345);
+        ASSERT_TRUE(reached({{"sysv", "compose"}, {"sytrf", "blocked"}, {"sytrs", "blocked"}}, [&] {
+            const select::ScopedPin<ops::sysv::SysvChoice> pin("sysv", ops::sysv::SysvChoice{ops::sysv::Compose{}});
+            const select::ScopedPin<ops::sytrf::SytrfChoice> pf("sytrf", ops::sytrf::SytrfChoice{ops::sytrf::Blocked{}});
+            const select::ScopedPin<ops::sytrs::SytrsChoice> ps("sytrs", ops::sytrs::SytrsChoice{ops::sytrs::Blocked{}});
+            host_sysv(ah, bh, UL, hp, hi);
+        }));
+        UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * wg, -12345);
+        UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
+        GlobalWs gw(dv::sysv_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
+        dev_sysv<UL, Tier, wg>(q(), ad, bd, dp.data(), Outs{ret.data(), can.data()}, wg, gw.view());
+        EXPECT_TRUE(uniform_returns(ret, wg, hi.data())) << "n " << n;
+        EXPECT_TRUE(forced_parity(dp.data(), hi.data(), n, batch, UL, "device")) << "n " << n;
+        EXPECT_TRUE(canary_intact(can)) << "n " << n;
+        EXPECT_TRUE(gw.intact()) << "n " << n;
+        EXPECT_TRUE(ts::unwritten_outside<T>(ad, Live::triangle(UL))) << "n " << n;
+        EXPECT_TRUE(ts::unwritten_outside<T>(bd, Live::block())) << "n " << n;
+        std::vector<int> singular;
+        for (int b = 0; b < batch; ++b)
+            if (hi.data()[b] != 0) singular.push_back(b);
+        ASSERT_FALSE(singular.empty());
+        EXPECT_TRUE(ts::items_bit_identical_to<T>(bd, b0, singular)) << "n " << n << ": a singular item's B changed";
+        const auto ok = solvable(hi.data(), batch);
+        ASSERT_FALSE(ok.empty());
+        EXPECT_VERIFY(T, verify::Check::solve, n, residual(full, bd, b0, ok)) << "device n " << n;
+        EXPECT_VERIFY(T, verify::Check::solve, n, residual(full, bh, b0, ok)) << "host n " << n;
+    }
 };
 
 using DeviceApiSytrfTypes = typename test_utils::backend_types<ts::Config>::type;
@@ -464,6 +745,80 @@ TYPED_TEST(DeviceApiSytrfTest, SysvBlocked1IsTheHostComposeOverWgBitForBit) {
     }
 }
 
+// ---- Blocked<NB>: the in-group blocked tiers, NB = the host route's 31 -------------------------
+constexpr int kNb = sycl_sytrf::kSytrfBlockedNb;
+static_assert(kNb == 31, "the n lists below straddle panels of 31");
+constexpr int kBlockedBatch = 128;
+
+// n straddles every panel end (31 | 32, 62 | 63 | 64, 93 | 94) and n <= NB (the ?sytf2 tail only).
+TYPED_TEST(DeviceApiSytrfTest, SytrfBlockedAgreesWithTheHostBlockedRoute) {
+    for (int n : {5, 31, 32, 33, 62, 63, 64, 94, 150}) {
+        this->template sytrf_blocked_case<Uplo::Lower, kNb>(n, kBlockedBatch);
+        this->template sytrf_blocked_case<Uplo::Upper, kNb>(n, kBlockedBatch);
+    }
+}
+
+TYPED_TEST(DeviceApiSytrfTest, SytrsBlockedAgreesWithTheHostBlockedRoute) {
+    // trsm's diagonal blocks are NB wide: n straddles them; nrhs past one 32-wide C tile.
+    for (int n : {5, 31, 32, 33, 64, 100}) {
+        this->template sytrs_blocked_case<Uplo::Lower, kNb>(n, 3, kBlockedBatch);
+        this->template sytrs_blocked_case<Uplo::Upper, kNb>(n, 1, kBlockedBatch);
+    }
+    this->template sytrs_blocked_case<Uplo::Upper, kNb>(70, 40, 32);
+}
+
+TYPED_TEST(DeviceApiSytrfTest, SysvBlockedAgreesWithTheHostComposeOverBlocked) {
+    for (int n : {5, 32, 63, 120}) {
+        this->template sysv_blocked_case<Uplo::Lower, kNb>(n, 2, kBlockedBatch);
+        this->template sysv_blocked_case<Uplo::Upper, kNb>(n, 3, kBlockedBatch);
+    }
+}
+
+// A saturating batch of one random problem (three panels and the tail): every item bit-identical
+// to item 0, A, ipiv and the return value.
+TYPED_TEST(DeviceApiSytrfTest, SytrfBlockedSaturatingBatchIsBitIdenticalToItemZero) {
+    using T = typename TestFixture::T;
+    using Tier = dv::tier::Blocked<kNb>;
+    const int n = 94;
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+        Matrix<T> one = blocked_batch<T>(n, 1, uplo, 4242u);
+        Matrix<T> full(n, n, kBatch);
+        for (int b = 0; b < kBatch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) full(i, j, b) = one(i, j, 0);
+        Matrix<T> a = stored(full, uplo);
+        UnifiedVector<int32_t> dp(std::size_t(n) * kBatch, kPivSentinel), ret(std::size_t(kBatch) * 256, -12345);
+        UnifiedVector<unsigned char> can(std::size_t(kBatch) * kCanary, 0);
+        if (uplo == Uplo::Lower) {
+            GlobalWs gw(dv::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, kBatch);
+            dev_sytrf<Uplo::Lower, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view());
+            EXPECT_TRUE(gw.intact());
+        } else {
+            GlobalWs gw(dv::sytrf_buffer_size<Uplo::Upper, Tier, T>(n).global_bytes, kBatch);
+            dev_sytrf<Uplo::Upper, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view());
+            EXPECT_TRUE(gw.intact());
+        }
+        EXPECT_TRUE(ts::items_bit_identical<T>(a)) << ts::uplo_name(uplo);
+        for (int b = 1; b < kBatch; ++b)
+            ASSERT_TRUE(same_ints(dp.data(), dp.data() + std::size_t(b) * n, std::size_t(n), "ipiv vs item 0")) << "item " << b;
+        EXPECT_TRUE(uniform_returns(ret, 256, nullptr)) << ts::uplo_name(uplo);
+        EXPECT_TRUE(canary_intact(can));
+    }
+}
+
+// The global canary's own red case: W carved 64 bytes late runs into it, so it must fail.
+TYPED_TEST(DeviceApiSytrfTest, ShiftedGlobalWorkspaceBreaksTheCanary) {
+    using T = typename TestFixture::T;
+    using Tier = dv::tier::Blocked<kNb>;
+    const int n = 40, batch = 32;  // n > NB: the first panel zero-fills all of W
+    Matrix<T> a = stored(blocked_batch<T>(n, batch, Uplo::Lower, 78u), Uplo::Lower);
+    UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * 256, -12345);
+    UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
+    GlobalWs gw(dv::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, batch);
+    dev_sytrf<Uplo::Lower, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view(kCanary));
+    EXPECT_FALSE(gw.intact()) << "the global canary did not see a write past buffer_size";
+}
+
 // The canary guard's own red case: the tile carved 64 bytes late runs into it, so it must fail.
 TYPED_TEST(DeviceApiSytrfTest, ShiftedWorkspaceBreaksTheCanary) {
     using T = typename TestFixture::T;
@@ -525,6 +880,17 @@ TYPED_TEST(DeviceApiSytrfTest, ArgumentErrorsAreUniformAndWriteNothing) {
                   return dv::sytrf<Uplo::Lower, dv::tier::Blocked<1>>(dv::RtGroup<>(it), dv::item(av, b, n, n), ip + b * n, w);
               }),
               -1);
+    // Blocked<31> checks first as well: ld = n - 1 (-4), B with n - 1 rows (-7), no workspace touched.
+    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
+                  const dv::Mat<T> m{av.data() + std::ptrdiff_t(b) * av.stride(), dv::Dyn{n}, dv::Dyn{n}, dv::Dyn{n - 1}};
+                  return dv::sytrf<Uplo::Upper, dv::tier::Blocked<31>>(dv::WorkGroup<256, 32>{it}, m, ip + b * n, w);
+              }),
+              -4);
+    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
+                  return dv::sysv<Uplo::Lower, dv::tier::Blocked<31>>(dv::WorkGroup<256, 32>{it}, dv::item(av, b, n, n),
+                                                                     dv::item(bv, b, n - 1, nrhs), ip + b * n, w);
+              }),
+              -7);
     EXPECT_TRUE(same_storage(a0, a, "A"));
     EXPECT_TRUE(same_storage(b0, bm, "B"));
     for (std::size_t e = 0; e < dp.size(); ++e) ASSERT_EQ(dp.data()[e], kPivSentinel) << "ipiv written at " << e;
@@ -533,12 +899,12 @@ TYPED_TEST(DeviceApiSytrfTest, ArgumentErrorsAreUniformAndWriteNothing) {
 // ---- with_tier: host side, mock device limits ----------------------------------------------------
 dv::DeviceLimits big_limits() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
 
-template <class Rt, class T>
+template <class Rt, class T, class List = dv::tiers_t<Rt, T>>
 std::string pick(const dv::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Rt, T>(lim, n, [&]<class Tier>(Tier) {
-            if constexpr (std::is_same_v<Tier, dv::tier::Blocked<1>>) got = "blocked1";
+        dv::with_tier<Rt, T, List>(lim, n, [&]<class Tier>(Tier) {
+            if constexpr (requires { Tier::nb; }) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });
     } catch (const batchlas::invalid_argument& e) {
@@ -589,6 +955,29 @@ TEST(DeviceApiSytrfTiers, EachDeviceFilterRemovesItsTier) {
     narrow.max_work_group_size = 128;
     EXPECT_EQ((pick<SysvL, float>(narrow, 20)), "cta32");
     EXPECT_EQ((pick<SysvL, float>(narrow, 40)), "throw:sysv: no device tier admits n=40");
+}
+
+// Blocked<31> is the caller's to list: first after the small tiers, and filtered by its 256 items
+// and its local part (one byte short drops it).
+TEST(DeviceApiSytrfTiers, WithTierTakesBlockedFromACallerList) {
+    namespace tr = dv::tier;
+    using SytrfList = tr::list<tr::Cta<32>, tr::Blocked<31>>;
+    using SytrsList = tr::list<tr::Cta<32>, tr::Cta<64>, tr::Cta<128>, tr::Blocked<31>>;
+    const auto lim = big_limits();
+    EXPECT_EQ((pick<SytrfL, float, SytrfList>(lim, 32)), "cta32");
+    EXPECT_EQ((pick<SytrfL, float, SytrfList>(lim, 33)), "blocked31");
+    EXPECT_EQ((pick<SytrfL, std::complex<double>, SytrfList>(lim, 5000)), "blocked31");
+    EXPECT_EQ((pick<SytrsU, float, SytrsList>(lim, 129)), "blocked31");
+    EXPECT_EQ((pick<SysvL, double, SytrfList>(lim, 33)), "blocked31");
+    dv::DeviceLimits narrow = big_limits();
+    narrow.max_work_group_size = 128;
+    EXPECT_EQ((pick<SytrfL, float, SytrfList>(narrow, 33)), "throw:sytrf: no device tier admits n=33");
+    const std::size_t need = dv::sytrf_buffer_size<Uplo::Lower, tr::Blocked<31>, float>(33).local_bytes;
+    dv::DeviceLimits slm = big_limits();
+    slm.local_mem_bytes = need;
+    EXPECT_EQ((pick<SytrfL, float, SytrfList>(slm, 33)), "blocked31");
+    slm.local_mem_bytes = need - 1;
+    EXPECT_EQ((pick<SytrfL, float, SytrfList>(slm, 33)), "throw:sytrf: no device tier admits n=33");
 }
 
 }  // namespace

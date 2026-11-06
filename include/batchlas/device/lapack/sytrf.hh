@@ -26,6 +26,7 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/level3/group.hh>
 
 namespace batchlas::device::inline v2 {
 
@@ -418,6 +419,13 @@ inline void lasyf_undo(const sytrf_detail::RevMat<D>& S, int start, int end, con
 //   tier::Cta<N>, N <= 32   A's logical lower triangle in local memory; sub-group 0 of ex factors
 //   tier::Blocked<1>        any n: ?sytf2 in place in global memory (LAPACK's NB = 1, unblocked);
 //                           ex at most 256 items (the arg-max scratch's eight sub-groups)
+//   tier::Blocked<NB>, NB>1 any n: ?sytrf's blocked loop in one work-group (the host `blocked`
+//                           route's steps): ?lasyf panels of NB columns, W (n x (NB + 1)) in the
+//                           caller's global workspace, the trailing A22 -= L21 W21^T on the
+//                           in-group L3 (sytrf_l3_cfg), ?sytf2 on the last n - end <= NB columns;
+//                           ex = WorkGroup<256, 32>. Not in tiers_t (no measured win yet, design
+//                           F6): name it, or pass with_tier a tier::list holding it. NB = 31 is
+//                           the host route's (the update's k = 32).
 // The host routes `cta` and `wg` run the same bodies (sytrf_cta_factor, sytf2) with uplo a
 // run-time flag: the reversal map makes Upper an index transform, so one kernel per T serves
 // both and the kernel names stay.
@@ -453,6 +461,27 @@ template <class R> constexpr SytrfWgPlan<R> sytrf_wg_plan() {
     const auto v = p.take<R>(ws::Space::Local, sytrf_wg_max / 32);
     const auto i = p.take<int>(ws::Space::Local, sytrf_wg_max / 32);
     return {v, i, p.size()};
+}
+
+// Blocked<NB>'s L3 configuration: a function of T only (one kernel per T, never of n), 256 items.
+template <class T> using sytrf_l3_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+inline constexpr int sytrf_blocked_wg = 256;
+static_assert(sytrf_l3_cfg<float>::threads == sytrf_blocked_wg);
+
+template <int NB, class T> struct SytrfBlockedPlan {
+    ws::Slot<real_t<T>> v;
+    ws::Slot<int> i;
+    ws::Slot<T> smem;
+    ws::Slot<T> w;  // global: ?lasyf's W, n x (NB + 1) at ld n
+    WorkspaceSize size;
+};
+template <int NB, class T> constexpr SytrfBlockedPlan<NB, T> sytrf_blocked_plan(int n) {
+    Plan p;
+    const auto v = p.take<real_t<T>>(ws::Space::Local, sytrf_wg_max / 32);
+    const auto i = p.take<int>(ws::Space::Local, sytrf_wg_max / 32);
+    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<sytrf_l3_cfg<T>>());
+    const auto w = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * (NB + 1));
+    return {v, i, sm, w, p.size()};
 }
 
 // Whole sub-groups of 32 (a compile-time width a multiple of 32): the butterflies are 32-lane.
@@ -542,6 +571,66 @@ BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, i
     return sytf2(sytrf_view(A, rev), A.rows(), rev, ex, am, [&](int k, int v) { ipiv[k] = v; });
 }
 
+// The host `blocked` route's step order in one work-group: each panel's ?lasyf, its trailing
+// update, then (before the next panel) its ?lasyf_undo; [first, end) is the last panel's columns,
+// the host's per-item state. The update has the panel's own rank, end - k0 (NB, or NB + 1 when a
+// 2 x 2 block took column k0 + NB), on the logical trailing matrix [end, n): physically the lower
+// triangle at (end, end), or for Upper the upper triangle at (0, 0) with the panel's columns and
+// W's both reversed. evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
+template <Uplo UL, int NB, class Ex, class MA>
+    requires(NB > 1)
+BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+    using D = std::remove_cv_t<typename MA::value_type>;
+    using R = real_t<D>;
+    using Cfg = sytrf_l3_cfg<D>;
+    using Ar = arith_t<typename Cfg::ops, D>;
+    static_assert(!is_runtime_v<Ex> && Ex::size == Cfg::threads, "sytrf tier::Blocked<NB>: a WorkGroup<256, 32> executor");
+    constexpr bool rev = UL == Uplo::Upper;
+    constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
+    const int n = A.rows();
+    const auto pl = sytrf_blocked_plan<NB, D>(n);
+    const ArgMaxScratch<R> am{carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw()};
+    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    D* const w = carve_global(ws, pl.w);
+    D* const a0 = &A(0, 0);
+    const int lda = static_cast<int>(sytrf_ld(A));
+    const RevMat<D> S = rev_mat(a0, lda, n, rev);
+    const RevMat<D> W = w_tile(w, n, n, NB + 1, rev);
+    auto piv_out = [&](int k, int v) { ipiv[k] = v; };
+    auto partner = [&](int j, bool& two) {
+        const int raw = ipiv[rev ? n - 1 - j : j];
+        two = raw < 0;
+        const int p = (raw < 0 ? -raw : raw) - 1;
+        return rev ? n - 1 - p : p;
+    };
+    const D neg_one = Ar::neg(Ar::one()), one = Ar::one();
+    int info = 0, first = 0, end = 0;
+    for (int k0 = 0; n - k0 > NB; k0 += NB) {
+        lasyf_undo(S, first, end, ex, partner);
+        const int e = lasyf(S, W, n, k0, NB, end, rev, ex, am, info, piv_out);
+        first = end;
+        end = e;
+        const int m = n - e, rank = e - k0;
+        if (m == 0) continue;
+        const l3::Global<D> c{rev ? a0 : a0 + e + e * lda, lda, m, m};
+        const D* const lp = rev ? a0 + (n - k0 - rank) * lda : a0 + e + k0 * lda;
+        const D* const wp = rev ? w + (NB + 1 - rank) * n : w + e;
+        const auto pass = l3::make_pass<true, false>(rank, [=](int r, int kk) BATCHLAS_DLA_BODY { return lp[r + kk * lda]; },
+                                                      [=](int kk, int col) BATCHLAS_DLA_BODY { return wp[col + kk * n]; });
+        l3::rank_update<Cfg, tri, false>(ex, sm, c, neg_one, one, pass);
+        sync<scope::Group>(ex, Mem::Global);
+    }
+    lasyf_undo(S, first, end, ex, partner);
+    const int sub = n - end;
+    if (sub > 0) {  // ?sytf2 on the trailing sub-matrix; its ipiv and info shifted to A's indices
+        const int off = rev ? 0 : end;
+        const int t = sytf2(rev_mat(a0 + off + off * lda, lda, sub, rev), sub, rev, ex, am,
+                            [&](int k, int v) { ipiv[k + off] = v > 0 ? v + off : v - off; });
+        if (info == 0 && t > 0) info = t + off;
+    }
+    return info;
+}
+
 }  // namespace sytrf_detail
 
 template <Uplo UL, class T> struct tiers<routine::sytrf<UL>, T> {
@@ -558,8 +647,14 @@ template <Uplo UL, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<1
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return sytrf_detail::sytrf_wg_plan<real_t<T>>().size; }
 };
+template <Uplo UL, int NB, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<NB>, T> {
+    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sytrf_detail::sytrf_blocked_plan<NB, T>(n).size; }
+};
 
-// The workspace of one matrix: local bytes for the tier's tile / scratch, no global part.
+// The workspace of one matrix: local bytes for the tier's tile / scratch; a global part only for
+// Blocked<NB> (W), which the caller offsets per matrix (global_slice).
 template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrf_buffer_size(int n) {
     using Rt = routine::sytrf<UL>;
     return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
@@ -571,7 +666,8 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrf_buffer_siz
 // all on entry; both are visible to every item on return. Returns LAPACK's info, the same on
 // every item: 0; k > 0 (D(k, k) is exactly zero; the factor is complete); -2 (A not square, or n
 // outside the tier); -4 (ld < max(1, n)); -1 (ex: a run-time width that is not whole 32-wide
-// sub-groups, or wider than Blocked<1>'s 256). The executor needs sub-group size 32.
+// sub-groups, or wider than Blocked<1>'s 256). The executor needs sub-group size 32. ws holds
+// sytrf_buffer_size<UL, Tier, T>(n): its local bytes, and its global bytes for this matrix alone.
 template <Uplo UL, class Tier, class Ex, class MA> inline int sytrf(const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Tr = resolve_tier_t<routine::sytrf<UL>, D, Tier>;

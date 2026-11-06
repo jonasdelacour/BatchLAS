@@ -8,6 +8,9 @@
 //                           (the host route sysv `cta` launches these two bodies)
 //   tier::Blocked<1>        any n: sytrf Blocked<1>, then sytrs Blocked<1> (sysv `compose` over
 //                           sytrf `wg` and sytrs `wg`); ex at most 256 items
+//   tier::Blocked<NB>, NB>1 any n: sytrf Blocked<NB>, then sytrs Blocked<NB> (sysv `compose`
+//                           over sytrf `blocked` and sytrs `blocked`); ex = WorkGroup<256, 32>;
+//                           not in tiers_t; sysv_buffer_size<UL, Tier, T>(n, nrhs)
 // Tests: tests/device_api_sytrf_tests.cc.
 
 #include <cstddef>
@@ -81,6 +84,16 @@ BATCHLAS_DLA_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, co
     return 0;
 }
 
+template <Uplo UL, int NB, class Ex, class MA, class MB>
+    requires(NB > 1)
+BATCHLAS_DLA_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+    // As Blocked<1>: both halves carve from offset 0 of both spaces; sytrf's ends on a barrier.
+    const int info = sytrf_detail::sytrf_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, ws);
+    if (info != 0) return info;
+    sytrs_detail::sytrs_run<UL>(tier::Blocked<NB>{}, ex, A, B, ipiv, ws);
+    return 0;
+}
+
 constexpr WorkspaceSize sysv_max(const WorkspaceSize& a, const WorkspaceSize& b) {
     return {a.local_bytes > b.local_bytes ? a.local_bytes : b.local_bytes,
             a.global_bytes > b.global_bytes ? a.global_bytes : b.global_bytes, a.align > b.align ? a.align : b.align};
@@ -95,19 +108,26 @@ template <Uplo UL, int N, class T> struct tier_info<routine::sysv<UL>, tier::Cta
     static_assert(N <= 32, "sysv tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int) { return sysv_detail::sysv_cta_plan<N, T>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return sysv_detail::sysv_cta_plan<N, T>().size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<1>, T> {
     static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int) {
+    static constexpr WorkspaceSize buffer_size(int, int = 1) {
         return sysv_detail::sysv_max(sytrf_detail::sytrf_wg_plan<real_t<T>>().size, sytrs_detail::sytrs_wg_plan<real_t<T>>().size);
     }
 };
+template <Uplo UL, int NB, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<NB>, T> {
+    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) {
+        return sysv_detail::sysv_max(sytrf_detail::sytrf_blocked_plan<NB, T>(n).size, sytrs_detail::sytrs_blocked_plan<T>(n, nrhs).size);
+    }
+};
 
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sysv_buffer_size(int n) {
+template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sysv_buffer_size(int n, int nrhs = 1) {
     using Rt = routine::sysv<UL>;
-    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
+    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n, nrhs);
 }
 
 // ?sysv of one matrix inside a kernel: A := sytrf's factor, ipiv[0, n) := its pivots, and B :=
