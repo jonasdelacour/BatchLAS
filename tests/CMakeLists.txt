@@ -39,6 +39,7 @@ set(TEST_TARGETS
     device_api_stedc_tests
     device_api_svd_tests
     device_api_sygst_tests
+    device_api_sytrf_tests
     device_api_util_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
@@ -275,6 +276,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_api_stedc_tests
     device_api_svd_tests
     device_api_sygst_tests
+    device_api_sytrf_tests
     device_api_util_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
