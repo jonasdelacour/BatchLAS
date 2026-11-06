@@ -996,3 +996,16 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
         message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
     endif()
 endif()
+
+# examples/device/: the device API guide's worked examples (docs/design/device-la-v2.md), each a
+# smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_api_* tests.
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    foreach(_example potrf_any_n)
+        add_executable(device_example_${_example} "${PROJECT_SOURCE_DIR}/examples/device/${_example}.cc")
+        batchlas_configure_binary_target(device_example_${_example})
+        batchlas_gpu_test_command(_example_cmd device_example_${_example})
+        add_test(NAME device_example_${_example} COMMAND ${_example_cmd})
+        set_tests_properties(device_example_${_example} PROPERTIES LABELS "blas" TIMEOUT 300)
+        batchlas_test_needs_gpu(device_example_${_example})
+    endforeach()
+endif()
