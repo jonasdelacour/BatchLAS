@@ -89,8 +89,8 @@ template <Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize or
 /// and tau visible on entry, C visible on return; A and tau are not written. One tier per kernel
 /// (with_tier<routine::ormqr<SD, TR>, T> on the host).
 /// @param ex   the executor
-/// @param a    this matrix's reflectors (l3::Global, a global Mat or device::item)
-/// @param c    this matrix's C, overwritten
+/// @param A    this matrix's reflectors (l3::Global, a global Mat or device::item)
+/// @param C    this matrix's C, overwritten
 /// @param tau  k scalars: a T* or a unit-stride vector operand
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
 ///             ormqr_buffer_size<SD, TR, Tier, T>(C.rows(), C.cols())

@@ -351,7 +351,7 @@ template <class Tier, class T> constexpr WorkspaceSize geqrf_buffer_size(int m, 
 /// uses conj(tau), zgeqr2's). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; A visible
 /// on entry, A and tau visible on return. One tier per kernel (with_tier<routine::geqrf, T>).
 /// @param ex   the executor
-/// @param a    this matrix (l3::Global, a global Mat or device::item)
+/// @param A    this matrix (l3::Global, a global Mat or device::item)
 /// @param tau  k scalars: a T* or a unit-stride vector operand
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
 ///             geqrf_buffer_size<Tier, T>(m, n); contents undefined on return

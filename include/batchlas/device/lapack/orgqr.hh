@@ -61,7 +61,7 @@ template <class Tier, class T> constexpr WorkspaceSize orgqr_buffer_size(int m, 
 /// not read) and Q, with orthonormal columns, on return. Collective over a
 /// WorkGroup<tier_info<...>::wg_size, 32>; A and tau visible on entry, A visible on return.
 /// @param ex   the executor
-/// @param a    this matrix (l3::Global, a global Mat or device::item), overwritten with Q
+/// @param A    this matrix (l3::Global, a global Mat or device::item), overwritten with Q
 /// @param tau  n scalars: a T* or a unit-stride vector operand
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
 ///             orgqr_buffer_size<Tier, T>(m, n)

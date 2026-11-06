@@ -54,7 +54,7 @@ BATCHLAS_DLA_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, con
 /// element (contiguous), read where the scans run.
 /// The tolerance is LAPACK's ABSOLUTE 8 eps max(|D|_inf, |z|_inf), taken before the Givens loop so
 /// proximity deflation uses it too (a relative one under-deflates clustered small eigenvalues).
-/// evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
+/// `evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance`
 /// No trailing barrier: the caller syncs before it reads the outputs.
 template <class Ex, class D, class Z, class Q, class AbsX, class DAt, class RhoAt, class KeepAt, class KeepPtr, class PermAt, class MapAt,
           class PermLocal, class ScanInc, class ScanIncPtr, class ScanExc, class ScanExcPtr, class SetReduced>
