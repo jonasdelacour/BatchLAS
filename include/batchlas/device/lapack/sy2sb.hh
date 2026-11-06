@@ -9,6 +9,7 @@
 // staging in local memory. Sizes: sy2sb_buffer_size<UL, Tier, T>(n, kd); with_tier:
 // routine::sy2sb<UL, KDMax>. copy_band_col is also the host route's band copy.
 
+#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <type_traits>
@@ -59,10 +60,11 @@ template <class Tier, class T> constexpr Layout<T> panel_layout(int n, int kd) {
     return l;
 }
 
-// AB(0 : lk, j) := A(j : j + lk, j), lk = min(kd, n - 1 - j) + 1: column j of the lower band.
-template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void copy_band_col(const Ex& ex, const MA& a, const MB& ab, int kd, int j) {
-    const int last = a.cols() - 1 - j;
-    const int lk = (kd < last ? kd : last) + 1;
+// The length of band column j of an n x n matrix: min(kd, n - 1 - j) + 1.
+BATCHLAS_DLA_INLINE constexpr int band_len(int kd, int n, int j) { return std::min(kd, n - 1 - j) + 1; }
+// AB(0 : lk, j) := A(j : j + lk, j), lk = band_len(kd, n, j): column j of the lower band. lk is
+// an argument: computed in the host launcher's own body its SASS stays identical to before.
+template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void copy_band_col(const Ex& ex, const MA& a, const MB& ab, int lk, int j) {
     copy(ex, a.col(j).tail(j).head(lk), ab.col(j).head(lk));
 }
 
@@ -154,10 +156,14 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
 
     const auto a = mat(ag.p, n, n, ag.ld);
     const auto ab = mat(bg.p, kd + 1, n, bg.ld);
-    laset(ex, Zero{}, Zero{}, ab);
+    // alg::Flat: the x86 OpenCL CPU compiler hoists Walk's wg_size / (kd + 1) to the kernel entry,
+    // above the kd < 0 return (SIGFPE at kd = -1); Flat divides only inside its loop.
+    laset<Part::Full, alg::Flat>(ex, Zero{}, Zero{}, ab);
     ex.barrier(Mem::Global);
     if (kd == 0 || n <= kd) {
-        for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { sy2sb_detail::copy_band_col(Thread{}, a, ab, kd, j); });
+        for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY {
+            sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, j), j);
+        });
         ex.barrier(Mem::Global);
         return 0;
     }
@@ -175,7 +181,7 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
         ex.barrier(Mem::Global);
         // Columns [i, i + pk) are final; the strip and A22 below write columns >= i + pk only.
         for_each_owned(ex, pk, [&](int c) BATCHLAS_DLA_BODY {
-            sy2sb_detail::copy_band_col(Thread{}, a, ab, kd, i + c);
+            sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, i + c), i + c);
             tau(i + c) = taup[c];
         });
         const auto w = mat(vp, pn, pk, pn);
@@ -188,7 +194,9 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
                                            carve_global(ws, lay.p), carve_global(ws, lay.y), carve_global(ws, lay.m1),
                                            carve_global(ws, lay.m2), sm);
     }
-    for_each_owned(ex, kd, [&](int c) BATCHLAS_DLA_BODY { sy2sb_detail::copy_band_col(Thread{}, a, ab, kd, n - kd + c); });
+    for_each_owned(ex, kd, [&](int c) BATCHLAS_DLA_BODY {
+        sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, n - kd + c), n - kd + c);
+    });
     ex.barrier(Mem::Global);
     return 0;
 }
