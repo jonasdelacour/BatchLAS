@@ -15,30 +15,36 @@
 
 namespace batchlas::device::inline v2::l3 {
 
+namespace detail {
+// ceil(value / divisor) as the tuned kernel spelled it (a call, run-time divisor): an inline
+// constant TileK keeps nsw, the k guard becomes k > 0 and the reg tiles' REG moves.
+inline int slab_count(int value, int divisor) { return (value + divisor - 1) / divisor; }
+}  // namespace detail
+
 /// acc += op(A)(m0 + :, 0 : k) op(B)(0 : k, n0 + :) for the item (local_row, local_col) of a G
-/// tile. stage_a(kk0, dst) writes op(A)'s TileM x TileK slab at k offset kk0 through dst(r, c);
-/// stage_b(kk0, dst) op(B)'s TileK x TileN slab (both zero outside the matrix). tile_a / tile_b:
+/// tile. stage(kk0, dst_a, dst_b) writes op(A)'s TileM x TileK slab at k offset kk0 through
+/// dst_a(r, c) and op(B)'s TileK x TileN slab through dst_b(r, c) (both zero outside the matrix).
+/// tile_a / tile_b (a pointer or a local_accessor, indexed as the tuned kernel indexed it):
 /// Stages * StageASize / StageBSize local elements. Exact: k % TileK == 0, no tail tests. Ends
 /// on a barrier after the last read of both stages (kloop), so an epilogue may reuse them.
-template <class G, bool Exact, class Ops = arith::Native, class Ex, class T, class StageA, class StageB>
-BATCHLAS_DLA_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, T* tile_a, T* tile_b, const int& k, StageA&& stage_a,
-                                      StageB&& stage_b, Tile<T, G::ThreadTileRows, G::ThreadTileCols>& accum) {
-    auto load_stage = [&](int kk0, int stage) BATCHLAS_DLA_BODY {
-        T* tile_a_stage = tile_a + stage * G::StageASize;
-        T* tile_b_stage = tile_b + stage * G::StageBSize;
+template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, class Stage, class T>
+BATCHLAS_DLA_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
+                                      const int& k, Tile<T, G::ThreadTileRows, G::ThreadTileCols>& accum) {
+    auto load_stage = [&](int kk0, int s) BATCHLAS_DLA_BODY {
+        T* tile_a_stage = &tile_a[s * G::StageASize];
+        T* tile_b_stage = &tile_b[s * G::StageBSize];
         auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * G::TileAStride + r]; };
         auto dst_b = [&](int r, int c) -> T& { return tile_b_stage[G::b_slot(c, r)]; };
-        stage_a(kk0, dst_a);
-        stage_b(kk0, dst_b);
+        stage(kk0, dst_a, dst_b);
     };
     auto accumulate_stage = [&](int stage, int kk0) {
-        const T* tile_a_stage = tile_a + stage * G::StageASize;
-        const T* tile_b_stage = tile_b + stage * G::StageBSize;
+        const T* tile_a_stage = &tile_a[stage * G::StageASize];
+        const T* tile_b_stage = &tile_b[stage * G::StageBSize];
         mma_slab<G::TileK, G::UnrollK, Exact, Ops>(
             accum, kk0, k, [&](int t, int i) { return tile_a_stage[t * G::TileAStride + local_row * G::ThreadTileRows + i]; },
             [&](int t, int j) { return tile_b_stage[G::b_slot(local_col * G::ThreadTileCols + j, t)]; });
     };
-    const int tile_count = Exact ? (k / G::TileK) : (k + G::TileK - 1) / G::TileK;
+    const int tile_count = Exact ? (k / G::TileK) : detail::slab_count(k, G::TileK);
     kloop<G::Stages, Exact, G::TileK>(ex, tile_count, load_stage, accumulate_stage);
 }
 

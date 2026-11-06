@@ -179,39 +179,34 @@ Event launch_register_tiled(Queue& ctx,
                 v2::Tile<T, ThreadTileRows, ThreadTileCols> accum;
                 v2::fill(accum, T(0));
 
-                // Stage op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B) (k x n; the
-                // swizzled b_slot) of k slab kk0 (l3::reg_tile_mma calls A then B per stage). Scalar
-                // staging (odd ld or base) walks the operand's contiguous index fastest; the shared
-                // layout is the same.
+                // accum += A(:, t) B(t, :) over every slab's k steps (all TileK when aligned). The
+                // stage callback writes op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B)
+                // (k x n; the swizzled b_slot) of k slab kk0; scalar staging (odd ld or base) walks
+                // the operand's contiguous index fastest, the shared layout is the same. Spelled
+                // in the call, after tile_a / tile_b and before k: the closure's first-use order is
+                // the kernel's argument order (the tuned kernel's, for byte-identical SASS).
                 constexpr int Thr = Policy::ThreadsPerGroup;
-                constexpr bool aligned_nn = AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
-                                            && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>;
-                auto stage_a = [&](int kk0, auto& dst_a) BATCHLAS_DLA_BODY {
-                    const int m0 = group_row * TileM;
-                    if constexpr (aligned_nn) {
-                        gc::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
-                    } else if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
-                        if (packet_a) gc::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                        else gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                    } else {
-                        gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                    }
-                };
-                auto stage_b = [&](int kk0, auto& dst_b) BATCHLAS_DLA_BODY {
-                    const int n0 = group_col * TileN;
-                    if constexpr (aligned_nn) {
-                        gc::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
-                    } else if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
-                        if (packet_b) gc::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
-                        else gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
-                    } else {
-                        gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
-                    }
-                };
-
-                // accum += A(:, t) B(t, :) over every slab's k steps (all TileK when aligned).
-                gc::reg_tile_mma<Policy, AlignedFastPath>(ex, local_row, local_col, &tile_a[0], &tile_b[0], k, stage_a, stage_b,
-                                                          accum);
+                gc::reg_tile_mma<Policy, AlignedFastPath>(
+                    ex, local_row, local_col, tile_a, tile_b,
+                    [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DLA_BODY {
+                        const int m0 = group_row * TileM, n0 = group_col * TileN;
+                        if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
+                                      && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
+                            gc::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
+                            gc::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
+                            return;
+                        }
+                        if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
+                            if (packet_a) gc::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            else gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            if (packet_b) gc::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                            else gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                        } else {
+                            gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                        }
+                    },
+                    k, accum);
 
                 // C goes out through tile_a/tile_b, lane = consecutive row: lanes run along n here,
                 // so a direct store puts adjacent lanes ldc apart. kloop ends on a barrier after its

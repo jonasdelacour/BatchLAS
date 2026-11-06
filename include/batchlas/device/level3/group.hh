@@ -92,13 +92,11 @@ BATCHLAS_DLA_INLINE void run_tile(const Ex& ex, const Smem<C>& sm, T* c, int ldc
     fill(accum, Arith<T>::zero());
     auto one_pass = [&](const auto& ps) BATCHLAS_DLA_BODY {
         using PS = std::remove_cvref_t<decltype(ps)>;
-        auto stage_a = [&](int kk0, auto& dst) BATCHLAS_DLA_BODY {
-            stage_block_read<pass_a_rows<PS>, G::TileM, G::TileK, Thr, T>(lid, m0, kk0, m, ps.k, ps.a, dst);
+        auto stage = [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DLA_BODY {
+            stage_block_read<pass_a_rows<PS>, G::TileM, G::TileK, Thr, T>(lid, m0, kk0, m, ps.k, ps.a, dst_a);
+            stage_block_read<pass_b_rows<PS>, G::TileK, G::TileN, Thr, T>(lid, kk0, n0, ps.k, n, ps.b, dst_b);
         };
-        auto stage_b = [&](int kk0, auto& dst) BATCHLAS_DLA_BODY {
-            stage_block_read<pass_b_rows<PS>, G::TileK, G::TileN, Thr, T>(lid, kk0, n0, ps.k, n, ps.b, dst);
-        };
-        reg_tile_mma<G, false, Ops>(ex, local_row, local_col, tile_a, tile_b, ps.k, stage_a, stage_b, accum);
+        reg_tile_mma<G, false, Ops>(ex, local_row, local_col, tile_a, tile_b, stage, ps.k, accum);
     };
     (one_pass(passes), ...);
     store_tile_staged<G::TileM, G::TileN, Thr, G::Stages * G::StageASize, G::Stages * G::StageBSize, 2, Ops>(
