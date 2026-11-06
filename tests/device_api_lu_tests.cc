@@ -119,11 +119,14 @@ template <class T> Batch<T> downloaded(Dev& d, const Batch<T>& like, const T* p)
 }
 
 // A = P0 L0 U0, |L0(i, j)| <= 0.17 below a unit diagonal, |U0(j, j)| >= 1: partial pivoting picks
-// P0's rows with a 4x margin (cabs1 included). `singular` zeroes U0's last column: A's last
-// column is then exactly zero, stays so through every update, and info = n.
+// P0's rows with a 4x margin (cabs1 included). U0's off-diagonal is scaled by min(1, 2 / sqrt(n)):
+// unscaled, cond(U0) grows exponentially (complex n = 129: ~1e9) and float LU loses the pivots.
+// `singular` zeroes U0's last column: A's last column is then exactly zero, stays so through
+// every update, and info = n.
 template <class T> std::vector<T> lu_input(int n, std::uint64_t seed, bool singular) {
     using R = real_of<T>;
     std::vector<LD<T>> L(std::size_t(n) * n, LD<T>(0)), U(std::size_t(n) * n, LD<T>(0));
+    const long double us = std::min(1.0L, 2.0L / std::sqrt(static_cast<long double>(n)));
     for (int i = 0; i < n; ++i)
         for (int j = 0; j <= i; ++j)
             L[i + std::size_t(j) * n] = i == j ? LD<T>(1) : LD<T>(val<T>(seed + 7u * i + 1000u * j)) * (long double)0.17;
@@ -131,6 +134,7 @@ template <class T> std::vector<T> lu_input(int n, std::uint64_t seed, bool singu
         for (int c = j; c < n; ++c) {
             LD<T> u = LD<T>(val<T>(seed + 99991u + 13u * j + 1777u * c));
             if (c == j) u = LD<T>(T(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
+            else u *= us;
             U[j + std::size_t(c) * n] = (singular && c == n - 1) ? LD<T>(0) : u;
         }
     std::vector<int> perm(n);
@@ -397,10 +401,10 @@ TYPED_TEST(DeviceApiLuTest, GetrfBlockedMatchesTheOracleAndTheHostBlockedRoute) 
         Batch<T> A0(n, n, items);
         fill_lu(A0, 0x10u + n, true);
         const auto a = to_dev(d, A0), ah = to_dev(d, A0);
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int64_t* pivh = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infoh = d.alloc<std::int32_t>(items, -12345);
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int64_t* pivh = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infoh = d.template alloc<std::int32_t>(items, -12345);
         device_getrf<Tier>(d, a, i32(piv), info);
         const Batch<T> F = downloaded(d, A0, a.p);
         const auto P = d.down(i32(piv), std::size_t(n) * items);
@@ -427,8 +431,8 @@ TYPED_TEST(DeviceApiLuTest, WithTierSwitchesToBlockedAndAnyConfigurationFactors)
         Batch<T> A0(n, n, 6);
         fill_lu(A0, 0x77u + n, true);
         const auto a = to_dev(d, A0);
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * 6, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(6, -12345);
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * 6, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(6, -12345);
         std::string picked;
         dv::with_tier<dv::routine::getrf, T, List>(lim, n, [&]<class Tr>(Tr) {
             picked = dv::getrf_detail::is_blocked_v<Tr> ? "Blocked" : "Cta";
@@ -444,8 +448,8 @@ TYPED_TEST(DeviceApiLuTest, WithTierSwitchesToBlockedAndAnyConfigurationFactors)
     Batch<T> A0(n, n, 6);
     fill_lu(A0, 0x16u, true);
     const auto a = to_dev(d, A0);
-    std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * 6, -1);
-    std::int32_t* info = d.alloc<std::int32_t>(6, -12345);
+    std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * 6, -1);
+    std::int32_t* info = d.template alloc<std::int32_t>(6, -12345);
     device_getrf<Tier16>(d, a, i32(piv), info);
     check_factor(A0, downloaded(d, A0, a.p), d.down(i32(piv), std::size_t(n) * 6), d.down(info, 6), "Blocked<16, 64x64>");
 }
@@ -462,8 +466,8 @@ TYPED_TEST(DeviceApiLuTest, GetrsBlockedSolvesAsTheHostBlockedRoute) {
         fill_lu(A0, 0x2000u + n, false);
         fill_vals(B0, 0x3000u + nrhs);
         const auto a = to_dev(d, A0);
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
         device_getrf<Tier>(d, a, i32(piv), info);
         for (Transpose tr : {kNT, kTr, kCT}) {
             const auto b = to_dev(d, B0), bh = to_dev(d, B0);
@@ -498,10 +502,10 @@ TYPED_TEST(DeviceApiLuTest, GesvBlockedMatchesTheHostBlockedRoute) {
         fill_lu(A0, 0x4000u + n, true);
         fill_vals(B0, 0x5000u + n);
         const auto a = to_dev(d, A0), ah = to_dev(d, A0), b = to_dev(d, B0), bh = to_dev(d, B0);
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int64_t* pivh = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infoh = d.alloc<std::int32_t>(items, -12345);
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int64_t* pivh = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infoh = d.template alloc<std::int32_t>(items, -12345);
         device_gesv(d, a, b, i32(piv), info);
         const auto P = d.down(i32(piv), std::size_t(n) * items);
         const auto I = d.down(info, items);
@@ -514,7 +518,7 @@ TYPED_TEST(DeviceApiLuTest, GesvBlockedMatchesTheHostBlockedRoute) {
         if (!host_gpu(d)) continue;
         host_blocked<batchlas::ops::gesv::GesvChoice>(d, "gesv", [&] {
             const std::size_t bytes = batchlas::gesv_buffer_size(*d.ctx, ah.view(), bh.view());
-            std::byte* ws = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
+            std::byte* ws = d.template alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
             (void)batchlas::gesv(*d.ctx, ah.view(), bh.view(), Span<std::int64_t>(pivh, std::size_t(n) * items), Span<std::byte>(ws, bytes),
                                  Span<std::int32_t>(infoh, items));
         });
@@ -536,10 +540,10 @@ TYPED_TEST(DeviceApiLuTest, GetriBlockedMatchesTheHostBlockedRoute) {
         Batch<T> A0(n, n, items), C0(n, n, items);
         fill_lu(A0, 0x6000u + n, true);
         const auto a = to_dev(d, A0), c = to_dev(d, C0), ch = to_dev(d, C0);
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infoc = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infoh = d.alloc<std::int32_t>(items, -12345);
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infoc = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infoh = d.template alloc<std::int32_t>(items, -12345);
         device_getrf<Tier>(d, a, i32(piv), info);
         const auto LU = d.down(a.p, A0.h.size());
         device_getri(d, a, c, i32(piv), infoc);
@@ -573,11 +577,11 @@ TYPED_TEST(DeviceApiLuTest, InvBlockedIsGetrfThenGetriOnACopy) {
         fill_lu(A0, 0x7000u + n, true);
         const auto a = to_dev(d, A0), w = to_dev(d, A0), c = to_dev(d, C0), cw = to_dev(d, C0);
         const dv::WorkspaceSize ws = dv::inv_buffer_size<Tier, T>(n);
-        std::byte* gws = d.alloc<std::byte>(ws.global_bytes * items, std::byte{0x5a});
-        std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-        std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infow = d.alloc<std::int32_t>(items, -12345);
-        std::int32_t* infoc = d.alloc<std::int32_t>(items, -12345);
+        std::byte* gws = d.template alloc<std::byte>(ws.global_bytes * items, std::byte{0x5a});
+        std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+        std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infow = d.template alloc<std::int32_t>(items, -12345);
+        std::int32_t* infoc = d.template alloc<std::int32_t>(items, -12345);
         device_inv(d, a, c, gws, info);
         device_getrf<Tier>(d, w, i32(piv), infow);
         device_getri(d, w, cw, i32(piv), infoc);
@@ -601,10 +605,10 @@ TYPED_TEST(DeviceApiLuTest, DeliberateBreakADeadItemIsTheOnlyMismatch) {
     Batch<T> A0(n, n, items);
     fill_lu(A0, 0xdeadu, true);
     const auto a = to_dev(d, A0), ah = to_dev(d, A0);
-    std::int64_t* piv = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-    std::int64_t* pivh = d.alloc<std::int64_t>(std::size_t(n) * items, -1);
-    std::int32_t* info = d.alloc<std::int32_t>(items, -12345);
-    std::int32_t* infoh = d.alloc<std::int32_t>(items, -12345);
+    std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+    std::int64_t* pivh = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
+    std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
+    std::int32_t* infoh = d.template alloc<std::int32_t>(items, -12345);
     device_getrf<Tier>(d, a, i32(piv), info, dead);
     host_blocked<batchlas::ops::getrf::GetrfChoice>(d, "getrf", [&] {
         (void)batchlas::getrf(*d.ctx, ah.view(), Span<std::int64_t>(pivh, std::size_t(n) * items), Span<std::int32_t>(infoh, items));
