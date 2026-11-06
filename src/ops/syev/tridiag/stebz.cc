@@ -23,7 +23,8 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syev/tridiag/tridiag_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/stebz.hh>
 
 namespace batchlas {
 
@@ -31,7 +32,6 @@ template <Backend B, typename T>
 struct StebzKernel;
 
 namespace v2 = device;
-namespace tdv2 = device::tridiag;
 
 template <Backend B, typename T>
 Event stebz(Queue& ctx,
@@ -84,10 +84,12 @@ Event stebz(Queue& ctx,
         static_cast<size_t>(std::max<int64_t>(max_wanted, 1)));
 
     auto* m_ptr = m.data();
+    using Tier = v2::tier::Blocked<1>;
+    const v2::WorkspaceSize wsz = v2::stebz_buffer_size<Tier, T>(static_cast<int>(n));
 
+    // Thin launcher (design C.8): the body is the public device::stebz.
     ctx->submit([&](sycl::handler& h) {
-        auto bounds = sycl::local_accessor<T, 1>(sycl::range<1>(3), h);   // lo, hi, pivmin
-        auto found = sycl::local_accessor<int32_t, 1>(sycl::range<1>(2), h); // count, first index
+        auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
 
         batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
@@ -95,58 +97,13 @@ Event stebz(Queue& ctx,
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
                 const v2::RtGroup<> ex{item};
-                const v2::Thread th{};
                 const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
-
-                const auto g = tdv2::gershgorin(ex, dv, ev);
-                if (ex.leader()) {
-                    const T eps = std::numeric_limits<T>::epsilon();
-                    const T norm = sycl::max(sycl::fabs(g.lo), sycl::fabs(g.hi));
-                    // Widen slightly so that count(lo) == 0 and count(hi) == n
-                    // strictly, which the bisection invariant relies on.
-                    const T pad = eps * norm * T(2) + std::numeric_limits<T>::min();
-                    bounds[0] = g.lo - pad;
-                    bounds[1] = g.hi + pad;
-                    bounds[2] = std::numeric_limits<T>::min() * sycl::max(T(1), g.e2max);
-                    found[0] = 0;
-                    found[1] = 0;
-                }
-                ex.barrier(v2::Mem::Global);
-
-                const T glo = bounds[0];
-                const T ghi = bounds[1];
-                const T pivmin = bounds[2];
-                const T eps = std::numeric_limits<T>::epsilon();
-                const T norm = sycl::max(sycl::fabs(glo), sycl::fabs(ghi));
-                const T tol = (abstol > T(0)) ? abstol : (eps * sycl::max(norm, T(1)));
-
-                // A value range (vl, vu] is the index range [count(vl), count(vu) - 1].
-                int64_t first = il;
-                int64_t last = iu;
-                if (value_range) {
-                    if (ex.leader()) {
-                        const int c_lo = tdv2::sturm_count(th, dv, ev, vl, pivmin);
-                        const int c_hi = tdv2::sturm_count(th, dv, ev, vu, pivmin);
-                        found[0] = c_hi - c_lo;
-                        found[1] = c_lo;
-                    }
-                    ex.barrier(v2::Mem::Global);
-                    first = static_cast<int64_t>(found[1]);
-                    last = first + static_cast<int64_t>(found[0]) - 1;
-                } else if (ex.leader()) {
-                    found[0] = static_cast<int32_t>(last - first + 1);
-                }
-
-                // One work-item per wanted eigenvalue; no interaction between them.
-                const int count_wanted = static_cast<int>(last - first + 1);
-                v2::for_each_owned(ex, count_wanted, [&](int slot) {
-                    const T lambda = tdv2::bisect_eig(th, dv, ev, int(first) + slot, glo, ghi, tol, pivmin, max_iter);
-                    w(descending ? (count_wanted - 1 - slot) : slot, bid) = lambda;
-                });
-
-                ex.barrier(v2::Mem::Global);
-                if (ex.leader()) m_ptr[bid] = found[0];
+                const v2::stebz_detail::Params<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
+                int found = 0;
+                v2::stebz<Tier>(ex, dv, ev, v2::item(w, static_cast<int>(bid)), found,
+                                v2::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
+                if (ex.leader()) m_ptr[bid] = found;
             });
     });
 

@@ -62,7 +62,7 @@ void stedc_merge_fused(Queue& ctx,
                 // evidence: docs/perf/stedc.md#stedc-the-rejected-private-pole-fast-path
                 const auto poles = v2::vec(eigenvalues.batch_item(bid));
                 v2::for_each_owned_2d<v2::alg::DivMod>(ex, dd, dd, [&](int i, int j) { Q(i, j) = poles(i); });
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
                 v2::for_each_owned(ex, dd, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
@@ -81,10 +81,10 @@ void stedc_merge_fused(Queue& ctx,
                                             1);
                     }
                 });
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
                 maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.
                 for (int eig = 0; eig < dd; ++eig) {

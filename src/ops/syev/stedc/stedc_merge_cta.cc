@@ -78,7 +78,7 @@ inline void load_local_problem_vectors(const Ex& ex,
                                        const VectorView<T>& z_prob) {
     v2::copy(ex, d_prob_global, d_prob);
     v2::copy(ex, z_prob_global, z_prob);
-    stedc_v2::group_sync(ex);
+    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 }
 
 template <typename T, typename Ex>
@@ -534,7 +534,7 @@ inline void normalize_vectors(const Ex& ex,
         // only what it just wrote.
         const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
         v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
-        stedc_v2::group_sync(ex);
+        if constexpr (stedc_v2::is_group_v<Ex>) v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
     }
 }
 
@@ -619,7 +619,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                     write_denominator_column(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                stedc_v2::group_sync(wex);
+                v2::sync<v2::scope::Group>(wex, v2::Mem::Global);
 
                 // Rescale and normalize are parallel over their outer index, so
                 // hand one index to each partition instead of walking them
@@ -629,7 +629,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 // Rescale reads all of Q and writes all of v; normalize
                 // overwrites Q and reads all of v. One barrier separates the two
                 // phases -- the loops themselves no longer need any.
-                stedc_v2::group_sync(wex);
+                v2::sync<v2::scope::Group>(wex, v2::Mem::Global);
                 normalize_vectors<T>(pex, part_id, parts_per_wg, dd, Q, v, bid);
             });
     });
@@ -705,7 +705,7 @@ void stedc_merge_fused_wg(Queue& ctx,
                     write_denominator_column(ex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
                 }
 
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
 
                 // Sequential over the index with work-group-wide reductions: (first, stride) = (0, 1).
                 maybe_rescale_vectors(do_rescale, ex, 0, 1, dd, Q_bid, d_prob, v, bid);

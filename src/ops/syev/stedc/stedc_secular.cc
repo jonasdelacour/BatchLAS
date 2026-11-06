@@ -25,11 +25,11 @@ template <typename T, typename Ex, typename V, typename P>
 auto sec_eval(const Ex& ex, const V& v, const V& d, const T& x, const int32_t i, const int32_t n, const P& psi) {
     const auto terms = psi.head(n);
     v2::map(ex, terms, [=](T vk, T dk) { return vk / (dk - x); }, v, d);
-    stedc_v2::group_sync(ex);
+    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
     auto psi1 = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
     auto psi2 = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     v2::map(ex, terms, [=](T vk, T dk) { return vk / ( (dk - x) * (dk - x)); }, v, d);
-    stedc_v2::group_sync(ex);
+    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
     auto psi1_prime = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
     auto psi2_prime = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
@@ -72,7 +72,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 lnum(k) = T(0);
                 lden(k) = T(0);
             });
-            stedc_v2::group_sync(ex);
+            v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
             v2::map(ex, sgn, [](T vk) { return (vk >= T(0)) ? T(1) : T(-1); }, vb);
             v2::map(ex, vb, [](T vk) { return vk * vk; }, vb);  // z = v .* v, in place
 
@@ -153,7 +153,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db);
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 auto log_den2 = i > 0 ? stedc_v2::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
 
                 v2::map(ex, scratch.head(n - i - 1), [&](T dk) {
@@ -161,13 +161,13 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db.tail(i + 1));
-                stedc_v2::group_sync(ex);
+                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
                 auto log_den1 = (i + 1) < n ? stedc_v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
 
                 if (ex.leader()) { [&]() BATCHLAS_DLA_BODY { lden(i) = log_den1 + log_den2; }(); }
             }
 
-            stedc_v2::group_sync(ex);
+            v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
             // zhat_k = sign(v_k) sqrt(numerator_k / denominator_k), from the logs, range-clamped.
             v2::map(ex, zhat, [=](T ln, T ld, T s) {
                 auto exponent = T(0.5) * (ln - ld);

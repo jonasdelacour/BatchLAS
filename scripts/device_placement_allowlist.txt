@@ -70,14 +70,7 @@ src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::v2::gesvd_glue::tri
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::gemm_nr
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::lapmr_copy
 src-device src/ops/getrs/getrs_v2.hh batchlas::device::v2::lu::trsm_lane
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::Interval
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::bisect_eig
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::detail::refl2_one
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::gershgorin
 src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::house2
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::lanst_inf
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::refl2
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::v2::tridiag::sturm_count
 src-device src/ops/syevx/syevx_v2.hh batchlas::device::v2::syevx::ColsFlipped
 src-device src/ops/syevx/syevx_v2.hh batchlas::device::v2::syevx::Flipped
 src-device src/ops/syevx/syevx_v2.hh batchlas::device::v2::syevx::cols_flipped
