@@ -32,6 +32,7 @@ set(TEST_TARGETS
     device_api_sb2st_tests
     device_api_stebz-stein_tests
     device_api_svd_tests
+    device_api_sygst_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
@@ -260,6 +261,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_api_potrf_tests
     device_api_stebz-stein_tests
     device_api_svd_tests
+    device_api_sygst_tests
     device_blas_v2_bdsqr-bdsdc_tests
     device_blas_v2_elementwise-glue_tests
     device_blas_v2_gebrd_tests
