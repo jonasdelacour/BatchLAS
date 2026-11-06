@@ -346,10 +346,11 @@ BATCHLAS_DLA_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, 
         ex.barrier(Mem::Global);
     }
     const int order = SD == Side::Left ? m : n;
-    const int blocks = (order + NB - 1) / NB;
+    // kb itself is the induction variable: a block count (order + NB - 1) / NB lets LLVM narrow a
+    // downward counter to i27, which the AdaptiveCpp Metal emitter rejects.
+    const int kb_first = forward ? 0 : (order - 1) / NB * NB;
     const T neg_one = Ar::neg(Ar::one()), one = Ar::one();
-    for (int ib = 0; ib < blocks; ++ib) {
-        const int kb = forward ? ib * NB : (blocks - 1 - ib) * NB;
+    for (int kb = kb_first; forward ? kb < order : kb >= 0; kb += forward ? NB : -NB) {
         const int nb = order - kb < NB ? order - kb : NB;
         if constexpr (SD == Side::Left) {
             for (int j = lid; j < n; j += Ex::size) {
