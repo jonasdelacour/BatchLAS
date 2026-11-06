@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSYTRD / xHETRD: sytd2 (the unblocked reduction on a resident tile, one row per item) and
-// sytrd<UL, tier::Cta<N>> (one matrix per SgpPartition<N>, the tile in local memory). Strict
-// port: arith::Native and the replaced kernels' expression shapes. sytrd_detail holds the CTA
-// body (sytrd_cta_run, the host sytrd_cta kernel's too) and the forms core does not reproduce
-// bit for bit yet: Fit dotc / gemv / her2 (product-only dot, subtracted rank-2 term), lacpy_herm.
+// xSYTRD / xHETRD: sytd2 (the unblocked reduction on a resident tile, one row per item),
+// sytrd<UL, tier::Cta<N>> (one matrix per SgpPartition<N>, the tile in local memory) and
+// sytrd<Lower, tier::Blocked<NB>> (one matrix per WorkGroup<256>, any n: xLATRD panels on A in
+// global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
+// replaced kernels' expression shapes. sytrd_detail holds the CTA body (sytrd_cta_run, the host
+// sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
+// and the forms core does not reproduce bit for bit yet: Fit dotc / gemv / her2, lacpy_herm.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
 #include <batchlas/device.hh>
+#include <batchlas/device/level3/group.hh>
 #include <batchlas/device/sg_partition.hh>
+#include <batchlas/util/group-collectives.hh>
 
 namespace batchlas::device::inline v2 {
 
@@ -272,6 +277,221 @@ template <int N, class T> struct cta_plan {
           w(plan.take<T>(ws::Space::Local, N)) {}
 };
 
+// ---- xLATRD, Lower: one work-group, A in global memory ------------------------------------------
+// The lower panel's one body (the host LatrdLowerPanelKernelLegacy's too): reduces columns 0 ..
+// ib-1 of the n x n matrix Ab (lower triangle read; ib <= n - 1) and forms W (n x ib), as xLATRD
+// UPLO = 'L'. Reflector i leaves in Ab(i+2:, i) with its unit Ab(i+1, i) := 1 (the trailing update
+// reads it; the caller writes e back afterwards); on_reflector(i, beta, tau) runs on item 0 as it
+// is formed. Ab / Wb: (r, c), data(), ld(). v / wcol: n elements each in memory VM, shared by the
+// work-group; vip / wip: ib elements of local memory. The hand kernel's expressions (std::complex
+// operators, Native and ExplicitInline policies). Ends on a global barrier. COLLECTIVE.
+template <int WG, Mem VM = Mem::Local, class T, class AB, class WB, class Loc, class F>
+BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, T* v_ptr, T* wcol_ptr,
+                                         const Loc& vip_local, const Loc& wip_local, F&& on_reflector) {
+    using Real = real_t<T>;
+    using v2::arith::Native;
+    const int lid = ex.lid();
+    const sycl::group<1> g = ex.it.get_group();
+    const auto A = v2::mat(Ab.data(), n, n, Ab.ld());
+    const auto W = v2::mat(Wb.data(), n, ib, Wb.ld());
+    const auto vfull = v2::vec<VM>(v_ptr, n);
+    const auto wfull = v2::vec<VM>(wcol_ptr, n);
+
+    for (int i = 0; i < ib; ++i) {
+        if (i >= n - 1) break;
+
+        if (lid < i) {
+            const int p = lid;
+            vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
+            wip_local[p] = Wb(i, p);
+        }
+        ex.barrier(Mem::Local);
+
+        // A(i:, i) -= V(i:, :i) W(i, :i)^H + W(i:, :i) V(i, :i)^H, each term subtracted from the
+        // running value (not a gemv: beta = 1 sums first).
+        if (lid == 0) {
+            T aii = Ab(i, i);
+            for (int p = 0; p < i; ++p) {
+                const T vip = vip_local[p];
+                const T wip = wip_local[p];
+                aii -= vip * ::batchlas::device::conj(wip) + wip * ::batchlas::device::conj(vip);
+            }
+            Ab(i, i) = aii;
+        }
+        for (int r = i + 1 + lid; r < n; r += WG) {
+            T val = Ab(r, i);
+            for (int p = 0; p < i; ++p) {
+                const T wip = wip_local[p];
+                const T vip = vip_local[p];
+                const T vrp = v2::unit_head(A.col(p), p + 1)(r);
+                const T wrp = Wb(r, p);
+                val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
+            }
+            Ab(r, i) = val;
+        }
+        ex.barrier(Mem::Global);
+
+        // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.
+        const auto x = A.col(i).tail(i + 2);
+        const Real sumsq = v2::reduce<Scope::Group>(ex, x.size(), [&](int k) {
+            const T& xk = x(k);
+            if constexpr (Arith<T>::is_complex) {
+                const Real re = xk.real();
+                const Real im = xk.imag();
+                return re * re + im * im;
+            } else {
+                return xk * xk;
+            }
+        });
+        T alpha = T(0);
+        if (lid == 0 && i + 1 < n) {
+            alpha = Ab(i + 1, i);
+        }
+        alpha = ::batchlas::portable::group_broadcast(g, alpha);
+
+        T tau_i = T(0);
+        T beta = alpha;
+        T scale = T(0);
+
+        if (lid == 0) {
+            const Real xnorm = sycl::sqrt(sumsq);
+            if constexpr (Arith<T>::is_complex) {
+                if (xnorm == Real(0) && alpha.imag() == Real(0)) {
+                    tau_i = T(0);
+                    beta = alpha;
+                    scale = T(0);
+                } else {
+                    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
+                    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
+                    const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
+                    beta = -alpha_sign * T(beta_abs);
+                    tau_i = (beta - alpha) / beta;
+                    scale = T(1) / (alpha - beta);
+                }
+            } else {
+                if (xnorm == Real(0)) {
+                    tau_i = T(0);
+                    beta = alpha;
+                    scale = T(0);
+                } else {
+                    // -sign(alpha) by its sign bit (never 0), as the hand kernel's sign_nonzero.
+                    beta = -T(sycl::signbit(static_cast<Real>(alpha)) ? Real(-1) : Real(1)) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                    tau_i = (beta - alpha) / beta;
+                    scale = T(1) / (alpha - beta);
+                }
+            }
+
+            on_reflector(i, beta, tau_i);
+            Ab(i + 1, i) = T(1);
+        }
+
+        tau_i = ::batchlas::portable::group_broadcast(g, tau_i);
+        scale = ::batchlas::portable::group_broadcast(g, scale);
+
+        if (tau_i != T(0)) v2::scal<Native>(ex, scale, x);
+        ex.barrier(Mem::Global);
+
+        // w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
+        const auto v = vfull.tail(i + 1);
+        const auto w = wfull.tail(i + 1);
+        // i by value: on AdaptiveCpp (Metal and its CPU device) a by-reference capture of this
+        // barrier loop's counter gives NaN eigenvalues (syev_blocked Upper n = 96).
+        v2::for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
+        v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(
+            ex, v2::One{}, v2::trailing(Ab, i + 1, n), ex.publish(v2::trailing(vfull, i + 1)), v2::Zero{}, v2::trailing(wfull, i + 1));
+
+        for (int p = 0; p < i; ++p) {
+            const auto vcol = v2::unit_head(A.col(p), p + 1).tail(i + 1);
+            const auto wcol = W.col(p).tail(i + 1);
+            const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
+            const T gamma = gd[0], delta = gd[1];
+            v2::map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
+        }
+
+        v2::scal<Native>(ex, tau_i, w);
+        const T dot = v2::dotc<Scope::Group, Native>(ex, v, w);
+        v2::axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
+        v2::copy(ex, w, W.col(i).tail(i + 1));
+        ex.barrier(Mem::Global);
+    }
+}
+
+// ---- the Blocked tier ---------------------------------------------------------------------------
+// A column-major matrix in global memory as latrd_lower_run reads it.
+template <class T> struct ColView {
+    T* p;
+    int ld_;
+    BATCHLAS_DLA_INLINE T& operator()(int r, int c) const { return p[r + c * ld_]; }
+    BATCHLAS_DLA_INLINE T* data() const { return p; }
+    BATCHLAS_DLA_INLINE int ld() const { return ld_; }
+};
+
+// The trailing update's tile: the in-group L3 preset the device_api_l3 tests cover (256 items).
+template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+
+template <class Tier> inline constexpr bool is_blocked_v = false;
+template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
+
+// The Blocked tier's workspace: W (n x NB, ld n), v and wcol (n each) in global memory; vip, wip
+// (NB each) and the L3 stage in local memory. O(NB) local bytes, so any n fits.
+template <int NB, class T> struct blocked_plan {
+    Plan plan{};
+    ws::Slot<T> w{}, v{}, wc{}, vip{}, wip{}, smem{};
+    constexpr explicit blocked_plan(int n)
+        : w(plan.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<T>(ws::Space::Global, n)),
+          wc(plan.take<T>(ws::Space::Global, n)), vip(plan.take<T>(ws::Space::Local, NB)), wip(plan.take<T>(ws::Space::Local, NB)),
+          smem(plan.take<T>(ws::Space::Local, l3::smem_elems<blocked_cfg<T>>())) {}
+};
+
+// xSYTRD UPLO = 'L' on one n x n matrix per work-group (the host sytrd_blocked's panel loop): per
+// NB-column panel, latrd_lower_run on A(j0:, j0:) with W(j0:, :ib), then A22 -= V W^H + W V^H by
+// the in-group her2k (Lower triangle only, Im(diag) := 0); finally d(i) = A(i,i) and e(i) back
+// into A(i+1, i) and A(i, i+1) = conj(e(i)) (the host restore_tridiag_lower). Im(diag) of the
+// input is dropped first. The strictly upper triangle past the superdiagonal is not referenced.
+template <int NB, int WG, class T, class DV, class EV, class TV>
+BATCHLAS_DLA_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const DV& d, const EV& e, const TV& tau,
+                                           const Workspace& ws) {
+    using Cfg = blocked_cfg<T>;
+    using Ar = Arith<T>;
+    const int n = a.m, lda = a.ld;
+    const blocked_plan<NB, T> plan(n);
+    T* const wp = carve_global(ws, plan.w);
+    T* const vp = carve_global(ws, plan.v);
+    T* const wcp = carve_global(ws, plan.wc);
+    const auto vip = carve_local(ws, plan.vip).get();
+    const auto wip = carve_local(ws, plan.wip).get();
+    const l3::Smem<Cfg> sm{carve_local(ws, plan.smem).get_raw()};
+
+    if constexpr (Ar::is_complex) {
+        for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<T>(0)); });
+        ex.barrier(Mem::Global);
+    }
+    const int k = n - 1;
+    for (int j0 = 0; j0 < k; j0 += NB) {
+        const int ib = std::min(NB, k - j0);
+        const int j2 = j0 + ib, n2 = n - j2;
+        const ColView<T> ap{a.p + j0 + j0 * lda, lda};
+        const ColView<T> wv{wp + j0, n};
+        latrd_lower_run<WG, Mem::Global>(ex, ap, wv, n - j0, ib, vp, wcp, vip, wip,
+                                         [&, j0](int i, const T& beta, const T& t) BATCHLAS_DLA_BODY {  // j0 by value: see the latrd i
+                                             e(j0 + i) = beta;
+                                             tau(j0 + i) = t;
+                                         });
+        if (n2 > 0)
+            her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, l3::Global<T>{a.p + j2 + j0 * lda, lda, n2, ib}, l3::Global<T>{wp + j2, n, n2, ib},
+                                                         l3::Global<T>{a.p + j2 + j2 * lda, lda, n2, n2}, NegOne{}, One{}, sm);
+    }
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+        d(i) = a(i, i);
+        if (i < n - 1) {
+            const T ei = e(i);
+            a(i + 1, i) = ei;
+            a(i, i + 1) = ::batchlas::device::conj(ei);
+        }
+    });
+    ex.barrier(Mem::Global);
+}
+
 }  // namespace sytrd_detail
 
 namespace routine {
@@ -288,38 +508,61 @@ template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::sytrd<UL
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return sytrd_detail::cta_plan<N, T>{}.plan.size(); }
 };
+// tier::Blocked<NB>: Uplo::Lower only (the host sytrd_blocked's restriction; mirror an Upper input
+// with core mirror<Uplo::Upper, true> first, as syev_blocked does).
+template <int NB, class Alg, class T> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, T> {
+    static constexpr int wg_size = sytrd_detail::blocked_cfg<T>::threads;  // 256: the her2k tile's items
+    static constexpr int sg_size = 32;
+    static constexpr bool admits(int n) { return n >= 1; }
+    static constexpr WorkspaceSize buffer_size(int n) { return sytrd_detail::blocked_plan<NB, T>(n).plan.size(); }
+};
 template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
-    using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
+    using cta = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
+    using type = std::conditional_t<UL == Uplo::Lower, tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>, cta>;
 };
 
-// Bytes of ONE problem's workspace (local: tile + v + w; global: none).
+// Bytes of ONE problem's workspace (Cta: local tile + v + w; Blocked: global W, v, wcol and local
+// vip, wip and the L3 stage).
 template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrd_buffer_size(int n) {
     return tier_info<routine::sytrd<UL>, resolve_tier_t<routine::sytrd<UL>, T, Tier>, T>::buffer_size(n);
 }
 
-// xSYTRD / xHETRD (unblocked: xSYTD2) on one n x n matrix A (n = A.rows() <= N) per
-// SgpPartition<N>, reading only A's UL triangle (Im(diag) ignored). A leaves in LAPACK's packing
-// with BOTH triangles written (the reflectors in UL, the conjugate mirror in the other); d(i) =
+// xSYTRD / xHETRD on one n x n matrix A, reading only A's UL triangle (Im(diag) ignored); d(i) =
 // A(i,i), e(i) the off-diagonal, tau(i) (i < n-1) the reflector scalars, all of A's scalar type.
-// ws.local: sytrd_buffer_size bytes for this problem. COLLECTIVE over the partition. Returns 0,
-// or -2 when A is not square with 1 <= n <= N.
+//   tier::Cta<N>      (unblocked: xSYTD2) n = A.rows() <= N, one matrix per SgpPartition<N>; A
+//                     leaves in LAPACK's packing with BOTH triangles written (the reflectors in UL,
+//                     the conjugate mirror in the other). ws.local only.
+//   tier::Blocked<NB> Uplo::Lower, any n, one matrix in global memory per WorkGroup<256>; A leaves
+//                     in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of the upper
+//                     triangle is not referenced. ws.global is this matrix's slice.
+// ws: sytrd_buffer_size bytes for this problem. COLLECTIVE over the executor. Returns 0, or -2
+// when A is not square with 1 <= n (<= N for Cta).
 template <Uplo UL, class Tier, class Ex, class MA, class DV, class EV, class TV>
 BATCHLAS_DLA_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws) {
     using T = std::remove_cv_t<typename MA::value_type>;
     using R = routine::sytrd<UL>;
     using Tr = resolve_tier_t<R, T, Tier>;
-    static_assert(HasTier<R, Tr, T>, "sytrd: the routine has no such tier (tier::Cta<N> only)");
-    constexpr int N = Tr::n_max;
-    static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
-                  "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
-    const int n = A.rows();
-    if (n < 1 || n > N || A.cols() != n) return -2;
-    const sytrd_detail::cta_plan<N, T> plan{};
-    const auto a = carve_local(ws, plan.a).get();
-    const auto v = carve_local(ws, plan.v).get();
-    const auto w = carve_local(ws, plan.w).get();
-    sytrd_detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
-    return 0;
+    static_assert(HasTier<R, Tr, T>, "sytrd: the routine has no such tier (tier::Cta<N>; tier::Blocked<NB> for Uplo::Lower)");
+    if constexpr (sytrd_detail::is_blocked_v<Tr>) {
+        constexpr int WG = tier_info<R, Tr, T>::wg_size;
+        static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "sytrd: tier::Blocked<NB> runs on device::WorkGroup<256> (one matrix per work-group)");
+        const auto a = l3::global_of(A);
+        if (a.m < 1 || a.n != a.m) return -2;
+        sytrd_detail::sytrd_blocked_run<Tr::nb>(ex, a, d, e, tau, ws);
+        return 0;
+    } else {
+        constexpr int N = Tr::n_max;
+        static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
+                      "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+        const int n = A.rows();
+        if (n < 1 || n > N || A.cols() != n) return -2;
+        const sytrd_detail::cta_plan<N, T> plan{};
+        const auto a = carve_local(ws, plan.a).get();
+        const auto v = carve_local(ws, plan.v).get();
+        const auto w = carve_local(ws, plan.w).get();
+        sytrd_detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
+        return 0;
+    }
 }
 
 }  // namespace batchlas::device

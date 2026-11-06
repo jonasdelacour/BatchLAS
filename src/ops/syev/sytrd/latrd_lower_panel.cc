@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -201,135 +202,19 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-                using Ex = v2::WorkGroup<WG>;
-                using Real = typename base_type<T>::type;
-                using v2::Mem;
-                using v2::Scope;
-                using v2::arith::Native;
-                const Ex ex{it};
+                const v2::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
-                const auto A = v2::mat(Ab.data(), n, n, Ab.ld());
-                const auto W = v2::mat(Wb.data(), n, ib, Wb.ld());
-                T* const v_ptr = util::get_raw_ptr(v_local);
-                T* const wcol_ptr = util::get_raw_ptr(wcol_local);
-                const auto vfull = v2::vec<Mem::Local>(v_ptr, n);
-                const auto wfull = v2::vec<Mem::Local>(wcol_ptr, n);
-
-                for (int i = 0; i < ib; ++i) {
-                    if (i >= n - 1) break;
-
-                    if (lid < i) {
-                        const int p = lid;
-                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
-                        wip_local[p] = Wb(i, p);
-                    }
-                    ex.barrier(Mem::Local);
-
-                    // S13-10/11: A(i:, i) -= V(i:, :i) W(i, :i)^H + W(i:, :i) V(i, :i)^H, each
-                    // term subtracted from the running value (not a gemv: beta=1 sums first).
-                    if (lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
-                        }
-                        Ab(i, i) = aii;
-                    }
-                    for (int r = i + 1 + lid; r < n; r += WG) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-                            const T vrp = v2::unit_head(A.col(p), p + 1)(r);
-                            const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
-                        }
-                        Ab(r, i) = val;
-                    }
-                    ex.barrier(Mem::Global);
-
-                    // S13-12/13: Householder reflector of A(i+1:, i).
-                    const auto x = A.col(i).tail(i + 2);
-                    const Real sumsq = v2::reduce<Scope::Group>(ex, x.size(),
-                        [&](int k) { return detail::abs2_if_complex(x(k)); });
-                    T alpha = T(0);
-                    if (lid == 0 && i + 1 < n) {
-                        alpha = Ab(i + 1, i);
-                    }
-                    alpha = batchlas::portable::group_broadcast(g, alpha);
-
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lid == 0) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        E_view(i, b) = beta;
-                        TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i) = T(1);
-                    }
-
-                    tau_i = batchlas::portable::group_broadcast(g, tau_i);
-                    scale = batchlas::portable::group_broadcast(g, scale);
-
-                    if (tau_i != T(0)) v2::scal<Native>(ex, scale, x);
-                    ex.barrier(Mem::Global);
-
-                    // S13-14..16: w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
-                    const auto v = vfull.tail(i + 1);
-                    const auto w = wfull.tail(i + 1);
-                    // i by value: on AdaptiveCpp (Metal and its CPU device) a by-reference capture of this
-                    // barrier loop's counter gives NaN eigenvalues (syev_blocked Upper n = 96).
-                    v2::for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
-                    v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(ex, v2::One{},
-                        v2::trailing(Ab, i + 1, n), ex.publish(v2::trailing(vfull, i + 1)), v2::Zero{}, v2::trailing(wfull, i + 1));
-
-                    for (int p = 0; p < i; ++p) {
-                        const auto vcol = v2::unit_head(A.col(p), p + 1).tail(i + 1);
-                        const auto wcol = W.col(p).tail(i + 1);
-                        const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
-                        const T gamma = gd[0], delta = gd[1];
-                        v2::map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
-                    }
-
-                    v2::scal<Native>(ex, tau_i, w);
-                    const T dot = v2::dotc<Scope::Group, Native>(ex, v, w);
-                    v2::axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
-                    v2::copy(ex, w, W.col(i).tail(i + 1));
-                    ex.barrier(Mem::Global);
-                }
+                // Thin launcher: the panel body of device::sytrd<Lower, tier::Blocked<NB>> (latrd_lower_run).
+                v2::sytrd_detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
+                                                      vip_local, wip_local, [&](int i, const T& beta, const T& tau_i) BATCHLAS_DLA_BODY {
+                                                          E_view(i, b) = beta;
+                                                          TAU_view(i, b) = tau_i;
+                                                      });
 
                 if constexpr (FuseTrailingUpdate) {
+                    const int lid = static_cast<int>(it.get_local_linear_id());
                     const int j2 = ib;
                     const int n2 = n - j2;
                     for (int lin = lid; lin < n2 * n2; lin += wg) {
