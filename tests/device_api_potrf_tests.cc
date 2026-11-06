@@ -315,6 +315,7 @@ template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
     try {
         dv::with_tier<dv::routine::potrf<Uplo::Lower>, T>(lim, n, [&]<class Tier>(Tier) {
             if constexpr (dv::potrf_detail::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
+            else if constexpr (dv::potrf_detail::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });
     } catch (const batchlas::invalid_argument& e) {
@@ -335,7 +336,8 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
     EXPECT_EQ(pick<T>(big, 64), "cta64");
     EXPECT_EQ(pick<T>(big, 65), "cta128");
     EXPECT_EQ(pick<T>(big, 128), "cta128");
-    EXPECT_EQ(pick<T>(big, 129), "throw");
+    EXPECT_EQ(pick<T>(big, 129), kReg32<T> ? "blocked32" : "blocked16");  // tier::Blocked: any n
+    EXPECT_EQ(pick<T>(big, 4000), kReg32<T> ? "blocked32" : "blocked16");
 
     const std::size_t k32 = 32 * 1024;
     const int n32 = cta_fit<T>(k32);
@@ -343,7 +345,10 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
     ASSERT_LT(n32, 128);
     const dv::DeviceLimits metal{k32, {32}, 1024, true};
     EXPECT_EQ(pick<T>(metal, n32), n32 > 64 ? "cta128" : "cta64");
-    EXPECT_EQ(pick<T>(metal, n32 + 1), "throw");
+    EXPECT_EQ(pick<T>(metal, n32 + 1), kReg32<T> ? "blocked32" : "blocked16");
+    const std::size_t blocked_local = dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<4096>, T>(4000).local_bytes;
+    const dv::DeviceLimits starved{blocked_local - 1, {32}, 1024, true};
+    EXPECT_EQ(pick<T>(starved, 200), "throw");
     EXPECT_LE((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32).local_bytes), k32);
     EXPECT_GT((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32 + 1).local_bytes), k32);
 
@@ -355,6 +360,7 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
 
     static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<8>>, dv::tier::Reg<8>>);
     static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<100>>, dv::tier::Cta<128>>);
+    static_assert(dv::potrf_detail::is_blocked_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<200>>>);
     static_assert(dv::potrf_buffer_size<Uplo::Upper, dv::tier::Reg<16>, T>(16) == dv::WorkspaceSize{});
 }
 

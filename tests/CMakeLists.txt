@@ -27,6 +27,7 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
+    device_api_chol_tests
     device_api_gemv_tests
     device_api_getrf_tests
     device_api_l3_tests
@@ -261,6 +262,7 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     cond_tests
     group_collectives_tests
+    device_api_chol_tests
     device_api_gemv_tests
     device_api_getrf_tests
     device_api_l3_tests
@@ -446,6 +448,7 @@ list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS device_api_chol_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS sygvd_mask_tests syev_mask_tests syevx_mask_tests getrs_mask_tests
     getrf_mask_tests)
 
