@@ -10,9 +10,10 @@
 // checked bit for bit; m, n, k off the 32-tile grid (2 x 3 tiles, a k tail); trsm over 2 and 3
 // diagonal blocks of a graded well-conditioned triangle; a 1024-item batch of one repeated
 // problem bit-identical to item 0; the float gemm bit-identical to the pinned, reached host route.
-// Red set: to be recorded when the suite first runs (written without a device): TriMask keep()
-// flipped; trsm's backward block order reversed; run_tile's second pass dropped; sym_at's
-// Hermitian diagonal kept complex; trmm's Left upper k range starting at 0.
+// Red set (each seen red, sm_89): TriMask keep() flipped (syrk/herk, syr2k/her2k); trsm's
+// backward block order reversed (trsm); run_tile's second pass dropped (syr2k/her2k); sym_at's
+// Hermitian diagonal kept complex (hemm); trmm's lower k range ending at m0 (trmm). A Left upper
+// k range from 0 stays green: tri_at is zero off the triangle, so it only costs work.
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
