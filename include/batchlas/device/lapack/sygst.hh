@@ -334,6 +334,24 @@ template <int Itype, Uplo UL, int NB, class Alg, class T> struct tier_info<routi
 
 namespace sygst_detail {
 
+// One ?sygs2 block of order kb <= NF at f, A's and B's leading kb x kb blocks (ipw 1): sygs2_group
+// on ex when ex is one sub-group, else on sub-group 0 alone. AdaptiveCpp's Metal code repeats
+// sygs2_group's barriers on both sides of its per-item `active` branch, so a partly active
+// sub-group in a wider group reaches each barrier twice and frees the other sub-groups a phase
+// early: their write-back read S before its last store (wrong columns from sub-group 1 on).
+template <bool Inverse, int NF, class Ex, class D, class MA, class MB, class Full>
+BATCHLAS_DLA_INLINE void sygs2_one(const Ex& ex, int kb, bool lower, D* f, const MA& a, const MB& b, const Full& full) {
+    const int ldf = sygs2_ldf<D>(kb), lds = kb + 1;
+    auto run = [&](const auto& x) BATCHLAS_DLA_BODY {
+        sygs2_group<Inverse, 0, NF>(
+            x, x.lid(), kb, lower, std::size_t(0), 1, f, kb * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return a; }, kb * lds,
+            lds, std::remove_cvref_t<decltype(x)>::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; },
+            [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return b; }, ldf, full);
+    };
+    if constexpr (Ex::size <= Ex::sg_size) run(ex);
+    else if (ex.sub().get_group_linear_id() == 0) run(SubGroup<Ex::sg_size>{ex.sub()});
+}
+
 template <class T> BATCHLAS_DLA_INLINE l3::Global<T> gsub(const l3::Global<T>& g, int r0, int c0, int m, int n) {
     return {g.p + r0 + c0 * g.ld, g.ld, m, n};
 }
@@ -369,15 +387,11 @@ BATCHLAS_DLA_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3:
     const int n = a.n;
     // Reduce the kb x kb diagonal block at `at`; with `full`, the whole Hermitian result goes to H.
     auto diag = [&](int at, int kb, bool full) BATCHLAS_DLA_BODY {
-        const int ldf = sygs2_ldf<D>(kb), lds = kb + 1;
         const auto ab = mat(a.p + at + at * a.ld, kb, kb, a.ld);
         const auto bb = mat(b.p + at + at * b.ld, kb, kb, b.ld);
-        sygs2_group<Itype == 1, 0, NB>(
-            ex, ex.lid(), kb, lower, std::size_t(0), 1, lmem, kb * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return ab; }, kb * lds,
-            lds, Ex::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; }, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return bb; },
-            ldf, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DLA_BODY {
-                if (full) h[r + c * NB] = v;
-            });
+        sygs2_one<Itype == 1, NB>(ex, kb, lower, lmem, ab, bb, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DLA_BODY {
+            if (full) h[r + c * NB] = v;
+        });
         sync(ex, Mem::Global);
     };
     // H := the whole Hermitian kb x kb block whose UL triangle A holds at `at` (real diagonal).
@@ -465,12 +479,9 @@ BATCHLAS_DLA_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Work
         if (a.rows() != n || n > N) return -2;
         if (b.rows() < n || b.cols() < n) return -3;
         if (n == 0) return 0;
-        const int ldf = sygs2_ldf<D>(n), lds = n + 1;
         D* const f = reinterpret_cast<D*>(carve_local(ws, sygst_detail::cta_plan<D>(n).block).get_raw());
-        sygs2_group<Itype == 1, 0, N>(
-            ex, ex.lid(), n, UL == Uplo::Lower, std::size_t(0), 1, f, n * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return a; },
-            n * lds, lds, Ex::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; },
-            [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return b; }, ldf, [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DLA_BODY {});
+        sygst_detail::sygs2_one<Itype == 1, N>(ex, n, UL == Uplo::Lower, f, a, b,
+                                               [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DLA_BODY {});
         sync(ex, Mem::Global);  // A's result visible to every item
         return 0;
     } else {

@@ -19,7 +19,8 @@
 // multiples +-1), Blocked<16> over three blocks (16, 16, 1), Blocked<32> at n = 32 (one block)
 // bit-identical to Cta<32>; the global workspace poisoned with NaN bytes (H and W are written
 // before they are read); B's diagonal real (potrf's factor: the trsm / trmm steps read it as
-// stored, on both routes, as LAPACK's do), A's Im(diag) still poisoned.
+// stored, on both routes, as LAPACK's do), A's Im(diag) still poisoned. Cta<N> on 64 and 256 items
+// (n = 13, 31) bit-identical to its wg_size launch: red on Metal before sygs2_one.
 // Deliberate breaks (to record when first run; expected red sets): (1) sygst() passing
 // `UL != Uplo::Lower` to sygs2_group: every BitIdentical case red (device vs host); (2) in
 // sygs2_group's first sweep, F stored with `fat<Inverse>(fs, row, c)` in the Upper branch: the
@@ -142,11 +143,12 @@ struct Dev {
 };
 
 // The user's kernel: one matrix per work-group of the tier's wg_size, the op's info per item; the
-// global workspace (Blocked) is batch slices of global_bytes, poisoned with NaN bytes.
-template <int Itype, Uplo UL, class Tier, class T>
+// global workspace (Blocked) is batch slices of global_bytes, poisoned with NaN bytes. Wg > 0
+// launches a wider group than the tier's wg_size (Cta: any group of at least N items).
+template <int Itype, Uplo UL, class Tier, int Wg = 0, class T>
 void device_call(Dev& dev, T* A, const T* B, const Problem<T>& p, int* info) {
     using Tr = dv::resolve_tier_t<dv::routine::sygst<Itype, UL>, T, Tier>;  // Tier may be tier::upto
-    constexpr int WG = dv::tier_info<dv::routine::sygst<Itype, UL>, Tr, T>::wg_size;
+    constexpr int WG = Wg > 0 ? Wg : dv::tier_info<dv::routine::sygst<Itype, UL>, Tr, T>::wg_size;
     const dv::WorkspaceSize ws = dv::sygst_buffer_size<Itype, UL, Tier, T>(p.n);
     std::byte* gws = nullptr;
     if (ws.global_bytes) {
@@ -400,6 +402,34 @@ TYPED_TEST(DeviceApiSygstTest, BlockedOneBlockIsBitIdenticalToCta) {
     device_call<1, Uplo::Upper, dv::tier::Blocked<32>>(this->dev, Ab, B, p, info);
     const auto gc = this->dev.down(Ac, p.a.size()), gb = this->dev.down(Ab, p.a.size());
     EXPECT_EQ(std::memcmp(gc.data(), gb.data(), gc.size() * sizeof(T)), 0);
+    const auto gi = this->dev.down(info, kBatch);
+    EXPECT_EQ(std::count(gi.begin(), gi.end(), 0), kBatch);
+}
+
+// Cta<N> on a group of several sub-groups (64, 256 items) with n < 32: same bits as on wg_size. On
+// Metal the ?sygs2 block ran on the whole group before, and a partly active sub-group freed the
+// others early (every column but those of sub-group 0 wrong).
+TYPED_TEST(DeviceApiSygstTest, CtaOnWiderGroupIsBitIdentical) {
+    using T = TypeParam;
+    Problem<T> p(13, Uplo::Lower);
+    T* A0 = this->dev.up(p.a);
+    T* A1 = this->dev.up(p.a);
+    const T* B = this->dev.up(p.b);
+    int* info = this->dev.up(std::vector<int>(kBatch, -99));
+    device_call<1, Uplo::Lower, dv::tier::Cta<16>>(this->dev, A0, B, p, info);
+    device_call<1, Uplo::Lower, dv::tier::Cta<16>, 64>(this->dev, A1, B, p, info);
+    const auto g0 = this->dev.down(A0, p.a.size()), g1 = this->dev.down(A1, p.a.size());
+    EXPECT_EQ(std::memcmp(g0.data(), g1.data(), g0.size() * sizeof(T)), 0) << "Cta<16> n 13 on 64 items";
+    this->check_result(p, g1, 1, "Cta<16> n 13 on 64 items");
+    Problem<T> q(31, Uplo::Upper);
+    T* B0 = this->dev.up(q.a);
+    T* B1 = this->dev.up(q.a);
+    const T* Bq = this->dev.up(q.b);
+    device_call<2, Uplo::Upper, dv::tier::Cta<32>>(this->dev, B0, Bq, q, info);
+    device_call<2, Uplo::Upper, dv::tier::Cta<32>, 256>(this->dev, B1, Bq, q, info);
+    const auto h0 = this->dev.down(B0, q.a.size()), h1 = this->dev.down(B1, q.a.size());
+    EXPECT_EQ(std::memcmp(h0.data(), h1.data(), h0.size() * sizeof(T)), 0) << "Cta<32> n 31 on 256 items";
+    this->check_result(q, h1, 2, "Cta<32> n 31 on 256 items");
     const auto gi = this->dev.down(info, kBatch);
     EXPECT_EQ(std::count(gi.begin(), gi.end(), 0), kBatch);
 }
