@@ -157,7 +157,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 // AB staged when the band fits, C/WORK local when they fit. On Metal each C/WORK storage
                 // is its own body (no pointer merged across address spaces; givens_on does the same for AB).
                 auto body = [&](std::pair<Real*, T*> cw) BATCHLAS_DLA_BODY {
-                    v2::sb2st_detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab(), use_local_ab, cw.first, cw.second);
+                    v2::sb2st_detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
                 };
                 if (sycl_impl::on_metal()) {
                     if (use_local_cw) body(local_cw());

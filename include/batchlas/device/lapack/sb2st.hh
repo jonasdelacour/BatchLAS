@@ -659,13 +659,15 @@ inline void finalize_tridiag(int n, const Diag& diag, const Sub& sub, const D& d
 }
 
 // One band on one sub-group partition (kd >= 2): the rotation scratch c / work (n + kd + 2 each)
-// zeroed; with stage, the band (abg, ldg) copied to the packed local abl (ld kd + 1), chased there
-// and copied back, else chased in place. TRAP (Metal): no generic address space, so a pointer
-// chosen between local and global memory at run time is rejected ("Conflicting address space
-// information in PHI node"); there each storage gets its own chase, elsewhere the pointer is
-// selected once and the chase emitted once. The caller picks c / work the same way.
-template <class Rot, class Ex, class T, class R>
-BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, T* abl, bool stage, R* c, T* work) {
+// zeroed; with stage, the band (abg, ldg) copied to the packed local copy abl() (ld kd + 1), chased
+// there and copied back, else chased in place. abl is called only when staging: a pointer computed
+// up front stays live across the zeroing (+2 registers, 8 -> 7 blocks/SM for the double P = 32 host
+// kernel). TRAP (Metal): no generic address space, so a pointer chosen between local and global
+// memory at run time is rejected ("Conflicting address space information in PHI node"); there each
+// storage gets its own chase, elsewhere the pointer is selected once and the chase emitted once.
+// The caller picks c / work the same way.
+template <class Rot, class Ex, class T, class AbL, class R>
+BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, const AbL& abl, bool stage, R* c, T* work) {
     const auto& partition = pex.part;
     const int ldab_l = kd + 1;
     const int cw_len = n + kd + 2;
@@ -688,9 +690,10 @@ BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg
     };
     if (::batchlas::sycl_impl::on_metal()) {
         if (stage) {
-            stage_ab(abl, true);
-            sb2st_givens_chase<Rot>(pex, n, kd, abl, ldab_l, c, work);
-            stage_ab(abl, false);
+            T* const ab_l = abl();
+            stage_ab(ab_l, true);
+            sb2st_givens_chase<Rot>(pex, n, kd, ab_l, ldab_l, c, work);
+            stage_ab(ab_l, false);
         } else {
             sb2st_givens_chase<Rot>(pex, n, kd, abg, ldg, c, work);
         }
@@ -698,7 +701,7 @@ BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg
         T* ab = abg;
         int ldab = ldg;
         if (stage) {
-            ab = abl;
+            ab = abl();
             ldab = ldab_l;
             stage_ab(ab, true);
         }
@@ -816,11 +819,12 @@ BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& 
     const int ldg = sb2st_detail::band_ld(ab);
     const auto lay = sb2st_detail::layout<Tier, T>(n, kd);
     if constexpr (sb2st_detail::is_cta_v<Tier>) {
-        T* const abl = carve_local(ws, lay.ab).get_raw();
+        auto abl = [&]() BATCHLAS_DLA_BODY { return carve_local(ws, lay.ab).get_raw(); };
         sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
                                               carve_local(ws, lay.work).get_raw());
     } else {
-        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, static_cast<T*>(nullptr), false, carve_global(ws, lay.c),
+        auto no_abl = []() BATCHLAS_DLA_BODY { return static_cast<T*>(nullptr); };
+        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
                                               carve_global(ws, lay.work));
     }
     group_barrier(partition);
