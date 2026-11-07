@@ -4,12 +4,14 @@
 // zero-shift chase for a negligible diagonal, the singular values in s, the rotations accumulated
 // into U (U := U Q over its n columns) and Vh (Vh := P^T Vh over its n rows), optionally sorted
 // descending. ONE body for every executor:
-//   Thread                one item runs the sweep and applies each rotation as it forms it (the
-//                         host route's kernel, gesvd/bdsqr/bdsqr.cc, one item per matrix)
+//   Thread                one item runs the sweep and applies each rotation as it forms it
 //   tier::Blocked<1>      any n on a work-group: the leader runs the scalar recurrence and stores
 //                         one block's rotations in the global workspace; every item then applies
 //                         them, in the same order, to the rows of U and the columns of Vh it owns
-// Each element of U and Vh sees the same rotations in the same order on both executors.
+// Each element of U and Vh sees the same rotations in the same order on both executors, and the
+// same as the host route's kernel (gesvd/bdsqr/bdsqr.cc, one item per matrix). That kernel stays
+// its own body: as a launcher over the Thread path its outputs were bit-identical but it ran
+// 1.03-1.08x (n = 32) and 1.38x / 1.77x (float / double, n = 64, values only) slower, batch 1024.
 
 #include <algorithm>
 #include <cstdint>

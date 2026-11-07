@@ -8,11 +8,16 @@
 //   with_tier / upto / gebrd_buffer_size  the tier per n at every Cta boundary, each device filter
 //                        on its own, the op-named throw, buffer_size == the carved plan.
 //   tier::Blocked (one matrix per work-group of 256, the caller's global slice per matrix):
-//     bdsqr              vs the host bdsqr (its thin launcher on one item) on uniform, graded with
+//     bdsqr              vs the host bdsqr (its own kernel, one item per matrix) on uniform, graded with
 //                        an interior and a bottom zero diagonal (both zero-shift chases) and NaN
-//                        items: info per item, s, and U diag(s) V^H == B from identity seeds.
+//                        items: info per item, s, and U diag(s) V^H == B from identity seeds;
+//                        the Thread executor (one item per matrix) BIT FOR BIT the host's.
+//     bdsdc             vs the host bdsdc (host stedc; the device runs the in-group one at 2n) on
+//                        uniform, graded and exact-zero-d items (repair): info, s, U S V^H == B,
+//                        orthogonality, the values-only s bit for bit the with-vectors s.
 //     gebrd + ormbr      Q (ormbr 'Q' Left on I) B P^H (ormbr 'P' Right ConjTrans on I) == A, Q and
-//                        P^H unitary, |d| / |e| vs the host gebrd_blocked, m >= n across NB = 16.
+//                        P^H unitary, the bidiagonal's singular values vs the host gebrd_blocked's,
+//                        m >= n across NB = 16.
 //     gesvd              vs the host route pinned to blocked with BIDIAG=bdsqr: info per item, S,
 //                        U S V^H == A, U and V^H unitary; m > n, m < n (the adjoint path), All /
 //                        Thin / None, pads of every output unchanged.
@@ -28,7 +33,8 @@
 // caller can make); every GebrdCta case must fail on the bit-identity check (gate: all six n).
 // -DBATCHLAS_DEVICE_API_SVD_BLOCKED_BREAK moves every odd work-group's global slice half a slice
 // down (neighbours overlap: the per-matrix offset a caller can get wrong); the Blocked gesvd and
-// gebrd cases must fail their period / residual checks (bdsqr's is n-1 rotations, so n >= 3).
+// gebrd cases must fail their period / residual checks (bdsqr's is n-1 rotations, so n >= 3; on
+// CUDA bdsqr and bdsdc then fault on a neighbour's indices: the run aborts, also red).
 #include <gtest/gtest.h>
 #include <tests/test_utils.hh>
 
@@ -48,6 +54,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/lapack/bdsdc.hh>
 #include <batchlas/device/lapack/bdsqr.hh>
 #include <batchlas/device/lapack/gebrd.hh>
 #include <batchlas/device/lapack/gesvd.hh>
@@ -424,6 +431,40 @@ double svd_residual(F A0, int m, int n, const Mats<T>& U, const Mats<T>& Vh, con
         }
     return static_cast<double>(std::sqrt(num) / std::max(std::sqrt(den), std::numeric_limits<long double>::min()));
 }
+// Singular values (ascending, long double) of item b's upper bidiagonal (d at inc 2, stride sd; e
+// at stride se): bisection on the Golub-Kahan tridiagonal (zero diagonal, off-diagonal d0 e0 d1
+// ..), whose n largest eigenvalues they are; Sturm counts, so no rotation can mask a difference.
+template <class R> std::vector<long double> bidiag_svals(const std::vector<R>& d, const std::vector<R>& e, int sd, int se, int b, int n) {
+    std::vector<long double> f(std::size_t(2 * n - 1));
+    for (int i = 0; i < n; ++i) {
+        f[std::size_t(2 * i)] = d[std::size_t(b) * sd + 2 * i];
+        if (i + 1 < n) f[std::size_t(2 * i + 1)] = e[std::size_t(b) * se + i];
+    }
+    long double hi = 0;
+    for (int i = 0; i < 2 * n; ++i)
+        hi = std::max(hi, (i > 0 ? std::fabs(f[i - 1]) : 0.0L) + (i < 2 * n - 1 ? std::fabs(f[i]) : 0.0L));
+    const auto below = [&](long double x) {  // eigenvalues of the 2n x 2n tridiagonal below x
+        int cnt = 0;
+        long double q = -x;
+        for (int i = 0;; ++i) {
+            if (q == 0) q = -std::numeric_limits<long double>::min();
+            cnt += q < 0;
+            if (i + 1 == 2 * n) break;
+            q = -x - f[i] * f[i] / q;
+        }
+        return cnt;
+    };
+    std::vector<long double> s(n);
+    for (int j = 0; j < n; ++j) {
+        long double lo = 0, up = hi * 1.01L + std::numeric_limits<long double>::min();
+        for (int it = 0; it < 200 && up - lo > std::numeric_limits<long double>::epsilon() * up; ++it) {
+            const long double mid = (lo + up) / 2;
+            (below(mid) >= n + j + 1 ? up : lo) = mid;
+        }
+        s[j] = (lo + up) / 2;
+    }
+    return s;
+}
 // The user-style launch: kBatch work-groups of kBwg, group b's global slice at b * global_bytes
 // (BLOCKED_BREAK: odd groups half a slice lower), f(ex, b, ws) per group.
 template <class F> void launch_blocked(sycl::queue& q, const dv::WorkspaceSize& sz, F f) {
@@ -485,8 +526,8 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
             {
                 const VectorView<T> dv1(d1.p, n, kBatch, 1, sd), ev1(e1.p, std::max(n - 1, 0), kBatch, 1, se);
                 const Span<T> sspan(s1.p, std::size_t(ss) * kBatch);
-                DevBuf<std::byte> ws(this->q(), std::vector<std::byte>(bdsqr_buffer_size<T>(*this->ctx, dv1, ev1, sspan) + 16));
-                (void)bdsqr<B, T>(*this->ctx, dv1, ev1, sspan, Span<std::byte>(ws.p, ws.n), U.view(u1.p), Vh.view(v1.p), true,
+                UnifiedVector<std::byte> ws(bdsqr_buffer_size<T>(*this->ctx, dv1, ev1, sspan));
+                (void)bdsqr<B, T>(*this->ctx, dv1, ev1, sspan, ws.to_span(), U.view(u1.p), Vh.view(v1.p), true,
                                   Span<std::int32_t>(i1.p, kBatch));
                 this->ctx->wait();
             }
@@ -504,8 +545,35 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
                                                               dv::mat(vp + q * st, n, n, ld));
                 if (ex.leader()) ip[b] = r;
             });
+            // The Thread executor from a one-item-per-matrix user kernel: the host kernel's
+            // arithmetic in its order, so s, U, V^H and info are the host's BIT FOR BIT.
+            DevBuf<T> d3(this->q(), d), e3(this->q(), e), u3(this->q(), U.h), v3(this->q(), Vh.h);
+            DevBuf<T> s3(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
+            DevBuf<std::int32_t> i3(this->q(), std::vector<std::int32_t>(kBatch, -7));
+            {
+                T* const dq = d3.p;
+                T* const eq = e3.p;
+                T* const sq = s3.p;
+                T* const uq = u3.p;
+                T* const vq = v3.p;
+                std::int32_t* const iq = i3.p;
+                this->q()
+                    .parallel_for(sycl::range<1>(std::size_t(kBatch)),
+                                  [=](sycl::id<1> id) {
+                                      const std::ptrdiff_t q = static_cast<std::ptrdiff_t>(id[0]);
+                                      iq[q] = dv::bdsqr<dv::tier::Blocked<1>>(dv::Thread{}, dv::vec(dq + q * sd, n),
+                                                                              dv::vec(eq + q * se, std::max(n - 1, 0)), dv::vec(sq + q * ss, n),
+                                                                              dv::Workspace{}, dv::mat(uq + q * st, n, n, ld),
+                                                                              dv::mat(vq + q * st, n, n, ld));
+                                  })
+                    .wait_and_throw();
+            }
             const auto hi = i1.down(), gi = i2.down();
             const auto hs = s1.down(), gs = s2.down();
+            EXPECT_EQ(first_diff(hs, s3.down()), -1) << "Thread s vs the host's";
+            EXPECT_EQ(first_diff(u1.down(), u3.down()), -1) << "Thread U vs the host's";
+            EXPECT_EQ(first_diff(v1.down(), v3.down()), -1) << "Thread V^H vs the host's";
+            EXPECT_EQ(first_diff(hi, i3.down()), -1) << "Thread info vs the host's";
             const Mats<T> gu = U.with(u2.down()), gv = Vh.with(v2.down());
             long info_bad = 0;
             for (int b = 0; b < kBatch; ++b) info_bad += hi[b] != gi[b] || gi[b] != (b % kPeriod == 2 ? 1 : 0);
@@ -530,6 +598,96 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
             EXPECT_VERIFY(T, Check::orthogonality_rotations, n, orth);
             for (int b = 0; b < 2; ++b)
                 for (int i = 0; i + 1 < n; ++i) EXPECT_GE(gs[std::size_t(b) * ss + i], gs[std::size_t(b) * ss + i + 1]) << "descending, item " << b;
+        }
+    }
+}
+
+// bdsdc<tier::Blocked<1>> on a work-group (the in-group stedc at order 2n) vs the host bdsdc (the
+// host stedc): info, S descending, B == U S V^H, U and V^H orthogonal, and the values-only call.
+// Representatives: 0 uniform; 1 graded (1e-3); 2 an exact zero d (a zero sigma: repair rebuilds
+// its vectors).
+TYPED_TEST(DeviceApiSvd, BdsdcBlockedMatchesTheHostBdsdc) {
+    using T = typename TypeParam::ScalarType;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (dv::Arith<T>::is_complex) {
+        GTEST_SKIP() << "bdsdc is real (gebrd hands it a real bidiagonal for every T)";
+    } else {
+        if (!blocked_runs(this->q())) GTEST_SKIP() << "tier::Blocked needs sub-group size 32 and a work-group of 256";
+        for (int n : {1, 2, 3, 17, 32, 33}) {
+            SCOPED_TRACE("n " + std::to_string(n));
+            const int sd = n + 2, se = n + 1, ss = n + 1;
+            std::vector<T> d(std::size_t(sd) * kBatch, poison<T>()), e(std::size_t(se) * kBatch, poison<T>());
+            for (int b = 0; b < kBatch; ++b) {
+                const int r = b % kPeriod;
+                for (int i = 0; i < n; ++i) {
+                    const T g = r == 1 ? static_cast<T>(std::pow(10.0, -3.0 * i / n)) : T(1);
+                    d[std::size_t(b) * sd + i] = g * (T(1.5) + uval<T>(std::uint64_t(r) * 7919u + i));
+                    if (i + 1 < n) e[std::size_t(b) * se + i] = g * uval<T>(std::uint64_t(r) * 7919u + 5000u + i);
+                }
+                if (r == 2) d[std::size_t(b) * sd + n / 2] = T(0);
+            }
+            Mats<T> U(n, n), Vh(n, n);
+            DevBuf<T> d1(this->q(), d), e1(this->q(), e), u1(this->q(), U.h), v1(this->q(), Vh.h), u2(this->q(), U.h), v2(this->q(), Vh.h);
+            DevBuf<T> s1(this->q(), std::vector<T>(std::size_t(n) * kBatch, poison<T>()));
+            DevBuf<T> s2(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>())), s3(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
+            DevBuf<std::int32_t> i1(this->q(), std::vector<std::int32_t>(kBatch, -7)), i2(this->q(), std::vector<std::int32_t>(kBatch, -7));
+            {
+                const VectorView<T> dv1(d1.p, n, kBatch, 1, sd), ev1(e1.p, std::max(n - 1, 0), kBatch, 1, se);
+                const Span<T> sspan(s1.p, std::size_t(n) * kBatch);
+                UnifiedVector<std::byte> ws(bdsdc_buffer_size<B, T>(*this->ctx, dv1, ev1, sspan, true));
+                (void)bdsdc<B, T>(*this->ctx, dv1, ev1, sspan, ws.to_span(), U.view(u1.p), Vh.view(v1.p), true,
+                                  Span<std::int32_t>(i1.p, kBatch));
+                this->ctx->wait();
+            }
+            const T* const dp = d1.p;  // read only on both sides
+            const T* const ep = e1.p;
+            T* const sp = s2.p;
+            T* const s3p = s3.p;
+            T* const up = u2.p;
+            T* const vp = v2.p;
+            std::int32_t* const ip = i2.p;
+            const int ld = U.ld, st = U.stride;
+            launch_blocked(this->q(), dv::bdsdc_buffer_size<dv::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const dv::Workspace& w) {
+                const std::ptrdiff_t q = b;
+                const auto dd = dv::vec(dp + q * sd, n), ee = dv::vec(ep + q * se, std::max(n - 1, 0));
+                const int r = dv::bdsdc(ex, dd, ee, dv::vec(sp + q * ss, n), w, dv::mat(up + q * st, n, n, ld), dv::mat(vp + q * st, n, n, ld));
+                const auto none = dv::mat(static_cast<T*>(nullptr), 0, 0, 1);
+                const int r3 = dv::bdsdc(ex, dd, ee, dv::vec(s3p + q * ss, n), w, none, none);
+                if (ex.leader()) ip[b] = r | (r3 << 4);
+            });
+            const auto hi = i1.down(), gi = i2.down();
+            const auto hs = s1.down(), gs = s2.down(), gs3 = s3.down();
+            const Mats<T> gu = U.with(u2.down()), gv = Vh.with(v2.down());
+            const T pz = poison<T>();
+            long info_bad = 0, s_pads = 0, s_vals_only = 0;
+            for (int b = 0; b < kBatch; ++b) {
+                info_bad += hi[b] != 0 || gi[b] != 0;
+                s_pads += std::memcmp(&gs[std::size_t(b) * ss + n], &pz, sizeof(T)) != 0;
+                s_pads += std::memcmp(&gs3[std::size_t(b) * ss + n], &pz, sizeof(T)) != 0;
+                for (int i = 0; i < n; ++i) s_vals_only += std::memcmp(&gs[std::size_t(b) * ss + i], &gs3[std::size_t(b) * ss + i], sizeof(T)) != 0;
+            }
+            EXPECT_EQ(info_bad, 0) << "info 0 on host and device for every item";
+            EXPECT_EQ(s_pads, 0) << "S stride gaps";
+            EXPECT_EQ(s_vals_only, 0) << "the values-only S is the with-vectors S bit for bit";
+            EXPECT_EQ(pads_changed(U, gu) + pads_changed(Vh, gv), 0) << "U / V^H pads";
+            EXPECT_EQ(period_diffs(gu) + period_diffs(gv), 0) << "an item differs from its representative";
+            double sv = 0, res = 0, orth = 0;
+            for (int b = 0; b < kPeriod; ++b) {
+                long double smax = 0;
+                for (int i = 0; i < n; ++i) smax = std::max<long double>(smax, std::fabs(hs[std::size_t(b) * n + i]));
+                for (int i = 0; i < n; ++i)
+                    sv = batchlas::verify::nanmax(sv, double(std::fabs((long double)gs[std::size_t(b) * ss + i] - hs[std::size_t(b) * n + i]) /
+                                                             std::max(smax, std::numeric_limits<long double>::min())));
+                const auto B0 = [&](int i, int j) {
+                    return i == j ? d[std::size_t(b) * sd + i] : (j == i + 1 ? e[std::size_t(b) * se + i] : T(0));
+                };
+                res = batchlas::verify::nanmax(res, svd_residual(B0, n, n, gu, gv, gs, ss, b));
+                orth = batchlas::verify::nanmax(orth, std::max(unitary_defect(gu, b, true), unitary_defect(gv, b, false)));
+                for (int i = 0; i + 1 < n; ++i) EXPECT_GE(gs[std::size_t(b) * ss + i], gs[std::size_t(b) * ss + i + 1]) << "descending, item " << b;
+            }
+            EXPECT_VERIFY(T, Check::values, n, sv);
+            EXPECT_VERIFY(T, Check::factorization, n, res);
+            EXPECT_VERIFY(T, Check::orthogonality_rotations, n, orth);
         }
     }
 }
@@ -599,22 +757,20 @@ TYPED_TEST(DeviceApiSvd, GebrdBlockedAndOrmbrReconstructA) {
             const auto av = A.view(a2.p);
             const VectorView<R> dv2(d2.p, n, kBatch, 2, sd), ev2(e2.p, std::max(n - 1, 0), kBatch, 1, se);
             const VectorView<T> qv2(q2.p, n, kBatch, 1, st), pv2(p2.p, n, kBatch, 1, st);
-            DevBuf<std::byte> ws(this->q(), std::vector<std::byte>(gebrd_blocked_buffer_size<B, T>(*this->ctx, av, dv2, ev2, qv2, pv2, 16) + 16));
-            (void)gebrd_blocked<B, T>(*this->ctx, av, dv2, ev2, qv2, pv2, Span<std::byte>(ws.p, ws.n), 16);
+            UnifiedVector<std::byte> ws(gebrd_blocked_buffer_size<B, T>(*this->ctx, av, dv2, ev2, qv2, pv2, 16));
+            (void)gebrd_blocked<B, T>(*this->ctx, av, dv2, ev2, qv2, pv2, ws.to_span(), 16);
             this->ctx->wait();
+            // The bidiagonals' singular values, not d / e entrywise: B is a Lanczos-like product
+            // whose entries move by far more than the backward error when two reductions sum in
+            // different orders (the real host panel is its own kernel), its singular values do not.
             const auto hd = d2.down(), he = e2.down();
             double worst = 0;
             for (int b = 0; b < kPeriod; ++b) {
-                long double scale = 0;
-                for (int i = 0; i < n; ++i) scale = std::max<long double>(scale, std::fabs(hd[std::size_t(b) * sd + 2 * i]));
-                scale = std::max(scale, std::numeric_limits<long double>::min());
-                for (int i = 0; i < n; ++i) {
-                    worst = batchlas::verify::nanmax(worst, double(std::fabs((long double)gd[std::size_t(b) * sd + 2 * i] - hd[std::size_t(b) * sd + 2 * i]) / scale));
-                    if (i + 1 < n)
-                        worst = batchlas::verify::nanmax(worst, double(std::fabs((long double)ge[std::size_t(b) * se + i] - he[std::size_t(b) * se + i]) / scale));
-                }
+                const auto gs = bidiag_svals(gd, ge, sd, se, b, n), hs = bidiag_svals(hd, he, sd, se, b, n);
+                const long double scale = std::max(hs.back(), std::numeric_limits<long double>::min());
+                for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, double(std::fabs(gs[i] - hs[i]) / scale));
             }
-            EXPECT_VERIFY(T, Check::factorization, m, worst);
+            EXPECT_VERIFY(T, Check::values, m, worst);
         }
     }
 }
@@ -639,8 +795,8 @@ template <SvdVectors JU, SvdVectors JVT, Backend B, class T> void check_gesvd_bl
         const auto uv = JU == SvdVectors::None ? MatrixView<T, MatrixFormat::Dense>() : U.view(u1.p);
         const auto vv = JVT == SvdVectors::None ? MatrixView<T, MatrixFormat::Dense>() : Vh.view(v1.p);
         const Span<R> sspan(s1.p, std::size_t(k) * kBatch);
-        DevBuf<std::byte> ws(dq, std::vector<std::byte>(gesvd_buffer_size<B, T>(ctx, av, sspan, uv, vv, JU, JVT) + 16));
-        (void)gesvd<B, T>(ctx, av, sspan, uv, vv, JU, JVT, Span<std::byte>(ws.p, ws.n), Span<std::int32_t>(i1.p, kBatch));
+        UnifiedVector<std::byte> ws(gesvd_buffer_size<B, T>(ctx, av, sspan, uv, vv, JU, JVT));
+        (void)gesvd<B, T>(ctx, av, sspan, uv, vv, JU, JVT, ws.to_span(), Span<std::int32_t>(i1.p, kBatch));
         ctx.wait();
     }
     T* const ap = a2.p;
