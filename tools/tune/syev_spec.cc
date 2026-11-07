@@ -210,6 +210,7 @@ public:
         // family: jacobi "include/batchlas/device/lapack/jacobi.hh"
         // family: two_stage "include/batchlas/device/lapack/geqrf.hh" "include/batchlas/device/lapack/larfb.hh"
         // family: two_stage "include/batchlas/device/lapack/sb2st.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: two_stage "include/batchlas/device/lapack/sy2sb.hh"
         // family: two_stage "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
         // family: two_stage "include/batchlas/device/level3/group.hh" "include/batchlas/device/level3/mma.hh"
         // family: two_stage "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"

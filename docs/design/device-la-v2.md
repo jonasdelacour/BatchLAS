@@ -203,7 +203,8 @@ op's contract, executor per tier, info values and workspace.
 | LDL^T | `sytrf<UL, Tier>(ex, A, ipiv, ws)`, `sytrs`, `sysv` | `Cta<32>` (sytrs also `Cta<64>`, `Cta<128>`), `Blocked<1>`; `Blocked<NB>` by name | `device_api_sytrf` |
 | QR | `geqrf<Tier>(ex, A, tau, ws)`, `orgqr`, `ormqr<SD, TR, Tier>`; `larft`, `larfb` | `Blocked<NB, Alg>` (NB from `larfb_default_nb<T>`) | `device_api_qr` |
 | Generalized eigen | `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>` | `device_api_sygst` |
-| Band / tridiagonal | `sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws)` | `Cta<4096>`, `Blocked<32>` | `device_api_sb2st` |
+| Band / tridiagonal | `sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws)` (dense to band) | `Blocked<32>`; `Blocked<64>` by name | `device_api_sy2sb` |
+| | `sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws)` | `Cta<4096>`, `Blocked<32>` | `device_api_sb2st` |
 | | `stebz`, `stein`, `stedc<J, Tier>` (real T) | `Blocked<1>` (one body for every n) | `device_api_stebz-stein`, `device_api_stedc` |
 | | `laed2`, `laed3`, `laed4`, `lagtf`, `lagts`, `syevx` selection, `jacobi` | building blocks of the above and of the host routes | `device_blas_v2_*` |
 | SVD | `gebrd<Tier>(ex, it, A, d, e, tauq, taup, ws)` (real T); `gesvd` steps | `Cta<4>` .. `Cta<32>` | `device_api_svd` |
