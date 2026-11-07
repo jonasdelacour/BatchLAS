@@ -152,7 +152,7 @@ Event syev_cta_part(Queue& ctx,
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const auto [row, col] = sv::batched_rc(idx, b, nn);
                 // The strict upper triangle from the lower (conj), Im(diag) dropped: element (row, col).
-                v2::mirror<Uplo::Lower, true>(sv::ElemAt{row, col}, v2::item(A, b, nn, nn));
+                v2::mirror<Uplo::Lower, true>(v2::ElemAt{row, col}, v2::item(A, b, nn, nn));
             });
         });
     }

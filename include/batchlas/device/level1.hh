@@ -872,7 +872,7 @@ template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DLA_INLINE int find
 template <class Ex, class T, class P> BATCHLAS_DLA_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, int none, P&& pred) {
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
-    return butterfly<1, Ex::size, bfly::Asc>(ex, cand, sycl::minimum<int>());
+    return bfly::inline_body<1, Ex::size, bfly::Asc>(ex, cand, sycl::minimum<int>());
 }
 
 // argmax over x(i), i in [r.lo, r.hi) except i == skip, through a Group-scope exchange: per-item

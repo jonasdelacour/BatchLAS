@@ -114,7 +114,7 @@ artifact; complex<float> never crosses (`cta` 1.23× over vendor at 32).
 
 `syev_cta` runs `sytrd_cta`, `steqr_cta`, `ormqx_cta` plus pack kernels, each round-tripping global memory;
 `syev_cta_fused` keeps one problem in one sub-group partition from load to store with the same device code
-(`sytrd_cta_device.hh`, `steqr_cta_device.hh`). The reduction always runs Upper (Lower input is symmetrised on
+(`sytrd_cta_device.hh`, `device/lapack/steqr.hh`). The reduction always runs Upper (Lower input is symmetrised on
 load); eigenvalues are placed by rank, so no sort kernel. Hermitian input becomes real tridiagonal by
 \f$T' = S^H T S\f$, \f$S_{i+1} = S_i\,\bar e_i / |e_i|\f$, reapplied before `ormqx_cta(QL, Left, NoTrans)`.
 Real input follows DSYEV (explicit Q seeds `steqr`; lane c owns column c). The tile ld is P + 1 (bank conflicts).
