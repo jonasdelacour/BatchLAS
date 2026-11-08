@@ -203,6 +203,7 @@ op's contract, executor per tier, info values and workspace.
 | LDL^T | `sytrf<UL, Tier>(ex, A, ipiv, ws)`, `sytrs`, `sysv` | `Cta<32>` (sytrs also `Cta<64>`, `Cta<128>`), `Blocked<1>`; `Blocked<NB>` by name | `device_api_sytrf` |
 | QR | `geqrf<Tier>(ex, A, tau, ws)`, `orgqr`, `ormqr<SD, TR, Tier>`; `larft`, `larfb` | `Blocked<NB, Alg>` (NB from `larfb_default_nb<T>`) | `device_api_qr` |
 | Generalized eigen | `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>` | `device_api_sygst` |
+| Symmetric eigen | `syev<J, UL, Tier>(ex, A, W, ws)`; `sytrd<UL, Tier>(ex, A, d, e, tau, ws)`; `steqr<J, Tier>(ex, d, e, z, ws)` (real d, e) | `Cta<4>` .. `Cta<32>`, `Blocked<32>` (sytrd: Lower only; steqr: `Blocked<1>`) | `device_api_syev`, `device_api_sytrd`, `device_api_steqr` |
 | Band / tridiagonal | `sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws)` | `Cta<4096>`, `Blocked<32>` | `device_api_sb2st` |
 | | `stebz`, `stein`, `stedc<J, Tier>` (real T) | `Blocked<1>` (one body for every n) | `device_api_stebz-stein`, `device_api_stedc` |
 | | `laed2`, `laed3`, `laed4`, `lagtf`, `lagts`, `syevx` selection, `jacobi` | building blocks of the above and of the host routes | `device_blas_v2_*` |
@@ -296,7 +297,7 @@ identical to the hand code. Timing (RTX 4090, v2/base median, < 1 is faster; sel
 | --- | --- |
 | getrf `Blocked` | the lu unit waits on a BumpAllocator alignment decision |
 | gebrd / bdsqr / ormbr / gesvd `Blocked`, complex gebrd | the svd unit (not compiled yet) |
-| syev / syevd / syevx drivers, sytrd, latrd as device ops | the syev-sym unit (latrd A/Bs owed) |
+| syevd / syevx drivers | `sytrd`, `stedc`, `stebz` / `stein` compose in one kernel; no driver op |
 | sy2sb, the two-stage driver | the syev-2stage unit (a tolerance change awaits approval) |
 | Cta tiers of potrs, posv, potri | the host `tiny` / `fused` / `cta` bodies stay host-launched |
 | gemm register tiles, gemv_native, trsm diagonal solve, verification, sort | tuned host kernels on the device components, no separate device op |

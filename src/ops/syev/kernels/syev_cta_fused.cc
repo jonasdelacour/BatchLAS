@@ -13,8 +13,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <src/ops/syev/sytrd/sytrd_cta_device.hh>
-#include <batchlas/device/lapack/steqr.hh>
+#include <batchlas/device/lapack/syev.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
@@ -52,26 +51,14 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
 // ---------------------------------------------------------------------------
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
 // in one partition from load to store (sytrd -> steqr -> back-transform), so no
-// intermediate touches global memory. The stages are the SAME code as the standalone
-// kernels (sytrd_cta_device.hh / device/lapack/steqr.hh): keep it that way, so a
+// intermediate touches global memory. The body is device::syev<J, UL, tier::Cta<P>>'s
+// (device/lapack/syev.hh syev_detail::syev_cta_run), its stages the SAME code as the
+// standalone kernels (lapack/sytrd.hh, lapack/steqr.hh): keep it that way, so a
 // head-to-head benchmark measures fusion and nothing else. Real input seeds the
 // sweeps with an in-place Q_house (DSYEV's route); Hermitian input applies the
 // reflectors afterwards. The reduction always runs Uplo::Upper.
 // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 // ---------------------------------------------------------------------------
-
-namespace {
-
-template <typename U>
-inline typename base_type<U>::type real_part_f(const U& x) {
-    if constexpr (detail::is_complex<U>::value) {
-        return x.real();
-    } else {
-        return x;
-    }
-}
-
-} // namespace
 
 template <typename T, size_t P, bool ComputeVectors>
 inline void syev_cta_fused_impl(Queue& ctx,
@@ -84,7 +71,6 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                 int32_t* info,
                                 const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
-    constexpr bool kComplex = detail::is_complex<T>::value;
 
     const auto batch_size = a.batch_size();
 
@@ -96,19 +82,14 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // CTA path assumes warp-sized sub-groups on NVIDIA.
         const int32_t sg_size = 32;
 
-        // Real eigenvector path: the reflector tile and the rotation accumulator are the
-        // SAME tile (stage 2a builds Q_house in place), so it carries the accumulator's
-        // P+1 padding: it is read by column on write-out, and LD == 32 would serialize
-        // that 32 ways on bank conflicts. The complex path keeps two tiles (real
-        // accumulator, complex reflectors).
-        // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
-        constexpr bool kFusedOrgql = ComputeVectors && !kComplex;
-        constexpr int32_t LDQ = static_cast<int32_t>(P) + 1;
-        constexpr int32_t LDA = kFusedOrgql ? LDQ : static_cast<int32_t>(P);
-        constexpr bool kSeparateQTile = ComputeVectors && !kFusedOrgql;
+        // The tile layout of the one body (device/lapack/syev.hh cta_layout: real vectors on
+        // ONE P+1-padded tile, Hermitian vectors with a separate real accumulator).
+        using Lay = v2::syev_detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
+        constexpr int32_t LDQ = Lay::ldq;
+        constexpr int32_t LDA = Lay::lda;
+        constexpr bool kSeparateQTile = Lay::separate_q;
         constexpr std::size_t kATileElems = static_cast<std::size_t>(LDA) * P;
         constexpr std::size_t kQTileElems = static_cast<std::size_t>(LDQ) * P;
-        constexpr int kP = static_cast<int>(P);
 
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), sg_size);
         // 0 asks for the tuned value; any explicit value is taken as given.
@@ -187,148 +168,17 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                // arith::Native keeps the std::complex operators (strict port).
-                using Ops = v2::arith::Native;
-                const auto pex = v2::wrap(part);
-                // Views with the accessor as base (never &A_local[base]: a generic pointer).
-                using ATile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDA>, v2::Mem::Local, v2::Cyclic,
-                                      sycl::local_accessor<T, 1>>;
-
-                // ---- Stage 0: load the Hermitian completion of the stored triangle. ----
-                // The kernel lambda indexes accessors itself and calls named functions only: a direct
-                // operator() call (a view's or a lambda's) would become the SemaSYCL kernel body.
-                for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                    T v = T(0);
-                    if (live && lane < nn && c < nn) sv::herm_load<Ops>(v, A_prob, is_upper, lane, c);
-                    A_local[base_a + lane + c * LDA] = v;
-                }
-                group_barrier(part);
-                const ATile tile{A_local, {}, {}, {}, base_a};
-                [[maybe_unused]] const auto vs = v2::vec(V_local, kP, base_v);
-
-                // ---- Stage 1: tridiagonal reduction (SYTD2, upper path). ----
-                const T tau_lane = sytd2_cta_upper_partition<T, LDA>(part, A_local, base_a, V_local, base_v, W_local,
-                                                                     base_w, nn);
-
-                // Read the tridiagonal off the tile; above the superdiagonal is the packed
-                // reflector store that stage 3 consumes.
-                const T d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : T(0);
-                const T e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : T(0);
-
-                Real diag = real_part_f(d_c);
-                Real offdiag = Real(0);
-                T phase = T(1);
-
-                if constexpr (kComplex) {
-                    // Hermitian -> real tridiagonal (T' = S^H T S); each lane replays S itself.
-                    offdiag = (lane < (nn - 1)) ? sycl::hypot(e_c.real(), e_c.imag()) : Real(0);
-                    phase = sv::phase_replay<Ops>(pex, e_c, offdiag, nn);
-                } else {
-                    offdiag = real_part_f(e_c);
-                }
-
-                // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
-                const auto slot_of = [&](Real wj) BATCHLAS_DLA_BODY {
-                    if (!do_sort) return lane;
-                    int32_t rank = 0;
-                    for (int32_t k = 0; k < nn; ++k) {
-                        const Real wk = select_from_group(part, wj, static_cast<uint32_t>(k));
-                        // Strict total order (NaN last, ties on index): a bijection even for NaN.
-                        const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
-                        const bool before = (nan_j != nan_k) ? nan_j
-                                          : (nan_j || wk == wj) ? (k < lane)
-                                          : (ascending ? wk < wj : wk > wj);
-                        if (before) ++rank;
-                    }
-                    return rank;
-                };
-
-                if constexpr (!ComputeVectors) {
-                    // ---- Stage 2: eigenvalues only, no accumulator. ----
-                    v2::steqr_detail::QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    // A STORE, not a raise: exactly one of the three arms below runs per
-                    // problem, so this kernel is the item's single writer and needs no
-                    // separate clear (a second submission, racy out of order).
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                    }
-                } else if constexpr (kFusedOrgql) {
-                    // ---- Stage 2a: Q_house in place (DSYEV: DORGTR seeds DSTEQR, no back-transform).
-                    // org2l generates column k at step k, so the reflectors it has not reached stay intact.
-                    // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
-                    v2::Frag<Real, kP, v2::ColPerLane> Qc;
-                    sv::org2l<Ops>(pex, Qc, vs, tile, tau_lane, nn);
-
-                    // Identity outside the leading (n-1)^2 block; pad columns defined (sweeps run on all P lanes).
-                    if (lane >= nn) v2::fill(Qc, Real(0));
-                    else if (lane == nn - 1) sv::laset_col(Qc, nn - 1, Real(0), Real(1));
-
-                    // Hand the tile over: from here it is the accumulator.
-                    group_barrier(part);
-                    v2::store(Qc, tile.col(lane));
-                    group_barrier(part);
-
-                    // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
-                    v2::steqr_detail::QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
-                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    // The sweeps wrote the tile by row (lane == row); the readout
-                    // below reads it by column, i.e. other lanes' writes.
-                    group_barrier(part);
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                        v2::copy(v2::Thread{}, tile.col(lane), v2::mat(A_prob.data(), nn, nn, A_prob.ld()).col(dst));
-                    }
-                } else {
-                    // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
-                    // reflectors are applied afterwards, in stage 3). ----
-                    v2::steqr_detail::QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const v2::Mat<Real, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDQ>, v2::Mem::Local, v2::Cyclic,
-                                  sycl::local_accessor<Real, 1>>
-                        qtile{Q_local, {}, {}, {}, base_q};
-
-                    // The identity on the leading n x n block, zero elsewhere; this lane's row.
-                    const Real q_diag = lane < nn ? Real(1) : Real(0);
-                    for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                        v2::laset(v2::ElemAt{lane, c}, v2::Zero{}, q_diag, qtile);
-                    }
-                    group_barrier(part);
-
-                    const bool failed = v2::steqr_detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                    }
-
-                    // ---- Stage 3: back-transform, Z := Q_house * S * Z. ----
-                    v2::Frag<T, kP, v2::ColPerLane> C_col;
-                    v2::fill(C_col, T(0));
-
-                    // Zc = diag(S) Z (dgmm Left), staged before vs is reused for the reflectors.
-                    V_local[base_v + lane] = phase;
-                    group_barrier(part);
-                    if (lane < nn) sv::dgmm_lift<Ops>(C_col, vs, qtile.col(lane), nn);
-                    group_barrier(part);
-
-                    // Upper-path SYTD2 reflectors form a QL factorization: xORM2L, Left, NoTrans.
-                    sv::orm2l<Ops>(pex, C_col, vs, tile, tau_lane, nn);
-
-                    if (live && lane < nn) v2::store(C_col, v2::mat(A_prob.data(), nn, nn, A_prob.ld()).col(dst), nn);
-                }
+                const v2::syev_detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
+                // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
+                // back-transform; the stores skip a dead chunk.
+                v2::syev_detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
+                    part, solve_part, A_local, base_a, V_local, base_v, W_local, base_w, Q_local, base_q, A_prob,
+                    v2::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
+                    [&](bool failed) BATCHLAS_DLA_BODY {
+                        // A STORE, not a raise: the kernel is the item's single writer, so it
+                        // needs no separate clear (a second submission, racy out of order).
+                        if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
+                    });
             });
     });
 }
