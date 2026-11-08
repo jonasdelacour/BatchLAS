@@ -207,6 +207,7 @@ op's contract, executor per tier, info values and workspace.
 | | `stebz`, `stein`, `stedc<J, Tier>` (real T) | `Blocked<1>` (one body for every n) | `device_api_stebz-stein`, `device_api_stedc` |
 | | `laed2`, `laed3`, `laed4`, `lagtf`, `lagts`, `syevx` selection, `jacobi` | building blocks of the above and of the host routes | `device_blas_v2_*` |
 | SVD | `gebrd<Tier>(ex, it, A, d, e, tauq, taup, ws)` (real T); `gesvd` steps | `Cta<4>` .. `Cta<32>` | `device_api_svd` |
+| | `gebrd<Tier>(ex, A, d, e, tauq, taup, ws)` (every T, m >= n), `ormbr<Vect, SD, TR>`, `bdsqr`, `bdsdc` (real B), `gesvd<JU, JVT, Tier>(ex, A, S, U, Vh, ws)` (any m x n) | `Blocked<16>` (gebrd, gesvd), `Blocked<1>` (ormbr, bdsqr, bdsdc) | `device_api_svd` |
 | Level 3 | `level3/group.hh` ops, `level3.hh` register tier | one matrix per work-group, `Cfg` = `l3::cfg::RegTiled` preset | `device_api_l3`, `device_core_level3` |
 | Level 2, sparse | `gemv`; `spmm<TA, TB>`, `iluk_*` (`sparse.hh`) | Blocked | `device_api_gemv`, `device_api_sparse` |
 | Utilities | `ortho<TR, Algo, Tier>` (CGS2, Cholesky QR), `ritz_values`, `norm` | `Cta<N>`, `Blocked<NB>` | `device_api_util` |
@@ -295,7 +296,7 @@ identical to the hand code. Timing (RTX 4090, v2/base median, < 1 is faster; sel
 | Not yet a device op for every n | Status |
 | --- | --- |
 | getrf `Blocked` | the lu unit waits on a BumpAllocator alignment decision |
-| gebrd / bdsqr / ormbr / gesvd `Blocked`, complex gebrd | the svd unit (not compiled yet) |
+| gesvdj as a device op (any tier) | not started: the host gesvdj is a CTA kernel (n <= 64, SLM-resident); a `Blocked` one-sided Jacobi over global columns has no host route to back or check it, and `gesvd` `Blocked` already covers every n |
 | syev / syevd / syevx drivers, sytrd, latrd as device ops | the syev-sym unit (latrd A/Bs owed) |
 | sy2sb, the two-stage driver | the syev-2stage unit (a tolerance change awaits approval) |
 | Cta tiers of potrs, posv, potri | the host `tiny` / `fused` / `cta` bodies stay host-launched |
