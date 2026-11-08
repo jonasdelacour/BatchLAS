@@ -253,6 +253,7 @@ template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Rout
 
 template <class Tier> std::string tier_name() {
     if constexpr (dv::getrf_detail::is_reg_v<Tier>) return "Reg<" + std::to_string(Tier::n_max) + ">";
+    else if constexpr (dv::getrf_detail::is_blocked_v<Tier>) return "Blocked<" + std::to_string(Tier::nb) + ">";
     else return "Cta<" + std::to_string(Tier::n_max) + ">";
 }
 template <class T> std::string picked(const dv::DeviceLimits& lim, int n) {
@@ -350,14 +351,17 @@ TEST(DeviceApiGetrfTier, WithTierPicksTheFirstFittingTier) {
                                                         {17, "Reg<32>"}, {32, "Reg<32>"},  {33, "Cta<64>"}, {64, "Cta<64>"},
                                                         {65, "Cta<96>"}, {96, "Cta<96>"},  {97, "Cta<128>"}, {128, "Cta<128>"}};
     for (const auto& [n, want] : f) EXPECT_EQ(picked<float>(full, n), want) << "float n=" << n;
-    EXPECT_EQ(picked<float>(full, 129), "getrf: no device tier admits n=129");
+    EXPECT_EQ(picked<float>(full, 129), "Blocked<32>") << "past the last Cta tier, any n";
+    EXPECT_EQ(picked<float>(full, 5000), "Blocked<32>");
     EXPECT_EQ(picked<float>(full, 0), "getrf: no device tier admits n=0");
     EXPECT_EQ(picked<std::complex<double>>(full, 16), "Reg<16>");
     EXPECT_EQ(picked<std::complex<double>>(full, 17), "Cta<64>") << "complex<double> has no Reg<32>";
 
     const dv::DeviceLimits small{32 * 1024, {32}, 1024, true};
     EXPECT_EQ(picked<float>(small, 80), "Cta<96>") << "81 * 80 * 4 + 256 = 26176 bytes fit 32 KB";
-    EXPECT_EQ(picked<float>(small, 100), "getrf: no device tier admits n=100") << "101 * 100 * 4 + 256 = 40656 bytes do not";
+    EXPECT_EQ(picked<float>(small, 100), "Blocked<32>") << "Cta<128>'s 101 * 100 * 4 + 256 = 40656 bytes do not fit; Blocked's 2464 do";
+    EXPECT_EQ(picked<float>(dv::DeviceLimits{2 * 1024, {32}, 1024, true}, 100), "getrf: no device tier admits n=100")
+        << "Blocked's 2464 bytes do not fit 2 KB";
     EXPECT_EQ(picked<double>(dv::DeviceLimits{99 * 1024, {32}, 1024, false}, 5), "getrf: no device tier admits n=5");
     EXPECT_EQ(picked<float>(dv::DeviceLimits{99 * 1024, {16}, 1024, true}, 5), "getrf: no device tier admits n=5");
     EXPECT_EQ(picked<float>(dv::DeviceLimits{99 * 1024, {32}, 128, true}, 64), "getrf: no device tier admits n=64")
@@ -377,6 +381,7 @@ TEST(DeviceApiGetrfTier, BufferSizeIsThePlanByHand) {
     static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::getrf, float, dv::tier::upto<20>>, dv::tier::Reg<32>>);
     static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::getrf, float, dv::tier::upto<33>>, dv::tier::Cta<64>>);
     static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::getrf, std::complex<double>, dv::tier::upto<20>>, dv::tier::Cta<64>>);
+    static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::getrf, float, dv::tier::upto<129>>, dv::tier::Blocked<32>>);
     static_assert(dv::HasTier<dv::routine::getrf, dv::tier::Reg<16>, std::complex<double>>);
     static_assert(!dv::HasTier<dv::routine::getrf, dv::tier::Reg<32>, std::complex<double>>);
     static_assert(dv::tier_info<dv::routine::getrf, dv::tier::Reg<5>, float>::part_size == 8);
