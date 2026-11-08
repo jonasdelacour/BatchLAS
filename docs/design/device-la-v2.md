@@ -199,7 +199,8 @@ op's contract, executor per tier, info values and workspace.
 | --- | --- | --- | --- |
 | Cholesky | `potrf<UL, Tier>(ex, A, ws)` | `Reg<8>`, `Reg<16>`, `Reg<32>` (not complex<double>), `Cta<64>`, `Cta<128>`, `Blocked<32 / 16>` | `device_api_potrf`, `device_api_chol` |
 | | `potrs`, `posv`, `potri` / `trtri` / `lauum` (`potri.hh`) | `Blocked<32 / 16>` | `device_api_chol` |
-| LU | `getrf<Tier>(ex, A, ipiv, ws)`; `getrs` / `gesv` steps | `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`, `Cta<96>`, `Cta<128>` | `device_api_getrf` |
+| LU | `getrf<Tier>(ex, A, ipiv, ws)` | `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`, `Cta<96>`, `Cta<128>`, `Blocked<32>` | `device_api_getrf`, `device_api_lu` |
+| | `getrs`, `gesv`, `getri`, `inv` | `Blocked<32>` | `device_api_lu` |
 | LDL^T | `sytrf<UL, Tier>(ex, A, ipiv, ws)`, `sytrs`, `sysv` | `Cta<32>` (sytrs also `Cta<64>`, `Cta<128>`), `Blocked<1>`; `Blocked<NB>` by name | `device_api_sytrf` |
 | QR | `geqrf<Tier>(ex, A, tau, ws)`, `orgqr`, `ormqr<SD, TR, Tier>`; `larft`, `larfb` | `Blocked<NB, Alg>` (NB from `larfb_default_nb<T>`) | `device_api_qr` |
 | Generalized eigen | `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>` | `device_api_sygst` |
@@ -287,19 +288,20 @@ identical to the hand code. Timing (RTX 4090, v2/base median, < 1 is faster; sel
 
 | Accepted exception (user decision) | Measured |
 | --- | --- |
-| latrd lower panel: the v2 body is the only body (SLM floor cap and tuned occupancy) | float n = 256, batch 1024: 1.19x (no occupancy setting recovers it; decision 20); float / cfloat n >= 512, batch >= 512: 0.82-0.97x |
+| latrd lower panel: the v2 body is the only body (the SLM floor cap and tuned occupancy land with the syev-sym unit) | float n = 256, batch 1024: 1.19x (no occupancy setting recovers it; decision 20); float / cfloat n >= 512, batch >= 512: 0.82-0.97x |
 | `GetrsFusedNKernel`: one v2 body for every T (the complex<float> hand body is deleted) | complex<float> 0.96-1.01x at nrhs <= 4, 1.02-1.05x at nrhs 6-8 |
 | `PotrfCta<float, 8, 4, SubGroup>` | +3% instructions, 1.015x (decision 20) |
 | syfn `ScaleKernel` | +7.6% instructions, A/B within 1.02x (decision 20) |
 | `Sytd2CTAKernel<float,16>`, `SpmmGather<float,16,0>` | 1.021, 1.022 (decision 15) |
+| `BdsdcExtract<float>`: REG 36 -> 40, blocks/SM unchanged | A/B 1.001 (float), worst median 1.0028 |
+| host bdsqr keeps its hand kernel; the device `bdsqr<Thread>` is checked bit for bit against it | the thin launcher over the device op was 1.055-1.08x (n = 32, vectors) and 1.38-1.77x (n = 64, values only) |
 | bit-identity: gesvd Hermitian mirror Im(diag) = 0, real and complex axpby FMA contraction, Frobenius-norm reduction order, the algorithm ports (ormqr Right fused msub, larft v2, complex syevx / krylov / gebrd, gesvdj, tridiag solver, stedc `nrm2<Blue>`) | decisions 12 and 15 |
 
 | Not yet a device op for every n | Status |
 | --- | --- |
-| getrf `Blocked` | the lu unit waits on a BumpAllocator alignment decision |
 | gesvdj as a device op (any tier) | not started: the host gesvdj is a CTA kernel (n <= 64, SLM-resident); a `Blocked` one-sided Jacobi over global columns has no host route to back or check it, and `gesvd` `Blocked` already covers every n |
-| syev / syevd / syevx drivers, sytrd, latrd as device ops | the syev-sym unit (latrd A/Bs owed) |
-| sy2sb, the two-stage driver | the syev-2stage unit (a tolerance change awaits approval) |
+| syev / syevd / syevx drivers, sytrd, latrd as device ops, the latrd SLM floor cap | the syev-sym unit: latrd float n = 256 and complex<float> n = 1024 at batch 128 are 1.03x, above the 1.02x rule |
+| the two-stage driver | sy2sb and sb2st are device ops; the driver stays host-launched |
 | Cta tiers of potrs, posv, potri | the host `tiny` / `fused` / `cta` bodies stay host-launched |
 | gemm register tiles, gemv_native, trsm diagonal solve, verification, sort | tuned host kernels on the device components, no separate device op |
 
