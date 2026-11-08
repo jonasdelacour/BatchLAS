@@ -17,7 +17,7 @@
 #include <complex>
 #include <numeric>
 #include <array>
-#include <src/ops/syev/sytrd/sytrd_cta_device.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 
 
 namespace batchlas {
@@ -115,7 +115,7 @@ namespace batchlas {
                     // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
                     // const, and no capture of the mask when unmasked: a mutable flag the nested lambdas
                     // take by reference lands in local memory.
-                    const bool live = [&] {
+                    const bool live = [&]() BATCHLAS_DLA_BODY {
                         if constexpr (Masked) return mask[prob_id] != 0;
                         else return true;
                     }();
