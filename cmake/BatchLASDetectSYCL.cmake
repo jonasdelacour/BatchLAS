@@ -566,6 +566,36 @@ if(BATCHLAS_SYCL_TARGETS_STRING)
     )
 endif()
 
+# The Intel CPU runtime's ReduceCrossBarrierValues pass, run by opencl-aot on every
+# spir64_x86_64 device link, intermittently corrupts the heap on kernels with work-group
+# barriers (`malloc(): unsorted double linked list corrupted`, a segfault, SIGALRM, or a spin
+# of 40 min); it depends on the address layout, not on the link parallelism. The pass is an
+# optimisation (fewer values stored across a barrier per work-item), so links run with it off
+# when the runtime takes -opt-disable (2026.22 does, 2025.20 rejects it: probed on a .cl). The
+# variable reaches only that runtime: the GPU images are unchanged.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+list(FIND BATCHLAS_SYCL_TARGETS "spir64_x86_64" _x86_aot_idx)
+get_filename_component(_sycl_bin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+find_program(BATCHLAS_OPENCL_AOT opencl-aot HINTS "${_sycl_bin_dir}" NO_DEFAULT_PATH)
+if(NOT _x86_aot_idx EQUAL -1 AND BATCHLAS_OPENCL_AOT AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(_aot_llvm_opts "-opt-disable=sycl-kernel-reduce-cross-barrier-values -opt-bisect-verbose=false")
+    set(_aot_dir "${PROJECT_BINARY_DIR}/CMakeFiles/batchlas_x86_aot_probe")
+    file(MAKE_DIRECTORY "${_aot_dir}")
+    file(WRITE "${_aot_dir}/probe.cl" "__kernel void k(__global int *p) { p[0] = 1; }\n")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "CL_CONFIG_LLVM_OPTIONS=${_aot_llvm_opts}"
+                "${BATCHLAS_OPENCL_AOT}" --device=cpu "-o=${_aot_dir}/probe.out" "${_aot_dir}/probe.cl"
+        RESULT_VARIABLE _aot_rc OUTPUT_QUIET ERROR_QUIET TIMEOUT 120)
+    if(_aot_rc EQUAL 0)
+        get_property(_batchlas_launch_link GLOBAL PROPERTY RULE_LAUNCH_LINK)
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK
+            "\"${CMAKE_COMMAND}\" -E env \"CL_CONFIG_LLVM_OPTIONS=${_aot_llvm_opts}\" ${_batchlas_launch_link}")
+        message(STATUS "x86 AOT: links run without the CPU runtime's ReduceCrossBarrierValues pass")
+    else()
+        message(STATUS "x86 AOT: the CPU runtime rejects -opt-disable; opencl-aot may crash at random")
+    endif()
+endif()
+
 if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
     batchlas_build_interface_option(_targets_no_cpu_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}")
     target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
