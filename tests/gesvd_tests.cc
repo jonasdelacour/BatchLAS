@@ -848,6 +848,12 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
 
 namespace {
 
+// sigma_i = 10^(-log10cond * i/(k-1)): graded from 1 down to 10^-log10cond.
+inline double graded_sigma(int i, int k, double log10cond) {
+    const double t = (k > 1) ? static_cast<double>(i) / static_cast<double>(k - 1) : 0.0;
+    return std::pow(10.0, -log10cond * t);
+}
+
 // A = H(u) * diag(sigma) * H(v), with H(x) = I - 2 x x^T the Householder
 // reflector of a unit vector x. Both factors are orthogonal, so the singular
 // values of A are exactly sigma -- no reference solve is needed.
@@ -864,10 +870,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
     using Real = typename base_type<Scalar>::type;
 
     std::vector<double> sigma(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        const double t = (n > 1) ? static_cast<double>(i) / static_cast<double>(n - 1) : 0.0;
-        sigma[static_cast<size_t>(i)] = std::pow(10.0, -log10cond * t);
-    }
+    for (int i = 0; i < n; ++i) sigma[static_cast<size_t>(i)] = graded_sigma(i, n, log10cond);
 
     Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
 
@@ -943,10 +946,8 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
         ASSERT_TRUE(err.empty()) << err;
 
         std::vector<Real> expected(static_cast<size_t>(n));
-        for (int i = 0; i < n; ++i) {
-            const double t = static_cast<double>(i) / static_cast<double>(n - 1);
-            expected[static_cast<size_t>(i)] = static_cast<Real>(std::pow(10.0, -log10cond * t));
-        }
+        for (int i = 0; i < n; ++i)
+            expected[static_cast<size_t>(i)] = static_cast<Real>(graded_sigma(i, n, log10cond));
 
         // RELATIVE error, per singular value -- the quantity the normal-equation
         // path destroys and an absolute check cannot see. At kappa = 1e5 the CTA
@@ -1412,7 +1413,7 @@ std::vector<double> fill_graded(PaddedBatch<Scalar>& A, double log10cond, bool h
                                 int distinct_items) {
     const int m = A.rows, n = A.cols, k = std::min(m, n);
     std::vector<double> sigma(static_cast<size_t>(k));
-    for (int l = 0; l < k; ++l) sigma[l] = std::pow(10.0, -log10cond * (k > 1 ? double(l) / (k - 1) : 0.0));
+    for (int l = 0; l < k; ++l) sigma[l] = graded_sigma(l, k, log10cond);
     std::mt19937 gen(seed);
     for (int b = 0; b < A.batch; ++b) {
         if (b >= distinct_items) {
