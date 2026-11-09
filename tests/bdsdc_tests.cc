@@ -149,45 +149,15 @@ protected:
 
     void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0,
                double orth_slack = 0.0) {
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<double> dist(0.3, 1.7);
-        std::vector<double> dh(static_cast<size_t>(n) * batch);
-        std::vector<double> eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
-        for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < n; ++i) {
-                dh[static_cast<size_t>(b) * n + i] = dist(rng) * std::pow(dscale, i);
-            }
-            for (int i = 0; i < n - 1; ++i) {
-                eh[static_cast<size_t>(b) * (n - 1) + i] = dist(rng) * 0.5 * std::pow(dscale, i);
-            }
-        }
-        run_and_check(dh, eh, n, batch, vectors, "random", orth_slack);
+        const auto bd = test_utils::random_positive_bidiagonal(n, batch, seed, dscale);
+        run_and_check(bd.d, bd.e, n, batch, vectors, "random", orth_slack);
     }
 
     // Mixed signs, exact zeros, entries over six decades -- what gebrd actually
     // emits, as opposed to the friendly positive generator above.
     void check_hostile(int n, int batch, unsigned seed, bool vectors) {
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<double> mag(-3.0, 3.0);
-        std::uniform_int_distribution<int> sign(0, 1);
-        std::uniform_int_distribution<int> zero(0, 9);
-        std::vector<double> dh(static_cast<size_t>(n) * batch);
-        std::vector<double> eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
-        for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < n; ++i) {
-                const double m10 = std::pow(10.0, mag(rng));
-                double v = m10 * (sign(rng) ? 1.0 : -1.0);
-                if (zero(rng) == 0) v = 0.0;
-                dh[static_cast<size_t>(b) * n + i] = v;
-            }
-            for (int i = 0; i < n - 1; ++i) {
-                const double m10 = std::pow(10.0, mag(rng));
-                double v = m10 * (sign(rng) ? 1.0 : -1.0);
-                if (zero(rng) == 0) v = 0.0;
-                eh[static_cast<size_t>(b) * (n - 1) + i] = v;
-            }
-        }
-        run_and_check(dh, eh, n, batch, vectors, "hostile");
+        const auto bd = test_utils::hostile_bidiagonal(n, batch, seed);
+        run_and_check(bd.d, bd.e, n, batch, vectors, "hostile");
     }
 
     // `nz` decoupled positions, each forcing an EXACT zero singular value. This
