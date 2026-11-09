@@ -8,7 +8,7 @@
 //   with_tier / upto / gebrd_buffer_size  the tier per n at every Cta boundary, each device filter
 //                        on its own, the op-named throw, buffer_size == the carved plan.
 //   tier::Blocked (one matrix per work-group of 256, the caller's global slice per matrix):
-//     bdsqr              vs the host bdsqr (its own kernel, one item per matrix) on uniform, graded with
+//     bdsqr              vs the host bdsqr (bdsqr<Thread>, one item per matrix) on uniform, graded with
 //                        an interior and a bottom zero diagonal (both zero-shift chases) and NaN
 //                        items: info per item, s, and U diag(s) V^H == B from identity seeds;
 //                        the Thread executor (one item per matrix) BIT FOR BIT the host's.
@@ -545,8 +545,9 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
                                                               dv::mat(vp + q * st, n, n, ld));
                 if (ex.leader()) ip[b] = r;
             });
-            // The Thread executor from a one-item-per-matrix user kernel: the host kernel's
-            // arithmetic in its order, so s, U, V^H and info are the host's BIT FOR BIT.
+            // The Thread executor from a one-item-per-matrix user kernel (v2 Mat operands, the
+            // default params) vs the host launcher (v1 item operands, host-formed params): s, U,
+            // V^H and info BIT FOR BIT.
             DevBuf<T> d3(this->q(), d), e3(this->q(), e), u3(this->q(), U.h), v3(this->q(), Vh.h);
             DevBuf<T> s3(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
             DevBuf<std::int32_t> i3(this->q(), std::vector<std::int32_t>(kBatch, -7));
