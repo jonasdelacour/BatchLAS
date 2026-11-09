@@ -294,7 +294,6 @@ identical to the hand code. Timing (RTX 4090, v2/base median, < 1 is faster; sel
 | syfn `ScaleKernel` | +7.6% instructions, A/B within 1.02x (decision 20) |
 | `Sytd2CTAKernel<float,16>`, `SpmmGather<float,16,0>` | 1.021, 1.022 (decision 15) |
 | `BdsdcExtract<float>`: REG 36 -> 40, blocks/SM unchanged | A/B 1.001 (float), worst median 1.0028 |
-| host bdsqr keeps its hand kernel; the device `bdsqr<Thread>` is checked bit for bit against it | the thin launcher over the device op was 1.055-1.08x (n = 32, vectors) and 1.38-1.77x (n = 64, values only) |
 | bit-identity: gesvd Hermitian mirror Im(diag) = 0, real and complex axpby FMA contraction, Frobenius-norm reduction order, the algorithm ports (ormqr Right fused msub, larft v2, complex syevx / krylov / gebrd, gesvdj, tridiag solver, stedc `nrm2<Blue>`) | decisions 12 and 15 |
 
 | Not yet a device op for every n | Status |

@@ -8,10 +8,8 @@
 //   tier::Blocked<1>      any n on a work-group: the leader runs the scalar recurrence and stores
 //                         one block's rotations in the global workspace; every item then applies
 //                         them, in the same order, to the rows of U and the columns of Vh it owns
-// Each element of U and Vh sees the same rotations in the same order on both executors, and the
-// same as the host route's kernel (gesvd/bdsqr/bdsqr.cc, one item per matrix). That kernel stays
-// its own body: as a launcher over the Thread path its outputs were bit-identical but it ran
-// 1.03-1.08x (n = 32) and 1.38x / 1.77x (float / double, n = 64, values only) slower, batch 1024.
+// Each element of U and Vh sees the same rotations in the same order on both executors. The host
+// route (gesvd/bdsqr/bdsqr.cc) is a launcher over the Thread path, one item per matrix.
 
 #include <algorithm>
 #include <cstdint>
@@ -178,7 +176,12 @@ BATCHLAS_DLA_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, 
         while (l < n - 1) {
             int step = kNone, lo = 0, hi = 0;
             if (ex.leader()) {
-                while (l < n - 1 && e(l) == R(0)) ++l;
+                // One exit (no short circuit; n >= 2 here, so the clamped index is in range). The
+                // `&&` form's l >= n - 1 exit jumps straight to the latch, ptxas then sets no
+                // reconvergence point after the scan, and on Thread (one item per matrix) a warp's
+                // items enter the sweep 2-3 at a time instead of ~15: 3.4x warp instructions,
+                // 1.33x time at n = 64 (float, values only, batch 1024).
+                while ((l < n - 1) & (e(sycl::min(l, n - 2)) == R(0))) ++l;
                 if (l >= n - 1) {
                     step = kStop;
                 } else {
