@@ -31,6 +31,7 @@ set(TEST_TARGETS
     device_api_gemv_tests
     device_api_getrf_tests
     device_api_l3_tests
+    device_api_lu_tests
     device_api_potrf_tests
     device_api_qr_tests
     device_api_sb2st_tests
@@ -39,6 +40,7 @@ set(TEST_TARGETS
     device_api_stedc_tests
     device_api_steqr_tests
     device_api_svd_tests
+    device_api_sy2sb_tests
     device_api_syev_tests
     device_api_sygst_tests
     device_api_sytrd_tests
@@ -272,6 +274,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_api_gemv_tests
     device_api_getrf_tests
     device_api_l3_tests
+    device_api_lu_tests
     device_api_potrf_tests
     device_api_qr_tests
     device_api_sparse_tests
@@ -375,6 +378,7 @@ set(BATCHLAS_TEST_LABELS_tridiag
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests device_api_sb2st_tests
     device_api_steqr_tests
     device_api_sytrd_tests
+    device_api_sy2sb_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
