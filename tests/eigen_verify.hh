@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Eigen checks shared by the syev tests: orthonormal V and ||AV - V diag(w)|| (MatrixView statics)
-// (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values).
+// (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values). Also holds the
+// random upper-bidiagonal (d, e) inputs shared by the bdsqr and bdsdc tests.
 #pragma once
 
 #include <tests/test_utils.hh>
@@ -15,7 +16,9 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <random>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace test_utils {
@@ -118,6 +121,49 @@ void expect_eigenvalues_agree(const batchlas::UnifiedVector<typename batchlas::b
     const batchlas::VectorView<Real> w(const_cast<Real*>(W.data()), n, batch);
     const double err = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::values_error(w, ref, scale, w.all_items());
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, err);
+}
+
+/// Upper-bidiagonal (d, e) inputs, packed per batch item: d has n values, e has n-1.
+struct Bidiagonal {
+    std::vector<double> d, e;
+};
+
+/// Positive d and e in [0.3, 1.7] (e halved), both graded by dscale^i: a far easier class than gebrd emits.
+inline Bidiagonal random_positive_bidiagonal(int n, int batch, unsigned seed, double dscale = 1.0) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> dist(0.3, 1.7);
+    std::vector<double> dh(static_cast<size_t>(n) * batch), eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) dh[static_cast<size_t>(b) * n + i] = dist(rng) * std::pow(dscale, i);
+        for (int i = 0; i < n - 1; ++i) eh[static_cast<size_t>(b) * (n - 1) + i] = dist(rng) * 0.5 * std::pow(dscale, i);
+    }
+    return {std::move(dh), std::move(eh)};
+}
+
+/// Mixed signs, exact zeros (deflation) and entries over six decades (1e-3 .. 1e3), as gebrd emits. It
+/// caught bdsqr stagnating when gesvd_blocked was first wired onto it.
+inline Bidiagonal hostile_bidiagonal(int n, int batch, unsigned seed) {
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> mag(-3.0, 3.0);
+    std::uniform_int_distribution<int> sign(0, 1);
+    std::uniform_int_distribution<int> zero(0, 9);
+    std::vector<double> dh(static_cast<size_t>(n) * batch);
+    std::vector<double> eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const double m10 = std::pow(10.0, mag(rng));
+            double v = m10 * (sign(rng) ? 1.0 : -1.0);
+            if (zero(rng) == 0) v = 0.0;
+            dh[static_cast<size_t>(b) * n + i] = v;
+        }
+        for (int i = 0; i < n - 1; ++i) {
+            const double m10 = std::pow(10.0, mag(rng));
+            double v = m10 * (sign(rng) ? 1.0 : -1.0);
+            if (zero(rng) == 0) v = 0.0;
+            eh[static_cast<size_t>(b) * (n - 1) + i] = v;
+        }
+    }
+    return {std::move(dh), std::move(eh)};
 }
 
 }  // namespace test_utils
