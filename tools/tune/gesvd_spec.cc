@@ -232,7 +232,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/gesvd/gesvd.cc"
         // cta runs syev_cta (steqr); blocked syev_blocked, stedc (bdsdc) and the public gemm, trmm and syr2k.
-        // family: cta "src/ops/syev/kernels/syev_cta.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/sytrd/sytrd_cta_device.hh" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_cta.cc" "src/ops/syev/steqr/steqr_cta_device.hh" "src/ops/syev/steqr/steqr_wg.cc"
+        // family: cta "src/ops/syev/kernels/syev_cta.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "include/batchlas/device/lapack/sytrd.hh" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_cta.cc" "include/batchlas/device/lapack/steqr.hh" "src/ops/syev/steqr/steqr_wg.cc"
         // family: blocked "src/ops/syev/kernels/syev_blocked.cc" "src/ops/syev/sytrd/sytrd_blocked.cc" "src/ops/syev/sytrd/latrd_lower_panel.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_wg.cc"
         // family: blocked "src/ops/syev/stedc/stedc.cc" "src/ops/syev/stedc/stedc_merge_cta.cc" "src/ops/syev/stedc/stedc_merge_kernels.cc" "src/ops/syev/stedc/stedc_secular.cc" "src/ops/ormqr/kernels/ormqr_blocked.cc" "src/ops/syev/kernels/uplo_mirror.cc"
         // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"

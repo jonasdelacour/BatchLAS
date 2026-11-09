@@ -4,7 +4,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/device.hh>
-#include <src/ops/syev/steqr/steqr_v2.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <tuple>
@@ -23,7 +23,7 @@ namespace batchlas {
 namespace {
 
 namespace v2 = batchlas::device;
-namespace sv = batchlas::steqr_v2;
+namespace sv = batchlas::device::steqr_detail;
 
 template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
@@ -123,57 +123,23 @@ Event steqr_wg_impl(Queue& ctx,
                     auto n_local = end_ix - start_ix;
 
                     if (n_local == 1) continue;
+                    // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (steqr_detail::wg_*).
                     if (n_local == 2) {
-                        if (store_givens) {
-                            auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
-                            rotations_view(0, 0, gid) = {c, -s};
+                        sv::wg_solve_2x2<T>(d_, e_, store_givens, [&](const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
+                            rotations_view(0, 0, gid) = {g.c, g.s};
                             order_view[gid] = ApplyOrder::Forward;
-                        } else {
-                            auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
-                        }
+                        });
                         continue;
                     }
 
-                    // The sweep converges the end the shift is taken from (virtual index
-                    // n_local - 1), so orient that end at the SMALLER |d|, as dsteqr does.
-                    bool QR = std::abs(d_(n_local - 1)) < std::abs(d_(0));
+                    bool QR = sv::wg_forward(d_, n_local);
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
-                    const v2::Thread th{};
-                    const sv::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        const T anorm = sv::lanst_max(th, d_, e_);
-                        if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, detail::ssfmax<T>() / anorm, d_, e_);
-                        else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, detail::ssfmin<T>() / anorm, d_, e_);
-
-                        const auto shift = detail::wilkinson_shift(sv::virt_get<T, 1>(d_, QR, n_local, n_local - 2),
-                                                           sv::virt_get<T, 2>(e_, QR, n_local, n_local - 2),
-                                                           sv::virt_get<T, 1>(d_, QR, n_local, n_local - 1));
-
-                        // Implicit QR (QL when !QR) sweep: chase the bulge with lartg rotations.
-                        auto [c0, s0] = detail::givens_rotation(sv::virt_get<T, 1>(d_, QR, n_local, 0) - shift, sv::virt_get<T, 2>(e_, QR, n_local, 0));
-                        if (store_givens) {
-                            rotations_view(0, k, gid) = {c0, s0};
-                        }
-                        auto bulge = sv::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, v2::Givens<T>{c0, s0}, QR);
-                        for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = detail::givens_rotation(sv::virt_get<T, 2>(e_, QR, n_local, j - 1), bulge);
+                        const bool deflatable = sv::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
                             if (store_givens) {
-                                rotations_view(j, k, gid) = {cj, sj};
+                                rotations_view(j, k, gid) = {g.c, g.s};
                             }
-                            bulge = sv::tridiag_rot(th, d_, e_, bulge, j, j + 1, v2::Givens<T>{cj, sj}, QR);
-                        }
-
-                        const bool deflatable = sv::tridiag_split(th, d_, e_, tol);
-
-                        if (anorm > detail::ssfmax<T>()) sv::scal_tridiag(th, anorm / detail::ssfmax<T>(), d_, e_);
-                        else if (anorm < detail::ssfmin<T>() && anorm != T(0)) sv::scal_tridiag(th, anorm / detail::ssfmin<T>(), d_, e_);
-
+                        });
                         if (deflatable) break;
                     }
                 }

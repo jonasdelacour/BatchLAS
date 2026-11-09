@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -25,10 +26,13 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device;
 
 enum class LatrdImpl { Legacy, Grid };
 
@@ -59,63 +63,6 @@ inline bool use_grid_latrd(int64_t n) {
     const char* v = batchlas::settings().selection.latrd_impl.get();
     if (v && *v) return latrd_impl() == LatrdImpl::Grid;
     return n >= latrd_grid_min_n();
-}
-
-// ---------------------------------------------------------------------------
-// Helpers used by the legacy kernel
-// ---------------------------------------------------------------------------
-
-// acc += a * b, and acc += conj(a) * b, in explicit real arithmetic: std::complex *
-// carries an Annex G isnan branch plus __mulsc3 call that stops the symv keeping
-// loads in flight. Product first, then add: the same association as the `acc += a * b`
-// it replaces, so results do not move. Real types take the plain multiply-add.
-// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-template <typename U>
-inline void mac(U& acc, const U& a, const U& b) {
-    if constexpr (detail::is_complex<U>::value) {
-        using R = typename U::value_type;
-        const R ar = a.real(), ai = a.imag();
-        const R br = b.real(), bi = b.imag();
-        const R pr = ar * br - ai * bi;
-        const R pi = ar * bi + ai * br;
-        acc = U(acc.real() + pr, acc.imag() + pi);
-    } else {
-        acc += a * b;
-    }
-}
-
-// acc += conj(a) * b == (ar - i.ai)(br + i.bi)
-template <typename U>
-inline void mac_conj(U& acc, const U& a, const U& b) {
-    if constexpr (detail::is_complex<U>::value) {
-        using R = typename U::value_type;
-        const R ar = a.real(), ai = a.imag();
-        const R br = b.real(), bi = b.imag();
-        const R pr = ar * br + ai * bi;
-        const R pi = ar * bi - ai * br;
-        acc = U(acc.real() + pr, acc.imag() + pi);
-    } else {
-        acc += a * b;
-    }
-}
-
-// APPLIED TO THE SYMV ONLY, DELIBERATELY. Converting every other complex multiply in
-// this kernel made the panel 1.16x slower (register pressure). Do not "finish the
-// job" without re-measuring.
-// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-
-// ---------------------------------------------------------------------------
-// Helper used by the device kernel
-// ---------------------------------------------------------------------------
-
-template <typename T>
-inline T hermitian_diagonal(const T& value) {
-    return value;
-}
-
-template <typename Real>
-inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
-    return std::complex<Real>(value.real(), Real(0));
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +171,10 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                           const MatrixView<T, MatrixFormat::Dense>& w,
                                           const std::uint8_t* mask) {
     constexpr int wg = WG;
+    // Bytes per work-item, so the cap scales with WG (the panels shrink from WG 256 to 64).
+    // evidence: docs/perf/sytrd.md#sytrd-the-latrd-lower-panel-on-device-la-v2-an-accepted-miss
+    const std::ptrdiff_t slm_floor =
+        static_cast<std::ptrdiff_t>(tuning::latrd_lower_panel_slm_floor<T>(a.rows(), a.batch_size())) * wg;
 
     (void)q->submit([&](sycl::handler& h) {
         KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
@@ -237,7 +188,11 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
         const int ib = W_view.cols();
 
         auto v_local   = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        // Pad wcol_local so the four accessors total >= slm_floor bytes (occupancy cap; tuning_params.hh).
+        const std::ptrdiff_t pad = (slm_floor + static_cast<std::ptrdiff_t>(sizeof(T)) - 1) /
+                                       static_cast<std::ptrdiff_t>(sizeof(T)) - n - 2 * ib;
+        const size_t wcol_elems = static_cast<size_t>(std::max<std::ptrdiff_t>(n, pad));
+        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(wcol_elems), h);
         auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 
@@ -247,198 +202,19 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-                const batchlas::device::WorkGroup<WG> ex{it};
+                const v2::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
-
-                for (int i = 0; i < ib; ++i) {
-                    if (i >= n - 1) break;
-
-                    if (lid < i) {
-                        const int p = lid;
-                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
-                        wip_local[p] = Wb(i, p);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
-                        }
-                        Ab(i, i) = aii;
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-
-                            const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
-                        }
-                        Ab(r, i) = val;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    using Real = typename base_type<T>::type;
-
-                    const int x0 = i + 2;
-                    Real sumsq = Real(0);
-                    for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += detail::abs2_if_complex(Ab(r, i));
-                    }
-                    sumsq = ex.group_reduce(sumsq);
-
-                    T alpha = T(0);
-                    if (lid == 0 && i + 1 < n) {
-                        alpha = Ab(i + 1, i);
-                    }
-                    alpha = batchlas::portable::group_broadcast(g, alpha);
-
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lid == 0) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        E_view(i, b) = beta;
-                        TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i) = T(1);
-                    }
-
-                    tau_i = batchlas::portable::group_broadcast(g, tau_i);
-                    scale = batchlas::portable::group_broadcast(g, scale);
-
-                    if (tau_i != T(0)) {
-                        for (int r = x0 + lid; r < n; r += wg) {
-                            Ab(r, i) *= scale;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        v_local[r] = (r == i + 1) ? T(1) : Ab(r, i);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const int col = i;
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        // Symmetric mat-vec: acc = sum_c Ah(r,c) * v(c), where
-                        // Ah(r,c) is Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r.
-                        // Ascending c crosses c == r once, so splitting the loop there
-                        // keeps the accumulation order (bit-identical) and removes the
-                        // per-element branch. Memory-latency bound: keep loads in flight.
-                        // evidence: docs/perf/sytrd.md#sytrd-rejected-latrd-symv-loop-shapes
-                        const int c_split = sycl::min(r, n - 1);
-
-                        T acc = T(0);
-
-                        // c in [i+1, r]: walk row r of the lower triangle.
-                        // Consecutive threads hold consecutive r, so each step is a
-                        // coalesced access across the warp.
-                        #pragma unroll 4
-                        for (int c = i + 1; c <= c_split; ++c) {
-                            mac(acc, Ab(r, c), v_local[c]);
-                        }
-
-                        // c in (r, n): walk column r of the lower triangle.
-                        // Contiguous per thread, so successive iterations reuse the
-                        // same cache lines.
-                        #pragma unroll 4
-                        for (int c = c_split + 1; c < n; ++c) {
-                            mac_conj(acc, Ab(c, r), v_local[c]);
-                        }
-
-                        wcol_local[r] = acc;
-                    }
-
-                    for (int p = 0; p < i; ++p) {
-                        const int pc = p;
-
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
-                        for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = v_local[c];
-
-                            gamma_partial += batchlas::device::conj(Wb(c, pc)) * vc;
-
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::conj(vcp) * vc;
-                        }
-                        const T gamma = ex.group_reduce(gamma_partial);
-                        const T delta = ex.group_reduce(delta_partial);
-
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
-                            const T wrp = Wb(r, pc);
-                            wcol_local[r] -= vrp * gamma + wrp * delta;
-                        }
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        wcol_local[r] *= tau_i;
-                    }
-
-                    T dot_partial = T(0);
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        dot_partial += batchlas::device::conj(vr) * wcol_local[r];
-                    }
-                    const T dot = ex.group_reduce(dot_partial);
-
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        wcol_local[r] += alpha2 * vr;
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wb(r, col) = wcol_local[r];
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
+                // Thin launcher: the panel body of device::sytrd<Lower, tier::Blocked<NB>> (latrd_lower_run).
+                v2::sytrd_detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
+                                                      vip_local, wip_local, [&](int i, const T& beta, const T& tau_i) BATCHLAS_DLA_BODY {
+                                                          E_view(i, b) = beta;
+                                                          TAU_view(i, b) = tau_i;
+                                                      });
 
                 if constexpr (FuseTrailingUpdate) {
+                    const int lid = static_cast<int>(it.get_local_linear_id());
                     const int j2 = ib;
                     const int n2 = n - j2;
                     for (int lin = lid; lin < n2 * n2; lin += wg) {
@@ -688,16 +464,20 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // ---- symmetric mat-vec over this group's rows -------------
+                    // ExplicitInline: the plain-inline explicit complex mac of the symv ONLY
+                    // (every other complex multiply here converted cost 1.16x, register pressure).
+                    // evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
+                    using SymvAr = v2::arith_t<v2::arith::ExplicitInline, T>;
                     for (int r = rlo + lid; r < rhi; r += wg) {
                         const int c_split = sycl::min(r, n - 1);
                         T acc = T(0);
                         #pragma unroll 4
                         for (int c = base_r; c <= c_split; ++c) {
-                            mac(acc, Ab(r, c), v_local[c]);
+                            SymvAr::mac(acc, Ab(r, c), v_local[c]);
                         }
                         #pragma unroll 4
                         for (int c = c_split + 1; c < n; ++c) {
-                            mac_conj(acc, Ab(c, r), v_local[c]);
+                            SymvAr::mac_conj(acc, Ab(c, r), v_local[c]);
                         }
                         wcol_local[r] = acc;
                     }

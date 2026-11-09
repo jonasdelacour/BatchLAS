@@ -17,7 +17,7 @@
 #include <complex>
 #include <numeric>
 #include <array>
-#include <src/ops/syev/sytrd/sytrd_cta_device.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 
 
 namespace batchlas {
@@ -110,72 +110,32 @@ namespace batchlas {
                     const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
-                    const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     if (prob_id >= static_cast<int32_t>(batch_size)) return;
                     // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
                     // const, and no capture of the mask when unmasked: a mutable flag the nested lambdas
                     // take by reference lands in local memory.
-                    const bool live = [&] {
+                    const bool live = [&]() BATCHLAS_DLA_BODY {
                         if constexpr (Masked) return mask[prob_id] != 0;
                         else return true;
                     }();
 
                     namespace v2 = batchlas::device;
-                    namespace sv = batchlas::sytrd_v2;
-                    const auto ex = v2::wrap(part);
+                    // D, E, TAU, the tile, then A_view: the hand kernel's capture order, so its parameter layout.
                     auto D_prob = D_view.batch_item(prob_id);
                     auto E_prob = E_view.batch_item(prob_id);
                     auto TAU_prob = TAU_view.batch_item(prob_id);
-
                     const int32_t base_a = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
-                    constexpr int kP = static_cast<int>(P);
-                    // Views with the accessor as base: the uniform base keeps [R.X4+UR] addressing.
-                    using Local = sycl::local_accessor<T, 1>;
-                    using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<kP>, v2::Mem::Local, v2::Cyclic, Local>;
-                    const Tile tile{A_local, {}, {}, {}, base_a};
+                    const auto& A_tile = A_local;
                     // v1's address expression; extents from the kernel's n, so every guard tests one value.
                     const auto A = v2::item(A_view, prob_id, n, n);
 
-                    // The Hermitian tile from the named triangle only (defect 14), each lane loading its
-                    // row coalesced; Im(diag) dropped as {c,z}hetrd does; zero past n. An inactive item
-                    // reduces a zero tile.
-                    sv::lacpy_herm<Upper ? Uplo::Upper : Uplo::Lower, v2::arith::Native>(sv::fit(ex), A, tile, live);
-                    group_barrier(part);
-
-                    if constexpr (Upper) {
-                        // Shared with the fused SYEV kernel (sytrd_cta_device.hh).
-                        const T tau_lane = sytd2_cta_upper_partition<T, static_cast<int32_t>(P)>(
-                            part, A_local, base_a, V_local, base_v, W_local, base_w, n);
-                        // Read the tridiagonal straight off the reduced tile.
-                        if (live && lane < n) {
-                            D_prob(lane) = A_local[base_a + lane + lane * kP];
-                        }
-                        if (live && lane < (n - 1)) {
-                            E_prob(lane) = A_local[base_a + lane + (lane + 1) * kP];
-                            TAU_prob(lane) = tau_lane;
-                        }
-                    } else {
-                        // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then).
-                        sv::sytd2<Uplo::Lower>(ex, tile, v2::vec(V_local, n, base_v), v2::vec(W_local, n, base_w), n,
-                                               [&](int32_t i, const T& beta, const T& taui) {
-                                                   if (live) {
-                                                       E_prob(i) = beta;
-                                                       TAU_prob(i) = taui;
-                                                       D_prob(i) = tile(i, i);
-                                                   }
-                                               });
-                        if (live && lane == 0) {
-                            D_prob(n - 1) = A_local[base_a + (n - 1) + (n - 1) * kP];
-                        }
-                    }
-
-                    group_barrier(part);
-
-                    // Write back A, one row per lane (core lacpy owns elements 2-D Cyclic, not rows).
-                    if (live) sv::lacpy_rows(sv::fit(ex), tile.sub(0, 0, n, n), A);
+                    // Thin launcher: the body of device::sytrd<UL, tier::Cta<P>> on the accessors (the
+                    // named triangle only, defect 14; an inactive item reduces a zero tile, stores nothing).
+                    v2::sytrd_detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
+                        part, A_tile, base_a, V_local, base_v, W_local, base_w, A, D_prob, E_prob, TAU_prob, n, live);
                 });
         });
     }

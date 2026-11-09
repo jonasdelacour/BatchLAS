@@ -2,9 +2,11 @@
 // Family-private device LA v2 ops of the syev CTA trio against host references:
 //   src/ops/syev/kernels/syev_drivers_v2.hh  (herm_load, ElemAt, dgmm, similarities, repack,
 //                                             column-owner larf / org2l / orm2l)
-//   src/ops/syev/sytrd/sytrd_v2.hh           (Fit ops, larfg_rowfrag, lacpy_herm, sytd2)
-//   src/ops/syev/steqr/steqr_v2.hh           (lanst_max, tridiag_split, find_first_lane,
-//                                             scal_lane, reverse, tridiag_rot)
+//   include/batchlas/device/lapack/sytrd.hh  (sytd2; sytrd_detail Fit ops, lacpy_herm) and core
+//                                             larfg (the row-fragment form sytd2 calls)
+//   include/batchlas/device/lapack/steqr.hh  (steqr_detail lanst_max, tridiag_split, scal_lane,
+//                                             reverse, tridiag_rot) and core lanst / find_first
+//                                             (the LaneVec forms the CTA solver calls)
 // Shared ops (operands, item(), mirror, laset, lacpy, rot, lasr, Frag moves) are core's and are
 // covered by device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): non-natural
 // ld / inc, complex data with nonzero imaginary parts, NaN poison in every entry an op must not
@@ -28,16 +30,16 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <src/ops/syev/kernels/syev_drivers_v2.hh>
-#include <src/ops/syev/steqr/steqr_v2.hh>
-#include <src/ops/syev/sytrd/sytrd_v2.hh>
+#include <batchlas/device/lapack/steqr.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
 namespace v2 = batchlas::device;
 namespace dv = batchlas::syev_v2;
-namespace tv = batchlas::sytrd_v2;
-namespace qv = batchlas::steqr_v2;
+namespace tv = batchlas::device::sytrd_detail;
+namespace qv = batchlas::device::steqr_detail;
 using batchlas::verify::Check;
 
 namespace {
@@ -639,7 +641,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, RegisterColumnOps) {
     EXPECT_VERIFY(T, Check::blas, N, worst);
 }
 
-// ================================== sytrd (sytrd_v2.hh) ==================================
+// ============================== sytrd (lapack/sytrd.hh) ===============================
 
 // The Hermitian matrix whose UL triangle is stored in h (column-major, ld), real diagonal.
 template <class T> std::vector<LD<T>> herm_from(const T* h, int n, int ld, Uplo ul) {
@@ -735,15 +737,15 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
             const auto v = v2::vec(lm, n, base + LDA * P), w = v2::vec(lm, n, base + LDA * P + P);
             T* eb = e + std::ptrdiff_t(b) * n;
             T* tb = tu + std::ptrdiff_t(b) * n;
-            tv::lacpy_herm<UL, v2::arith::Native>(tv::fit(ex), v2::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
-            tv::part_barrier(ex);
-            const T tl = tv::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
+            tv::lacpy_herm<UL, v2::arith::Native>(v2::Fit{ex}, v2::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
+            v2::sync<v2::scope::Part>(ex);
+            const T tl = v2::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
                 if constexpr (UL == Uplo::Lower) {
                     eb[i] = beta;
                     tb[i] = t;
                 }
             });
-            tv::part_barrier(ex);
+            v2::sync<v2::scope::Part>(ex);
             const int lane = ex.lid();
             if (lane < n) d[std::ptrdiff_t(b) * n + lane] = tile(lane, lane);
             if constexpr (UL == Uplo::Upper) {
@@ -806,7 +808,7 @@ template <class T> void larfg_case(Dev& dev, int n, int ai) {
         const bool act = lane < n && lane != ai;
         T alpha = lane == ai ? xb[lane] : T(0);
         T xv = act ? xb[lane] : T(0);
-        const T tau = tv::larfg_rowfrag<v2::arith::Native>(ex, n, ai, alpha, xv, act);
+        const T tau = v2::larfg<v2::conv::Phase, v2::arith::Native>(ex, n, ai, alpha, xv, act);
         if (lane == ai) y[std::ptrdiff_t(b) * P + lane] = alpha;
         else if (act) y[std::ptrdiff_t(b) * P + lane] = xv;
         if (lane == 0) t[b] = tau;
@@ -867,7 +869,7 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
     dev.template run_acc<WG, T>(kBatch, LDT * NT + 2 * m + 7, [=](sycl::nd_item<1> it, const Local& lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto ex = v2::wrap(make_partition<NT>(it.get_sub_group()));
-        const auto fx = tv::fit(ex);
+        const auto fx = v2::Fit{ex};
         const int base = 7;  // a non-zero accessor offset
         const v2::Mat<T, v2::Ext<NT>, v2::Ext<NT>, v2::Ext<LDT>, v2::Mem::Local, v2::Cyclic, Local> t1{lm, {}, {}, {}, base};
         const auto xl = v2::vec(lm, m, base + LDT * NT), yl = v2::vec(lm, m, base + LDT * NT + m);
@@ -875,17 +877,17 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
         tv::lacpy_herm<UL, v2::arith::Native>(fx, v2::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
         v2::copy(fx, v2::vec(x + std::ptrdiff_t(b) * m, m), xl);
         v2::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
-        tv::part_barrier(ex);
+        v2::sync<v2::scope::Part>(ex);
         const auto B1 = t1.sub(o, o, m, m);
         tv::gemv_rows<v2::arith::Native>(fx, alpha, B1, v2::assume_published(xl), yl);  // reads t1 rows of others
         const T s = tv::dotc<v2::arith::Native>(fx, xl, yl);
         v2::axpy<v2::arith::Native>(fx, v2::Scalar<T>{v2::Arith<T>::neg(s)}, xl, yl);
-        tv::part_barrier(ex);
+        v2::sync<v2::scope::Part>(ex);
         if (ex.lid() == 0) ob[NT * NT + 2 * m] = s;
         v2::copy(fx, yl, v2::vec(ob + NT * NT + m, m));
         v2::copy(fx, xl, v2::vec(ob + NT * NT, m));
         tv::her2_full_sub<v2::arith::Native>(fx, v2::assume_published(xl), v2::assume_published(yl), B1);
-        tv::part_barrier(ex);
+        v2::sync<v2::scope::Part>(ex);
         v2::lacpy(ex, t1, v2::mat(ob, NT, NT, NT));
     });
     const auto g = dev.down(out, ho.size());
@@ -933,7 +935,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, FitOpsOnBlock) {
     fit_case<TypeParam, Uplo::Upper>(this->dev);
 }
 
-// ================================== steqr (steqr_v2.hh) ==================================
+// ============================== steqr (lapack/steqr.hh) ===============================
 
 // lanst_max ignores a NaN and must read d(n-1); tridiag_split zeroes exactly the entries under
 // the threshold and reports whether it did; d and e have inc 2 with a poisoned gap.
@@ -1053,7 +1055,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
 }
 
 // One problem of n = P - 1 per chunk (the last lane is padding): lanst_max on windows that exclude
-// a planted extreme on each side, the split over the whole e, find_first_lane past a leading
+// a planted extreme on each side, the split over the whole e, find_first (LaneVec) past a leading
 // zero, scal_lane on a window, then reverse of d (paired with an empty e window), and the paired
 // reverse of d[2, n-1) with e (e only on even problems).
 template <class T, int P, bool Masked> void lane_case(Dev& dev) {
@@ -1084,12 +1086,12 @@ template <class T, int P, bool Masked> void lane_case(Dev& dev) {
         const int l = ex.lid();
         T dl = l < n ? d[std::ptrdiff_t(q) * n + l] : T(0);
         T el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : T(0);
-        const T an = qv::lanst_max(ex, qv::lane_vec(dl, 1, n - 1), qv::lane_vec(el, 1, n - 2));
-        qv::tridiag_split(ex, dl, qv::lane_vec(el, 0, n - 1), tol);
-        const int first = qv::find_first_lane(ex, qv::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
-        qv::scal_lane(ex, T(2), qv::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
-        qv::reverse(ex, qv::lane_vec(dl, 1, n - 1), qv::lane_vec(el, 0, 0), true);
-        qv::reverse(ex, qv::lane_vec(dl, 2, n - 1), qv::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
+        const T an = v2::lanst<NormType::Max>(ex, v2::lane_vec(dl, 1, n - 1), v2::lane_vec(el, 1, n - 2));
+        qv::tridiag_split(ex, dl, v2::lane_vec(el, 0, n - 1), tol);
+        const int first = v2::find_first(ex, v2::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
+        qv::scal_lane(ex, T(2), v2::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
+        qv::reverse(ex, v2::lane_vec(dl, 1, n - 1), v2::lane_vec(el, 0, 0), true);
+        qv::reverse(ex, v2::lane_vec(dl, 2, n - 1), v2::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
         if (l < n) d[std::ptrdiff_t(q) * n + l] = dl;
         if (l < n - 1) e[std::ptrdiff_t(q) * n + l] = el;
         if (l == 0) {

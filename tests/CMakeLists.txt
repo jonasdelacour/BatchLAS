@@ -38,9 +38,12 @@ set(TEST_TARGETS
     device_api_sparse_tests
     device_api_stebz-stein_tests
     device_api_stedc_tests
+    device_api_steqr_tests
     device_api_svd_tests
     device_api_sy2sb_tests
+    device_api_syev_tests
     device_api_sygst_tests
+    device_api_sytrd_tests
     device_api_sytrf_tests
     device_api_util_tests
     device_blas_v2_bdsqr-bdsdc_tests
@@ -373,11 +376,13 @@ set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests device_api_sb2st_tests
+    device_api_steqr_tests
+    device_api_sytrd_tests
     device_api_sy2sb_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
-    syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
+    syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests device_api_syev_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
     gesvd_candidates_tests syev_candidates_tests
     syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests gesvd_mask_tests syevx_mask_tests)
