@@ -26,7 +26,7 @@ tested by hand, or untested.
 
 | | Compiler | GPU / arch | Status |
 | --- | --- | --- | --- |
-| Primary | `intel/llvm` DPC++ (clang 22) built `--cuda`, CUDA 13.2, Ubuntu 26.04 | RTX 4090, `sm_89` | Library, tests, benchmarks; CI GPU gate |
+| Primary | `intel/llvm` DPC++ (clang 22) built `--cuda`, CUDA 13.3, Ubuntu 26.04 | RTX 4090, `sm_89` | Library, tests, benchmarks; CI GPU gate |
 | Second GPU box | same toolchain | RTX PRO 6000, `sm_120` | Built and tested; `sm_120` tables measured here |
 | AdaptiveCpp generic | AdaptiveCpp 25.10.0, LLVM 20, SSCP, CUDA 13.2 | RTX PRO 6000, `sm_120` | Built and tested; ledger `tests/known-failures-acpp.txt` |
 | AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
@@ -123,7 +123,10 @@ Configure needs only the compiler (`-DCMAKE_CXX_COMPILER=<dpcpp>/bin/clang++`, `
 - Devices come from the compiler's own `sycl-ls` (AdaptiveCpp: `acpp-info`), then `nvidia-smi`
   (DPC++: only when the toolchain ships `libur_adapter_cuda.so`).
 - The CUDA toolkit is what `FindCUDAToolkit` finds, then AdaptiveCpp's `default-cuda-path`, then the
-  newest NVIDIA HPC SDK toolkit; the result is cached as `CUDAToolkit_ROOT`.
+  newest NVIDIA HPC SDK toolkit; the result is cached as `CUDAToolkit_ROOT`. A reconfigure that
+  resolves a different `nvcc` (by realpath: `/usr/local/cuda` re-pointed, another `PATH` or
+  `CUDA_PATH`) drops the cached toolkit and finds the new one; `--cuda-path` is the realpath, so the
+  device code rebuilds. Base and candidate trees of a comparison must share one toolkit.
 - Binaries carry an RPATH to the DPC++ runtime, the vendor libraries and `$ORIGIN`.
 - A self-built `intel/llvm --cuda` has no CPU adapter: outside oneAPI the tree is GPU-only
   (`No SYCL CPU device detected`).

@@ -6,7 +6,7 @@ Working rules for agents and contributors: toolchain, build, testing, routing, m
 kernel facts, repository conventions and agent workflow. Requirements, presets and every CMake
 option are in @ref guide_build; this page holds the rules and traps.
 
-**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.2, RTX 4090 (sm_89),
+**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.3, RTX 4090 (sm_89),
 Ubuntu 26.04. NVIDIA needs a CUDA-capable DPC++ (§2b): stock oneAPI `icpx` builds a CPU-only
 library without complaint. `sycl-ls` must list `[cuda:gpu]`; `-- Using SYCL targets:
 spir64_x86_64` at configure means CPU-only. `-DBATCHLAS_ENABLE_CUDA=ON` aborts without a CUDA
@@ -33,7 +33,7 @@ install only `intel-oneapi-compiler-dpcpp-cpp`; `source /opt/intel/oneapi/setvar
 ### 2b. CUDA-capable DPC++: NVIDIA GPUs
 
 The Codeplay **oneAPI for NVIDIA GPUs** plugin on top of §2a, or `intel/llvm` built with `--cuda`
-(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.2).
+(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.3, `/usr/local/cuda`; 13.2 before 2026-11).
 Configure with `-DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++`; a consumer of an installed
 BatchLAS uses the same compiler for its whole project (`docs/cpp-api.md`).
 

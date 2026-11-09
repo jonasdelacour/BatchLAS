@@ -734,6 +734,10 @@ def main():
     for spec in empty:
         print(f"sass_parity: --pair '{spec}' paired no kernels")
     print(f"sass_parity: mode={a.mode} base={libs['base']} cand={libs['cand']} cuobjdump={tool}")
+    toolkits = [os.path.realpath(p) if p else None for p in (cuda_path_of(a.base), cuda_path_of(a.cand))]
+    if toolkits[0] != toolkits[1]:
+        print(f"sass_parity: warn: base and cand use different CUDA toolkits {toolkits[0]} vs {toolkits[1]}"
+              " (--cuda-path): the delta includes the ptxas change")
     results = []
     for bn, cn in pairs:
         b, c = rec["base"][bn], rec["cand"][cn]

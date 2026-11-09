@@ -17,7 +17,7 @@ ruled-out idea; §12 conventions; §13 machines (`scripts/agent/dispatch.sh host
 
 ## Core: build and iterate
 
-- Toolchain: self-built CUDA DPC++ at `/opt/dpcpp-cuda` (CUDA 13.2, sm_89). `-- Using SYCL
+- Toolchain: self-built CUDA DPC++ at `/opt/dpcpp-cuda` (CUDA 13.3, sm_89). `-- Using SYCL
   targets: spir64_x86_64` at configure means a silent CPU-only build (TL;DR, §2b).
 - New worktree: `scripts/seed_build_tree.sh ~/BatchLAS/build build` before editing (§6, §7).
 - Build only via `scripts/b <target>` (`-j8` cap, memory admission, exit 70 when a requested binary

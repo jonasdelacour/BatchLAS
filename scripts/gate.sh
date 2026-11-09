@@ -177,7 +177,7 @@ build_tree() {
         note "$kind: seed options changed by the gate configure: $(python3 -c '
 import re, sys
 def cache(p):
-    return dict(m.groups() for m in (re.match(r"((?:BATCHLAS|CMAKE_BUILD_TYPE)\w*):[A-Z]+=(.*)", l) for l in open(p)) if m)
+    return dict(m.groups() for m in (re.match(r"((?:BATCHLAS|CMAKE_BUILD_TYPE|CUDAToolkit_BIN_DIR)\w*):[A-Z]+=(.*)", l) for l in open(p)) if m)
 a, b = cache(sys.argv[1]), cache(sys.argv[2])
 print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)) or "none")
 ' "$dir/gate-seed-cache.txt" "$dir/CMakeCache.txt")"
