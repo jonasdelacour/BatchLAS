@@ -1,48 +1,35 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/queue-dispatch.hh>
+#include <batchlas/device.hh>
+#include <src/queue.hh>
 #include <src/util/batch_mask.hh>
-#include <src/math-helpers.hh>
 
 namespace batchlas {
 
+template <typename T>
+struct LasclKernel;
+
+// One batched 2-D launch; each element applies core lascl's safe steps (every item computes the
+// same steps, so no step is a separate kernel). Inactive batch items are not touched.
 template <MatrixFormat MType, typename T>
 Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
-    (void)detail::call_mask("lascl", mat);  // scale honours the view's batch mask
+    static_assert(MType == MatrixFormat::Dense, "lascl: dense format");
+    const std::uint8_t* mk = detail::mask_ptr(detail::call_mask("lascl", mat));
     detail::require_device_fp64<T>(ctx, "lascl");
-    constexpr T zero = T(0);
-    constexpr T one  = T(1);
-    const T smlnum = detail::smlnum<T>();
-    const T bignum = T(1) / smlnum;
-
-    T cfromc = cfrom;
-    T ctoc   = cto;
-
-    T cfrom1, cto1, mul;
-    bool done = false;
-    Event last_event;
-
-    while (!done) {
-        cfrom1 = cfromc * smlnum;
-        cto1   = ctoc / bignum;
-
-        if (std::abs(cfrom1) > std::abs(ctoc) && ctoc != zero) {
-            mul    = smlnum;
-            done   = false;
-            cfromc = cfrom1;
-        } else if (std::abs(cto1) > std::abs(cfromc)) {
-            mul  = bignum;
-            done = false;
-            ctoc = cto1;
-        } else {
-            mul  = ctoc / cfromc;
-            done = true;
-        }
-
-        // Scale the matrix by mul
-        last_event = scale(ctx, mul, mat);
-    }
-
-    return last_event;
+    const int m = mat.rows(), n = mat.cols(), batch = mat.batch_size();
+    if (m == 0 || n == 0 || batch == 0) return ctx.get_event();
+    const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
+    const auto av = mat.kernel_view();
+    namespace v2 = ::batchlas::device;
+    ctx->parallel_for<LasclKernel<T>>(v2::batched2d_range(batch, m, n, v2::batched2d_shape(m, n)), [=](sycl::nd_item<3> item) {
+        const v2::Grid2D<> ex{item};
+        ex.for_each_batch(batch, [&](int b) {
+            if (masked && !mk[b]) return;
+            v2::lascl(ex, cfrom, cto, v2::item(av, b, m, n));
+        });
+    });
+    return ctx.get_event();
 }
 
 template Event lascl<MatrixFormat::Dense, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, float, float);

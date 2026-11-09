@@ -312,7 +312,7 @@ TYPED_TEST(SyevMask, LatrdPanelLeavesInactiveItemsUntouched) {
     const int ib = 4, j0 = 3, batch = 10;
     // grid at n = 100: four work-groups per item share its software grid barrier (40 resident).
     const bool cuda = B == Backend::CUDA;
-    for (const char* impl : {"legacy", "device", "grid"}) {
+    for (const char* impl : {"legacy", "grid"}) {
         if (impl[0] == 'g' && !cuda) continue;  // never on Metal or a host device: a CUDA-only check
         const int n = impl[0] == 'g' ? 100 : 21;
         SCOPED_TRACE(impl);

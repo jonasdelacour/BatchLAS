@@ -10,8 +10,8 @@
 #include <type_traits>
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/device/detail/group_blas_common.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/core.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::backend::detail {
 

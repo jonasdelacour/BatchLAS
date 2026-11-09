@@ -49,7 +49,7 @@ if [ -d /opt/dpcpp-cuda ]; then
     PATH=/opt/dpcpp-cuda/bin:$PATH
     LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 fi
-for cuda in /usr/local/cuda /usr/local/cuda-13.2; do
+for cuda in /usr/local/cuda /usr/local/cuda-13.3; do
     [ -d "$cuda/bin" ] && PATH=$PATH:$cuda/bin && break
 done
 PATH=$PATH:$HOME/.local/bin

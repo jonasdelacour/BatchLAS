@@ -66,6 +66,17 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
+    // A NETLIB queue's host device can lack 32-wide sub-groups (acpp's has size 1), and
+    // ormqr_blocked's larft then throws unsupported: that is a skip, not a failure.
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->HasFatalFailure() || ::testing::Test::IsSkipped() || !this->ctx) return;
+        if constexpr (B == Backend::NETLIB) {
+            if (!this->ctx->device().supports_sub_group_size(32))
+                GTEST_SKIP() << "ormqr_blocked's larft needs 32-wide sub-groups; this host device has none";
+        }
+    }
+
     Transpose trans_h() const {
         if constexpr (test_utils::is_complex<T>::value) {
             return Transpose::ConjTrans;

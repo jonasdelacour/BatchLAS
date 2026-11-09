@@ -178,11 +178,8 @@ struct SelectionSettings {
     /// and `yes` fall through to the shape default (`batch_size` \f$\ge 32\f$).
     EnvValue iluk_device{};
 
-    /// `BATCHLAS_LATRD_IMPL` = `legacy` | `device` | `grid`. Re-read per call.
+    /// `BATCHLAS_LATRD_IMPL` = `legacy` | `grid`. Re-read per call.
     EnvValue latrd_impl{};
-
-    /// `BATCHLAS_ORMQR_IMPL`: only the exact value `device` has an effect.
-    EnvValue ormqr_impl{};
 
     /// `BATCHLAS_ORMQR_WY` = `gemm` | `trmm` | `measured`: overrides the measured gate.
     EnvValue ormqr_wy{};
@@ -243,9 +240,6 @@ struct SelectionSettings {
     /// `std::nullopt` to let the tuned default decide. A value that is neither reads as nullopt.
     std::optional<bool> sytrd_fuse_panel_update{};
 
-    /// `BATCHLAS_SYTRD_IMPL`: only the exact value `device` has an effect.
-    EnvValue sytrd_impl{};
-
     /// `BATCHLAS_SYTRD_TRAILING_UPDATE` = `gemm` | `syr2k` | `her2k` | `rank2k`, either case;
     /// `syr2k` and `her2k` select one route.
     EnvValue sytrd_trailing_update{};
@@ -277,11 +271,6 @@ struct GeometrySettings {
     /// `BATCHLAS_LATRD_GRID_WG` (env_positive_int_or). 0 = computed. Only 32, 64, 128 and 256 are
     /// honoured; any other value is silently ignored.
     int latrd_grid_wg = 0;
-
-    /// `BATCHLAS_LATRD_LOWER_PANEL_WG_HINT`. 0 = unset; only 64, 128 and 256 take effect, and only
-    /// on the device path. Wins over `BATCHLAS_TUNE_LATRD_WG_HINT`.
-    // Deliberately not unified. evidence: docs/design/environment.md#environment-two-variables-for-one-quantity
-    int latrd_lower_panel_wg_hint = 0;
 
     /// `BATCHLAS_SB2ST_BACK_SUBS` (env_positive_int_or). 0 = the call site's default chain.
     /// @note Force together with sb2st_back_tile_w; only the (tile, subs) pairs in
@@ -378,6 +367,7 @@ struct GeometrySettings {
         EnvValue sy2sb_ormqr_nb{};             ///< `BATCHLAS_TUNE_SY2SB_ORMQR_NB`
         EnvValue sytrd_block_size{};           ///< `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`
         EnvValue latrd_wg_hint{};              ///< `BATCHLAS_TUNE_LATRD_WG_HINT`
+        EnvValue latrd_slm_floor{};            ///< `BATCHLAS_TUNE_LATRD_SLM_FLOOR`
         EnvValue stedc_recursion_threshold{};  ///< `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`
 
         /// `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`: a StedcMergeVariant value; 0 (Auto) is unreachable.
@@ -389,7 +379,7 @@ struct GeometrySettings {
         EnvValue stedc_wg_multiplier{};        ///< `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`
         EnvValue l2_chunk_percent{};           ///< `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
         EnvValue l2_chunk_items{};             ///< `BATCHLAS_TUNE_L2_CHUNK_ITEMS`
-    } tune{};  ///< The thirteen `BATCHLAS_TUNE_*` overrides.
+    } tune{};  ///< The fourteen `BATCHLAS_TUNE_*` overrides.
 };
 
 /// @brief Tracing, dumping, profiling and the opt-in checks. None changes a numeric result.

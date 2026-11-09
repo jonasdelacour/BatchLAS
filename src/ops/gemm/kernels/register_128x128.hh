@@ -19,19 +19,29 @@
 // evidence: docs/perf/gemm.md#the-128x128-float-kernel
 // evidence: docs/perf/gemm.md#gemm-the-128x128-kernel-in-every-real-transpose-form
 
-#include <src/ops/gemm/kernels/accessors.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/copy_async.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/pipeline.hh>
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
 namespace batchlas::sycl_gemm {
+
+namespace v2 = batchlas::device;
+namespace gc = batchlas::device::l3;
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::Vec4;
 
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 class GemmRegister128x128Kernel;
@@ -216,14 +226,9 @@ struct Gemm128x128Body {
         }
 #endif
 
-        T accum[ThreadTile][ThreadTile];
-BATCHLAS_UNROLL_FULL
-        for (int i = 0; i < ThreadTile; ++i) {
-BATCHLAS_UNROLL_FULL
-            for (int j = 0; j < ThreadTile; ++j) {
-                accum[i][j] = T(0);
-            }
-        }
+        const v2::Grid2D<> ex{item};
+        v2::Tile<T, ThreadTile, ThreadTile> accum;
+        v2::fill(accum, T(0));
 
         // Stages == 2 (the Stages > 2 lane map is described at kLaneMap):
         // one packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
@@ -320,40 +325,16 @@ BATCHLAS_UNROLL_FULL
                 const Vec4<T> b1 = vec4_ref(&xb[kk * BStride + BandN + nb]);
                 const T af[ThreadTile] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
                 const T bf[ThreadTile] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
-BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < ThreadTile; ++i) {
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < ThreadTile; ++j) {
-                        accum[i][j] += af[i] * bf[j];
-                    }
-                }
+                gc::outer_mac(accum, af, bf);
             }
         };
 
-        // One barrier per slab is enough: slab s+1 is stored into the buffer
-        // slab s-1 was read from, and every read of that finished before the
-        // barrier that ended iteration s-1. Unrolled by two so the buffer
-        // index is a constant; a runtime one costs a spill at the 128 cap.
+        // The register-prefetched double buffer (one barrier per slab; unrolled by two so the
+        // buffer index is a constant: a runtime one costs a spill at the 128 cap).
         const int slabs = (k + TileK - 1) / TileK;
-        auto mainloop = [&](auto edge) __attribute__((always_inline)) {
-            gload(0, edge);
-            sstore(0);
-            item.barrier(sycl::access::fence_space::local_space);
-            int s = 0;
-            for (; s + 1 < slabs; s += 2) {
-                gload((s + 1) * TileK, edge);
-                compute(0);
-                sstore(1);
-                item.barrier(sycl::access::fence_space::local_space);
-                const bool more = s + 2 < slabs;
-                if (more) gload((s + 2) * TileK, edge);
-                compute(1);
-                if (more) sstore(0);
-                item.barrier(sycl::access::fence_space::local_space);
-            }
-            if (s < slabs) {
-                compute(0);  // an odd slab count leaves the last slab in buffer 0
-            }
+        auto mainloop = [&](auto edge) BATCHLAS_DLA_BODY {
+            gc::kloop_prefetch2<TileK>(
+                ex, slabs, [&](int k0) __attribute__((always_inline)) { gload(k0, edge); }, sstore, compute);
         };
         if constexpr (Stages > 2) {
             // Stages - 1 slabs in flight. Step s waits for slab s (its own copies, then the
@@ -410,24 +391,10 @@ BATCHLAS_UNROLL_FULL
                     gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
                 }
             };
-            [&]<int... J>(std::integer_sequence<int, J...>) __attribute__((always_inline)) {
-                ((J < slabs ? issue(J * TileK, std::integral_constant<int, J>{}) : void(), copy_async_commit()), ...);
-            }(std::make_integer_sequence<int, Stages - 1>{});
-            auto step = [&](int s, auto buf) __attribute__((always_inline)) {
-                constexpr int b = decltype(buf)::value;
-                copy_async_wait<Stages - 2>();
-                item.barrier(sycl::access::fence_space::local_space);
-                if (s + Stages - 1 < slabs)
-                    issue((s + Stages - 1) * TileK, std::integral_constant<int, (b + Stages - 1) % Stages>{});
-                copy_async_commit();
-                compute(b);
-            };
-            for (int s0 = 0; s0 < slabs; s0 += Stages) {
-                [&]<int... J>(std::integer_sequence<int, J...>) __attribute__((always_inline)) {
-                    ((s0 + J < slabs && (step(s0 + J, std::integral_constant<int, J>{}), true)) && ...);
-                }(std::make_integer_sequence<int, Stages>{});
-            }
-            copy_async_wait<0>();
+            gc::kloop_async<Stages, TileK>(
+                ex, slabs, issue, []() __attribute__((always_inline)) { copy_async_commit(); },
+                []() __attribute__((always_inline)) { copy_async_wait<Stages - 2>(); },
+                []() __attribute__((always_inline)) { copy_async_wait<0>(); }, compute);
         } else if constexpr (AlignedFastPath) {
             mainloop(std::true_type{});
         } else if (m0 + TileM > m || n0 + TileN > n) {
@@ -453,7 +420,7 @@ BATCHLAS_UNROLL_FULL
             // TT 32 B on sm_120).
             if constexpr (Stages > 2 || AlignedFastPath) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
 #endif
-            item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
+            ex.barrier();  // the odd tail read sa
 BATCHLAS_UNROLL_FULL
             for (int p = 0; p < Band; ++p) {
 BATCHLAS_UNROLL_FULL
@@ -464,7 +431,7 @@ BATCHLAS_UNROLL_FULL
                         Vec4<T> v;
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
-                            v[i] = accum[band * Band + i][p + half * Band];
+                            v[i] = accum(band * Band + i, p + half * Band);
                         }
                         vec4_ref(&sc[slot * StageStride + band * BandM + mb]) = v;
                     }
@@ -486,7 +453,7 @@ BATCHLAS_UNROLL_FULL
                             prior[q][i] = !bz && col < n && 32 * i < rows_left ? src[32 * i] : T(0);
                     }
                 }
-                item.barrier(sycl::access::fence_space::local_space);
+                ex.barrier();
 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < 4; ++q) {
                     const int slot = (tid2 >> 5) * 4 + q;
@@ -520,7 +487,7 @@ BATCHLAS_UNROLL_FULL
                                                                                       prior[q][i]);
                     }
                 }
-                item.barrier(sycl::access::fence_space::local_space);
+                ex.barrier();
             }
             return;
         }
@@ -539,13 +506,13 @@ BATCHLAS_UNROLL_FULL
                     if (beta == T(0)) {
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
-                            out[i] = alpha * accum[band * Band + i][j];
+                            out[i] = alpha * accum(band * Band + i, j);
                         }
                     } else {
                         const Vec4<T> prior = vec4_ref(const_cast<const T*>(p));
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
-                            out[i] = LinearEpilogue<T>::apply(alpha, beta, accum[band * Band + i][j], prior[i]);
+                            out[i] = LinearEpilogue<T>::apply(alpha, beta, accum(band * Band + i, j), prior[i]);
                         }
                     }
                     vec4_ref(p) = out;
@@ -560,7 +527,7 @@ BATCHLAS_UNROLL_FULL
                             continue;
                         }
                         T* p = &Cb[row + static_cast<std::ptrdiff_t>(gn) * ldc];
-                        *p = LinearEpilogue<T>::apply(alpha, beta, accum[band * Band + i][j],
+                        *p = LinearEpilogue<T>::apply(alpha, beta, accum(band * Band + i, j),
                                                       beta == T(0) ? T(0) : *p);
                     }
                 }

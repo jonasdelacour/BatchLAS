@@ -6,7 +6,7 @@ Working rules for agents and contributors: toolchain, build, testing, routing, m
 kernel facts, repository conventions and agent workflow. Requirements, presets and every CMake
 option are in @ref guide_build; this page holds the rules and traps.
 
-**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.2, RTX 4090 (sm_89),
+**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.3, RTX 4090 (sm_89),
 Ubuntu 26.04. NVIDIA needs a CUDA-capable DPC++ (§2b): stock oneAPI `icpx` builds a CPU-only
 library without complaint. `sycl-ls` must list `[cuda:gpu]`; `-- Using SYCL targets:
 spir64_x86_64` at configure means CPU-only. `-DBATCHLAS_ENABLE_CUDA=ON` aborts without a CUDA
@@ -33,7 +33,7 @@ install only `intel-oneapi-compiler-dpcpp-cpp`; `source /opt/intel/oneapi/setvar
 ### 2b. CUDA-capable DPC++: NVIDIA GPUs
 
 The Codeplay **oneAPI for NVIDIA GPUs** plugin on top of §2a, or `intel/llvm` built with `--cuda`
-(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.2).
+(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.3, `/usr/local/cuda`; 13.2 before 2026-11).
 Configure with `-DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++`; a consumer of an installed
 BatchLAS uses the same compiler for its whole project (`docs/cpp-api.md`).
 
@@ -171,6 +171,14 @@ Findings and before/after tables: @ref design_build_performance.
   lacks the NETLIB/CPU instantiations, so it is never the gate. Vendor-free builds only at the gate.
 - `BATCHLAS_SYCL_LINK_JOBS` (`auto` = cores, 4..32): a link costs the sum of its batch maxima; a
   one-module `.so` gains nothing. Profile per module by replaying the driver's `-###` stages.
+- **x86 AOT flake**: the Intel CPU runtime's `sycl-kernel-reduce-cross-barrier-values` pass, run
+  by opencl-aot in every `spir64_x86_64` link, corrupts the heap at random on barrier kernels
+  (`malloc(): unsorted double linked list corrupted`, SIGSEGV, SIGALRM, a 40-min spin) at any
+  `BATCHLAS_SYCL_LINK_JOBS`, with either runtime (2026.22 often, 2025.20 once seen). Links run with
+  `CL_CONFIG_LLVM_OPTIONS=-opt-disable=<that pass>` (RULE_LAUNCH_LINK) when a configure probe shows
+  the runtime takes it: 2026.22 does, 2025.20 rejects the option and stays exposed. With 2026.22 a
+  `device_api_sygst_tests` module failed 4/12 runs and single `device_api_chol_tests` kernels
+  3/500; with the pass off, 0/12 and 0/1000. Per-kernel splitting does not help; ASLR off hides it.
 - `cmake --build --target A B C` can exit 0 and skip links: `scripts/b` checks (exit 70); by hand
   `test -x build/tests/<name>`.
 - Time a rebuild by appending a line, not `touch` (a ccache hit times only the link).

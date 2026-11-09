@@ -9,19 +9,22 @@
 // segment; the stride pad of 4 keeps those transposed writes conflict-free.
 // evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
 
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
-#include <src/ops/gemm/kernels/register_128x128.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <src/ops/gemm/kernels/register_128x128.hh>  // level3/{copy_async,epilogue,packet}.hh
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
 namespace batchlas::sycl_gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::Vec4;
 
 template <int TM, int TN, Transpose OpA, Transpose OpB, bool Vec16>
 class GemmRegisterK8S4LargeKernel;

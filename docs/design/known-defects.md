@@ -52,7 +52,7 @@ strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN 
 
 Fixed 2026-10-11. `LinearEpilogue` and `launch_direct` computed `alpha * acc + beta * prior` even at
 `beta == 0`, so a dirty workspace gave NaN; `LinearEpilogue::store`
-(`src/ops/gemm/kernels/epilogue_linear.hh`) now skips the load, and the geqrf/potrf zero fills that
+(now `include/batchlas/device/level3/epilogue.hh`) now skips the load, and the geqrf/potrf zero fills that
 hid it are deleted. Guard: `GemmCandidates.BetaZeroDoesNotReadC` (every pinned family, NaN `C`).
 
 ## Defect 12: vendor families accepted a heterogeneous batch
@@ -126,7 +126,7 @@ re-run to confirm.
 ## Defect 20: `BATCHLAS_LAUNCH_BOUNDS` emits no `.maxntid`, so ptxas ignores the bound
 
 Open, performance only. `intel::max_work_group_size(1, 1, N)` in the macro
-(`src/sycl/kernel_attrs.hh:18-19`) lowers to no `.maxntid` on NVPTX with the `/opt/dpcpp-cuda`
+(`include/batchlas/device/detail/kernel_attrs.hh:18-19`) lowers to no `.maxntid` on NVPTX with the `/opt/dpcpp-cuda`
 DPC++, and `.minnctapersm` alone is dropped, so register counts are uncapped. Still affected:
 `getrf_tiny.cc:90`, `gesv_tiny.cc:101`, `posv_tiny.cc:96`. Every gemm functor that uses the macro
 also declares `reqd_work_group_size` (`.reqntid`;
@@ -141,7 +141,7 @@ per kernel (the tiny-solver tables were tuned unbounded) and re-pinned kernel ha
 Open outside the capped part loops. A `parallel_for` over a plain `sycl::range<3>` with the batch in
 dimension 0 is rounded up by DPC++ (`__pf_kernel_wrapper`), here to 65536, past CUDA's 65535 grid:
 pinned blocked gesvd (float, \f$n = 40\f$) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:170`,
-`src/kernels/common/larft_wy.hh:262`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
+`src/kernels/common/larft_wy.hh:117`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
 `src/ops/syev/kernels/uplo_mirror.cc:29`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
 `src/ops/syev/sytrd/sytrd_sy2sb.cc:126`. **Workaround:** the blocked geqrf, orgqr, ormqr, gesvd and
 syev (cta, blocked) part loops keep every part at `max_groups_yz / 2`; test
@@ -232,7 +232,6 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:355`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
-- Matrix containers, the environment parser and the 3-D tile-group race are tracked on their pages:
+- Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
-  [environment](environment.md#environment-parser-defects-recorded-not-fixed),
-  [device-group BLAS](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
+  [environment](environment.md#environment-parser-defects-recorded-not-fixed).

@@ -10,10 +10,9 @@
 #include <src/ops/symm/kernels/symm_mirror.hh>
 #include <src/ops/symm/mirror_tile.hh>
 
-#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
+#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>  // level3/{epilogue,packet}.hh
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 
@@ -30,7 +29,7 @@ namespace batchlas::sycl_symm {
 namespace {
 
 using sycl_gemm::GemmWide64Body;
-using sycl_gemm::Vec4;
+using batchlas::device::l3::Vec4;
 namespace wide_scalar = sycl_gemm::wide_scalar;
 namespace wide_v2 = sycl_gemm::wide_v2;
 
@@ -367,7 +366,7 @@ Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T 
                     item.barrier(sycl::access::fence_space::local_space);
                 }
                 if (row < m && col < n)
-                    sycl_gemm::LinearEpilogue<T>::store(
+                    batchlas::device::l3::LinearEpilogue<T>::store(
                         c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c + row + static_cast<std::ptrdiff_t>(col) * ldc,
                         alpha, beta, sum);
             });

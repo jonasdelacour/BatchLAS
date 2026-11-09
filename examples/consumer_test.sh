@@ -133,13 +133,12 @@ say "include root is clean (no top-level blas/, util/, internal/)"
 # The matching positive assertion. A clean include root is also what a
 # completely broken install(DIRECTORY) destination produces, so check that the
 # headers actually landed where <batchlas/...> will find them -- one from each
-# moved directory, both generated headers, and the umbrella.
+# moved directory, the generated header, and the umbrella.
 for header in batchlas/blas/linalg.hh \
               batchlas/blas/enums.hh \
               batchlas/util/workspace.hh \
               batchlas/internal/ormqr_blocked.hh \
               batchlas/backend_config.h \
-              batchlas/device_limits.hh \
               batchlas.hh; do
     [[ -f "${prefix}/include/${header}" ]] \
         || fail "missing installed header: include/${header} -- check install(DIRECTORY)/install(FILES) destinations in cmake/BatchLASPackaging.cmake"

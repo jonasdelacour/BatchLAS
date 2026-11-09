@@ -23,11 +23,11 @@ completes in 728 s. `-fvisibility=hidden` applies only to a monolithic tree
 
 ## build performance: the umbrella header excludes device code {#build-performance-the-umbrella-header-excludes-device-code}
 
-`<batchlas/blas/linalg.hh>` (and so `<batchlas.hh>`) includes neither `<batchlas/blas/device.hh>`
-(@ref design_device_group_blas) nor `<sycl/sycl.hpp>`; together they cost about 4.1 s per consumer
+`<batchlas/blas/linalg.hh>` (and so `<batchlas.hh>`) includes neither `<batchlas/device.hh>`
+(@ref design_device_la_v2) nor `<sycl/sycl.hpp>`; together they cost about 4.1 s per consumer
 TU (measured before 2026-09-30, not re-measured).
 
-- A consumer that needs `batchlas::device::*` includes `<batchlas/blas/device.hh>` and builds with `-fsycl`.
+- A consumer that needs `batchlas::device::*` includes `<batchlas/device.hh>` and builds with `-fsycl`.
 - A consumer that passes a `sycl::queue` or `sycl::event` across the boundary includes
   `<batchlas/sycl_interop.hh>`, the one public non-device header that includes `<sycl/sycl.hpp>`.
 

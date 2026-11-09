@@ -10,14 +10,16 @@
 // oracle; ipiv is 1-based and GLOBAL, int32 in the public int64 span.
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_cta_device.hh>
+#include <batchlas/device/lapack/getrf.hh>
+#include <src/sycl/device_scalar.hh>
 #include <src/kernels/common/tiny_device.hh>
+#include <batchlas/device/sg_partition.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -36,9 +38,9 @@ template <typename T, int N, int NC, int MinBlocks> class GetrfTinyKernel;
 
 namespace {
 
-namespace gn = ::batchlas::getrf_native;
 namespace tn = ::batchlas::tiny_native;
-namespace sd = ::batchlas::sycl_device;
+namespace v2 = ::batchlas::device;
+namespace g2 = ::batchlas::device::getf2_detail;
 
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
@@ -68,6 +70,77 @@ constexpr int tiny_cap() {
     return std::is_same_v<T, std::complex<double>> ? 16 : 32;
 }
 
+// The launcher's addressing of the public Reg body (lapack/getrf.hh getrf_detail::reg_run, whose
+// pivot policy is getf2_detail::PivotPartition): 64-bit index math with the functor's 64-bit
+// ld; ipiv and info at matrix b's slots.
+template <typename D>
+struct TinyMat {
+    using value_type = D;
+    D* p;
+    std::ptrdiff_t ld;
+    BATCHLAS_DLA_INLINE D& operator()(int r, int c) const {
+        return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
+    }
+};
+struct TinyPiv {
+    int* p;
+    int b;
+    int n;
+    BATCHLAS_DLA_INLINE int& operator()(int i) const { return p[static_cast<std::ptrdiff_t>(b) * n + i]; }
+};
+struct TinyInfo {
+    int32_t* p;
+    int b;
+    template <typename Px>
+    BATCHLAS_DLA_INLINE void operator()(const Px& px, int32_t v) const {
+        if (px.leader()) p[b] = v;
+    }
+};
+
+// getf2_relabel's broadcast through local memory: the winner's lane packs the row right of
+// j into 16-byte vectors, DOUBLE-BUFFERED by step parity, so one sub-group barrier per step
+// orders this store after every lane's reads two steps back. evidence: docs/perf/lu.md#the-local-memory-broadcast
+template <typename D, int NC, int Mpw>
+struct TinySlmBcast {
+    using R = v2::real_t<D>;
+    using R4 = tn::tiny_r4<R>;
+    static constexpr int kW = tn::tiny_r4_width<D>();
+    static constexpr int kNCV = (NC + kW - 1) / kW;
+    const sycl::local_accessor<R4, 1>& slm;
+    sycl::sub_group sg;
+    int pidx;
+    int lane;
+    mutable R4* sp = nullptr;
+    BATCHLAS_DLA_INLINE void publish(int j, const v2::Frag<D, NC>& rA, int, g2::PivotWinner w) const {
+        sp = &slm[((j & 1) * Mpw + pidx) * kNCV];
+        if (lane == w.src) {
+BATCHLAS_UNROLL_FULL
+            for (int v = 0; v < kNCV; ++v) {
+                if (v < j / kW) continue;
+                sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
+            }
+        }
+        sycl::group_barrier(sg);
+    }
+    BATCHLAS_DLA_INLINE D pivot(int j, const v2::Frag<D, NC>&, g2::PivotWinner) const {
+        return tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
+    }
+    template <typename F>
+    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const v2::Frag<D, NC>&, g2::PivotWinner, F&& f) const {
+BATCHLAS_UNROLL_FULL
+        for (int v = 0; v < kNCV; ++v) {
+            if (v < j / kW || v * kW >= ncols) continue;
+            const R4 x = sp[v];
+BATCHLAS_UNROLL_FULL
+            for (int e = 0; e < kW; ++e) {
+                const int k = v * kW + e;
+                if (k <= j || k >= NC || k >= ncols) continue;
+                f(k, tn::tiny_r4_get<D, R>(x, e));
+            }
+        }
+    }
+};
+
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled: the attribute that
 // emits ptxas's .minnctapersm is refused on a lambda. MinBlocks caps the registers the
 // allocator may take (65,536 / (64 * MinBlocks)); 1 is no cap. NC <= N is the column
@@ -75,7 +148,7 @@ constexpr int tiny_cap() {
 // one shuffle per element (two per complex). evidence: docs/perf/lu.md#the-local-memory-broadcast
 template <typename D, int N, int NC, int Mpw, int MinBlocks, bool Slm>
 struct GetrfTinyBody {
-    using R = gn::real_of<D>;
+    using R = v2::real_t<D>;
     using R4 = tn::tiny_r4<R>;
     static constexpr int kW = tn::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;   // vectors per published row
@@ -93,10 +166,10 @@ struct GetrfTinyBody {
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
-        const auto part = make_partition<N>(sg);
+        const v2::SgpPartition<N> px(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
-        const int lane = static_cast<int>(part.get_local_linear_id());
-        const int pidx = tn::tiny_partition_id(sg, part);
+        const int lane = px.lid();
+        const int pidx = tn::tiny_partition_id(sg, px.part);
         const int prob_id = wg_id * kMpw + pidx;
 
         // CLAMP, DO NOT RETURN (as steqr_cta.cc does too): tiny_device.hh's
@@ -104,128 +177,21 @@ struct GetrfTinyBody {
         // item is dead the same way (I2): it factors an identity pad and stores nothing.
         const bool live = (prob_id < batch) && (mask == nullptr || mask[prob_id] != 0);
         const int b = live ? prob_id : 0;
-        const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
+        const TinyMat<D> A{ap + static_cast<std::ptrdiff_t>(b) * strp, ldp};
+        const TinyPiv piv{piv_ptr, b, n};
+        const TinyInfo info{info_ptr, b};
 
-        D rA[NC];  // top level, never a parameter: tiny_device.hh invariant 1
-BATCHLAS_UNROLL_FULL
-        for (int c = 0; c < NC; ++c) {
-            rA[c] = tn::tiny_load_pad_identity<D>(src, lane, c, n, ldp, live);
-        }
-
-        int rowid = lane;    // WHICH matrix row this lane currently owns
-        int my_piv = lane;   // lane j accumulates ipiv[j]
-        int32_t linfo = 0;   // partition-uniform: from the broadcast pivot
-
-        // The unroll is FULL only under the TU's raised -pragma-unroll-threshold
-        // (src/CMakeLists.txt): above LLVM's default it is declined silently and rA[]
-        // lands on the stack with zero spill. evidence: docs/perf/lu.md#the-column-bucket
-BATCHLAS_UNROLL_FULL
-        for (int j = 0; j < NC; ++j) {
-            // `continue`, NOT `break`. A break makes the trip count data-dependent,
-            // the toolchain declines the unroll, rA becomes dynamically indexed and
-            // ptxas relocates it to the stack -- with ZERO spill and green tests, so
-            // only the probe's stack-frame column shows it. Skipping a collective
-            // here is legal ONLY because n is kernel-uniform, which holds only
-            // because the entry point rejects a heterogeneous batch; relax that and
-            // every collective below is undefined -- a wrong answer, not a crash.
-            // evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
-            if (j >= n) continue;
-
-            // --- 1. argmax over live rows. A pad row is kept out by the tie-break
-            // DIRECTION, not by the `rowid < n` mask; the `mag == mag` map IS
-            // load-bearing -- an unmapped NaN leaves lanes disagreeing on the winner.
-            // evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
-            const R mag = gn::lu_cabs1<D>(rA[j]);
-            const bool cand = (rowid >= j) && (rowid < n);
-            R a = (cand && (mag == mag)) ? mag : R(-1);
-            // `rowid + N`: every non-candidate sorts strictly BELOW every candidate.
-            int key = tn::tiny_key(cand ? rowid : (rowid + N), lane);
-            tn::tiny_argmax_pair<N>(part, a, key);
-            const int p = tn::tiny_key_order(key);        // winner's rowid
-            const uint32_t pl = tn::tiny_key_lane(key);   // winner's lane
-            if (lane == j) my_piv = p;
-
-            if (rowid == p) rowid = j;  // --- 2. lazy swap; no row moves lanes
-            else if (rowid == j) rowid = p;
-
-            // --- 3. publish the pivot row. DOUBLE-BUFFERED by step parity: one barrier
-            // per step orders this store after every lane's reads two steps back.
-            R4* sp = nullptr;
-            if constexpr (Slm) {
-                sp = &slm[((j & 1) * kMpw + pidx) * kNCV];
-                if (lane == static_cast<int>(pl)) {
-BATCHLAS_UNROLL_FULL
-                    for (int v = 0; v < kNCV; ++v) {
-                        if (v < j / kW) continue;
-                        sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
-                    }
-                }
-                sycl::group_barrier(sg);
-            }
-
-            // --- 4. ?GETF2
-            D piv;
-            if constexpr (Slm) {
-                piv = tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
-            } else {
-                piv = tn::tiny_bcast<D>(part, rA[j], pl);
-            }
-            const bool zero = sd::dev_is_zero(piv);   // EXACT zero, no epsilon
-            if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
-            const D rc = sd::dev_recip(piv);
-            const bool use_mul =
-                !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
-            const bool act = (rowid > j);   // NEW rowid: the pivot row is excluded
-            if (act) {
-                if (use_mul) {
-                    rA[j] = sd::dev_mul(rA[j], rc);
-                } else if (!zero) {
-                    rA[j] = sd::dev_div(rA[j], piv);   // ?GETF2's sfmin arm
-                }
-            }
-
-            // --- 5. rank-1 update, collective OUTSIDE the guard. A zero pivot was
-            // the argmax, so every multiplier is zero: LAPACK's ?GER as a no-op.
-            // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled.
-            // evidence: docs/perf/lu.md#why-the-rank-1-update-starts-at-k--j--1
-            if constexpr (Slm) {
-BATCHLAS_UNROLL_FULL
-                for (int v = 0; v < kNCV; ++v) {
-                    if (v < j / kW || v * kW >= n) continue;
-                    const R4 x = sp[v];
-BATCHLAS_UNROLL_FULL
-                    for (int e = 0; e < kW; ++e) {
-                        const int k = v * kW + e;
-                        if (k <= j || k >= NC || k >= n) continue;
-                        const D u = tn::tiny_r4_get<D, R>(x, e);
-                        if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
-                    }
-                }
-            } else {
-BATCHLAS_UNROLL_FULL
-                for (int k = j + 1; k < NC; ++k) {
-                    if (k >= n) continue;      // kernel-uniform, as above
-                    const D u = tn::tiny_bcast<D>(part, rA[k], pl);
-                    if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
-                }
-            }
-        }
-
-        if (live) {
-            D* const dst = ap + static_cast<std::ptrdiff_t>(b) * strp;
-BATCHLAS_UNROLL_FULL
-            for (int k = 0; k < NC; ++k) {
-                if (k >= n) continue;
-                if (lane < n) {  // not `rowid < n`: equivalent, and loop-invariant
-                    dst[static_cast<std::ptrdiff_t>(rowid) +
-                        static_cast<std::ptrdiff_t>(k) * ldp] = rA[k];
-                }
-            }
-            if (lane < n) {
-                // 1-BASED and GLOBAL, as LAPACK defines ipiv.
-                piv_ptr[static_cast<std::ptrdiff_t>(b) * n + lane] = my_piv + 1;
-            }
-            if (part.leader()) info_ptr[b] = linfo;
+        // The public Reg body: ?GETF2 by lazy relabel, kmax = ncols = n. The unroll is FULL only
+        // under the TU's raised -pragma-unroll-threshold (src/CMakeLists.txt): above LLVM's
+        // default it is declined silently and rA lands on the stack with zero spill. Skipping a
+        // collective for j >= n is legal ONLY because n is kernel-uniform (the entry point
+        // rejects a heterogeneous batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
+        if constexpr (Slm) {
+            const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
+            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, bc, info);
+        } else {
+            // one select per element, two per complex
+            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, g2::bcast_shuffle(px), info);
         }
     }
 };

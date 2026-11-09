@@ -13,7 +13,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 

@@ -303,9 +303,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
             const auto Tblk = MatrixView<T, MatrixFormat::Dense>(ws.t.data(), ib, ib, nb,
                                                                  nb * nb, cb).with_batch_mask(mpart);
-            // Compile-time `false`: a runtime literal also instantiates the device-BLAS larft
-            // for GeqrfWyTag, 32 entry functions that can never launch.
-            (void)wy::larft_forward_columnwise_batched_t<GeqrfWyTag, T, false>(
+            (void)wy::larft_forward_columnwise_batched<GeqrfWyTag, T>(
                 ctx, ws.t.data(), nb, nb * nb,
                 ws.v.data(), ld_v, stride_v,
                 mp, ib,

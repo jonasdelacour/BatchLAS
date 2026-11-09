@@ -6,7 +6,8 @@
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
-#include <src/ops/gemm/kernels/accessors.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/stage.hh>
 #include <src/ops/gemm/kernels/register_128x128.hh>
 #include <src/ops/gemm/kernels/register_256x128.hh>
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
@@ -31,8 +32,10 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace {
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::operand_value;
 
+namespace {
 
 namespace og = ::batchlas::ops::gemm;
 

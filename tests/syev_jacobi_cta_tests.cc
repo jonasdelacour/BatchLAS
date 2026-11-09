@@ -456,6 +456,39 @@ TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     }
 }
 
+// The float rotation cosine c = 1/sqrt(1 + t^2) is rsqrt.approx + one Newton step. A bare
+// rsqrt.approx (NVPTX folded origin/main's `1 / sqrt` into one) leaves c^2 + s^2 = 1 + O(2^-22)
+// per rotation, which accumulates into the eigenvectors. ||Z^H Z - I||_F, worst of 1024 graded
+// items at n = 32, ld/stride gaps, in eps: float 171.5 (bare rsqrt 520.9), complex<float> 304.2
+// (bare rsqrt 383.0). The bound sits just above the Newton value. double divides: unchanged.
+TYPED_TEST(SyevJacobiCtaTest, RotationCosineKeepsEigenvectorsOrthonormal) {
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!std::is_same_v<Real, float>) {
+        GTEST_SKIP() << "the rsqrt + Newton cosine is float-only";
+    } else {
+        constexpr int n = 32, ld = n + 3, stride = ld * n + 5, batch = 1024;
+        constexpr double max_eps = std::is_same_v<Scalar, std::complex<float>> ? 320.0 : 180.0;
+        auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4274u);
+        UnifiedVector<Scalar> buf(static_cast<size_t>(batch) * stride, Scalar(0));
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i)  // graded: (i, j) scaled by 2^-floor(20 (i + j) / n)
+                    buf[static_cast<size_t>(b) * stride + i + j * ld] =
+                        A0.view()(i, j, b) * Real(std::ldexp(1.0, -(i + j) * 20 / n));
+        MatrixView<Scalar, MatrixFormat::Dense> Z(buf.data(), n, n, ld, stride, batch);
+        UnifiedVector<Real> W(static_cast<size_t>(n) * batch);
+        syev_jacobi_cta<B, Scalar>(*this->ctx, Z, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+        const double ortho = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(*this->ctx, Z, Z.all_items());
+        constexpr double eps = std::numeric_limits<Real>::epsilon();
+        const double factor = max_eps * eps / verify::bound<Scalar>(verify::Check::orthogonality_rotations, n);
+        EXPECT_VERIFY_SLACK(Scalar, verify::Check::orthogonality_rotations, n, ortho,
+                            verify::Slack{factor, "rsqrt + Newton cosine: measured Newton max, below the bare rsqrt"})
+            << "||Z^H Z - I||_F = " << ortho / eps << " eps, bound " << max_eps << " eps";
+    }
+}
+
 // Verifies that the float kernel agrees with an exact-input double reference to
 // within a small multiple of eps*||A||, i.e. that it is backward stable at the
 // level theory predicts. This is what licenses the ||A||-scaled values check used

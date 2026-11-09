@@ -25,7 +25,7 @@
 #include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
-// The only non-BatchLAS oracle here (verify::getrf_pivots): both tiers share lu_cabs1, so only
+// The only non-BatchLAS oracle here (verify::getrf_pivots): both tiers share core abs1, so only
 // TinyPivotsMatchLapackeOnUnstructuredData sees a defect in the pivot METRIC itself.
 #include <batchlas/verify/reference.hh>
 
@@ -3401,7 +3401,7 @@ TYPED_TEST(LuTest, TinyArgmaxIgnoresANaNCandidate) {
 // only one that reaches the property -- and the tie-break direction it pins is ALSO
 // what keeps a pad row (highest rowid in the partition) from winning an all-zero
 // column, which is the guard T4 turned out not to be.
-// Arms break (c), `ok < key` -> `ok > key` in tiny_argmax_pair.
+// Arms break (c), `oi < a.i` -> `oi > a.i` in maxloc_merge (lapack/getrf.hh getf2_detail).
 // evidence: docs/perf/lu.md#armed-breaks
 TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
     using T = typename TestFixture::T;
@@ -3522,8 +3522,8 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
 //
 // The only case in this file whose oracle shares NO line of code with the kernel.
 // `expect_piv` is the permutation make_dominant_permuted built, and T2/T6 compare
-// against a tier that #includes the SAME getrf_cta_device.hh and calls the SAME
-// lu_cabs1 -- so a defect in the shared pivot METRIC moves both tiers together and
+// against a tier that calls the SAME ?GETF2 (lapack/getrf.hh) and the SAME
+// core abs1 -- so a defect in the shared pivot METRIC moves both tiers together and
 // leaves all of those green. make_random is deliberate: on a dominant-permuted matrix
 // the argmax is decided by a gap of orders of magnitude, so a merely WRONG metric
 // still picks the right row.
@@ -3534,7 +3534,7 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
 // cross-checked against it ONLY on cells where LAPACKE passes a residual check on its
 // OWN factor. The dropped-cell count is asserted rather than silently tolerated -- a
 // silent fallback would let the LAPACKE arm quietly stop testing anything.
-// Arms break (h), lu_cabs1 -> the modulus in the SHARED getrf_cta_device.hh.
+// Arms break (h), abs1 -> the modulus at getf2's SHARED call sites (lapack/getrf.hh).
 // evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
 //           docs/perf/lu.md#the-pivot-margin-gate-on-elementwise-comparisons
 TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
@@ -3586,7 +3586,7 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
                     << " at a runner-up/winner margin of " << margin[size_t(k)]
                     << " -- the pivot METRIC or its ordering disagrees with LAPACK's, "
                        "and the CTA oracle cannot see it because both tiers share "
-                       "lu_cabs1";
+                       "abs1";
                 if (trust) {
                     ASSERT_EQ(ref[size_t(k)], static_cast<int>(hp[size_t(k)]))
                         << "n=" << n << " b=" << b << " step " << k

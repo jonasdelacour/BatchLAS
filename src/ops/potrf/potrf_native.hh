@@ -50,7 +50,7 @@ BATCHLAS_INTERNAL_API int potrf_cta_max_n_for_slm(
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
 template <typename T>
-int potrf_cta_max_n();
+BATCHLAS_INTERNAL_API int potrf_cta_max_n();
 
 // LPANEL tier (potrf_lpanel.cc): ONE \f$n \times NB\f$ panel in local memory instead of the whole
 // matrix. TWO caps, hence the second argument -- the local-memory slice AND

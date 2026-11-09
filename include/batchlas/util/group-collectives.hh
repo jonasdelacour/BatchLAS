@@ -89,7 +89,7 @@ struct rebind_op<OpT<V>, R> {
 template <typename T>
 using local_ptr = __attribute__((address_space(3))) T*;
 
-// sycl_impl::on_metal() (src/sycl/sscp_target.hh), which an installed header cannot include.
+// sycl_impl::on_metal() (include/batchlas/device/detail/sscp_target.hh), which an installed header cannot include.
 // 4 is compiler_backend::metal; acpp 25.10 has no such enumerator.
 __attribute__((always_inline)) inline bool on_metal() {
     bool r = false;

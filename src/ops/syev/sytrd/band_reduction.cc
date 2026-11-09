@@ -195,7 +195,7 @@ inline void band_extract_block(Queue& ctx,
                              } else {
                                  const int r = j - i;
                                  if (r <= kd) {
-                                     val = batchlas::device::detail::conj(safe_get(AB, r, i, b));
+                                     val = batchlas::device::conj(safe_get(AB, r, i, b));
                                  }
                              }
                              if (i == j) {
@@ -306,7 +306,7 @@ inline void band_scatter_block(Queue& ctx,
                                  const int r = -diff;
                                  if (r > kd) return;
                                  // Store A(j,i) in the lower band.
-                                 T val = batchlas::device::detail::conj(safe_get(I, ii, jj, b));
+                                 T val = batchlas::device::conj(safe_get(I, ii, jj, b));
                                  if (r == 0) {
                                      enforce_real_diagonal(val);
                                  }

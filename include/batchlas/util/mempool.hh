@@ -42,14 +42,15 @@ struct BumpAllocator {
 
     /// @brief A sizing pool: an effectively unbounded, maximally aligned fictitious region.
     ///
-    /// Give a real pool required_bytes() and the same call sequence succeeds, with at most one
-    /// alignment quantum to spare.
+    /// Give a real pool required_bytes() and the same call sequence succeeds whatever the alignment
+    /// of its base, with under two alignment quanta to spare on an aligned base.
     /// @warning The pointers it hands out are non-null and aligned (views can be built over them)
     ///          but unbacked: sizing code must never touch their contents, launch a kernel, or
     ///          test `data() != nullptr` to mean "a workspace was passed".
     /// @return a new sizing pool
-    // Exact because every alignment is one uniform value (device_align >= 16 >= alignof(T)), so
-    // offsets from the base match a real pool's. evidence: docs/design/workspace.md#workspace-bumpallocator-sizing-mode
+    // From any base a real pool never runs ahead of a copy started at its first quantum-aligned
+    // address (< quantum bytes in), which replays this one exactly.
+    // evidence: docs/design/workspace.md#workspace-bumpallocator-sizing-mode
     static BumpAllocator measuring() { return BumpAllocator(measure_tag{}); }
 
     /// @brief True for a pool made by measuring().
@@ -58,7 +59,8 @@ struct BumpAllocator {
 
     /// @brief Bytes a real pool must be given for the call sequence so far to succeed.
     ///
-    /// Rounded up to the coarsest alignment the sequence asked for.
+    /// Rounded up to the coarsest alignment the sequence asked for, plus one such quantum: the
+    /// worst-case padding from a real base address (any alignment) to its first aligned slice.
     /// @return required byte count; 0 when nothing was allocated
     /// @throws batchlas::api_misuse on a pool not made by measuring()
     // Rounding is load-bearing: callers add a callee's size into their total and re-serve it
@@ -68,7 +70,8 @@ struct BumpAllocator {
             throw batchlas::api_misuse("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
         }
         if (align_quantum_ == 0) return high_water_;
-        return (high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1);
+        // The allocation's own alignment is not trusted: acpp/Metal reports 512 B and hands out 256 B.
+        return ((high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1)) + align_quantum_;
     }
 
     /// @brief Alignment in bytes of an allocation of `T` on `device`.

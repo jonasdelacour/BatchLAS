@@ -19,6 +19,8 @@
 #include <batchlas/blas/functions/syev.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/syevx.hh>
 
 namespace batchlas {
 
@@ -41,22 +43,6 @@ inline MatrixView<T, MatrixFormat::Dense> packed_copy_view(T* data,
                                               n * n,
                                               static_cast<int>(batch_size),
                                               ptr_array);
-}
-
-// Number of eigenvalues <= x in an ASCENDING array (upper_bound, not lower_bound).
-// The `<=` must not become `<`: it is stebz's Sturm-count predicate, which is what
-// makes Direct and DirectSubset agree on m (up to one at a rounding boundary).
-// evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
-template <typename R>
-inline int64_t count_le(const R* asc, int64_t n, R x) {
-    int64_t lo = 0;
-    int64_t hi = n;
-    while (lo < hi) {
-        const int64_t mid = lo + (hi - lo) / 2;
-        if (asc[mid] <= x) lo = mid + 1;
-        else               hi = mid;
-    }
-    return lo;
 }
 
 } // namespace
@@ -162,63 +148,20 @@ Event syevx_direct(Queue& ctx,
             batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
-                    const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
+                    namespace v2 = batchlas::device;
+                    const v2::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
-                    const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
-                    auto cta = item.get_group();
                     if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
+                    const int nn = static_cast<int>(n);
+                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;
+                    // V's columns [write, dst_cols) are exactly zero, as on the DirectSubset path.
+                    const int64_t count = v2::syevx_select(
+                        ex, v2::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
+                        reverse, block, v2::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
+                        v2::mat(src_ptr + bid * n * n, nn, nn, nn),
+                        v2::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols), static_cast<int>(dst_ld)));
 
-                    const auto* lam = lam_ptr + bid * n;
-
-                    int64_t first;
-                    int64_t count;
-                    if (value_range) {
-                        if (tid == 0) {
-                            const int64_t c_lo = count_le<float_type>(lam, n, vl);
-                            const int64_t c_hi = count_le<float_type>(lam, n, vu);
-                            block[0] = c_lo;
-                            // Clamped anyway: m[b] is a loop bound downstream.
-                            block[1] = (c_hi > c_lo) ? (c_hi - c_lo) : int64_t(0);
-                        }
-                        sycl::group_barrier(cta);
-                        first = block[0];
-                        count = block[1];
-                    } else {
-                        first = range_il;
-                        count = range_count;
-                    }
-
-                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept.
-                    const int64_t write = (count < capacity) ? count : capacity;
-                    const int64_t hi_src = first + write - 1;
-
-                    auto* w = w_ptr + bid * capacity;
-                    for (int64_t i = tid; i < write; i += local_size) {
-                        const int64_t src = reverse ? (hi_src - i) : (first + i);
-                        w[i] = lam[src];
-                    }
-
-                    if (dst_ptr != nullptr) {
-                        const auto* vsrc = src_ptr + bid * n * n;
-                        auto* vdst = dst_ptr + bid * dst_stride;
-                        for (int64_t linear = tid; linear < n * write; linear += local_size) {
-                            const int64_t row = linear % n;
-                            const int64_t col = linear / n;
-                            const int64_t src_col = reverse ? (hi_src - col) : (first + col);
-                            vdst[row + col * dst_ld] = vsrc[row + src_col * n];
-                        }
-                        // Columns [write, dst_cols) are EXACTLY zero, as on the
-                        // DirectSubset path; unused W slots are deliberately untouched.
-                        // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
-                        for (int64_t linear = tid; linear < n * (dst_cols - write);
-                             linear += local_size) {
-                            const int64_t row = linear % n;
-                            const int64_t col = write + linear / n;
-                            vdst[row + col * dst_ld] = T(0);
-                        }
-                    }
-
-                    if (m_ptr != nullptr && tid == 0) {
+                    if (m_ptr != nullptr && ex.leader()) {
                         // The TRUE count: m[b] > capacity is the truncation signal.
                         m_ptr[bid] = static_cast<int32_t>(count);
                     }

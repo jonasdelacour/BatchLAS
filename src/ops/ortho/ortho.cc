@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
-#include <src/math-helpers.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -20,11 +19,15 @@
 
 #include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/ortho.hh>
+#include <src/ops/ortho/krylov-ortho-ritz_v2.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
 namespace batchlas {
+    namespace dla = device;
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};
@@ -176,7 +179,7 @@ namespace batchlas {
         // syrk writes only the lower triangle; potrf/trsm/shift read only that.
         // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
         // BATCHLAS_ORTHO_GRAM=gemm.
-        constexpr bool gram_is_real = !detail::is_complex<T>::value;
+        constexpr bool gram_is_real = !dla::Arith<T>::is_complex;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
@@ -195,10 +198,6 @@ namespace batchlas {
             return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
         };
 
-
-        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
-        auto square = [](T value) { if constexpr (detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
-
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
@@ -216,7 +215,7 @@ namespace batchlas {
         };
 
         auto conj_vector = [&](const VectorView<T>& v) {
-            if constexpr (detail::is_complex<T>::value) {
+            if constexpr (dla::Arith<T>::is_complex) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
                     if (masked && !mk[id[0]]) return;
@@ -258,33 +257,19 @@ namespace batchlas {
                 }
                 //Normalize A_i
                 ctx -> submit([&](sycl::handler& h){
-                    auto Anext_squared = sycl::local_accessor<float_t, 1>(m, h);
                     auto A_stride = A.stride();
                     auto Aptr = A.data_ptr();
                     const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
-                    const int64_t vstep = is_A_trans ? A.ld() : 1;
+                    const int vstep = is_A_trans ? A.ld() : 1;
 
                     batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}),
                         [=](sycl::nd_item<1> item){
-                            auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
-                            auto cta = item.get_group();
-                            if (masked && !mk[bid]) return;  // uniform per work-group, before the barrier
-                            T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
-                            auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
-
-                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                Anext_squared_span[j] = square(A_local_vector[j * vstep]);
-                            }
-
-                            sycl::group_barrier(cta);
-                            auto squared_norm = batchlas::portable::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
-                            auto norm = std::sqrt(squared_norm);
-
-                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                A_local_vector[j * vstep] /= norm;
-                            }
+                            if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
+                            const dla::RtGroup<> ex{item};
+                            const auto v = dla::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
+                            dla::ortho_detail::normalize(ex, v);  // the device ortho's CGS2 step
                         });
                 });
             }
@@ -296,17 +281,16 @@ namespace batchlas {
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                    auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
-                    auto cta = item.get_group();
                     if (masked && !mk[bid]) return;
-                    auto ATA_acc = ATA_ptr + bid * ATA_stride;
+                    const dla::RtGroup<> ex{item};  // WG = k: item i owns C(i, i)
+                    const auto d = dla::vec(ATA_ptr + bid * ATA_stride, k, k + 1);  // diag(C)
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
-                    const float_t fro2 = batchlas::portable::reduce_over_group(cta, real_part(ATA_acc[tid * k + tid]), sycl::plus<float_t>());
-                    const float_t eps = std::numeric_limits<float_t>::epsilon();
+                    const float_t fro2 = ex.group_reduce(dla::Arith<T>::re(d(ex.lid())));
+                    const float_t eps = dla::lamch<'P', float_t>();
                     const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
-                    ATA_acc[tid * k + tid] += T(shift);
+                    dla::for_each_owned_exact(ex, k, [&](int i) { d(i) = dla::Arith<T>::add(d(i), T(shift)); });  // C + shift I
                 });
             });
             //Compute the Cholesky Factorization of StS
@@ -328,20 +312,20 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
                 // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
                 // as non-null), leaving stale diags.
-                auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
-                auto diags_acc = diags.subspan(bid * k, k);
-
+                const dla::RtGroup<> ex{item};  // WG = k: one diagonal entry per item
                 // D = diag(A^H A)^(-1/2)
                 // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
                 // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
-                const float_t diag = sycl::fmax(float_t(0), real_part(ATA_acc[tid * k + tid]));
-                const float_t tau = std::numeric_limits<float_t>::min();
-                diags_acc[tid] = (diag <= tau) ? float_t(0) : sycl::rsqrt(diag);
+                const auto c_diag = dla::vec(ATA_ptr + bid * k * k, k, k + 1);
+                const auto d_out = dla::vec(diags.data() + bid * k, k);
+                dla::for_each_owned_exact(ex, k, [&](int i) {
+                    const float_t diag = sycl::fmax(float_t(0), dla::Arith<T>::re(c_diag(i)));
+                    d_out(i) = (diag <= dla::lamch<'U', float_t>()) ? float_t(0) : sycl::rsqrt(diag);
+                });
                 });
             });
             //Compute StS = D * StS * D
@@ -349,18 +333,13 @@ namespace batchlas {
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                auto cta = item.get_group();
-                auto D_acc = diags.subspan(bid * k, k);
-                D_local[tid] = D_acc[tid];
-                sycl::group_barrier(cta);
-                auto AtA_acc = Span(ATA_ptr + bid * k * k, k * k);
-                auto D_tid = D_local[tid];
-                for(int i = 0; i < k; i++){
-                    auto D_i = D_local[i];
-                    AtA_acc[i * k + tid] *= D_tid * D_i;
-                }
+                const dla::RtGroup<> ex{item};  // WG = k: one row per item
+                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
+                const auto d_in = dla::vec(diags.data() + bid * k, k);
+                dla::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
+                const auto D = ex.publish(d_slm);
+                krylov_v2::laqge(ex, D, D, dla::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
                 });
             });
 
@@ -371,19 +350,16 @@ namespace batchlas {
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto C_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                auto cta = item.get_group();
-                auto D_acc = diags.subspan(bid * k, k);
-                D_local[tid] = D_acc[tid];
-                sycl::group_barrier(cta);
-                auto C_acc = Span(C_ptr + bid * k * k, k * k);
-                auto D_tid = D_local[tid];
-                auto tau = std::numeric_limits<float_t>::epsilon() * std::abs(lambdas[bid * k + k - 1]);
-                for(int i = 0; i < k; i++){
-                    auto lambda_i = lambdas[bid * k + i] < tau ? tau : lambdas[bid * k + i];
-                    C_acc[i * k + tid] *= D_tid * sycl::rsqrt(std::abs(real_part(lambda_i)));
-                }
+                const dla::RtGroup<> ex{item};  // WG = k: one row per item
+                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
+                const auto d_in = dla::vec(diags.data() + bid * k, k);
+                dla::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
+                const auto D = ex.publish(d_slm);
+                const float_t* lam = lambdas.data() + bid * k;
+                const float_t tau = dla::lamch<'P', float_t>() * std::abs(lam[k - 1]);
+                const auto lam_rsqrt = dla::fn_vec(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
+                krylov_v2::laqge(ex, D, lam_rsqrt, dla::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
@@ -396,22 +372,17 @@ namespace batchlas {
             svqb_alg(A, output_view);
             auto A_stride = A.stride();
             auto A_ld = A.ld();
-            auto Adata = A.data();
+            auto Adata = A.data_ptr();
             auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
             ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
                 auto batch_idx = item.get_group().get_group_id()[0];
                 if (masked && !mk[batch_idx]) return;
-                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
-                    auto i = linear_ix % m;
-                    auto j = linear_ix / m;
-                    const T v = output_basis[batch_idx * m * k + j*m + i];
-                    if (is_A_trans) {
-                        if constexpr (detail::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
-                        else Adata[batch_idx * A_stride + i * A_ld + j] = v;
-                    } else {
-                        Adata[batch_idx * A_stride + j * A_ld + i] = v;
-                    }
-                }
+                const dla::RtGroup<> ex{item};
+                const auto Q = dla::mat(output_basis.data() + batch_idx * m * k, m, k, m);
+                T* const a = Adata + batch_idx * A_stride;
+                // A := Q, or rows of A := Q^H (is_A_trans is uniform: one branch per launch)
+                if (is_A_trans) dla::lacpy<dla::Part::Full, Transpose::ConjTrans, dla::alg::DivMod>(ex, Q, dla::mat(a, k, m, A_ld));
+                else dla::lacpy<dla::Part::Full, Transpose::NoTrans, dla::alg::DivMod>(ex, Q, dla::mat(a, m, k, A_ld));
             });
         };
 
@@ -501,7 +472,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-        auto trans = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = dla::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
         auto no_trans = Transpose::NoTrans;
         auto inv_transA = transA == trans ? no_trans : trans;
         auto inv_transM = transM == trans ? no_trans : trans;

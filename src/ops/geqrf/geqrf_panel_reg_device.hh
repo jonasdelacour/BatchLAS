@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The REGISTER panel leaf: one panel ROW per work-item, the \f$m \times N\f$ panel in registers
-// between one coalesced load and one store. LarfgScalars/geqrf_larfg_scalars are reused VERBATIM,
-// because tau's real-beta convention is a contract ormqr/orgqr/ormbr/sy2sb read.
+// The REGISTER panel leaf's plan: one panel ROW per work-item, the m x N panel in registers. The
+// body is the public device::geqr2_reg (include/batchlas/device/lapack/geqrf.hh); xLARFG is
+// device::larfg_scalars<conv::Lapack> (tau's real-beta convention is read by ormqr/orgqr/ormbr/sy2sb).
 // evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
 
 #include <src/ops/geqrf/geqrf_cta_device.hh>
@@ -18,8 +18,7 @@
 
 namespace batchlas::geqrf_native {
 
-// THE ONE source of this leaf's width and register cost. cols 0 = ABSENT; a non-zero cols MUST
-// equal geqrf_nb_for_type<T>(), which geqrf_blocked.cc static_asserts.
+// THE ONE source of this leaf's width and cost. cols 0 = ABSENT; else MUST equal geqrf_nb_for_type<T>().
 // evidence: docs/perf/qr.md#the-register-panel-leaf-width-and-height-table
 template <typename D> struct GeqrfPanelRegPlan {
     static constexpr int cols = 0;
@@ -47,7 +46,7 @@ template <> struct GeqrfPanelRegPlan<sycl_device::Cx<float>> {
     static constexpr int launch_max_rows = 0;
 };
 template <> struct GeqrfPanelRegPlan<sycl_device::Cx<double>> {
-    // 60.5 s of ptxas, and clamped at the 255-register ceiling: one block per SM.
+    // 60.5 s of ptxas; at the 255-reg ceiling: one block per SM.
     static constexpr int cols = 0;
     static constexpr int probed_cols = 32;
     static constexpr int probed_regs = 255;
@@ -59,7 +58,7 @@ template <> struct GeqrfPanelRegPlan<sycl_device::Cx<double>> {
 inline constexpr int kGeqrfPanelRegOverhead = 96;
 inline constexpr int kGeqrfPanelRegMargin = 16;
 
-// A row probed at a width the plan no longer uses reads as measured but describes another kernel.
+// A row probed at a width the plan no longer uses describes another kernel.
 template <typename D>
 constexpr bool geqrf_panel_reg_row_is_current() {
     return GeqrfPanelRegPlan<D>::cols == 0 || GeqrfPanelRegPlan<D>::probed_regs == 0 ||
@@ -70,7 +69,6 @@ constexpr int geqrf_panel_reg_words(std::size_t scalar_bytes) {
     return static_cast<int>(scalar_bytes / sizeof(float));
 }
 
-// A PROBED row needs no margin; the margin is the model's, because the model is an estimate.
 template <typename D>
 constexpr int geqrf_panel_reg_regs() {
     constexpr int probed = GeqrfPanelRegPlan<D>::probed_regs;
@@ -84,9 +82,8 @@ constexpr int geqrf_panel_reg_regs() {
 
 inline constexpr int kGeqrfPanelRegMaxWg = 1024;
 
-// THE HARD GATE as a HEIGHT: warps overflowing a register SUB-PARTITION abort the launch. THE
-// ARITHMETIC DOES NOT DECIDE IT -- sm89_max_work_group divides a PROBED count, optimistic against
-// what the library allocates, so the MEASURED launch_max_rows stays in the min() and wins.
+// THE HARD GATE as a HEIGHT: warps overflowing a register SUB-PARTITION abort the launch. The
+// optimistic PROBED arithmetic does not decide it: the MEASURED launch_max_rows wins the min().
 // evidence: docs/perf/qr.md#the-height-ceiling-the-aot-probe-got-wrong
 template <typename D>
 constexpr int geqrf_panel_reg_max_rows() {
@@ -103,8 +100,8 @@ constexpr int geqrf_panel_reg_max_rows() {
     }
 }
 
-// THE POLICY HEIGHT, a different fact from the hard ceiling: the tallest panel at which this
-// leaf is the right CHOICE. evidence: docs/perf/qr.md#the-panel-height-window
+// THE POLICY HEIGHT (not the hard ceiling): tallest panel where this leaf is the right CHOICE.
+// evidence: docs/perf/qr.md#the-panel-height-window
 inline constexpr int kGeqrfPanelRegPolicyRows = 128;
 
 constexpr int geqrf_panel_reg_wg(int m) {
@@ -112,113 +109,13 @@ constexpr int geqrf_panel_reg_wg(int m) {
     return (w < 32) ? 32 : w;
 }
 
-// Two real slots and N scalar slots per sub-group, plus alpha. The reductions are butterflies and
-// NEVER reduce_over_group, whose static shared opens the hole. evidence: docs/perf/qr.md#the-48-kib-launch-hole
+// Two real slots and N scalar slots per sub-group, plus alpha. Butterflies, NEVER reduce_over_group
+// (its static shared opens the hole). evidence: docs/perf/qr.md#the-48-kib-launch-hole
 constexpr std::size_t geqrf_panel_reg_real_slots(int wg) {
     return 2u * static_cast<std::size_t>(wg / 32);
 }
 constexpr std::size_t geqrf_panel_reg_scalar_slots(int wg, int cols) {
     return 1u + static_cast<std::size_t>(wg / 32) * static_cast<std::size_t>(cols);
-}
-
-// LAPACK ?GEQR2 on an \f$m \times n\f$ panel with \f$n \le N\f$, in place, one row per work-item. CONTRACT the
-// launcher holds: \f$m \le\f$ work-group size, \f$n \le N\f$, \f$\mathrm{kmax} \le \min(m, n)\f$, all launch-uniform. Rows at or
-// above m carry zeros and suppress their store but still execute every barrier -- an early return
-// is not work-group-uniform. Three barriers per column, none double-buffered: column j's writes
-// all follow column j-1's last barrier.
-template <typename D, int N, typename Real>
-inline void geqr2_panel_reg_device(sycl::nd_item<1> it, D* a, int ld, int m, int n, int kmax,
-                                   D* tau_ptr, Real* sred, D* sw) {
-    using R = real_of<D>;
-    static_assert(sizeof(R) == sizeof(Real), "the real slot array must match the scalar's real");
-
-    const auto g = it.get_group();
-    const auto sg = it.get_sub_group();
-    const int r = static_cast<int>(it.get_local_linear_id());
-    const int lane = static_cast<int>(sg.get_local_linear_id());
-    const int sgid = static_cast<int>(sg.get_group_linear_id());
-    const int nsg = static_cast<int>(sg.get_group_linear_range());
-    const bool live = (r < m);
-
-    // unroll(full) on EVERY loop whose index reaches rA, or rA[j] is a DYNAMIC index and the
-    // array leaves the register file. evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
-    D rA[N];
-#pragma clang loop unroll(full)
-    for (int k = 0; k < N; ++k) {
-        rA[k] = (live && k < n) ? a[static_cast<std::ptrdiff_t>(r) +
-                                    static_cast<std::ptrdiff_t>(k) * ld]
-                                : dev_zero<D>();
-    }
-
-#pragma clang loop unroll(full)
-    for (int j = 0; j < N; ++j) {
-        if (j >= kmax) continue;   // launch-uniform: cannot desync the barriers below
-
-        R part = (live && r >= j) ? dev_absmax<D>(rA[j]) : R(0);
-        part = geqrf_sg_max<R>(sg, part);
-        if (lane == 0) sred[sgid] = part;
-        if (r == j) sw[0] = rA[j];
-        sycl::group_barrier(g);                                        // B1
-
-        // Same slots in the same order on every item, so h below is work-group-uniform.
-        R smax = sred[0];
-        for (int i = 1; i < nsg; ++i) smax = sycl::fmax(smax, sred[i]);
-        const D alpha = sw[0];
-
-        R ssq_part = R(0);
-        if (live && r > j && smax > R(0)) ssq_part = dev_abs2_scaled<D>(rA[j], smax);
-        ssq_part = geqrf_sg_sum<R>(sg, ssq_part);
-        if (lane == 0) sred[nsg + sgid] = ssq_part;
-        sycl::group_barrier(g);                                        // B2
-
-        R ssq = R(0);
-        for (int i = 0; i < nsg; ++i) ssq += sred[nsg + i];
-
-        const LarfgScalars<D> h = geqrf_larfg_scalars<D>(alpha, smax, ssq);
-
-        // NO `if (h.identity) continue;`: inert arithmetically, and omitting it keeps the
-        // barrier sequence uniform. tau is a defined output either way.
-        if (r == j) {
-            rA[j] = h.beta;
-            tau_ptr[j] = h.tau;
-        } else if (live && r > j) {
-            rA[j] = h.use_mul ? sycl_device::dev_mul(rA[j], h.vfactor)
-                              : sycl_device::dev_div(rA[j], h.vfactor);
-        }
-
-        // One select: zeroes eliminated and dead rows, supplies the implicit v(j) = 1. Dropping
-        // the `r < j` term lets an eliminated row re-enter the reflector.
-        const D v = (!live || r < j)
-                        ? dev_zero<D>()
-                        : ((r == j) ? sycl_device::dev_one<D>() : rA[j]);
-        const D cv = sycl_device::dev_conj(v);
-        // CONJ(tau), zgeqr2's convention. evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
-        const D ctau = sycl_device::dev_conj(h.tau);
-
-#pragma clang loop unroll(full)
-        for (int k = 0; k < N; ++k) {
-            if (k <= j || k >= n) continue;   // uniform, or lanes drop out of the butterfly
-            const D pw = geqrf_sg_sum<D>(sg, sycl_device::dev_mul(cv, rA[k]));
-            if (lane == 0) sw[1 + sgid * N + k] = pw;
-        }
-        sycl::group_barrier(g);                                        // B3
-
-#pragma clang loop unroll(full)
-        for (int k = 0; k < N; ++k) {
-            if (k <= j || k >= n) continue;
-            D w = dev_zero<D>();
-            for (int i = 0; i < nsg; ++i) w = dev_add<D>(w, sw[1 + i * N + k]);
-            rA[k] = sycl_device::dev_sub(
-                rA[k], sycl_device::dev_mul(sycl_device::dev_mul(ctau, w), v));
-        }
-    }
-
-#pragma clang loop unroll(full)
-    for (int k = 0; k < N; ++k) {
-        if (live && k < n) {
-            a[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(k) * ld] = rA[k];
-        }
-    }
 }
 
 }  // namespace batchlas::geqrf_native

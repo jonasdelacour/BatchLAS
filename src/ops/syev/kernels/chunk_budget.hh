@@ -2,6 +2,7 @@
 #pragma once
 
 #include <src/queue.hh>
+#include <src/util/internal-api.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -12,7 +13,7 @@ namespace batchlas::ops::syev::detail {
 // Test seam: nonzero replaces Device::scratch_budget in the blocked and two_stage chunk caps. No quick
 // test batch passes the real budget, and on a 96 GB device not even C120 does.
 // evidence: docs/perf/syev.md#syev-vendor-free-double-band
-std::size_t& chunk_budget_override();
+BATCHLAS_INTERNAL_API std::size_t& chunk_budget_override();
 
 class ScopedChunkBudget {
 public:

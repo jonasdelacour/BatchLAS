@@ -824,7 +824,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
     }
 }
 
-// G8c. geqrf_larfg_scalars' division arm, on data that reaches it. That arm is taken ONLY
+// G8c. v2::larfg_scalars<conv::Lapack>' division arm, on data that reaches it. That arm is taken ONLY
 // on SUBNORMAL input, so a "simplify this to a plain reciprocal-multiply" edit would fill
 // every such column's v with infinities and nothing would go red. Hence FINITENESS and a
 // loose, scale-invariant orthogonality rather than a residual: ||A||_F^2 underflows to
@@ -862,7 +862,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             << "the rescaled problem flushed to all zeros; this test would prove nothing";
         ASSERT_FALSE(std::isfinite(R(1) / static_cast<R>(biggest * 16.0)))
             << "1/(" << biggest * 16.0 << ") is finite in this scalar type, so "
-            << "geqrf_larfg_scalars keeps use_mul == true and the DIVISION path is never "
+            << "v2::larfg_scalars<conv::Lapack> keeps use_mul == true and the DIVISION path is never "
                "reached. This test is vacuous as configured.";
 
         auto V = view_of(p);
@@ -885,7 +885,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             for (int i = 0; i < p.k; ++i) {
                 ASSERT_TRUE(std::isfinite(std::real(MVof<T>::up(tau[i]))) && std::isfinite(std::imag(MVof<T>::up(tau[i]))))
                     << what << ": tau[" << i << "] is not finite at b=" << b
-                    << " -- the reciprocal guard in geqrf_larfg_scalars is not doing its job";
+                    << " -- the reciprocal guard in v2::larfg_scalars<conv::Lapack> is not doing its job";
             }
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i) {
@@ -1884,7 +1884,7 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
            "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
            "is warp-uniform here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is backend-specific (src/kernels/common/sg_partition/; "
+        << path << ": group_barrier(part) is backend-specific (include/batchlas/device/detail/sg_partition/; "
            "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
            "correct on this box and not ordered everywhere: " << part_barrier;
 }

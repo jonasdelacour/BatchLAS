@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Device helpers for the register-resident GEQRF ("tiny") tier. geqrf_cta_device.hh's
-// LarfgScalars is reused VERBATIM -- tau is a contract ormqr/orgqr/ormbr/sy2sb consume, and a
-// second LAPACK real-beta convention is a second thing to get wrong. evidence:
+// Device helpers for the register-resident GEQRF ("tiny") tier. The tier shares the CTA
+// leaves' xLARFG (v2::larfg_scalars<conv::Lapack>) -- tau is a contract ormqr/orgqr/ormbr/sy2sb
+// consume, and a second LAPACK real-beta convention is a second thing to get wrong. Its
+// PARTITION-wide butterflies are core's always_inline device::detail::butterfly<N, bfly::Asc>
+// (reduce.hh's plain-inline butterfly<1, N, Asc>: FP64 N = 8 +3.5% SASS), ALL-reduces on
+// purpose, a WORK-GROUP reduction would re-open the 48 KB hole. evidence:
 // docs/perf/qr.md#the-two-partition-butterflies, #a-residual-test-cannot-guard-a-convention
 
 #include <src/ops/geqrf/geqrf_cta_device.hh>
@@ -11,32 +14,12 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/util/resident_capacity.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace batchlas::geqrf_native {
-
-// PARTITION-wide XOR butterflies, ALL-reduces on purpose: a WORK-GROUP reduce_over_group would
-// re-open the 48 KB hole. evidence: docs/perf/qr.md#the-two-partition-butterflies
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_fmax(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value = sycl::fmax(value, permute_group_by_xor(part, value, mask));
-    }
-    return value;
-}
-
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_sum(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value += permute_group_by_xor(part, value, mask);
-    }
-    return value;
-}
 
 // THE ONE source of truth for the register count. Keyed on the DEVICE scalar D, never on T:
 // Cx<float> and double are 8 bytes each with very different bodies.

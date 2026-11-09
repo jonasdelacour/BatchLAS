@@ -124,8 +124,9 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: direct
             "src/ops/spmm/kernels/spmm_native.cc",
             "src/ops/spmm/spmm_native.hh",
@@ -135,6 +136,16 @@ public:
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/spmm/spmm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: direct "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: direct "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: direct "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: direct "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: direct "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: direct "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: direct "include/batchlas/device/scalar.hh" "include/batchlas/device/sparse.hh"
+        // family: direct "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: direct "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/spmm_spec.cc"; }

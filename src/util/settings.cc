@@ -104,7 +104,6 @@ void load_selection(SelectionSettings& s) {
     set_if_present(s.getrs_laswp, "BATCHLAS_GETRS_LASWP");
     set_if_present(s.iluk_device, "BATCHLAS_ILUK_DEVICE");
     set_if_present(s.latrd_impl, "BATCHLAS_LATRD_IMPL");
-    set_if_present(s.ormqr_impl, "BATCHLAS_ORMQR_IMPL");
     set_if_present(s.ormqr_wy, "BATCHLAS_ORMQR_WY");
     set_if_present(s.ortho_gram, "BATCHLAS_ORTHO_GRAM");
     set_if_present(s.sb2st_back_wave, "BATCHLAS_SB2ST_BACK_WAVE");
@@ -116,7 +115,6 @@ void load_selection(SelectionSettings& s) {
     set_if_present(s.syevx_instr_host, "BATCHLAS_SYEVX_INSTR_HOST");
     set_if_present(s.syevx_projected_vendor, "BATCHLAS_SYEVX_PROJECTED_VENDOR");
     set_if_present(s.syevx_soft_lock, "BATCHLAS_SYEVX_SOFT_LOCK");
-    set_if_present(s.sytrd_impl, "BATCHLAS_SYTRD_IMPL");
     set_if_present(s.sytrd_trailing_update, "BATCHLAS_SYTRD_TRAILING_UPDATE");
     set_if_present(s.tuned_dir, "BATCHLAS_TUNED_DIR");
 
@@ -142,7 +140,6 @@ void load_geometry(GeometrySettings& g) {
     set_if_present(g.latrd_grid_groups, "BATCHLAS_LATRD_GRID_GROUPS", positive_or(0));
     set_if_present(g.latrd_grid_min_n, "BATCHLAS_LATRD_GRID_MIN_N", positive_or(768));
     set_if_present(g.latrd_grid_wg, "BATCHLAS_LATRD_GRID_WG", positive_or(0));
-    set_if_present(g.latrd_lower_panel_wg_hint, "BATCHLAS_LATRD_LOWER_PANEL_WG_HINT", positive_or(0));
 
     set_if_present(g.sb2st_back_subs, "BATCHLAS_SB2ST_BACK_SUBS", positive_or(0));
     set_if_present(g.sb2st_back_tile_w, "BATCHLAS_SB2ST_BACK_TILE_W", positive_or(0));
@@ -207,6 +204,7 @@ void load_geometry(GeometrySettings& g) {
     set_if_present(g.tune.sy2sb_ormqr_nb, "BATCHLAS_TUNE_SY2SB_ORMQR_NB");
     set_if_present(g.tune.sytrd_block_size, "BATCHLAS_TUNE_SYTRD_BLOCK_SIZE");
     set_if_present(g.tune.latrd_wg_hint, "BATCHLAS_TUNE_LATRD_WG_HINT");
+    set_if_present(g.tune.latrd_slm_floor, "BATCHLAS_TUNE_LATRD_SLM_FLOOR");
     set_if_present(g.tune.stedc_recursion_threshold, "BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD");
     set_if_present(g.tune.stedc_merge_variant, "BATCHLAS_TUNE_STEDC_MERGE_VARIANT");
     set_if_present(g.tune.stedc_threads_per_root, "BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT");

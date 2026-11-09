@@ -3,7 +3,7 @@
 > **Status:** current · RTX 4090 (sm_89)
 
 `steqr_cta` solves one tridiagonal problem per chunk of `P` lanes, \f$P \in \{4, 8, 16, 32\}\f$, so a
-warp holds \f$32/P\f$ problems. The device solve `steqr_cta_solve` (`src/ops/syev/steqr/steqr_cta_device.hh`)
+warp holds \f$32/P\f$ problems. The device solve `steqr_detail::steqr_cta_solve` (`include/batchlas/device/lapack/steqr.hh`)
 also runs inside the fused small-n SYEV kernel and at the stedc leaves. The algorithm is
 @ref algo_steqr; this page holds the lane-scheduling decisions and their numbers.
 
@@ -81,7 +81,7 @@ dead tail chunks onto a zero problem instead of returning:
 | `redux.sync` with a per-chunk mask | ptxas serialises the warp | Rejected; `redux.sync` only with the full mask |
 | Interleaved Q tile (`LDQ = 32`, no bank conflicts) | 0.978-1.005x: the kernel is latency-bound | Rejected |
 
-Partition-primitive changes (`src/kernels/common/sg_partition/`) are judged by real-kernel A/B (`steqr`
+Partition-primitive changes (`include/batchlas/device/detail/sg_partition/`) are judged by real-kernel A/B (`steqr`
 and `syev_cta` at n = 5..16, batch 16,384), never by microbenchmark: full-warp and maskless rewrites
 that won microbenchmarks lost in these kernels.
 
@@ -125,7 +125,7 @@ for \f$n \le 8\f$. The boundary lives in the float \f$n \le 32\f$ rows of `tuned
 
 ## CTA STEQR: chase micro-structure decisions
 
-The device building blocks live in `src/ops/syev/steqr/steqr_cta_device.hh`, shared by `steqr_cta.cc` and
+The device building blocks live in `include/batchlas/device/lapack/steqr.hh` (`steqr_detail`), shared by `steqr_cta.cc` and
 `syev_cta_fused.cc`, so a fused-versus-partitioned comparison measures fusion rather than two solvers.
 None of these choices has a recorded before/after figure; read them as reasons.
 

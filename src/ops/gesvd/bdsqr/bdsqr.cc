@@ -4,6 +4,8 @@
 
 #include <batchlas/util/mempool.hh>
 
+#include <batchlas/device/interop.hh>
+#include <batchlas/device/lapack/bdsqr.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -11,83 +13,13 @@
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
-#include <cmath>
-#include <limits>
 #include <stdexcept>
-#include <limits>
 
 namespace batchlas {
 
 namespace {
 
-template <typename Real>
-inline Real safe_abs(Real x) {
-    return sycl::fabs(x);
-}
-
-template <typename Real>
-inline void apply_rotation_to_rows(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
-                                   int32_t batch,
-                                   int32_t row0,
-                                   int32_t row1,
-                                   Real c,
-                                   Real s) {
-    for (int32_t col = 0; col < matrix.cols(); ++col) {
-        const Real x0 = matrix(row0, col, batch);
-        const Real x1 = matrix(row1, col, batch);
-        matrix(row0, col, batch) = c * x0 + s * x1;
-        matrix(row1, col, batch) = -s * x0 + c * x1;
-    }
-}
-
-template <typename Real>
-inline void apply_rotation_to_cols(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
-                                   int32_t batch,
-                                   int32_t col0,
-                                   int32_t col1,
-                                   Real c,
-                                   Real s) {
-    for (int32_t row = 0; row < matrix.rows(); ++row) {
-        const Real x0 = matrix(row, col0, batch);
-        const Real x1 = matrix(row, col1, batch);
-        matrix(row, col0, batch) = c * x0 + s * x1;
-        matrix(row, col1, batch) = -s * x0 + c * x1;
-    }
-}
-
-template <typename Real>
-inline void scale_row(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
-                      int32_t batch,
-                      int32_t row,
-                      Real alpha) {
-    for (int32_t col = 0; col < matrix.cols(); ++col) {
-        matrix(row, col, batch) *= alpha;
-    }
-}
-
-template <typename Real>
-inline void swap_rows(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
-                      int32_t batch,
-                      int32_t row0,
-                      int32_t row1) {
-    for (int32_t col = 0; col < matrix.cols(); ++col) {
-        const Real tmp = matrix(row0, col, batch);
-        matrix(row0, col, batch) = matrix(row1, col, batch);
-        matrix(row1, col, batch) = tmp;
-    }
-}
-
-template <typename Real>
-inline void swap_cols(const KernelMatrixView<Real, MatrixFormat::Dense>& matrix,
-                      int32_t batch,
-                      int32_t col0,
-                      int32_t col1) {
-    for (int32_t row = 0; row < matrix.rows(); ++row) {
-        const Real tmp = matrix(row, col0, batch);
-        matrix(row, col0, batch) = matrix(row, col1, batch);
-        matrix(row, col1, batch) = tmp;
-    }
-}
+namespace v2 = ::batchlas::device;
 
 template <typename Real>
 bool bdsqr_implicit_qr_attempt(Queue& ctx,
@@ -101,11 +33,8 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                bool sort_desc,
                                Span<int32_t> fail_flags,
                                const std::uint8_t* mask) {
-    const Real eps = std::numeric_limits<Real>::epsilon();
-    const Real tolmul = sycl::fmax(Real(10), sycl::fmin(Real(100), sycl::pow(eps, Real(-0.125))));
-    const Real tol = tolmul * eps;
-    const int32_t maxitr = 6; // LAPACK DBDSQR default
-    const int32_t maxit = std::max<int32_t>(32, maxitr * n * n);
+    // DBDSQR's tolerance and iteration cap, formed on the host.
+    const auto params = v2::bdsqr_detail::params<Real>(n);
 
     ctx->submit([&](sycl::handler& cgh) {
         auto D = d;
@@ -117,8 +46,8 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
         const int32_t nn = n;
         const int32_t nb = batch;
         const bool descending = sort_desc;
-        const bool accumulate_u = u.rows() > 0 && u.cols() == n;
-        const bool accumulate_vh = vh.rows() == n && vh.cols() > 0;
+        const int32_t urows = static_cast<int32_t>(u.rows()), ucols = static_cast<int32_t>(u.cols());
+        const int32_t vrows = static_cast<int32_t>(vh.rows()), vcols = static_cast<int32_t>(vh.cols());
 
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
@@ -131,200 +60,11 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
 
             Real* db = D.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(D.stride());
             Real* eb = (nn > 1) ? (E.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(E.stride())) : nullptr;
-
-            int32_t iters = 0;
-            bool converged = (nn <= 1);
-
-            while (!converged && iters < maxit) {
-                converged = true;
-
-                Real smax = Real(0);
-                for (int32_t i = 0; i < nn; ++i) {
-                    smax = sycl::fmax(smax, safe_abs(db[i]));
-                }
-                for (int32_t i = 0; i < nn - 1; ++i) {
-                    smax = sycl::fmax(smax, safe_abs(eb[i]));
-                }
-                const Real abs_thresh = tol * smax;
-
-                for (int32_t i = 0; i < nn - 1; ++i) {
-                    const Real rel_thresh = eps * (safe_abs(db[i]) + safe_abs(db[i + 1]));
-                    const Real thresh = sycl::fmax(rel_thresh, abs_thresh);
-                    if (safe_abs(eb[i]) <= thresh) {
-                        eb[i] = Real(0);
-                    } else {
-                        converged = false;
-                    }
-                }
-                if (converged) break;
-
-                int32_t l = 0;
-                while (l < nn - 1) {
-                    while (l < nn - 1 && eb[l] == Real(0)) ++l;
-                    if (l >= nn - 1) break;
-
-                    int32_t m = l;
-                    while (m < nn - 1 && eb[m] != Real(0)) ++m;
-
-                    if (m == l) {
-                        eb[l] = Real(0);
-                        l = m + 1;
-                        continue;
-                    }
-
-                    // ---- Zero-diagonal deflation (DBDSQR's zero-shift chase).
-                    // Required: with db[l] == 0, g = 0, lartg returns the
-                    // identity and the sweep spins to maxit. Chase the entry
-                    // off the block with zero-shift rotations to deflate.
-                    // evidence: docs/perf/gesvd.md#gesvd-bdsqr-the-missing-zero-shift-chase
-                    {
-                        int32_t zrow = -1;
-                        for (int32_t i = l; i <= m; ++i) {
-                            const Real dthresh = sycl::fmax(abs_thresh,
-                                                            std::numeric_limits<Real>::min());
-                            if (safe_abs(db[i]) <= dthresh) { zrow = i; break; }
-                        }
-                        if (zrow >= 0) {
-                            db[zrow] = Real(0);
-                            if (zrow < m) {
-                                // Zero strictly inside the block: chase e[zrow]
-                                // RIGHTWARDS with LEFT rotations, which empties
-                                // row zrow.
-                                Real f2 = eb[zrow];
-                                eb[zrow] = Real(0);
-                                for (int32_t j = zrow + 1; j <= m; ++j) {
-                                    const auto rz = detail::lartg<Real>(db[j], f2);
-                                    db[j] = rz.r;
-                                    if (accumulate_u) {
-                                        apply_rotation_to_cols(U, b, j, zrow, rz.c, rz.s);
-                                    }
-                                    if (j < m) {
-                                        f2 = -rz.s * eb[j];
-                                        eb[j] = rz.c * eb[j];
-                                    }
-                                }
-                            } else if (m > l) {
-                                // Zero at the BOTTOM: the rightward chase does
-                                // nothing here and the sweep never converges.
-                                // Chase LEFTWARDS with RIGHT rotations, emptying
-                                // column m.
-                                Real f2 = eb[m - 1];
-                                eb[m - 1] = Real(0);
-                                for (int32_t j = m - 1; j >= l; --j) {
-                                    const auto rz = detail::lartg<Real>(db[j], f2);
-                                    db[j] = rz.r;
-                                    if (accumulate_vh) {
-                                        apply_rotation_to_rows(Vh, b, j, m, rz.c, rz.s);
-                                    }
-                                    if (j > l) {
-                                        f2 = -rz.s * eb[j - 1];
-                                        eb[j - 1] = rz.c * eb[j - 1];
-                                    }
-                                }
-                            }
-                            iters += (m - l + 1);
-                            l = m + 1;
-                            continue;
-                        }
-                    }
-
-                    // DBDSQR's shift: the smaller singular value of the trailing 2x2 of B (?LAS2,
-                    // no squares, so no overflow near sqrt(max)), dropped when negligible.
-                    const int32_t p = m - 1;
-                    Real shift = detail::las2(db[p], eb[p], db[m])[0];
-                    const Real sll = safe_abs(db[l]);
-                    if (sll > Real(0) && (shift / sll) * (shift / sll) < std::numeric_limits<Real>::epsilon()) {
-                        shift = Real(0);
-                    }
-                    Real f = (sll - shift) * (sycl::copysign(Real(1), db[l]) + shift / db[l]);
-                    Real g = eb[l];
-
-                    for (int32_t k = l; k <= m - 1; ++k) {
-                        const auto r1 = detail::lartg<Real>(f, g);
-                        const Real cs = r1.c;
-                        const Real sn = r1.s;
-                        if (accumulate_vh) {
-                            apply_rotation_to_rows(Vh, b, k, k + 1, cs, sn);
-                        }
-                        if (k > l) eb[k - 1] = r1.r;
-
-                        const Real dk = db[k];
-                        const Real ek = eb[k];
-                        const Real dk1 = db[k + 1];
-
-                        f = cs * dk + sn * ek;
-                        eb[k] = cs * ek - sn * dk;
-                        g = sn * dk1;
-                        db[k + 1] = cs * dk1;
-
-                        const auto r2 = detail::lartg<Real>(f, g);
-                        const Real cs2 = r2.c;
-                        const Real sn2 = r2.s;
-                        if (accumulate_u) {
-                            apply_rotation_to_cols(U, b, k, k + 1, cs2, sn2);
-                        }
-                        db[k] = r2.r;
-
-                        const Real dk1b = db[k + 1];
-                        const Real ekb = eb[k];
-                        f = cs2 * ekb + sn2 * dk1b;
-                        db[k + 1] = cs2 * dk1b - sn2 * ekb;
-
-                        if (k < m - 1) {
-                            g = sn2 * eb[k + 1];
-                            eb[k + 1] = cs2 * eb[k + 1];
-                        } else {
-                            g = Real(0);
-                        }
-                        eb[k] = f;
-                    }
-
-                    iters += (m - l + 1);
-                    l = m + 1;
-                }
-            }
-
             Real* sb = out + static_cast<size_t>(b) * static_cast<size_t>(nn);
-            for (int32_t i = 0; i < nn; ++i) {
-                if (db[i] < Real(0)) {
-                    db[i] = -db[i];
-                    if (accumulate_vh) {
-                        scale_row(Vh, b, i, Real(-1));
-                    }
-                }
-                sb[i] = db[i];
-            }
-
-            if (descending) {
-                for (int32_t i = 0; i < nn; ++i) {
-                    int32_t best = i;
-                    for (int32_t j = i + 1; j < nn; ++j) {
-                        if (sb[j] > sb[best]) {
-                            best = j;
-                        }
-                    }
-                    if (best != i) {
-                        const Real tmp = sb[i];
-                        sb[i] = sb[best];
-                        sb[best] = tmp;
-                        if (accumulate_u) {
-                            swap_cols(U, b, i, best);
-                        }
-                        if (accumulate_vh) {
-                            swap_rows(Vh, b, i, best);
-                        }
-                    }
-                }
-            }
-
-            bool bad = false;
-            for (int32_t i = 0; i < nn; ++i) {
-                if (!(sb[i] == sb[i])) {
-                    bad = true;
-                    break;
-                }
-            }
-            fail[b] = (converged && !bad) ? 0 : 1;
+            // device::bdsqr on one item (lapack/bdsqr.hh): U and Vh addressed as v1's (i, j, b).
+            fail[b] = v2::bdsqr<v2::tier::Blocked<1>>(v2::Thread{}, v2::vec(db, nn), v2::vec(eb, nn > 1 ? nn - 1 : 0), v2::vec(sb, nn),
+                                                      v2::Workspace{}, v2::item(U, b, urows, ucols), v2::item(Vh, b, vrows, vcols),
+                                                      descending, params);
         });
     });
 

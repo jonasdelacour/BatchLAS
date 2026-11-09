@@ -14,10 +14,7 @@ on every call, so one process can A/B the kernels.
 | Value | Kernel |
 | --- | --- |
 | unset, or any other value | Legacy (default below `latrd_grid_min_n`) |
-| `%device` | Device-BLAS variant (`device::hemv`, `her2k`). Slower; no figures recorded |
 | `grid` | Grid kernel |
-
-`BATCHLAS_SYTRD_IMPL` (`sytrd_blocked.cc`) is latched in a `static` and does not behave this way.
 
 ## sytrd: the latrd grid-path threshold
 
@@ -236,10 +233,28 @@ case-folded disable set `sb2st_wave_disabled`; any other value, including a typo
 > {0, false, FALSE, off, OFF}, and `env_int_or` turns an unparseable value into 1. Either way `=False`,
 > `=Off` or `=no` silently enables the wave path, and a wave-versus-tiled A/B compares the wave kernel with itself.
 
+## sytrd: the latrd lower panel on device LA v2, an accepted miss
+
+The legacy latrd lower-panel kernel body is gone: the device LA v2 port is the only body. That port
+compiles to the same instructions but needs fewer registers, so more blocks fit on each SM (float 4 to 5,
+complex<float> 3 to 4, at work-group size 256), and sytrd blocked ran up to 1.21x slower than the legacy
+kernel. `LATRD_LOWER_PANEL_SLM_FLOOR_*` brings occupancy back down. It is a local-memory floor of 97
+bytes per work-item for float and 130 for complex<float>. The floor applies only at batch >= 512, to
+panels of at least 257 rows (float) or 129 rows (complex<float>).
+
+| Shape (sm_89) | latrd v2 against legacy |
+| --- | --- |
+| float and complex<float>, n >= 512, batch >= 512, floor on | 0.82-0.97x |
+| float, n = 256, batch 1024 | 1.19x |
+
+No occupancy setting brings the float n = 256 shape back to legacy speed. Below the row gate, the extra
+local-memory carveout leaves less L1 and costs 3-31%. The 1.19x is therefore accepted as the cost of
+having one latrd body (user decision, 2026-11-05). double and complex<double> keep no floor, because they
+were not tuned on a 1:64 FP64 GPU. The output is bit-identical to the legacy kernel.
+
 ## sytrd: open debts
 
 - The 25% local-memory headroom in `sytrd_sb2st_cta.cc` (`lmem_budget = lmem_bytes * 3 / 4`) is unmeasured.
-- `BATCHLAS_LATRD_IMPL=%device` is recorded as slower with no figures; re-measure before deleting or reviving it.
 - Overlapping \f$Q_1 Q_2\f$ with `stedc` needs an out-of-order queue; unmeasured.
 - The complex stage-2 retiling is tracked in
   [syev: open debt, complex stage-2 occupancy](syev.md#syev-open-debt-complex-stage-2-occupancy).

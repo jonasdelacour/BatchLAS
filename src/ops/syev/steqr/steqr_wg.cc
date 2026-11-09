@@ -3,6 +3,8 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <tuple>
@@ -19,6 +21,9 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device;
+namespace sv = batchlas::device::steqr_detail;
 
 template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
@@ -118,87 +123,23 @@ Event steqr_wg_impl(Queue& ctx,
                     auto n_local = end_ix - start_ix;
 
                     if (n_local == 1) continue;
+                    // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (steqr_detail::wg_*).
                     if (n_local == 2) {
-                        if (store_givens) {
-                            auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
-                            rotations_view(0, 0, gid) = {c, -s};
+                        sv::wg_solve_2x2<T>(d_, e_, store_givens, [&](const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
+                            rotations_view(0, 0, gid) = {g.c, g.s};
                             order_view[gid] = ApplyOrder::Forward;
-                        } else {
-                            auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
-                        }
+                        });
                         continue;
                     }
 
-                    // The sweep converges the end the shift is taken from (virtual index
-                    // n_local - 1), so orient that end at the SMALLER |d|, as dsteqr does.
-                    bool QR = std::abs(d_(n_local - 1)) < std::abs(d_(0));
+                    bool QR = sv::wg_forward(d_, n_local);
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        auto anorm = std::abs(d_(n_local - 1));
-                        for (size_t idx = 0; idx < n_local - 1; ++idx) {
-                            anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
-                        }
-
-                        if (anorm > detail::ssfmax<T>()) {
-                            auto alpha = detail::ssfmax<T>() / anorm;
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = detail::ssfmin<T>() / anorm;
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        }
-
-                        auto d_get = [&](size_t idx) -> T {
-                            return QR ? d_(idx) : d_(n_local - 1 - idx);
-                        };
-                        auto e_get = [&](size_t idx) -> T {
-                            return QR ? e_(idx) : e_(n_local - 2 - idx);
-                        };
-
-                        const auto shift = detail::wilkinson_shift(d_get(n_local - 2),
-                                                           e_get(n_local - 2),
-                                                           d_get(n_local - 1));
-
-                        auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
-                        if (store_givens) {
-                            rotations_view(0, k, gid) = {c0, s0};
-                        }
-                        auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
-
-                        for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
+                        const bool deflatable = sv::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
                             if (store_givens) {
-                                rotations_view(j, k, gid) = {cj, sj};
+                                rotations_view(j, k, gid) = {g.c, g.s};
                             }
-                            bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
-                        }
-
-                        bool deflatable = false;
-                        for (size_t j = 0; j < n_local - 1; ++j) {
-                            if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j)) * std::abs(d_(j + 1)) +
-                                                                   detail::safmin<T>()) {
-                                e_(j) = T(0);
-                                deflatable = true;
-                            }
-                        }
-
-                        if (anorm > detail::ssfmax<T>()) {
-                            auto alpha = anorm / detail::ssfmax<T>();
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = anorm / detail::ssfmin<T>();
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        }
-
+                        });
                         if (deflatable) break;
                     }
                 }
@@ -217,21 +158,16 @@ Event steqr_wg_impl(Queue& ctx,
                     auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
                     const int ncols = static_cast<int>(Q_.cols());
                     bool forward = order_view[gid] == ApplyOrder::Forward;
-                    auto col_index = [&](int v) -> int {
-                        return forward ? v : (ncols - 1 - v);
-                    };
+                    // Row k of Q, in the sweep's virtual column order.
+                    const auto q_row = [&](int v) -> T& { return Q_(k, forward ? v : (ncols - 1 - v)); };
 
+                    // dlasr (SIDE = R): Q := Q G(sweep, 0) ... G(sweep, ncols-2), sweep by sweep.
                     for (int i = 0; i < rotations_view.cols(); ++i) {
-                        for (int j = 0; j < ncols - 1; ++j) {
-                            auto [c, s] = rotations_view(j, i, gid);
-                            int ix1 = col_index(j);
-                            int ix2 = col_index(j + 1);
-
-                            const T x = Q_(k, ix1);
-                            const T y = Q_(k, ix2);
-                            Q_(k, ix1) = c * x - s * y;
-                            Q_(k, ix2) = s * x + c * y;
-                        }
+                        const auto rots = [&](int j) {
+                            const auto& r = rotations_view(j, i, gid);
+                            return v2::Givens<T>{r[0], r[1]};
+                        };
+                        v2::lasr<v2::rot_conv::Transposed>(v2::Thread{}, ncols, rots, q_row);
                     }
                 }
             });

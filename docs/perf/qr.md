@@ -151,7 +151,7 @@ geqrf and orgqr lose at every percent (the parts under-fill the trailing gemms).
 2. **The CTA/blocked crossover is a single occupancy target, not a per-type area**: it lands 4-28% below the measured crossover; worst cell cfloat \f$128 \times 48\f$, where CTA is 1.925x faster but the fit sends it to `blocked` ([what the clamp costs](#settling-the-target-on-the-tall-panels)). Fix: a retune timing `cta` against `blocked` on the tall grid.
 3. **cfloat 97..110 is extrapolated; cdouble has no measured cell above \f$n = 64\f$.** The capacity (cfloat 76, cdouble 54) sends both bands to `blocked`.
 4. **`geqrf_panel_wg(n, max_wg)` never looks at `m`**: at double \f$n = 64\f$ at least 193 of 256 work-items idle through a 256-wide reduction; that kernel is 100% of GPU time in the worst `geqrf` loss (0.53x).
-5. **`larft_forward_columnwise_wg_legacy`** is 15-20% of GPU time (float \f$n = 1024\f$, cdouble \f$n = 256\f$) for about \f$1/60\f$ of the GEMM's arithmetic (serial T-update on `lid == 0`); `larft` plus `pack_v` is about 20-22%.
+5. **`larft_forward_columnwise_wg_legacy`** (the former serial body, since replaced by the v2 `larft`) was 15-20% of GPU time (float \f$n = 1024\f$, cdouble \f$n = 256\f$) for about \f$1/60\f$ of the GEMM's arithmetic (serial T-update on `lid == 0`); `larft` plus `pack_v` is about 20-22%.
 6. **`ormqr`'s width ladder is float-only and keyed on `A.rows()`** (`block_size()` in `ormqr.cc`, `tuning_params.hh`), costing 1.11-1.55x for the other types ([block-width evidence](#block-width-evidence)); a derived leg, so no table retune fixes it.
 7. **The `!dev_is_zero(r)` half of the reciprocal guard is untested** (needs `alpha - beta` to overflow, input about \f$10^{308}\f$).
 8. **`geqrf_buffer_size_bound`** reserves the blocked layout even where `cta` runs (168 MB float, 671 MB cdouble at \f$n = 64\f$ batch 8192); sizing W1/W2 on `n - nb` took about 28% off. Per-call host overhead of the eigen drivers' ~500 `geqrf` calls per \f$n = 1024\f$ solve is unmeasured.
@@ -351,15 +351,11 @@ Vendor-free and under a `native` pin, the rows rank `tiny` second after `vendor`
 
 ## QR: the shared WY machinery in larft_wy.hh
 
-`src/kernels/common/larft_wy.hh` holds `larft` (the \f$i_b \times i_b\f$ T factor, Forward/Columnwise) and `pack_v` (the unit-lower V panel), shared by `ormqr_blocked.cc`, `geqrf` and `sytrd_sy2sb.cc`.
+`src/kernels/common/larft_wy.hh` holds `larft` (the \f$i_b \times i_b\f$ T factor, Forward/Columnwise) and `pack_v` (the unit-lower V panel), shared by `ormqr_blocked.cc`, `geqrf_blocked.cc`, `ormbr.cc` and `sytrd_sy2sb.cc`.
 
 ### larft_wy.hh: why the WY helpers are shared
 
-One copy serves every caller. The legacy manual-reduction `larft` is the default; the device-BLAS one is reached only through `ormqr`'s `BATCHLAS_ORMQR_IMPL`.
-
-### larft_wy.hh: UseDevice is a template parameter
-
-A runtime `bool` instantiated both implementations per `(Tag, T, WG)` (32 dead entry functions, 9 s of device link). Callers passing a literal use the `_t` form.
+One copy serves every caller; `larft` is the device LA `device::larft` (`include/batchlas/device/lapack/larft.hh`). It needs 32-wide sub-groups; elsewhere `larft_forward_columnwise_batched` throws `batchlas::unsupported`.
 
 ### larft_wy.hh: pack_v indexes the row fastest
 

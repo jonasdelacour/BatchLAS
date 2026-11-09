@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gebrd.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -10,7 +12,6 @@
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 
-#include <array>
 #include <numeric>
 #include <stdexcept>
 
@@ -19,66 +20,19 @@ namespace batchlas {
 
 namespace {
 
-template <typename T, typename Group>
-inline T group_reduce_sum_select_from_group(const Group& g, T v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    (void)lanes;
-
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
-        Real re = v.real();
-        Real im = v.imag();
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            re += permute_group_by_xor(g, re, offset);
-            im += permute_group_by_xor(g, im, offset);
-        }
-        return T(re, im);
-    } else {
-        for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
-    }
-}
-
-template <typename T, typename Partition>
-inline T larfg_small(const Partition& part,
-                     int32_t len,
-                     int32_t lane,
-                     int32_t alpha_lane,
-                     T& alpha,
-                     T& x,
-                     bool x_active) {
-    using Real = typename base_type<T>::type;
-
-    const Real xsq = x_active ? (x * x) : Real(0);
-    const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
-    const Real xnorm = invoke_one_broadcast(part, [&]() {
-        return sycl::sqrt(sumsq);
-    });
-
-    const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
-
-    const auto [beta_b, tau_b, scale_b] = invoke_one_broadcast(part, [&]() {
-        if (len <= 1) {
-            return std::array<T, 3>{alpha_leader, T(0), T(0)};
-        }
-
-        const auto scalars = detail::larfg(alpha_leader, xnorm, len);
-        return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
-    });
-
-    if (lane == alpha_lane) {
-        alpha = beta_b;
-    } else if (x_active && tau_b != T(0)) {
-        x *= scale_b;
-    }
-
-    return tau_b;
-}
+namespace v2 = batchlas::device;
 
 template <typename T, size_t P>
 class GebrdCTAKernel;
+
+// The hand kernel's operand (A_view.batch_item(b), addressed by its own operator()) with the host
+// n as its order: v2::item would re-form the batch term per element (+2% SASS here).
+template <typename T> struct ItemOfOrder {
+    KernelMatrixView<T, MatrixFormat::Dense> v;
+    int32_t n;
+    T& operator()(int i, int j) const { return v(i, j); }
+    int rows() const { return n; }
+};
 
 template <typename T, size_t P>
 inline void gebrd_cta_impl(Queue& ctx,
@@ -90,8 +44,6 @@ inline void gebrd_cta_impl(Queue& ctx,
                            int32_t n,
                            size_t cta_wg_size_multiplier,
                            const std::uint8_t* mask) {
-    using Real = typename base_type<T>::type;
-
     const auto batch_size = a.batch_size();
     if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
         throw batchlas::invalid_argument("gebrd_cta_impl: invalid n or matrix sizes for CTA partition");
@@ -137,131 +89,44 @@ inline void gebrd_cta_impl(Queue& ctx,
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
+        using Tier = v2::tier::Cta<static_cast<int>(P)>;
+        // One matrix's local slice (P x P of T); the accessor holds probs_per_wg of them.
+        constexpr int32_t kSlice = static_cast<int32_t>(v2::gebrd_buffer_size<Tier, T>(static_cast<int>(P)).local_bytes);
+        static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(T)), "gebrd_cta: the tile slice is P x P of T");
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
+        // A thin launcher over device::gebrd<tier::Cta<P>> (lapack/gebrd.hh).
         impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
-                const auto part = make_partition<P>(sg);
+                const v2::SgpPartition<static_cast<int>(P)> ex{sg};
 
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
-                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
-                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+                const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
+                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // NO EARLY RETURN (I2): every it.barrier below is work-group wide, so a dead
+                // NO EARLY RETURN (I2): every barrier in gebd2_tile is work-group wide, so a dead
                 // partition (batch % probs_per_wg != 0, or an inactive item) runs a zero tile
                 // (tau = 0 throughout) and stores nothing.
                 const bool live = prob_id < static_cast<int32_t>(batch_size) &&
                                   (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(pid);
-                auto D_prob = D_view.batch_item(pid);
-                auto E_prob = E_view.batch_item(pid);
-                auto TAUQ_prob = TAUQ_view.batch_item(pid);
-                auto TAUP_prob = TAUP_view.batch_item(pid);
-
-                const int32_t base_a = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
-                for (int32_t c = 0; c < n; ++c) {
-                    if (lane < n) {
-                        A_local[base_a + lane + c * static_cast<int32_t>(P)] = live ? A_prob(lane, c) : T(0);
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                for (int32_t i = 0; i < n; ++i) {
-                    T alpha_l = T(0);
-                    if (lane == i) {
-                        alpha_l = A_local[base_a + i + i * static_cast<int32_t>(P)];
-                    }
-                    T x_l = T(0);
-                    const bool x_l_active = (lane > i && lane < n);
-                    if (x_l_active) {
-                        x_l = A_local[base_a + lane + i * static_cast<int32_t>(P)];
-                    }
-
-                    const T tau_l = larfg_small(part, n - i, lane, i, alpha_l, x_l, x_l_active);
-                    if (lane == i) {
-                        A_local[base_a + i + i * static_cast<int32_t>(P)] = alpha_l;
-                        if (live) {
-                            D_prob(i) = static_cast<Real>(alpha_l);
-                            TAUQ_prob(i) = tau_l;
-                        }
-                    } else if (x_l_active) {
-                        A_local[base_a + lane + i * static_cast<int32_t>(P)] = x_l;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i < n - 1 && tau_l != T(0) && lane > i && lane < n) {
-                        const int32_t j = lane;
-                        T dot = A_local[base_a + i + j * static_cast<int32_t>(P)];
-                        for (int32_t r = i + 1; r < n; ++r) {
-                            dot += A_local[base_a + r + i * static_cast<int32_t>(P)] *
-                                   A_local[base_a + r + j * static_cast<int32_t>(P)];
-                        }
-                        const T gamma = tau_l * dot;
-                        A_local[base_a + i + j * static_cast<int32_t>(P)] -= gamma;
-                        for (int32_t r = i + 1; r < n; ++r) {
-                            A_local[base_a + r + j * static_cast<int32_t>(P)] -=
-                                A_local[base_a + r + i * static_cast<int32_t>(P)] * gamma;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i >= n - 1) continue;
-
-                    T alpha_r = T(0);
-                    if (lane == i + 1) {
-                        alpha_r = A_local[base_a + i + (i + 1) * static_cast<int32_t>(P)];
-                    }
-                    T x_r = T(0);
-                    const bool x_r_active = (lane > i + 1 && lane < n);
-                    if (x_r_active) {
-                        x_r = A_local[base_a + i + lane * static_cast<int32_t>(P)];
-                    }
-
-                    const T tau_r = larfg_small(part, n - (i + 1), lane, i + 1, alpha_r, x_r, x_r_active);
-                    if (lane == i + 1) {
-                        A_local[base_a + i + (i + 1) * static_cast<int32_t>(P)] = alpha_r;
-                        if (live) {
-                            E_prob(i) = static_cast<Real>(alpha_r);
-                            TAUP_prob(i) = tau_r;
-                        }
-                    } else if (x_r_active) {
-                        A_local[base_a + i + lane * static_cast<int32_t>(P)] = x_r;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (tau_r != T(0) && lane > i && lane < n) {
-                        const int32_t r = lane;
-                        T dot = A_local[base_a + r + (i + 1) * static_cast<int32_t>(P)];
-                        for (int32_t c = i + 2; c < n; ++c) {
-                            dot += A_local[base_a + r + c * static_cast<int32_t>(P)] *
-                                   A_local[base_a + i + c * static_cast<int32_t>(P)];
-                        }
-                        const T gamma = tau_r * dot;
-                        A_local[base_a + r + (i + 1) * static_cast<int32_t>(P)] -= gamma;
-                        for (int32_t c = i + 2; c < n; ++c) {
-                            A_local[base_a + r + c * static_cast<int32_t>(P)] -=
-                                gamma * A_local[base_a + i + c * static_cast<int32_t>(P)];
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-
-                if (live && lane == n - 1) {
-                    TAUP_prob(n - 1) = T(0);
-                }
-
-                for (int32_t c = 0; c < n; ++c) {
-                    if (live && lane < n) {
-                        A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
-                    }
-                }
+                // The operands of the hand kernel this replaced (batch_item views, the host n), in
+                // its capture order (A_view .. TAUP_view, A_local, n): the kernel parameters match.
+                const auto A_prob = A_view.batch_item(pid);
+                const auto D_prob = D_view.batch_item(pid);
+                const auto E_prob = E_view.batch_item(pid);
+                const auto TAUQ_prob = TAUQ_view.batch_item(pid);
+                const auto TAUP_prob = TAUP_view.batch_item(pid);
+                // The work-group's accessor; gebrd indexes this partition's slice by part_id.
+                const v2::Workspace ws{v2::local_mptr<std::byte>(reinterpret_cast<v2::local_mptr<std::byte>::pointer>(
+                                           A_local.template get_multi_ptr<sycl::access::decorated::yes>().get_decorated())),
+                                       nullptr};
+                v2::gebrd<Tier>(ex, it, ItemOfOrder<T>{A_prob, n}, D_prob, E_prob, TAUQ_prob, TAUP_prob, ws, live);
             });
     });
 }

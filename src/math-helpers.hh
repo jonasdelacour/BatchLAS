@@ -5,13 +5,13 @@
 #include <batchlas/util/group-collectives.hh>
 
 #include <batchlas/blas/enums.hh>
-#include <batchlas/blas/device.hh>
 #include <batchlas/util/group-invoke.hh>
+#include <batchlas/device/scalar.hh>
 
 #include <complex>
 
 #include <src/queue.hh>
-#include <src/sycl/sscp_target.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 
 namespace batchlas {
@@ -35,11 +35,6 @@ namespace batchlas {
             } else {
                 return sycl::fabs(value);
             }
-        }
-
-        template <typename T>
-        inline constexpr bool is_numerically_zero(const T& value) {
-            return abs(value) < std::numeric_limits<base_float_t<T>>::epsilon();
         }
 
         template <typename T>
@@ -110,134 +105,12 @@ namespace batchlas {
         }
 
 
-        template <typename T>
-        inline constexpr auto nrm2(const sycl::group<1>& cta, const VectorView<T>& v)
-        {
-            using R = base_float_t<T>;
-
-            const auto tid  = cta.get_local_linear_id();
-            const auto bdim = cta.get_local_range()[0];
-            const auto bid  = cta.get_group_linear_id();
-            const int  N    = static_cast<int>(v.size());
-
-            // ---- Blue's scaling constants (match dnrm2.f90 formulas) ----
-            const int radix = std::numeric_limits<R>::radix;      // typically 2
-            const int p     = std::numeric_limits<R>::digits;     // mantissa bits (e.g. 53)
-            const int emin  = std::numeric_limits<R>::min_exponent; // min exponent for normalized
-            const int emax  = std::numeric_limits<R>::max_exponent; // max exponent
-
-            auto floor_div = [](int a, int b) {
-                int q = a / b;
-                // ensure mathematical floor for negatives
-                if (((a ^ b) < 0) && (a % b)) --q;
-                return q;
-            };
-            auto ceil_div = [](int a, int b) {
-                int q = a / b;
-                // ensure mathematical ceil
-                if (((a ^ b) >= 0) && (a % b)) ++q;
-                return q;
-            };
-
-            const int e_tsml = ceil_div(emin - 1, 2);
-            const int e_tbig = floor_div(emax - p + 1, 2);
-            const int e_ssml = -floor_div(emin - p, 2);
-            const int e_sbig = -ceil_div(emax + p - 1, 2);
-
-            const R tsml = sycl::pown(static_cast<R>(radix), e_tsml);
-            const R tbig = sycl::pown(static_cast<R>(radix), e_tbig);
-            const R ssml = sycl::pown(static_cast<R>(radix), e_ssml);
-            const R sbig = sycl::pown(static_cast<R>(radix), e_sbig);
-
-            // ---- Three accumulators per work-item ----
-            struct Three { R abig; R amed; R asml; };
-            sycl::vec<R, 3> part{R(0), R(0), R(0)};
-
-            for (int i = tid; i < N; i += bdim) {
-                const T xi = v(i, bid);
-                const R ax = sycl::fabs(static_cast<R>(detail::abs(xi)));
-                if (ax > tbig) {
-                    const R t = ax * sbig;
-                    part[0] += t * t;
-                } else if (ax < tsml) {
-                    const R t = ax * ssml;
-                    part[2] += t * t;
-                } else {
-                    part[1] += ax * ax;
-                }
-            }
-
-            sycl::vec<R, 3> total = batchlas::portable::reduce_over_group(cta, part, sycl::plus<sycl::vec<R, 3>>());
-
-            // ---- Final combination (verbatim logic from dnrm2) ----
-            const R zero = R(0);
-            const R one  = R(1);
-            const R maxN = std::numeric_limits<R>::max();
-
-            R scl = one;
-            R sumsq = zero;
-
-            if (total[0] > zero) {
-                // combine abig and amed
-                if ((total[1] > zero) || (total[1] > maxN) || (total[1] != total[1])) {
-                    const R tmp = (total[1] * sbig) * sbig;
-                    total[0] += tmp;
-                }
-                scl = one / sbig;
-                sumsq = total[0];
-            } else if (total[2] > zero) {
-                // combine amed and asml
-                if ((total[1] > zero) || (total[1] > maxN) || (total[1] != total[1])) {
-                    const R am = sycl::sqrt(total[1]);
-                    const R as = sycl::sqrt(total[2]) / ssml;
-                    const R ymin = sycl::fmin(am, as);
-                    const R ymax = sycl::fmax(am, as);
-                    scl   = one;
-                    sumsq = ymax * ymax * (one + (ymin / ymax) * (ymin / ymax));
-                } else {
-                    scl   = one / ssml;
-                    sumsq = total[2];
-                }
-            } else {
-                // all mids
-                scl   = one;
-                sumsq = total[1];
-            }
-
-            return scl * sycl::sqrt(sumsq);
-        }
-
-        template <typename T>
-        inline constexpr T ipow(T base, int e) {
-            T result = T(1);
-            if (e < 0) {
-                base = T(1) / base;
-                e = -e;
-            }
-            while (e > 0) {
-                if (e & 1) result *= base;
-                base *= base;
-                e >>= 1;
-            }
-            return result;
-        }
-
-        template <RealScalar T>
-        inline constexpr T safmin(){
-            constexpr auto eps = std::numeric_limits<T>::epsilon();
-            constexpr auto s1 = std::numeric_limits<T>::min();
-            constexpr auto s2 = T(1) / std::numeric_limits<T>::max();
-            return s2 > s1 ? s2 * (T(1) + eps) : s1;
-        }
-
-        template <RealScalar T>
-        inline constexpr T safmax(){
-            return T(1) / safmin<T>();
-        }
+        using ::batchlas::device::safmin;
+        using ::batchlas::device::safmax;
 
         template <RealScalar T>
         inline constexpr T ssfmin(){
-            return std::sqrt(safmin<T>()) / (std::numeric_limits<T>::epsilon() * std::numeric_limits<T>::epsilon());
+            return std::sqrt(safmin<T>()) / (::batchlas::device::lamch<'P', T>() * ::batchlas::device::lamch<'P', T>());
         }
 
         template <RealScalar T>
@@ -245,282 +118,28 @@ namespace batchlas {
             return std::sqrt(safmax<T>()) / T(3.0);
         }
 
-        //Matches LAPACK's DLAMCH/SLAMCH 'E' option
-        template <RealScalar T>
-        inline constexpr T rounding_eps(){
-            return std::numeric_limits<T>::epsilon() / T(2);
-        }
-
-        //Matches LAPACK's "eps2" used in DLAED2/DSTEQR
+        //Matches LAPACK's "eps2" used in DLAED2/DSTEQR: dlamch('E') squared
         template <RealScalar T>
         inline constexpr T eps2(){
-            return rounding_eps<T>() * rounding_eps<T>();
+            return ::batchlas::device::lamch<'E', T>() * ::batchlas::device::lamch<'E', T>();
         }
 
+        // Device LA v2 scalar lartg; complex<float> works in double except on Metal (no fp64,
+        // chosen at JIT time) to cut rounding noise in the downstream bulge chase.
         template <typename T>
-        inline constexpr T sbig() {
-            constexpr T e = std::ceil( (std::numeric_limits<T>::max_exponent + std::numeric_limits<T>::digits - 1) * T(0.5) );
-            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e));
-        }
-
-        template <typename T>
-        inline constexpr T smlnum() {
-            return safmin<T>() / std::numeric_limits<T>::epsilon();
-        }
-
-        template <typename T>
-        inline constexpr T ssml(){
-            constexpr T e = std::floor( (std::numeric_limits<T>::min_exponent - std::numeric_limits<T>::digits) * T(0.5) );
-            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e));
-        }
-
-        template <typename T>
-        inline constexpr T tbig() {
-            constexpr T e = std::floor( (std::numeric_limits<T>::max_exponent - std::numeric_limits<T>::digits + 1) * T(0.5) );
-            return ipow(std::numeric_limits<T>::radix, static_cast<int>(e));
-        }
-
-        template <typename T>
-        struct lartg_result {
-            base_float_t<T> c;
-            T s;
-            T r;
-        };
-
-        template <typename T>
-        struct larfg_result {
-            T tau;
-            T beta;
-            T scale;
-        };
-
-        template <typename T>
-        inline constexpr base_float_t<T> dotc_norm_sq_real(const T& value) {
-            if constexpr (is_complex<T>::value) {
-                return value.real();
-            } else {
-                return value;
-            }
-        }
-
-        // CLARTG/ZLARTG-style with f, g != 0: incorporate scaling to avoid overflow/underflow,
-        // with the scalar math in W.
-        template <typename W, typename T>
-        __attribute__((always_inline)) inline lartg_result<T> lartg_complex_scaled(const T& f, const T& g)
+        __attribute__((always_inline)) inline ::batchlas::device::LartgResult<T> lartg(const T& f, const T& g)
         {
-            using R = base_float_t<T>;
-            const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
-            const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
-
-            const W u = sycl::fmin(safmax<W>(), sycl::fmax(safmin<W>(), sycl::fmax(f_abs_w, g_abs_w)));
-            const W fs = f_abs_w / u;
-            const W gs = g_abs_w / u;
-            const W norm = u * sycl::sqrt(fs * fs + gs * gs);
-
-            const std::complex<W> f_w{static_cast<W>(f.real()), static_cast<W>(f.imag())};
-            const std::complex<W> g_w{static_cast<W>(g.real()), static_cast<W>(g.imag())};
-            const std::complex<W> alpha = f_w / f_abs_w; // sgn(F)
-            const W c_w = f_abs_w / norm;
-            const std::complex<W> conjg_w{g_w.real(), -g_w.imag()};
-            const std::complex<W> s_w = alpha * conjg_w / norm;
-            const std::complex<W> r_w = alpha * norm;
-
-            const T s{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())};
-            const T r{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())};
-            return {static_cast<R>(c_w), s, r};
-        }
-
-        template <typename T>
-        inline constexpr lartg_result<T> lartg(const T& f, const T& g)
-        {
-            using R = base_float_t<T>;
-
-            const R f_abs = detail::abs(f);
-            const R g_abs = detail::abs(g);
-
-            // G=0 => C=1, S=0, R=F.
-            if (g_abs == R(0)) {
-                return {R(1), T(0), f};
-            }
-
-            // F=0 => C=0. Choose S so that R is real for complex case.
-            if (f_abs == R(0)) {
-                if constexpr (is_complex<T>::value) {
-                    const T conjg = T(g.real(), -g.imag());
-                    const T s = conjg / T(g_abs);
-                    const T r = T(g_abs, R(0));
-                    return {R(0), s, r};
-                } else {
-                    const R s = sycl::copysign(R(1), static_cast<R>(g));
-                    const R r = g_abs;
-                    return {R(0), T(s), T(r)};
-                }
-            }
-
-            if constexpr (is_complex<T>::value) {
-                // For complex<float>, do the scalar math in double to reduce accumulated
-                // rounding noise in downstream bulge-chasing. Metal has no double: chosen at JIT
-                // time, so only the Metal device path rounds in float.
-                if constexpr (std::is_same_v<R, float>) {
-                    if (sycl_impl::on_metal()) return lartg_complex_scaled<float>(f, g);
-                    return lartg_complex_scaled<double>(f, g);
-                } else {
-                    return lartg_complex_scaled<R>(f, g);
-                }
+            if constexpr (is_complex<T>::value && std::is_same_v<base_float_t<T>, float>) {
+                if (sycl_impl::on_metal()) return ::batchlas::device::lartg<float>(f, g);
+                return ::batchlas::device::lartg<double>(f, g);
             } else {
-                // SLARTG/DLARTG-style fast path improves accuracy for floats by avoiding
-                // extra scaling ops when values are safely in range.
-                const R rtmin = sycl::sqrt(safmin<R>());
-                const R rtmax = sycl::sqrt(safmax<R>() / R(2));
-
-                const R f_r = static_cast<R>(f);
-                const R g_r = static_cast<R>(g);
-
-                if (f_abs > rtmin && f_abs < rtmax && g_abs > rtmin && g_abs < rtmax) {
-                    const R d = sycl::sqrt(f_r * f_r + g_r * g_r);
-                    const R c = f_abs / d;
-                    const R r = sycl::copysign(d, f_r);
-                    const R s = g_r / r;
-                    return {c, T(s), T(r)};
-                }
-
-                // General case with scaling.
-                const R u = sycl::fmin(safmax<R>(), sycl::fmax(safmin<R>(), sycl::fmax(f_abs, g_abs)));
-                const R fs = f_r / u;
-                const R gs = g_r / u;
-                const R d = sycl::sqrt(fs * fs + gs * gs);
-                const R c = detail::abs(fs) / d;
-                const R r_unscaled = sycl::copysign(d, f_r);
-                const R s = gs / r_unscaled;
-                const R r = r_unscaled * u;
-                return {c, T(s), T(r)};
+                return ::batchlas::device::lartg(f, g);
             }
         }
 
         template <typename T>
-        inline constexpr larfg_result<T> larfg(const T& alpha, base_float_t<T> xnorm, int len)
-        {
-            using R = base_float_t<T>;
-
-            larfg_result<T> result{T(0), alpha, T(0)};
-
-            // LAPACK semantics: for N <= 1, tau = 0 and alpha is unchanged (beta = alpha).
-            if (len <= 1) {
-                return result;
-            }
-
-            if constexpr (is_complex<T>::value) {
-                if (xnorm == R(0) && alpha.imag() == R(0)) {
-                    return result;
-                }
-
-                const R alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                const R beta_abs = sycl::hypot(alpha_abs, xnorm);
-                const T alpha_sign = (alpha_abs == R(0)) ? T(1) : (alpha / alpha_abs);
-                result.beta = -alpha_sign * T(beta_abs);
-                result.tau = (result.beta - alpha) / result.beta;
-                result.scale = T(1) / (alpha - result.beta);
-                return result;
-            } else {
-                if (xnorm == R(0)) {
-                    return result;
-                }
-
-                const R alpha_r = static_cast<R>(alpha);
-                const R sign = sycl::signbit(alpha_r) ? R(-1) : R(1);
-                const R beta = -sign * sycl::hypot(alpha_r, xnorm);
-                result.beta = T(beta);
-                result.tau = (result.beta - alpha) / result.beta;
-                result.scale = T(1) / (alpha - result.beta);
-                return result;
-            }
-        }
-
-        template <typename Exec, typename T>
-        inline T larfg(const Exec& exec, T& alpha, const VectorView<T>& x)
-        {
-            using R = base_float_t<T>;
-
-            const int len = static_cast<int>(x.size()) + 1;
-            if (len <= 1) {
-                return T(0);
-            }
-
-            const auto& group = [&]() -> const auto& {
-                if constexpr (requires { exec.get_group(); }) {
-                    return exec.get_group();
-                } else {
-                    return exec;
-                }
-            }();
-
-            const R xnorm = (x.size() > 0)
-                ? sycl::sqrt(dotc_norm_sq_real(batchlas::device::dotc(group, x, x)))
-                : R(0);
-
-            const auto scalars = [&]() {
-                if constexpr (requires { exec.get_group(); }) {
-                    return invoke_one_broadcast(exec.get_group(), [&]() {
-                        return larfg(alpha, xnorm, len);
-                    });
-                } else {
-                    return invoke_one_broadcast(exec, [&]() {
-                        return larfg(alpha, xnorm, len);
-                    });
-                }
-            }();
-            alpha = scalars.beta;
-
-            if (scalars.tau != T(0) && x.size() > 0) {
-                batchlas::device::scal(group, x, scalars.scale);
-            }
-
-            return scalars.tau;
-        }
-
-        template <typename T>
-        inline constexpr auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
-            // LAPACK SLAE2/DLAE2-style stable computation of eigenvalues of a 2x2
-            // symmetric matrix [[A, B], [B, C]]. If (b != c), we symmetrize.
-            const auto one  = T(1);
-            const auto two  = T(2);
-            const auto zero = T(0);
-            const auto half = T(0.5);
-
-            const auto sm  = a + c;          // sum (trace)
-            const auto df  = a - c;          // difference
-            const auto adf = std::abs(df);
-            const auto tb  = b + b;          // 2*B
-            const auto ab  = std::abs(tb);
-
-            // Select larger/smaller of A and C by magnitude as in LAPACK
-            const auto acmx = (std::abs(a) > std::abs(c)) ? a : c;
-            const auto acmn = (std::abs(a) > std::abs(c)) ? c : a;
-
-            T rt; // sqrt(adf^2 + (2B)^2) without overflow/underflow
-            if (adf > ab) {
-                rt = adf * std::sqrt(one + (ab / adf) * (ab / adf));
-            } else if (adf < ab) {
-                rt = ab * std::sqrt(one + (adf / ab) * (adf / ab));
-            } else { // includes case ab = adf = 0
-                rt = ab * std::sqrt(two);
-            }
-
-            T rt1, rt2;
-            if (sm < zero) {
-                rt1 = half * (sm - rt);
-                // Order of operations important for an accurate smaller eigenvalue
-                rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-            } else if (sm > zero) {
-                rt1 = half * (sm + rt);
-                rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-            } else {
-                // includes case rt1 = rt2 = 0
-                rt1 = half * rt;
-                rt2 = -half * rt;
-            }
-
-            return std::array{rt1, rt2};
+        __attribute__((always_inline)) inline auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
+            return ::batchlas::device::lae2(a, b, c);
         }
 
         // The eigenvalue of [[a, b], [b, c]] closest to c.
@@ -530,125 +149,11 @@ namespace batchlas {
             return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
         }
 
-        // LAPACK ?LAS2: {ssmin, ssmax}, the singular values of the upper triangular [[f, g], [0, h]],
-        // without squaring any entry.
+        // Binds core laev2's operands by reference: a using-declaration (by value) costs the steqr
+        // legacy / wg Francis kernels 3 LDG and 4 REG on sm_89. Goes when core laev2 takes const R&.
         template <typename T>
-        inline constexpr std::array<T, 2> las2(const T& f, const T& g, const T& h) {
-            const T one = T(1), two = T(2), zero = T(0);
-            const T fa = std::abs(f), ga = std::abs(g), ha = std::abs(h);
-            const T fhmn = fa < ha ? fa : ha;
-            const T fhmx = fa < ha ? ha : fa;
-            if (fhmn == zero) {
-                if (fhmx == zero) return {zero, ga};
-                const T mx = fhmx > ga ? fhmx : ga, mn = fhmx > ga ? ga : fhmx;
-                return {zero, mx * std::sqrt(one + (mn / mx) * (mn / mx))};
-            }
-            if (ga < fhmx) {
-                const T as = one + fhmn / fhmx, at = (fhmx - fhmn) / fhmx, au = (ga / fhmx) * (ga / fhmx);
-                const T c = two / (std::sqrt(as * as + au) + std::sqrt(at * at + au));
-                return {fhmn * c, fhmx / c};
-            }
-            const T au = fhmx / ga;
-            if (au == zero) return {(fhmn * fhmx) / ga, ga};
-            const T as = one + fhmn / fhmx, at = (fhmx - fhmn) / fhmx;
-            const T c = one / (std::sqrt(one + (as * au) * (as * au)) + std::sqrt(one + (at * au) * (at * au)));
-            return {two * ((fhmn * c) * au), ga / (c + c)};
-        }
-
-        template <typename T>
-        inline constexpr auto laev2(const T& a, const T& b, const T& c) {
-            // LAPACK SLAEV2-style stable computation of eigenvalues and eigenvector
-            // of a 2x2 symmetric matrix [[A, B], [B, C]]. Returns {rt1, rt2, cs1, sn1},
-            // where rt1 >= rt2 are the eigenvalues and [cs1, sn1]^T is the normalized
-            // eigenvector corresponding to rt1.
-
-            const T one  = T(1);
-            const T two  = T(2);
-            const T zero = T(0);
-            const T half = T(0.5);
-
-            // Local scalars
-            int sgn1 = 0;
-            int sgn2 = 0;
-
-            const T sm  = a + c;
-            const T df  = a - c;
-            const T adf = std::abs(df);
-            const T tb  = b + b;      // 2*B
-            const T ab  = std::abs(tb);
-
-            T acmx, acmn;
-            if (std::abs(a) > std::abs(c)) {
-                acmx = a;
-                acmn = c;
-            } else {
-                acmx = c;
-                acmn = a;
-            }
-
-            T rt;
-            if (adf > ab) {
-                rt = adf * std::sqrt(one + (ab / adf) * (ab / adf));
-            } else if (adf < ab) {
-                rt = ab * std::sqrt(one + (adf / ab) * (adf / ab));
-            } else {
-                // Includes case ab = adf = 0
-                rt = ab * std::sqrt(two);
-            }
-
-            T rt1, rt2;
-            if (sm < zero) {
-                rt1 = half * (sm - rt);
-                sgn1 = -1;
-                // Order of operations important for the smaller eigenvalue
-                rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-            } else if (sm > zero) {
-                rt1 = half * (sm + rt);
-                sgn1 = 1;
-                // Order of operations important for the smaller eigenvalue
-                rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-            } else {
-                // Includes case rt1 = rt2 = 0
-                rt1 = half * rt;
-                rt2 = -half * rt;
-                sgn1 = 1;
-            }
-
-            // Compute the eigenvector corresponding to rt1
-            T cs;
-            if (df >= zero) {
-                cs   = df + rt;
-                sgn2 = 1;
-            } else {
-                cs   = df - rt;
-                sgn2 = -1;
-            }
-
-            const T acs = std::abs(cs);
-            T cs1, sn1;
-
-            if (acs > ab) {
-                const T ct = -tb / cs;
-                sn1        = one / std::sqrt(one + ct * ct);
-                cs1        = ct * sn1;
-            } else {
-                if (ab == zero) {
-                    cs1 = one;
-                    sn1 = zero;
-                } else {
-                    const T tn = -cs / tb;
-                    cs1        = one / std::sqrt(one + tn * tn);
-                    sn1        = tn * cs1;
-                }
-            }
-
-            if (sgn1 == sgn2) {
-                const T tn = cs1;
-                cs1        = -sn1;
-                sn1        = tn;
-            }
-
-            return std::array{rt1, rt2, cs1, sn1};
+        __attribute__((always_inline)) inline auto laev2(const T& a, const T& b, const T& c) {
+            return ::batchlas::device::laev2(a, b, c);
         }
 
     }

@@ -6,18 +6,20 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <src/ops/syev/sytrd/sytrd_cta_device.hh>
-#include <src/ops/syev/steqr/steqr_cta_device.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/lapack/syev.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device.hh>
+#include <src/ops/syev/kernels/syev_drivers_v2.hh>
 
 #include <complex>
 #include <cstdint>
@@ -28,6 +30,9 @@
 
 
 namespace batchlas {
+
+namespace v2 = device;
+namespace sv = syev_v2;
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.
@@ -46,26 +51,14 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
 // ---------------------------------------------------------------------------
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
 // in one partition from load to store (sytrd -> steqr -> back-transform), so no
-// intermediate touches global memory. The stages are the SAME code as the standalone
-// kernels (sytrd_cta_device.hh / steqr_cta_device.hh): keep it that way, so a
+// intermediate touches global memory. The body is device::syev<J, UL, tier::Cta<P>>'s
+// (device/lapack/syev.hh syev_detail::syev_cta_run), its stages the SAME code as the
+// standalone kernels (lapack/sytrd.hh, lapack/steqr.hh): keep it that way, so a
 // head-to-head benchmark measures fusion and nothing else. Real input seeds the
 // sweeps with an in-place Q_house (DSYEV's route); Hermitian input applies the
 // reflectors afterwards. The reduction always runs Uplo::Upper.
 // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 // ---------------------------------------------------------------------------
-
-namespace {
-
-template <typename U>
-inline typename base_type<U>::type real_part_f(const U& x) {
-    if constexpr (detail::is_complex<U>::value) {
-        return x.real();
-    } else {
-        return x;
-    }
-}
-
-} // namespace
 
 template <typename T, size_t P, bool ComputeVectors>
 inline void syev_cta_fused_impl(Queue& ctx,
@@ -78,7 +71,6 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                 int32_t* info,
                                 const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
-    constexpr bool kComplex = detail::is_complex<T>::value;
 
     const auto batch_size = a.batch_size();
 
@@ -90,16 +82,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // CTA path assumes warp-sized sub-groups on NVIDIA.
         const int32_t sg_size = 32;
 
-        // Real eigenvector path: the reflector tile and the rotation accumulator are the
-        // SAME tile (stage 2a builds Q_house in place), so it carries the accumulator's
-        // P+1 padding: it is read by column on write-out, and LD == 32 would serialize
-        // that 32 ways on bank conflicts. The complex path keeps two tiles (real
-        // accumulator, complex reflectors).
-        // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
-        constexpr bool kFusedOrgql = ComputeVectors && !kComplex;
-        constexpr int32_t LDQ = static_cast<int32_t>(P) + 1;
-        constexpr int32_t LDA = kFusedOrgql ? LDQ : static_cast<int32_t>(P);
-        constexpr bool kSeparateQTile = ComputeVectors && !kFusedOrgql;
+        // The tile layout of the one body (device/lapack/syev.hh cta_layout: real vectors on
+        // ONE P+1-padded tile, Hermitian vectors with a separate real accumulator).
+        using Lay = v2::syev_detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
+        constexpr int32_t LDQ = Lay::ldq;
+        constexpr int32_t LDA = Lay::lda;
+        constexpr bool kSeparateQTile = Lay::separate_q;
         constexpr std::size_t kATileElems = static_cast<std::size_t>(LDA) * P;
         constexpr std::size_t kQTileElems = static_cast<std::size_t>(LDQ) * P;
 
@@ -180,265 +168,17 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                // ---- Stage 0: load and symmetrize into the resident tile. ----
-                // The reduction reads the full matrix, so the requested triangle is
-                // mirrored on the way in.
-                for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                    T v = T(0);
-                    if (live && lane < nn && c < nn) {
-                        if (lane == c) {
-                            // Hermitian diagonals are real: drop the caller's imaginary round-off.
-                            v = T(real_part_f(A_prob(lane, c)));
-                        } else if (is_upper) {
-                            v = (lane < c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        } else {
-                            v = (lane > c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        }
-                    }
-                    A_local[base_a + lane + c * LDA] = v;
-                }
-                group_barrier(part);
-
-                // ---- Stage 1: tridiagonal reduction (SYTD2, upper path). ----
-                const T tau_lane = sytd2_cta_upper_partition<T, LDA>(
-                    part, &A_local[base_a], &V_local[base_v], &W_local[base_w], nn, lane);
-
-                // Read the tridiagonal off the tile; above the superdiagonal is the packed
-                // reflector store that stage 3 consumes.
-                const T d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : T(0);
-                const T e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : T(0);
-
-                Real diag = real_part_f(d_c);
-                Real offdiag = Real(0);
-                T phase = T(1);
-
-                if constexpr (kComplex) {
-                    // Hermitian -> real tridiagonal via T' = S^H T S; every lane replays
-                    // S(0) = 1, S(i+1) = S(i) * conj(e(i)) / |e(i)| itself (no scratch).
-                    offdiag = (lane < (nn - 1)) ? sycl::hypot(e_c.real(), e_c.imag()) : Real(0);
-                    for (int32_t i = 0; i < nn - 1; ++i) {
-                        const T e_i = select_from_group(part, e_c, static_cast<uint32_t>(i));
-                        const Real abs_i = select_from_group(part, offdiag, static_cast<uint32_t>(i));
-                        if (lane > i && abs_i != Real(0)) {
-                            phase = phase * (batchlas::device::detail::conj(e_i) / abs_i);
-                        }
-                    }
-                } else {
-                    offdiag = real_part_f(e_c);
-                }
-
-                // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
-                const auto slot_of = [&](Real wj) {
-                    if (!do_sort) return lane;
-                    int32_t rank = 0;
-                    for (int32_t k = 0; k < nn; ++k) {
-                        const Real wk = select_from_group(part, wj, static_cast<uint32_t>(k));
-                        // Strict total order (NaN last, ties on index): a bijection even for NaN.
-                        const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
-                        const bool before = (nan_j != nan_k) ? nan_j
-                                          : (nan_j || wk == wj) ? (k < lane)
-                                          : (ascending ? wk < wj : wk > wj);
-                        if (before) ++rank;
-                    }
-                    return rank;
-                };
-
-                if constexpr (!ComputeVectors) {
-                    // ---- Stage 2: eigenvalues only, no accumulator. ----
-                    QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    // A STORE, not a raise: exactly one of the three arms below runs per
-                    // problem, so this kernel is the item's single writer and needs no
-                    // separate clear (a second submission, racy out of order).
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                    }
-                } else if constexpr (kFusedOrgql) {
-                    // ---- Stage 2a: form Q_house explicitly, in place. ----
-                    //
-                    // DSYEV's structure: DORGTR builds Q, DSTEQR is seeded with it, and
-                    // the sweeps accumulate straight onto Q (no back-transform pass).
-                    // Q = H(n-2)...H(0); column k is GENERATED at step k and no step
-                    // touches a column above its own index, so reflector k' > k (tile
-                    // column k'+1) is still intact when its turn comes (DORG2L without
-                    // its column shift). Lane c owns column c in registers; every
-                    // subscript into Qc must stay a compile-time constant.
-                    // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
-                    Real Qc[P];
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        Qc[r] = Real(0);
-                    }
-
-                    for (int32_t k = 0; k < nn - 1; ++k) {
-                        const Real tau_k = select_from_group(part, tau_lane, static_cast<uint32_t>(k));
-
-                        // Stage v_k indexed by absolute row, explicitly zeroed
-                        // outside its support.
-                        Real vv = Real(0);
-                        if (lane < k) {
-                            vv = A_local[base_a + lane + (k + 1) * LDA];
-                        } else if (lane == k) {
-                            vv = Real(1);
-                        }
-                        V_local[base_v + lane] = vv;
-                        group_barrier(part);
-
-                        if (lane < k) {
-                            // Existing column: apply H(k).
-                            Real dot = Real(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += V_local[base_v + r] * Qc[r];
-                            }
-                            const Real gamma = tau_k * dot;
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                Qc[r] -= V_local[base_v + r] * gamma;
-                            }
-                        } else if (lane == k) {
-                            // New column: H(k) e_k = e_k - tau_k v_k.
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                Qc[r] = (r < k) ? (-tau_k * V_local[base_v + r])
-                                                : ((r == k) ? (Real(1) - tau_k) : Real(0));
-                            }
-                        }
-
-                        // All lanes must be done reading v before it is rebuilt.
-                        group_barrier(part);
-                    }
-
-                    // Q is the identity outside its leading (n-1)x(n-1) block, and
-                    // the pad columns must hold defined values because the sweeps
-                    // run unguarded on all P lanes.
-                    if (lane >= nn) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            Qc[r] = Real(0);
-                        }
-                    } else if (lane == nn - 1) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            Qc[r] = (r == nn - 1) ? Real(1) : Real(0);
-                        }
-                    }
-
-                    // Hand the tile over: from here it is the accumulator.
-                    group_barrier(part);
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        A_local[base_a + r + lane * LDA] = Qc[r];
-                    }
-                    group_barrier(part);
-
-                    // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
-                    QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    // The sweeps wrote the tile by row (lane == row); the readout
-                    // below reads it by column, i.e. other lanes' writes.
-                    group_barrier(part);
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                        for (int32_t r = 0; r < nn; ++r) {
-                            A_prob(r, dst) = A_local[base_a + r + lane * LDA];
-                        }
-                    }
-                } else {
-                    // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
-                    // reflectors are applied afterwards, in stage 3). ----
-                    QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-
-                    for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                        Q_local[base_q + lane + c * LDQ] = (lane == c && lane < nn) ? Real(1) : Real(0);
-                    }
-                    group_barrier(part);
-
-                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps,
-                                             shift_strategy, update_scheme);
-                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
-
-                    const int32_t dst = slot_of(diag);
-                    if (live && lane < nn) {
-                        W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
-                    }
-
-                    // ---- Stage 3: back-transform, Z := Q_house * Z. ----
-                    // Lane j owns column j of Z in registers (as ormqx_cta LEFT). Indices
-                    // into C_col must stay compile-time constants, or the array spills
-                    // to local memory.
-                    T C_col[P];
-BATCHLAS_UNROLL_FULL
-                    for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                        C_col[r] = T(0);
-                    }
-
-                    // Lift through the phase: Zc(r, :) = S(r) * Z(r, :). Stage S before
-                    // V_local is reused for reflectors.
-                    V_local[base_v + lane] = phase;
-                    group_barrier(part);
-
-                    if (lane < nn) {
-BATCHLAS_UNROLL_FULL
-                        for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            if (r < nn) {
-                                const Real z = Q_local[base_q + r + lane * LDQ];
-                                C_col[r] = V_local[base_v + r] * T(z, Real(0));
-                            }
-                        }
-                    }
-                    group_barrier(part);
-
-                    // Upper-path SYTD2 reflectors form a QL factorization (ormqx_cta QL,
-                    // Left, NoTrans). Reflector ii: rows 0..ii-1 of tile column ii+1,
-                    // implicit 1 at row ii, tau in lane ii.
-                    for (int32_t ii = 0; ii < nn - 1; ++ii) {
-                        const T tau_ii = select_from_group(part, tau_lane, static_cast<uint32_t>(ii));
-
-                        // v zeroed outside its support: the update runs unpredicated over all P rows.
-                        T vv = T(0);
-                        if (lane < ii) {
-                            vv = A_local[base_a + lane + (ii + 1) * LDA];
-                        } else if (lane == ii) {
-                            vv = T(1);
-                        }
-                        V_local[base_v + lane] = vv;
-                        group_barrier(part);
-
-                        if (lane < nn && tau_ii != T(0)) {
-                            T dot = T(0);
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
-                            }
-                            const T gamma = tau_ii * dot;
-BATCHLAS_UNROLL_FULL
-                            for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                C_col[r] -= V_local[base_v + r] * gamma;
-                            }
-                        }
-
-                        // All lanes must be done reading v before it is rebuilt.
-                        group_barrier(part);
-                    }
-
-                    if (live && lane < nn) {
-                        for (int32_t r = 0; r < nn; ++r) {
-                            A_prob(r, dst) = C_col[r];
-                        }
-                    }
-                }
+                const v2::syev_detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
+                // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
+                // back-transform; the stores skip a dead chunk.
+                v2::syev_detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
+                    part, solve_part, A_local, base_a, V_local, base_v, W_local, base_w, Q_local, base_q, A_prob,
+                    v2::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
+                    [&](bool failed) BATCHLAS_DLA_BODY {
+                        // A STORE, not a raise: the kernel is the item's single writer, so it
+                        // needs no separate clear (a second submission, racy out of order).
+                        if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
+                    });
             });
     });
 }

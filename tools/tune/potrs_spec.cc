@@ -93,8 +93,8 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
             // family: fused
             "src/ops/getrs/kernels/getrs_fused.cc",
@@ -109,6 +109,24 @@ public:
         // common "src/ops/potrs/potrs.cc"
         // trsm calls the public trsm: its native kernels count too.
         // family: trsm "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: fused "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: fused "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: fused "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: fused "include/batchlas/device/lapack/getrs.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: fused "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: fused "include/batchlas/device/level3.hh" "include/batchlas/device/operand.hh"
+        // family: fused "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: fused "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: fused "include/batchlas/device/workspace.hh"
+        // family: trsm "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: trsm "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: trsm "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: trsm "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: trsm "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: trsm "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: trsm "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: trsm "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potrs_spec.cc"; }

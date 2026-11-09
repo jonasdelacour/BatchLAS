@@ -10,8 +10,11 @@
 
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/bdsdc.hh>
 
 #include <src/math-helpers.hh>
+#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -24,6 +27,9 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device;
+namespace glue = ::batchlas::device::gesvd_glue;
 
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;
@@ -105,26 +111,11 @@ void bdsdc_build_gk(Queue& ctx,
         const int32_t nn = n;
         const int32_t N = 2 * n;
         h.parallel_for<BdsdcBuildGk<B, T>>(
-            sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            for (int32_t i = 0; i < N; ++i) {
-                GD(i, b) = T(0);
-            }
-            // off-diagonal f[2k] = d_k (couples v_k,u_k), f[2k+1] = e_k (couples u_k,v_{k+1})
-            for (int32_t k = 0; k < nn; ++k) {
-                GE(2 * k, b) = D(k, b);
-                if (k < nn - 1) {
-                    GE(2 * k + 1, b) = E(k, b);
-                }
-            }
-            GS(0, b) = T(1);
-            for (int32_t i = 0; i < N - 1; ++i) {
-                const T fi = GE(i, b);
-                const T sgn = (fi >= T(0)) ? T(1) : T(-1);
-                GS(i + 1, b) = GS(i, b) * sgn;
-                GE(i, b) = sycl::fabs(fi);
-            }
+            v2::bdsdc_detail::build_gk(glue::item_n(D, b, nn), glue::item_n(E, b, nn - 1), glue::item_n(GD, b, N),
+                                       glue::item_n(GE, b, N - 1), glue::item_n(GS, b, N));
         });
     });
 }
@@ -189,46 +180,16 @@ void bdsdc_extract_vectors(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
+            const v2::WorkGroup<kGroup> wg{it};
             const int32_t grp = static_cast<int32_t>(it.get_group(0));
-            const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
             const int32_t b = grp / nn;
             if (mask != nullptr && mask[b] == 0) return;  // I1: one work-group per (item, column)
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
-
-            T p2 = T(0);
-            T q2 = T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                const T pv = Zk(2 * r, src, b);
-                const T qv = Zk(2 * r + 1, src, b);
-                p2 += pv * pv;
-                q2 += qv * qv;
-            }
-            p2 = batchlas::portable::reduce_over_group(it.get_group(), p2, sycl::plus<T>());
-            q2 = batchlas::portable::reduce_over_group(it.get_group(), q2, sycl::plus<T>());
-            const T pn = sycl::sqrt(p2);
-            const T qn = sycl::sqrt(q2);
-
-            if (lid == 0) {
-                sig[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(L(src, b), T(0));
-            }
-
-            // Guard the amplification, not just division by zero: the exact half-norm is
-            // 1/sqrt(2), but a half rotated away comes back at ~1e-20, and 1/1e-20 writes
-            // +-inf into the column, NaNing every later dot product so the repair below
-            // rejects all n candidate axes. Below this bound, zero it and let repair rebuild.
-            const T half_present = T(0.0625);
-            const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
-            const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                if (wv) {
-                    // Vh is V^T: row i, column r.
-                    Vh(i, r, b) = S(2 * r, b) * Zk(2 * r, src, b) * pinv;
-                }
-                if (wu) {
-                    U(r, i, b) = S(2 * r + 1, b) * Zk(2 * r + 1, src, b) * qinv;
-                }
-            }
+            // Eigenvector src of the Golub-Kahan matrix; Vh is V^T, so row i holds v_i.
+            v2::bdsdc_detail::extract_column(wg, glue::col_of(v2::item(Zk, b, 2 * nn, 2 * nn), src), v2::item(S, b), nn,
+                                             v2::item(L, b), src, v2::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), i,
+                                             glue::row_of(v2::item(Vh, b, nn, nn), i), glue::col_of(v2::item(U, b, nn, nn), i), wu, wv);
         });
     });
 }
@@ -259,13 +220,6 @@ void bdsdc_repair_degenerate(Queue& ctx,
         const int32_t nn = n;
         const bool wu = want_u;
         const bool wv = want_vh;
-        // Repair sigma_i < eps*sigma_max/(2*tau): below that the +/- pair is
-        // unresolved and U gets parallel columns. No factor of n (it would
-        // discard informative sigma). Values keep gebrd's eps*||A|| floor.
-        // evidence: docs/perf/gesvd.md#gesvd-bdsdc-the-repair-threshold-from-the-resolution-limit
-        constexpr T kOrthTarget = T(1e-3);
-        const T tol_factor =
-            (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
 
         batchlas::impl::parallel_for<BdsdcRepair<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),
@@ -273,91 +227,8 @@ void bdsdc_repair_degenerate(Queue& ctx,
             [=](sycl::nd_item<1> it) {
             const int32_t b = static_cast<int32_t>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1
-            const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
-            auto grp = it.get_group();
-            const T* sb = sig + static_cast<size_t>(b) * static_cast<size_t>(nn);
-
-            T smax = T(0);
-            for (int32_t i = 0; i < nn; ++i) smax = sycl::fmax(smax, sb[i]);
-            const T tol = smax * tol_factor;
-
-            int32_t ndeg = 0;
-            for (int32_t i = 0; i < nn; ++i) ndeg += (sb[i] <= tol) ? 1 : 0;
-            if (ndeg == 0) return;
-
-            // which = 0 -> rebuild V (rows of Vh), which = 1 -> rebuild U (cols of U)
-            for (int32_t which = 0; which < 2; ++which) {
-                if (which == 0 && !wv) continue;
-                if (which == 1 && !wu) continue;
-
-                for (int32_t j = 0; j < nn; ++j) {
-                    if (sb[j] > tol) continue;
-
-                    // Rank against every column already final: the earlier rebuilt ones
-                    // (t < j) and ALL non-degenerate ones, including those after j. Skipping
-                    // the latter loses orthogonality against them under ascending order.
-                    T best = std::numeric_limits<T>::max();
-                    int32_t best_c = lid;
-                    for (int32_t c = lid; c < nn; c += kGroup) {
-                        T acc = T(0);
-                        for (int32_t t = 0; t < nn; ++t) {
-                            if (t == j) continue;
-                            if (t > j && sb[t] <= tol) continue;
-                            const T q = (which == 0) ? Vh(t, c, b) : U(c, t, b);
-                            acc += q * q;
-                        }
-                        if (acc < best) { best = acc; best_c = c; }
-                    }
-                    const T best_all = batchlas::portable::reduce_over_group(grp, best, sycl::minimum<T>());
-                    const int32_t c_star = batchlas::portable::reduce_over_group(
-                        grp, (best == best_all) ? best_c : nn, sycl::minimum<int32_t>());
-
-                    // Seed w := e_c*, project out the final columns, twice -- one
-                    // pass is not enough when e_c* is nearly in their span.
-                    for (int32_t r = lid; r < nn; r += kGroup) {
-                        const T seed = (r == c_star) ? T(1) : T(0);
-                        if (which == 0) { Vh(j, r, b) = seed; } else { U(r, j, b) = seed; }
-                    }
-                    it.barrier(sycl::access::fence_space::global_and_local);
-
-                    for (int32_t pass = 0; pass < 2; ++pass) {
-                        for (int32_t t = 0; t < nn; ++t) {
-                            if (t == j) continue;
-                            if (t > j && sb[t] <= tol) continue;
-                            T dot = T(0);
-                            for (int32_t r = lid; r < nn; r += kGroup) {
-                                const T wr = (which == 0) ? Vh(j, r, b) : U(r, j, b);
-                                const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
-                                dot += wr * tr;
-                            }
-                            dot = batchlas::portable::reduce_over_group(grp, dot, sycl::plus<T>());
-                            for (int32_t r = lid; r < nn; r += kGroup) {
-                                const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
-                                if (which == 0) { Vh(j, r, b) -= dot * tr; }
-                                else            { U(r, j, b) -= dot * tr; }
-                            }
-                            it.barrier(sycl::access::fence_space::global_and_local);
-                        }
-                    }
-
-                    T acc = T(0);
-                    for (int32_t r = lid; r < nn; r += kGroup) {
-                        const T wr = (which == 0) ? Vh(j, r, b) : U(r, j, b);
-                        acc += wr * wr;
-                    }
-                    const T nrm2 = batchlas::portable::reduce_over_group(grp, acc, sycl::plus<T>());
-                    // c_star is the best axis available, so a residual too small to normalise
-                    // means the final columns already span the space; leave the column as
-                    // extracted rather than amplifying noise.
-                    if (nrm2 > std::numeric_limits<T>::min()) {
-                        const T inv = T(1) / sycl::sqrt(nrm2);
-                        for (int32_t r = lid; r < nn; r += kGroup) {
-                            if (which == 0) { Vh(j, r, b) *= inv; } else { U(r, j, b) *= inv; }
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_and_local);
-                }
-            }
+            v2::bdsdc_detail::repair(v2::WorkGroup<kGroup>{it}, v2::item(U, b, nn, nn), v2::item(Vh, b, nn, nn),
+                                     v2::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), nn, wu, wv);
         });
     });
 }

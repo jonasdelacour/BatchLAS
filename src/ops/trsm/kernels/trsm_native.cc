@@ -8,12 +8,14 @@
 
 #include <src/ops/trsm/trsm_native.hh>
 #include <src/ops/trsm/trsm_canonical.hh>
+#include <src/ops/trsm/trsm_v2.hh>
 
 #include <src/linalg-impl.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device/arith.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -23,9 +25,12 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/device.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas::sycl_trsm {
+
+namespace v2 = batchlas::device;
 
 namespace {
 
@@ -44,10 +49,6 @@ template <typename D>
 constexpr int trsm_max_bucket() {
     return 32;
 }
-
-// Packed lower triangle, row-major by s: N(N+1)/2 elements. All threads read the
-// same Lc(s,t) at a step, so this is an SLM broadcast and bank layout is moot.
-constexpr int tri_idx(int s, int t) { return s * (s + 1) / 2 + t; }
 
 // Side::Left staging tile height, in ELEMENTS: two 32 B sectors' worth, so a
 // lane-group's column read fills them. evidence: docs/perf/trsm.md#the-sideleft-staging-tile
@@ -139,174 +140,76 @@ Event trsm_native_v1(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
+                using Ar = v2::arith_t<v2::arith::Fma, D>;
+                constexpr bool kLeft = (SideV == Side::Left);
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
                 const int b = wg_id / groups;
                 // A work-group serves one item (I1): uniform, before the first barrier.
                 if (mask != nullptr && mask[b] == 0) return;
-                const int lane = static_cast<int>(it.get_local_linear_id());
-                const int u = (wg_id % groups) * wg + lane;
+                const v2::RtGroup<> ex{it};
+                const int lane = ex.lid();
+                const int u0 = (wg_id % groups) * wg;   // this group's first column
+                const int u = u0 + lane;
                 const bool live = (u < q);
 
-                const D* Ab = a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a;
                 D* Bb = b_ptr + static_cast<std::ptrdiff_t>(b) * stride_b;
+                // ConjTrans conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
+                const dla::CanonTri<const D, kLeft> L{a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a, lda, n,
+                                                      fwd, do_trans, do_conj};
 
                 D* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
                 D* sRd = rd.template get_multi_ptr<sycl::access::decorated::no>().get();
                 int* sDiv = use_div.template get_multi_ptr<sycl::access::decorated::no>().get();
                 D* sTile = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
-                const int u0 = (wg_id % groups) * wg;   // this group's first column
 
                 if (lane == 0) sDiv[0] = 0;
-
-                // rho(s) = fwd ? s : n-1-s maps canonical to stored index, and the
-                // operand order of Lc is swapped between the sides. ConjTrans
-                // conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
-                for (size_t idx = lane; idx < tri_elems; idx += static_cast<size_t>(wg)) {
-                    int s = 0;
-                    while (tri_idx(s + 1, 0) <= static_cast<int>(idx)) ++s;
-                    const int t = static_cast<int>(idx) - tri_idx(s, 0);
-
-                    D v;
-                    if (s >= n || t >= n) {
-                        v = (s == t) ? sycl_device::dev_one<D>() : D{};
-                    } else {
-                        const int rs = fwd ? s : (n - 1 - s);
-                        const int rt = fwd ? t : (n - 1 - t);
-                        const int r = (SideV == Side::Left) ? rs : rt;
-                        const int c = (SideV == Side::Left) ? rt : rs;
-                        v = do_trans
-                                ? Ab[c + static_cast<std::ptrdiff_t>(r) * lda]   // A(c,r)
-                                : Ab[r + static_cast<std::ptrdiff_t>(c) * lda];  // A(r,c)
-                        if (do_conj) v = sycl_device::dev_conj(v);
-                    }
-                    sLc[idx] = v;
-                }
-
+                dla::tp_pack_lower<N>(ex, L, n, sLc);
                 // REQUIRED; without it the solve returns WRONG ANSWERS: sLc is
                 // written strided by lane and read by a different lane, and lane 0
                 // zeroes sDiv[0] while any lane may store 1. The race cannot show
                 // at wg == 32, i.e. below roughly q*batch = 65k -- the whole suite.
                 // evidence: docs/perf/trsm.md#the-missing-group-barrier
-                sycl::group_barrier(it.get_group());
+                // Mem::Global fences both spaces, as the legacy sycl::group_barrier did.
+                ex.barrier(v2::Mem::Global);
+                // A non-finite 1/Lc(s,s) flips the group-uniform flag back to division.
+                dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
+                ex.barrier(v2::Mem::Global);
+                const dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
 
-                // The recurrence multiplies by rd[s] = 1/Lc(s,s), which is inf
-                // where a division would stay finite; a thread seeing a non-finite
-                // reciprocal flips a group-uniform flag back to division.
-                for (int s = lane; s < N; s += wg) {
-                    D r = sycl_device::dev_one<D>();
-                    if (s < n && !unit) {
-                        const D d = sLc[tri_idx(s, s)];
-                        r = sycl_device::dev_recip(d);
-                        if (!sycl_device::dev_isfinite(r)) {
-                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                             sycl::memory_scope::work_group,
-                                             sycl::access::address_space::local_space>(sDiv[0])
-                                .store(1);
-                            r = sycl_device::dev_one<D>();
-                        }
-                    }
-                    sRd[s] = r;
-                }
-
-                sycl::group_barrier(it.get_group());
-
-                const bool divide = (sDiv[0] != 0);
-
-                const std::ptrdiff_t unit_s =
-                    (SideV == Side::Left) ? 1 : static_cast<std::ptrdiff_t>(ldb);
-                const std::ptrdiff_t du =
-                    (SideV == Side::Left) ? static_cast<std::ptrdiff_t>(ldb) : 1;
-                const std::ptrdiff_t b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
-                const std::ptrdiff_t ds = fwd ? unit_s : -unit_s;
-
-                const auto left_addr = [&](int s_can, int col) -> std::ptrdiff_t {
-                    const int row = fwd ? s_can : (n - 1 - s_can);
-                    return static_cast<std::ptrdiff_t>(row) +
-                           static_cast<std::ptrdiff_t>(col) * ldb;
-                };
-
-                constexpr int STEP   = kStageLeft ? TILE_ROWS : N;
-                constexpr int ROUNDS = (N + STEP - 1) / STEP;
-
-                D x[N];
-BATCHLAS_UNROLL_FULL
-                for (int k = 0; k < ROUNDS; ++k) {
-                    if constexpr (kStageLeft) {
-                        // Barrier BEFORE overwriting the tile: last round's reads
-                        // must have retired. Both barriers sit outside every `live`
-                        // test -- a barrier only some lanes reach is undefined.
-                        sycl::group_barrier(it.get_group());
-                        // r varies fastest: lanes read consecutive ROWS.
-                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
-                            const int r = i % TILE_ROWS;
-                            const int c = i / TILE_ROWS;
-                            const int s_can = k * TILE_ROWS + r;
-                            const int col = u0 + c;
-                            D v{};
-                            if (s_can < n && col < q) v = Bb[left_addr(s_can, col)];
-                            sTile[c * (TILE_ROWS + 1) + r] = v;
-                        }
-                        sycl::group_barrier(it.get_group());
-                    }
-
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < STEP; ++j) {
-                        const int s = k * STEP + j;
-                        if (s >= N) continue;    // folds away when STEP divides N
-                        D acc = D{};
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < N; ++t) {
-                            if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
-                        }
-                        D rhs = D{};
-                        if (live && s < n) {
-                            if constexpr (kStageLeft) {
-                                rhs = sycl_device::dev_mul(
-                                    alpha_d, sTile[lane * (TILE_ROWS + 1) + j]);
-                            } else {
-                                rhs = sycl_device::dev_mul(
-                                    alpha_d,
-                                    Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du]);
-                            }
-                        }
-                        D v = sycl_device::dev_sub(rhs, acc);
-                        if (!unit) {
-                            v = divide ? sycl_device::dev_div(v, sLc[tri_idx(s, s)])
-                                       : sycl_device::dev_mul(v, sRd[s]);
-                        }
-                        x[s] = v;
-                    }
-                }
-
+                v2::Frag<D, N> x;
                 if constexpr (kStageLeft) {
+                    constexpr int ROUNDS = (N + TILE_ROWS - 1) / TILE_ROWS;
+                    const dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
+                    D* my_col = sTile + lane * (TILE_ROWS + 1);
 BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
-                        sycl::group_barrier(it.get_group());
-                        // The guard is on the STEP, not on `live`: a non-live
-                        // lane's column is one the store below refuses to write.
+                        // Barrier BEFORE overwriting the tile (last round's reads); no
+                        // barrier sits under `live`: one only some lanes reach is undefined.
+                        ex.barrier(v2::Mem::Global);
+                        dla::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
+                        ex.barrier(v2::Mem::Global);
+                        dla::trsv_lower_rows<N, TILE_ROWS, Ar>(x, k * TILE_ROWS, sLc, dg, [&](int s) {
+                            D rhs{};
+                            if (live && s < n) rhs = Ar::mul(alpha_d, my_col[s - k * TILE_ROWS]);
+                            return rhs;
+                        });
+                    }
 BATCHLAS_UNROLL_FULL
-                        for (int j = 0; j < TILE_ROWS; ++j) {
-                            const int s = k * TILE_ROWS + j;
-                            if (s < N) sTile[lane * (TILE_ROWS + 1) + j] = x[s];
-                        }
-                        sycl::group_barrier(it.get_group());
-                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
-                            const int r = i % TILE_ROWS;
-                            const int c = i / TILE_ROWS;
-                            const int s_can = k * TILE_ROWS + r;
-                            const int col = u0 + c;
-                            if (s_can < n && col < q) {
-                                Bb[left_addr(s_can, col)] = sTile[c * (TILE_ROWS + 1) + r];
-                            }
-                        }
+                    for (int k = 0; k < ROUNDS; ++k) {
+                        // A non-live lane's column is one lacpy_tile_out refuses to write.
+                        ex.barrier(v2::Mem::Global);
+                        dla::frag_copy_out<TILE_ROWS>(x, k * TILE_ROWS, my_col);
+                        ex.barrier(v2::Mem::Global);
+                        dla::lacpy_tile_out<TILE_ROWS, TILE_ROWS + 1>(ex, sTile, Bc, k * TILE_ROWS, u0);
                     }
                 } else {
-BATCHLAS_UNROLL_FULL
-                    for (int s = 0; s < N; ++s) {
-                        if (live && s < n) {
-                            Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];
-                        }
-                    }
+                    const auto bu = dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(u);
+                    dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+                        D rhs{};
+                        if (live && s < n) rhs = Ar::mul(alpha_d, bu(s));
+                        return rhs;
+                    });
+                    v2::store(x, bu, live ? n : 0);
                 }
             });
     });
