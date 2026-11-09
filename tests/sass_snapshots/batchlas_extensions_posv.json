@@ -5,7 +5,7 @@
  ],
  "toolchain": {
   "cxx": "Intel SYCL compiler development build based on: clang version 22.0.0git (https://github.com/intel/llvm e79d489ddc8c30c9b81de653c1bfc4ba67115ee1)",
-  "cuda": "Cuda compilation tools, release 13.2, V13.2.86",
+  "cuda": "Cuda compilation tools, release 13.3, V13.3.73",
   "arch": "sm_89"
  },
  "kernels": {
