@@ -149,10 +149,11 @@ public:
             "src/ops/syev/sytrd/sytrd_sb2st_hh.hh",
             // common
             "src/ops/syev/sytrd/sytrd_cta.cc",
-            "src/ops/syev/sytrd/sytrd_cta_device.hh",
+            "include/batchlas/device/lapack/sytrd.hh",
+            "include/batchlas/device/lapack/syev.hh",
             "src/ops/syev/steqr/steqr.cc",
             "src/ops/syev/steqr/steqr_cta.cc",
-            "src/ops/syev/steqr/steqr_cta_device.hh",
+            "include/batchlas/device/lapack/steqr.hh",
             "src/ops/syev/steqr/steqr_wg.cc",
             "src/ops/syev/steqr/steqr_internal.hh",
             "src/ops/syev/stedc/stedc.cc",
