@@ -365,8 +365,8 @@ def layout_findings(root):
                 for m in DEVICE_ALIAS.finditer(text):
                     add("layout-alias", rel, f"{m.group(1)} = {m.group(2)}", text.count("\n", 0, m.start()) + 1)
                 if detail_ns:
-                    rx = re.compile(r"(?<![\w])(?:(?:::)?batchlas::)?(?:device::)?(" + "|".join(
-                        sorted(n for n in detail_ns if n != "detail")) + r"|device::detail)::(\w+)")
+                    alts = sorted(n for n in detail_ns if n != "detail") + ["device::detail"]
+                    rx = re.compile(r"(?<![\w])(?:(?:::)?batchlas::)?(?:device::)?(" + "|".join(alts) + r")::(\w+)")
                     for m in rx.finditer(text):
                         if not m.group(2).endswith("_run"):
                             add("layout-detail-use", rel, f"{m.group(1)}::{m.group(2)}",
