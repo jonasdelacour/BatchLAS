@@ -17,7 +17,6 @@
 
 namespace batchlas::getrf_native {
 
-namespace v2 = ::batchlas::device;
 
 // `kmax` must be KERNEL-UNIFORM (skipped steps skip barriers). `always_inline` is NOT a hint:
 // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
@@ -29,17 +28,17 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
                                                           int32_t* info_item,
                                                           SxAcc sx, ValAcc rval,
                                                           IdxAcc ridx) {
-    const v2::RtGroup<v2::Scope::Group> ex{it};
+    const device::RtGroup<device::Scope::Group> ex{it};
     const int tid = ex.lid();
 
     // CLAMP, never return: a pad item is still in every shuffle mask and every barrier.
     const bool live = (tid < m);
     const std::ptrdiff_t ldp = static_cast<std::ptrdiff_t>(ld);
 
-    v2::Frag<D, NB> rA;  // top level, never a parameter: tiny_device.hh invariant 1
+    device::Frag<D, NB> rA;  // top level, never a parameter: tiny_device.hh invariant 1
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) {
-        D v = v2::Arith<D>::zero();   // a STATEMENT, not `?:`: see spelling 3
+        D v = device::Arith<D>::zero();   // a STATEMENT, not `?:`: see spelling 3
         if (live && c < ncols) v = a[tid + static_cast<std::ptrdiff_t>(c) * ldp];
         rA[c] = v;
     }
@@ -48,9 +47,9 @@ BATCHLAS_UNROLL_FULL
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
     // iamax (B1), relabel, pivot row through sx (B2), rscl, ger: docs/perf/lu.md#two-barriers-per-column
-    auto piv = v2::getf2_detail::pivot_rows_group(ex, rval, ridx, m, v2::IpivSink{piv_item, piv_base}, info_local);
-    auto bc = v2::getf2_detail::bcast_row_local(ex, sx);
-    v2::getf2_relabel(rA, rowid, kmax, ncols, piv, bc);
+    auto piv = device::getf2_detail::pivot_rows_group(ex, rval, ridx, m, device::IpivSink{piv_item, piv_base}, info_local);
+    auto bc = device::getf2_detail::bcast_row_local(ex, sx);
+    device::getf2_relabel(rA, rowid, kmax, ncols, piv, bc);
 
     if (live) {  // to the RELABELLED row: rowid is where this data belongs in P A
 BATCHLAS_UNROLL_FULL

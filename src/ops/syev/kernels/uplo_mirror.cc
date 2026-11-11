@@ -16,8 +16,6 @@
 
 namespace batchlas {
 
-namespace v2 = device;
-namespace sv = syev_v2;
 
 namespace {
 template <Backend B, typename T> class UploMirrorUpperToLowerKernel;
@@ -44,7 +42,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // Only strictly-upper source entries do work; each writes its mirror (c, r).
                 if (c <= r) return;
-                v2::mirror<Uplo::Upper, true>(v2::ElemAt{c, r}, v2::mat(ptr + b * stride, n, n, ld));
+                device::mirror<Uplo::Upper, true>(device::ElemAt{c, r}, device::mat(ptr + b * stride, n, n, ld));
             });
     });
     return ctx.get_event();

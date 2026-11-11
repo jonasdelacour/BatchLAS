@@ -30,7 +30,6 @@
 
 namespace batchlas::sycl_trsm {
 
-namespace v2 = batchlas::device;
 
 namespace {
 
@@ -140,13 +139,13 @@ Event trsm_native_v1(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
-                using Ar = v2::arith_t<v2::arith::Fma, D>;
+                using Ar = device::arith_t<device::arith::Fma, D>;
                 constexpr bool kLeft = (SideV == Side::Left);
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
                 const int b = wg_id / groups;
                 // A work-group serves one item (I1): uniform, before the first barrier.
                 if (mask != nullptr && mask[b] == 0) return;
-                const v2::RtGroup<> ex{it};
+                const device::RtGroup<> ex{it};
                 const int lane = ex.lid();
                 const int u0 = (wg_id % groups) * wg;   // this group's first column
                 const int u = u0 + lane;
@@ -170,13 +169,13 @@ Event trsm_native_v1(Queue& ctx,
                 // at wg == 32, i.e. below roughly q*batch = 65k -- the whole suite.
                 // evidence: docs/perf/trsm.md#the-missing-group-barrier
                 // Mem::Global fences both spaces, as the legacy sycl::group_barrier did.
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
                 // A non-finite 1/Lc(s,s) flips the group-uniform flag back to division.
                 dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
                 const dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
 
-                v2::Frag<D, N> x;
+                device::Frag<D, N> x;
                 if constexpr (kStageLeft) {
                     constexpr int ROUNDS = (N + TILE_ROWS - 1) / TILE_ROWS;
                     const dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
@@ -185,9 +184,9 @@ BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
                         // Barrier BEFORE overwriting the tile (last round's reads); no
                         // barrier sits under `live`: one only some lanes reach is undefined.
-                        ex.barrier(v2::Mem::Global);
+                        ex.barrier(device::Mem::Global);
                         dla::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
-                        ex.barrier(v2::Mem::Global);
+                        ex.barrier(device::Mem::Global);
                         dla::trsv_lower_rows<N, TILE_ROWS, Ar>(x, k * TILE_ROWS, sLc, dg, [&](int s) {
                             D rhs{};
                             if (live && s < n) rhs = Ar::mul(alpha_d, my_col[s - k * TILE_ROWS]);
@@ -197,9 +196,9 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
                         // A non-live lane's column is one lacpy_tile_out refuses to write.
-                        ex.barrier(v2::Mem::Global);
+                        ex.barrier(device::Mem::Global);
                         dla::frag_copy_out<TILE_ROWS>(x, k * TILE_ROWS, my_col);
-                        ex.barrier(v2::Mem::Global);
+                        ex.barrier(device::Mem::Global);
                         dla::lacpy_tile_out<TILE_ROWS, TILE_ROWS + 1>(ex, sTile, Bc, k * TILE_ROWS, u0);
                     }
                 } else {
@@ -209,7 +208,7 @@ BATCHLAS_UNROLL_FULL
                         if (live && s < n) rhs = Ar::mul(alpha_d, bu(s));
                         return rhs;
                     });
-                    v2::store(x, bu, live ? n : 0);
+                    device::store(x, bu, live ? n : 0);
                 }
             });
     });

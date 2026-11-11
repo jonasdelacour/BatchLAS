@@ -28,8 +28,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = ::batchlas::device;
-namespace glue = ::batchlas::device::gesvd_glue;
 
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;
@@ -114,8 +112,8 @@ void bdsdc_build_gk(Queue& ctx,
             sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            v2::bdsdc_detail::build_gk(glue::item_n(D, b, nn), glue::item_n(E, b, nn - 1), glue::item_n(GD, b, N),
-                                       glue::item_n(GE, b, N - 1), glue::item_n(GS, b, N));
+            device::bdsdc_detail::build_gk(device::gesvd_glue::item_n(D, b, nn), device::gesvd_glue::item_n(E, b, nn - 1), device::gesvd_glue::item_n(GD, b, N),
+                                       device::gesvd_glue::item_n(GE, b, N - 1), device::gesvd_glue::item_n(GS, b, N));
         });
     });
 }
@@ -180,16 +178,16 @@ void bdsdc_extract_vectors(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
-            const v2::WorkGroup<kGroup> wg{it};
+            const device::WorkGroup<kGroup> wg{it};
             const int32_t grp = static_cast<int32_t>(it.get_group(0));
             const int32_t b = grp / nn;
             if (mask != nullptr && mask[b] == 0) return;  // I1: one work-group per (item, column)
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
             // Eigenvector src of the Golub-Kahan matrix; Vh is V^T, so row i holds v_i.
-            v2::bdsdc_detail::extract_column(wg, glue::col_of(v2::item(Zk, b, 2 * nn, 2 * nn), src), v2::item(S, b), nn,
-                                             v2::item(L, b), src, v2::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), i,
-                                             glue::row_of(v2::item(Vh, b, nn, nn), i), glue::col_of(v2::item(U, b, nn, nn), i), wu, wv);
+            device::bdsdc_detail::extract_column(wg, device::gesvd_glue::col_of(device::item(Zk, b, 2 * nn, 2 * nn), src), device::item(S, b), nn,
+                                             device::item(L, b), src, device::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), i,
+                                             device::gesvd_glue::row_of(device::item(Vh, b, nn, nn), i), device::gesvd_glue::col_of(device::item(U, b, nn, nn), i), wu, wv);
         });
     });
 }
@@ -227,8 +225,8 @@ void bdsdc_repair_degenerate(Queue& ctx,
             [=](sycl::nd_item<1> it) {
             const int32_t b = static_cast<int32_t>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1
-            v2::bdsdc_detail::repair(v2::WorkGroup<kGroup>{it}, v2::item(U, b, nn, nn), v2::item(Vh, b, nn, nn),
-                                     v2::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), nn, wu, wv);
+            device::bdsdc_detail::repair(device::WorkGroup<kGroup>{it}, device::item(U, b, nn, nn), device::item(Vh, b, nn, nn),
+                                     device::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), nn, wu, wv);
         });
     });
 }

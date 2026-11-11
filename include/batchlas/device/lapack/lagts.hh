@@ -10,7 +10,7 @@
 namespace batchlas::device {
 
 template <class T>
-BATCHLAS_DLA_HELPER void lagts(const Thread&, const T* dl, const T* dd, const T* du, const T* du2, const unsigned char* swapped,
+BATCHLAS_DEVICE_HELPER void lagts(const Thread&, const T* dl, const T* dd, const T* du, const T* du2, const unsigned char* swapped,
                                std::int64_t n, T* b) {
     for (std::int64_t i = 0; i < n - 1; ++i) {
         if (!swapped[i]) {

@@ -345,8 +345,7 @@ Event syevx_direct_subset(Queue& ctx,
             batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device;
-                    const v2::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1
 
@@ -360,15 +359,15 @@ Event syevx_direct_subset(Queue& ctx,
                     // of W are left untouched, as are the matching columns of V.
                     const int write = static_cast<int>((count < capacity) ? count : capacity);
 
-                    v2::copy(ex, v2::flip(v2::vec(w_in + bid * w_in_stride, write), reverse),
-                             v2::vec(w_out + bid * capacity, write));
+                    device::copy(ex, device::flip(device::vec(w_in + bid * w_in_stride, write), reverse),
+                             device::vec(w_out + bid * capacity, write));
 
                     if (v_ptr != nullptr && reverse) {
                         // Column c <-> column write-1-c for c < write/2: each pair once.
                         const int nn = static_cast<int>(n);
                         const int half = write / 2;
-                        const auto Vb = v2::mat(v_ptr + bid * v_stride, nn, write, static_cast<int>(v_ld));
-                        v2::for_each_owned_2d<v2::alg::Flat>(ex, nn, half, [&](int r, int c) {
+                        const auto Vb = device::mat(v_ptr + bid * v_stride, nn, write, static_cast<int>(v_ld));
+                        device::for_each_owned_2d<device::alg::Flat>(ex, nn, half, [&](int r, int c) {
                             const T t = Vb(r, c);
                             Vb(r, c) = Vb(r, write - 1 - c);
                             Vb(r, write - 1 - c) = t;

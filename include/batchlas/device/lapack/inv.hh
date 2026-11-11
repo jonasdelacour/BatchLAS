@@ -75,7 +75,7 @@ template <class Tier, class T> constexpr WorkspaceSize inv_buffer_size(int n) {
 /// @param[in]  live  false: a dead matrix of the launch (executor-uniform)
 /// @return getrf's info, uniform across `ex` (the host inv reports none)
 template <class Tier, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE std::int32_t inv(const Ex& ex, const MA& a, const MB& ainv, const Workspace& ws, bool live = true) {
+BATCHLAS_DEVICE_INLINE std::int32_t inv(const Ex& ex, const MA& a, const MB& ainv, const Workspace& ws, bool live = true) {
     using D = getrf_detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::inv, D, Tier>;
     static_assert(HasTier<routine::inv, Tr, D>, "inv: this tier is not offered for this scalar type");

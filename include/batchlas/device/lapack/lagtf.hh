@@ -13,7 +13,7 @@
 namespace batchlas::device {
 
 template <class T>
-BATCHLAS_DLA_HELPER void lagtf(const Thread&, T* dl, T* dd, T* du, T* du2, unsigned char* swapped, std::int64_t n, T tol) {
+BATCHLAS_DEVICE_HELPER void lagtf(const Thread&, T* dl, T* dd, T* du, T* du2, unsigned char* swapped, std::int64_t n, T tol) {
     for (std::int64_t i = 0; i < n - 1; ++i) {
         if (sycl::fabs(dd[i]) >= sycl::fabs(dl[i])) {
             swapped[i] = 0;

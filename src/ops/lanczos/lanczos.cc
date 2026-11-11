@@ -18,7 +18,6 @@
 #include <batchlas/device.hh>
 
 namespace batchlas {
-    namespace dla = device;
 
     template <Backend B, typename T, MatrixFormat MF>
     struct InitKernel {};
@@ -90,12 +89,12 @@ namespace batchlas {
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
                     if (masked && !mk[bid]) return;  // I1, before the group reduction
-                    const dla::RtGroup<> ex{item};
-                    const auto v0 = dla::vec(Vmem.data() + bid*(n+1)*n, n);
+                    const device::RtGroup<> ex{item};
+                    const auto v0 = device::vec(Vmem.data() + bid*(n+1)*n, n);
                     // Same start vector for every item: keyed on the row only.
-                    dla::for_each_owned(ex, n, [&](int i) { v0(i) = T(philox::uniform_unit<real_t>(42, 0, static_cast<std::uint64_t>(i))); });
-                    const real_t norm = sycl::sqrt(dla::sumsq<dla::alg::Unfused>(ex, v0));
-                    dla::map(ex, v0, [=](T v) { return dla::Arith<T>::div_real(v, norm); }, v0);  // a true division, not scal(1/norm)
+                    device::for_each_owned(ex, n, [&](int i) { v0(i) = T(philox::uniform_unit<real_t>(42, 0, static_cast<std::uint64_t>(i))); });
+                    const real_t norm = sycl::sqrt(device::sumsq<device::alg::Unfused>(ex, v0));
+                    device::map(ex, v0, [=](T v) { return device::Arith<T>::div_real(v, norm); }, v0);  // a true division, not scal(1/norm)
                 });
             });
         };
@@ -130,30 +129,30 @@ namespace batchlas {
                     batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
                         if (masked && !mk[bid]) return;
-                        const dla::RtGroup<> ex{item};
-                        const auto v_prev = dla::vec(v_prev_ptr + bid*(n+1)*n, n);
-                        const auto v_cur = dla::vec(v_current_ptr + bid*(n+1)*n, n);
-                        const auto w = dla::vec(v_next_ptr + bid*2*n, n);  // A v_it on entry
+                        const device::RtGroup<> ex{item};
+                        const auto v_prev = device::vec(v_prev_ptr + bid*(n+1)*n, n);
+                        const auto v_cur = device::vec(v_current_ptr + bid*(n+1)*n, n);
+                        const auto w = device::vec(v_next_ptr + bid*2*n, n);  // A v_it on entry
                         T* const alpha_b = alphas.data() + bid*n;
                         T* const beta_b = betas.data() + bid*n;
                         // x^T y with every product rounded before the sum (the SLM-staged legacy reduction),
                         // spelled at each call site: a local lambda called here would become the SYCL kernel body.
-                        const T alpha = dla::reduce(ex, n, [&](int i) { return dla::Arith<T>::mul(v_cur(i), w(i)); });
+                        const T alpha = device::reduce(ex, n, [&](int i) { return device::Arith<T>::mul(v_cur(i), w(i)); });
                         alpha_b[it] = alpha;
                         if (it > 0) {
                             // beta_{it-1} takes the sign of v_{it-1}^T A v_it, which reorthogonalization may flip.
                             const T beta_prev = beta_b[it - 1];
-                            const T coupling = dla::reduce(ex, n, [&](int i) { return dla::Arith<T>::mul(v_prev(i), w(i)); });
+                            const T coupling = device::reduce(ex, n, [&](int i) { return device::Arith<T>::mul(v_prev(i), w(i)); });
                             const T signed_beta = sycl::copysign(beta_prev, coupling);
                             if (ex.leader()) beta_b[it - 1] = signed_beta;
-                            dla::map(ex, w, [=](T wi, T p, T c) { return wi - (signed_beta * p + alpha * c); }, w, v_prev, v_cur);
+                            device::map(ex, w, [=](T wi, T p, T c) { return wi - (signed_beta * p + alpha * c); }, w, v_prev, v_cur);
                         } else {
-                            dla::axpy(ex, -alpha, v_cur, w);
+                            device::axpy(ex, -alpha, v_cur, w);
                         }
-                        const T beta = sycl::sqrt(dla::sumsq<dla::alg::Unfused>(ex, w));
+                        const T beta = sycl::sqrt(device::sumsq<device::alg::Unfused>(ex, w));
                         beta_b[it] = beta;
                         if (it < iterations - 1)
-                            dla::map(ex, dla::vec(Vmem.data() + bid*(n+1)*n + (it+1)*n, n), [=](T v) { return dla::Arith<T>::div_real(v, beta); }, w);
+                            device::map(ex, device::vec(Vmem.data() + bid*(n+1)*n + (it+1)*n, n), [=](T v) { return device::Arith<T>::div_real(v, beta); }, w);
                     });
                 });
             }

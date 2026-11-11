@@ -27,19 +27,19 @@ namespace batchlas::device {
 namespace syev_detail {
 
 // SubGroupPartition's own chunk barrier (core Partition::barrier is a whole-sub-group barrier).
-template <class Ex> BATCHLAS_DLA_INLINE void chunk_barrier(const Ex& ex) {
+template <class Ex> BATCHLAS_DEVICE_INLINE void chunk_barrier(const Ex& ex) {
     if constexpr (sycl::is_group_v<std::remove_cvref_t<decltype(ex.part)>>) sycl::group_barrier(ex.part);
     else group_barrier(ex.part);  // ADL: SubGroupPartition
 }
 
-template <class U> BATCHLAS_DLA_INLINE real_t<U> real_part(const U& x) {
+template <class U> BATCHLAS_DEVICE_INLINE real_t<U> real_part(const U& x) {
     if constexpr (Arith<U>::is_complex) return x.real();
     else return x;
 }
 
 // v := element (i, j) of the Hermitian matrix whose `upper` (else lower) triangle A stores,
 // Im(diag) dropped; assigned per branch so a caller's guard folds into one CFG.
-template <class Ops = arith::Native, class T, class M> BATCHLAS_DLA_INLINE void herm_load(T& v, const M& A, bool upper, int i, int j) {
+template <class Ops = arith::Native, class T, class M> BATCHLAS_DEVICE_INLINE void herm_load(T& v, const M& A, bool upper, int i, int j) {
     using AR = arith_t<Ops, T>;
     if (i == j) {
         v = AR::make(AR::re(A(i, j)), real_t<T>(0));
@@ -55,7 +55,7 @@ template <class Ops = arith::Native, class T, class M> BATCHLAS_DLA_INLINE void 
 // subdiagonal (Uplo::Lower) and conj when it is the superdiagonal. want_s == false writes
 // dr and er only. Every step reads S(i) back from s.
 template <class Ops = arith::Native, class Dv, class Ev, class Drv, class Erv, class Sv>
-BATCHLAS_DLA_INLINE void phase_similarity(const Thread&, int n, const Dv& d, const Ev& e, const Drv& dr, const Erv& er, const Sv& s,
+BATCHLAS_DEVICE_INLINE void phase_similarity(const Thread&, int n, const Dv& d, const Ev& e, const Drv& dr, const Erv& er, const Sv& s,
                                           Uplo uplo, bool want_s) {
     using T = std::remove_cvref_t<decltype(e(0))>;
     using AR = arith_t<Ops, T>;
@@ -80,7 +80,7 @@ BATCHLAS_DLA_INLINE void phase_similarity(const Thread&, int n, const Dv& d, con
 // The same phase chain replayed per lane on a Partition (no scratch): lane l returns S(l) of
 // the superdiagonal form, S(i+1) = S(i) * conj(e_i) / |e_i|, from e_lane / abs_lane held by
 // lane i. 2 (n - 1) broadcasts; the lane-local product order is the serial one.
-template <class Ops = arith::Native, class Ex, class T, class R> BATCHLAS_DLA_INLINE T phase_replay(const Ex& ex, T e_lane, R abs_lane, int n) {
+template <class Ops = arith::Native, class Ex, class T, class R> BATCHLAS_DEVICE_INLINE T phase_replay(const Ex& ex, T e_lane, R abs_lane, int n) {
     using AR = arith_t<Ops, T>;
     const int lane = ex.lid();
     T phase = AR::one();
@@ -99,7 +99,7 @@ template <class V> struct UnitHeadQL {
     V v;
     int head;
     using value_type = elem_t<V>;
-    BATCHLAS_DLA_INLINE value_type operator()(int i) const {
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const {
         using A = Arith<value_type>;
         value_type x = A::zero();
         if (i < head) x = v(i);
@@ -107,17 +107,17 @@ template <class V> struct UnitHeadQL {
         return x;
     }
 };
-template <class V> BATCHLAS_DLA_INLINE UnitHeadQL<V> unit_head_ql(V v, int head) { return {v, head}; }
+template <class V> BATCHLAS_DEVICE_INLINE UnitHeadQL<V> unit_head_ql(V v, int head) { return {v, head}; }
 
 // c(r) = beta at r == j, alpha elsewhere (xLASET on one register column).
-template <class T, int N, class L> BATCHLAS_DLA_INLINE void laset_col(Frag<T, N, L>& c, int j, T alpha, T beta) {
+template <class T, int N, class L> BATCHLAS_DEVICE_INLINE void laset_col(Frag<T, N, L>& c, int j, T alpha, T beta) {
 #pragma unroll
     for (int r = 0; r < N; ++r) c[r] = (r == j) ? beta : alpha;
 }
 
 // c(r) = d(r) * z(r) for r < n (z real, core lift): the dgmm Left lift on a register column.
 template <class Ops = arith::Native, class T, int N, class L, class Dv, class Zv>
-BATCHLAS_DLA_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z, const int& n) {
+BATCHLAS_DEVICE_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z, const int& n) {
     using AR = arith_t<Ops, T>;
 #pragma unroll
     for (int r = 0; r < N; ++r) {
@@ -128,7 +128,7 @@ BATCHLAS_DLA_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z, c
 // larf, Side::Left, on a register column: c := (I - tau v v^H) c, with v read at every r < N
 // (zero outside its support: unpredicated) from an operand all lanes may read.
 template <class Ops = arith::Native, class T, int N, class L, class V>
-BATCHLAS_DLA_INLINE void larf_col(Frag<T, N, L>& c, const Published<V>& v, T tau) {
+BATCHLAS_DEVICE_INLINE void larf_col(Frag<T, N, L>& c, const Published<V>& v, T tau) {
     using AR = arith_t<Ops, T>;
     T dot = AR::zero();
 #pragma unroll
@@ -139,7 +139,7 @@ BATCHLAS_DLA_INLINE void larf_col(Frag<T, N, L>& c, const Published<V>& v, T tau
 }
 // c := H e_k = e_k - tau v for the QL vector v (v(k) = 1, v(r > k) = 0): column k of xORG2L.
 template <class Ops = arith::Native, class T, int N, class L, class V>
-BATCHLAS_DLA_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& v, T tau, int k) {
+BATCHLAS_DEVICE_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& v, T tau, int k) {
     using AR = arith_t<Ops, T>;
 #pragma unroll
     for (int r = 0; r < N; ++r) c[r] = (r < k) ? AR::mul(AR::neg(tau), v(r)) : ((r == k) ? AR::sub(AR::one(), tau) : AR::zero());
@@ -147,7 +147,7 @@ BATCHLAS_DLA_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& v, 
 
 // n - 1 QL reflectors: k in column k + 1 of `refl` (rows < k, unit at k), tau(k) on lane k;
 // lane l owns column l; vs is the chunk's P-long scratch. Stage reflector k, zero-padded:
-template <class Ex, class Vs, class Rm> BATCHLAS_DLA_INLINE void stage_ql_reflector(const Ex& ex, const Vs& vs, const Rm& refl, int k) {
+template <class Ex, class Vs, class Rm> BATCHLAS_DEVICE_INLINE void stage_ql_reflector(const Ex& ex, const Vs& vs, const Rm& refl, int k) {
     const int lane = ex.lid();
     vs(lane) = unit_head_ql(refl.col(k + 1), k)(lane);
 }
@@ -156,7 +156,7 @@ template <class Ex, class Vs, class Rm> BATCHLAS_DLA_INLINE void stage_ql_reflec
 // Q = H(n-2) ... H(0) (columns >= n - 1 are the caller's). Column k is generated at step k,
 // so the reflector store may overlap the columns of Q not yet generated.
 template <class Ops = arith::Native, class Ex, class T, int N, class L, class Vs, class Rm>
-BATCHLAS_DLA_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
+BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
     const int lane = ex.lid();
     fill(q, arith_t<Ops, T>::zero());
     for (int k = 0; k < n - 1; ++k) {
@@ -172,7 +172,7 @@ BATCHLAS_DLA_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, con
 // xORM2L, Side::Left, NoTrans, column-owner form: c := H(n-2) ... H(0) c on the lanes < n
 // (the n x n block's columns); a reflector with tau == 0 is skipped.
 template <class Ops = arith::Native, class Ex, class T, int N, class L, class Vs, class Rm>
-BATCHLAS_DLA_INLINE void orm2l(const Ex& ex, Frag<T, N, L>& c, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
+BATCHLAS_DEVICE_INLINE void orm2l(const Ex& ex, Frag<T, N, L>& c, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
     const int lane = ex.lid();
     for (int k = 0; k < n - 1; ++k) {
         const T tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
@@ -224,7 +224,7 @@ struct cta_opts {  // the host SteqrParams fields of the same meaning
 // matrix and stores nothing. Buf / QBuf: a sycl::local_accessor or a decorated local pointer.
 template <class T, std::size_t P, bool V, std::int32_t LDA, std::int32_t LDQ, bool M, class SP, class Buf, class QBuf, class MA,
           class MO, class WV, class F>
-BATCHLAS_DLA_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, const SP& solve_part, const Buf& A_local, std::int32_t base_a,
+BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, const SP& solve_part, const Buf& A_local, std::int32_t base_a,
                                       const Buf& V_local, std::int32_t base_v, const Buf& W_local, std::int32_t base_w,
                                       const QBuf& Q_local, std::int32_t base_q, const MA& A_in, const MO& A_out, const WV& W,
                                       std::int32_t nn, bool is_upper, bool live, const cta_opts& o, F&& on_solved) {
@@ -236,7 +236,7 @@ BATCHLAS_DLA_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, const
     using Ops = arith::Native;  // the std::complex operators (strict port)
     const auto pex = wrap(part);
     using ATile = Mat<T, Ext<kP>, Ext<kP>, Ext<LDA>, Mem::Local, Cyclic, Buf>;
-    const auto store_w = [&](std::int32_t dst, Real x) BATCHLAS_DLA_BODY {
+    const auto store_w = [&](std::int32_t dst, Real x) BATCHLAS_DEVICE_BODY {
         if constexpr (std::is_pointer_v<WV>) W[dst] = x;
         else W(dst) = x;
     };
@@ -273,7 +273,7 @@ BATCHLAS_DLA_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, const
     }
 
     // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
-    const auto slot_of = [&](Real wj) BATCHLAS_DLA_BODY {
+    const auto slot_of = [&](Real wj) BATCHLAS_DEVICE_BODY {
         if (!o.sort) return lane;
         std::int32_t rank = 0;
         for (std::int32_t k = 0; k < nn; ++k) {
@@ -401,7 +401,7 @@ template <bool V, int NB, class T> struct blocked_plan {
 // sytrd's reflectors A(1:, 0:n-1). The eigenvalues leave ascending (NaN last, ties by index) in W,
 // column j of Z in column rank(j) of A. Returns steqr's info (uniform).
 template <bool V, Uplo UL, int NB, int WG, class T, class WV>
-BATCHLAS_DLA_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const WV& W, const Workspace& ws,
+BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const WV& W, const Workspace& ws,
                                          const steqr_opts& opts) {
     using R = real_t<T>;
     using Ar = Arith<T>;
@@ -417,7 +417,7 @@ BATCHLAS_DLA_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Glob
 
     if constexpr (UL == Uplo::Upper) {
         for (int j = 0; j < n; ++j)
-            for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+            for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
                 if (i > j) a(i, j) = ::batchlas::device::conj(a(j, i));
             });
         ex.barrier(Mem::Global);
@@ -440,7 +440,7 @@ BATCHLAS_DLA_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Glob
     const auto z = mat(zp, n, n, n);
     if constexpr (V) {
         for (int j = 0; j < n; ++j)
-            for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { z(i, j) = i == j ? Ar::one() : Ar::zero(); });
+            for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { z(i, j) = i == j ? Ar::one() : Ar::zero(); });
         ex.barrier(Mem::Global);
     }
     const int info = steqr<J, tier::Blocked<1>>(ex, vec(drp, n), vec(erp, nm1), z, sub, opts);
@@ -449,14 +449,14 @@ BATCHLAS_DLA_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Glob
         if constexpr (Ar::is_complex) {
             const T* const sp = carve_global(ws, plan.s);
             for (int j = 0; j < n; ++j)
-                for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { z(i, j) = sp[i] * z(i, j); });
+                for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { z(i, j) = sp[i] * z(i, j); });
             ex.barrier(Mem::Global);
         }
         if (n > 1)
             (void)ormqr<Side::Left, Transpose::NoTrans, ormqr_tier<T>>(ex, mat(a.p + 1, nm1, nm1, lda), mat(zp + 1, nm1, n, n), tp, sub);
         ex.barrier(Mem::Global);
     }
-    for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
         const R wi = drp[i];
         const bool nan_i = sycl::isnan(wi);
         int r = 0;
@@ -468,11 +468,11 @@ BATCHLAS_DLA_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Glob
         rk[i] = r;
     });
     ex.barrier(Mem::Global);
-    for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { W(rk[i]) = drp[i]; });
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { W(rk[i]) = drp[i]; });
     if constexpr (V) {
         for (int j = 0; j < n; ++j) {
             const int dst = rk[j];
-            for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { a(i, dst) = z(i, j); });
+            for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { a(i, dst) = z(i, j); });
         }
     }
     ex.barrier(Mem::Global);
@@ -526,7 +526,7 @@ template <JobType J, Uplo UL, class Tier, class T> constexpr WorkspaceSize syev_
 // Returns 0, k > 0 when steqr did not converge (Cta: 1; Blocked: the e(j) != 0 left), -2 when A is
 // not square with 1 <= n (<= N for Cta); uniform.
 template <JobType J, Uplo UL, class Tier, class Ex, class MA, class WV>
-BATCHLAS_DLA_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Workspace& ws, const steqr_opts& opts = syev_detail::default_opts) {
+BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Workspace& ws, const steqr_opts& opts = syev_detail::default_opts) {
     using T = std::remove_cv_t<typename MA::value_type>;
     using R = routine::syev<J, UL>;
     using Tr = resolve_tier_t<R, T, Tier>;
@@ -556,7 +556,7 @@ BATCHLAS_DLA_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Works
         const syev_detail::cta_opts o{opts.max_sweeps, opts.shift, opts.update, true, true};
         bool failed = false;
         syev_detail::syev_cta_run<T, P, kVecs, Lay::lda, Lay::ldq>(ex.part, solve, a, 0, v, 0, w, 0, q, 0, A, A, W, n, UL == Uplo::Upper,
-                                                                   true, o, [&](bool f) BATCHLAS_DLA_BODY { failed = f; });
+                                                                   true, o, [&](bool f) BATCHLAS_DEVICE_BODY { failed = f; });
         return failed ? 1 : 0;
     }
 }

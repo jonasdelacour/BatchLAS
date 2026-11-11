@@ -71,10 +71,10 @@ library CALLs), address-space loss (0 generic LD/ST), spills (LMEM 0) and `reqd_
   run-time modes (uplo, side, trans, itype, job) become template parameters.
 - **Arithmetic policies** `arith::{Explicit, ExplicitInline, Native, Fma}` via `arith_t<Ops,T>`. Strict
   (1:1) ports use `Native` for bit identity; algorithm ports use `Explicit`.
-- **Inline policy: take the attribute of the replaced code.** `BATCHLAS_DLA_INLINE` (always_inline) for
-  leaf arithmetic, accessors and expression text; `BATCHLAS_DLA_HELPER` (plain inline) for ops that
+- **Inline policy: take the attribute of the replaced code.** `BATCHLAS_DEVICE_INLINE` (always_inline) for
+  leaf arithmetic, accessors and expression text; `BATCHLAS_DEVICE_HELPER` (plain inline) for ops that
   replace a plain-inline helper (an always_inline call after a loop is spliced ahead of the loop body,
-  and LLVM unrolls a loop differently once a call is inlined); `BATCHLAS_DLA_BODY` on lambdas passed to
+  and LLVM unrolls a loop differently once a call is inlined); `BATCHLAS_DEVICE_BODY` on lambdas passed to
   loop ops, which is also the sanctioned kernel-body invoker (`scripts/check_kernel_entry_calls.py`).
 - **Call ops from the kernel lambda or a named function**, never first through a functor `operator()`
   or a local lambda: DPC++'s SemaSYCL mis-handles a kernel body entered that way

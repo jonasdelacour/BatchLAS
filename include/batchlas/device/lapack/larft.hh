@@ -14,13 +14,13 @@ namespace larft_detail {
 // y := A x, A upper (strict lower never read), y not aliasing x. Item r forms y(r) from row r:
 // y is Cyclic, so a later call reading y(r) as A(r, :) runs on its writer (no barrier).
 template <class Ops = arith::Explicit, class Ex, class MA, class X, class Y>
-BATCHLAS_DLA_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, const X& xp, const Y& y) {
+BATCHLAS_DEVICE_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, const X& xp, const Y& y) {
     using T = typename MA::value_type;
     using A = arith_t<Ops, T>;
     detail::require_published<Ex, X>();
     const auto& x = detail::unpub(xp);
     const int n = a.rows();
-    for_each_owned(ex, n, [&](int r) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, n, [&](int r) BATCHLAS_DEVICE_BODY {
         T acc = A::zero();
         A::mac(acc, a(r, r), x(r));
 #pragma unroll 2  // 4 costs FP64 an occupancy step (REG 40 -> 48 in larft)
@@ -35,7 +35,7 @@ BATCHLAS_DLA_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, const X
 // -tau_j V^H v_j parks in T's strict lower row j; the trmv owner reads back only its rows; the
 // scratch is cleared last. tau_j == 0 gives a zero column above T(j, j).
 template <class Ex, class MV, class MT, class VT>
-BATCHLAS_DLA_INLINE void larft(const Ex& ex, const MV& V, const MT& Tm, const VT& tau) {
+BATCHLAS_DEVICE_INLINE void larft(const Ex& ex, const MV& V, const MT& Tm, const VT& tau) {
     using T = typename MT::value_type;
     using A = Arith<T>;
     const int m = V.rows(), ib = V.cols();

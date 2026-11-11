@@ -32,10 +32,6 @@ namespace sycl_geqrf {
 
 namespace {
 
-namespace gn = ::batchlas::geqrf_native;
-namespace tn = ::batchlas::tiny_native;
-namespace v2 = ::batchlas::device;
-namespace gd = ::batchlas::device::geqrf_detail;
 
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
 // copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
@@ -43,18 +39,18 @@ template <typename T> using TinyDev = typename sycl_device::DevMap<T>::type;
 
 constexpr int geqrf_tiny_worst_regs() {
     int worst = 0;
-    for (const int* t : {gn::GeqrfTinyRegs<float>::at, gn::GeqrfTinyRegs<double>::at,
-                         gn::GeqrfTinyRegs<sycl_device::Cx<float>>::at,
-                         gn::GeqrfTinyRegs<sycl_device::Cx<double>>::at}) {
+    for (const int* t : {geqrf_native::GeqrfTinyRegs<float>::at, geqrf_native::GeqrfTinyRegs<double>::at,
+                         geqrf_native::GeqrfTinyRegs<sycl_device::Cx<float>>::at,
+                         geqrf_native::GeqrfTinyRegs<sycl_device::Cx<double>>::at}) {
         for (int i = 0; i < 3; ++i) worst = (t[i] > worst) ? t[i] : worst;
     }
-    return worst + gn::kGeqrfTinyRegMargin;
+    return worst + geqrf_native::kGeqrfTinyRegMargin;
 }
 
 // GATE 1, the HARD one: a work-group whose warps overflow a register SUB-PARTITION ABORTS
 // the launch -- 64 lanes is 2 warps in one of the four, 1 x 32 x ceil8(226 + 8) = 7,680 of
 // its 16,384. Both operands are named so raising either is deliberate; GATE 2 still binds.
-constexpr int kGeqrfTinyMaxWg = gn::kGeqrfTinyWg;
+constexpr int kGeqrfTinyMaxWg = geqrf_native::kGeqrfTinyWg;
 constexpr int kGeqrfTinyWorstRegs = geqrf_tiny_worst_regs();
 static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
               "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "
@@ -63,9 +59,9 @@ static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
 // GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM (a regression
 // fails to COMPILE). GATE 3: each row's probed chunk width still re-derives from that row.
 #define BATCHLAS_GEQRF_TINY_CELL_ASSERT(D, N)                                               \
-    static_assert(gn::geqrf_tiny_cell_is_resident<D, N>(),                                  \
+    static_assert(geqrf_native::geqrf_tiny_cell_is_resident<D, N>(),                                  \
                   "geqrf tiny: this cell falls below R1's four-blocks-per-SM floor");       \
-    static_assert(gn::geqrf_tiny_chunk_is_fixed_point<D, N>(),                              \
+    static_assert(geqrf_native::geqrf_tiny_chunk_is_fixed_point<D, N>(),                              \
                   "geqrf tiny: the register row was probed at a different chunk width "     \
                   "than the rule now derives -- re-probe at the derived C and update the "  \
                   "row, or pin the cell");
@@ -93,9 +89,9 @@ constexpr int geqrf_tiny_type_ceiling() {
 // Local memory ONE work-group asks for, at the derived chunk width.
 template <typename T, int N>
 constexpr std::size_t geqrf_tiny_wg_bytes() {
-    constexpr int C = gn::geqrf_tiny_chunk<TinyDev<T>, N>();
-    return static_cast<std::size_t>(gn::geqrf_tiny_matrices_per_wg<N>()) *
-           gn::geqrf_tiny_slm_elems(N, C) * sizeof(T);
+    constexpr int C = geqrf_native::geqrf_tiny_chunk<TinyDev<T>, N>();
+    return static_cast<std::size_t>(geqrf_native::geqrf_tiny_matrices_per_wg<N>()) *
+           geqrf_native::geqrf_tiny_slm_elems(N, C) * sizeof(T);
 }
 
 // No request lands near the (47104, 49664] launch hole, so geqrf_cta.cc's padding is not carried.
@@ -112,20 +108,20 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     // Re-typed HERE: std::complex's Annex-G operator* is an isnan branch plus a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = v2::real_t<D>;
-    using Ar = v2::Arith<D>;
-    using Fa = v2::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
+    using R = device::real_t<D>;
+    using Ar = device::Arith<D>;
+    using Fa = device::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
-    constexpr int C = gn::geqrf_tiny_chunk<D, N>();
-    constexpr int SLDA = gn::geqrf_tiny_slda(C);
-    constexpr int M = gn::geqrf_tiny_matrices_per_wg<N>();
+    constexpr int C = geqrf_native::geqrf_tiny_chunk<D, N>();
+    constexpr int SLDA = geqrf_native::geqrf_tiny_slda(C);
+    constexpr int M = geqrf_native::geqrf_tiny_matrices_per_wg<N>();
     constexpr int WG = M * N;
-    constexpr std::size_t kPerMatrix = gn::geqrf_tiny_slm_elems(N, C);
+    constexpr std::size_t kPerMatrix = geqrf_native::geqrf_tiny_slm_elems(N, C);
 
-    static_assert(WG == gn::kGeqrfTinyWg, "the work-group must stay a whole number of warps");
-    static_assert(WG % tn::kTinySubGroupSize == 0, "the work-group must be whole sub-groups");
-    static_assert(tn::tiny_n_is_legal(N), "N must divide the sub-group");
+    static_assert(WG == geqrf_native::kGeqrfTinyWg, "the work-group must stay a whole number of warps");
+    static_assert(WG % tiny_native::kTinySubGroupSize == 0, "the work-group must be whole sub-groups");
+    static_assert(tiny_native::tiny_n_is_legal(N), "N must divide the sub-group");
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     D* const tp = reinterpret_cast<D*>(tau_ptr);
@@ -141,10 +137,10 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                               sycl::range<1>(static_cast<std::size_t>(WG))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
-                const v2::SgpPartition<N> ex{sg};
+                const device::SgpPartition<N> ex{sg};
                 const auto& part = ex.part;
                 const int lane = ex.lid();
-                const int slot = tn::tiny_partition_id(sg, part);
+                const int slot = tiny_native::tiny_partition_id(sg, part);
                 const int prob = static_cast<int>(it.get_group_linear_id()) * M + slot;
 
                 // NO EARLY RETURN. `if (prob >= batch) return;` is partition-uniform but NOT
@@ -158,7 +154,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     live ? static_cast<std::ptrdiff_t>(prob) * stride : std::ptrdiff_t(0);
 
                 D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
-                tn::tiny_load_full<D, N>(rA, ap + off, ld, lane, n, row_live);
+                tiny_native::tiny_load_full<D, N>(rA, ap + off, ld, lane, n, row_live);
 
                 D* const sP = &scratch[0] + static_cast<std::ptrdiff_t>(slot) *
                                                 static_cast<std::ptrdiff_t>(kPerMatrix);
@@ -181,16 +177,16 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // Order-symmetric, so every lane leaves with a BIT-IDENTICAL smax and ssq
                     // and needs no publish/broadcast pair. Widening either leaks across
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
-                    R smax = (lane >= j) ? v2::abs_inf(rA[j]) : R(0);
+                    R smax = (lane >= j) ? device::abs_inf(rA[j]) : R(0);
                     // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
-                    smax = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, smax, v2::op::FMax());
+                    smax = device::detail::butterfly<N, device::bfly::Asc>(ex.part, smax, device::op::FMax());
 
                     R ssq = R(0);
-                    if (lane > j && smax > R(0)) ssq = gd::abs2_scaled(rA[j], smax);
-                    ssq = v2::detail::butterfly<N, v2::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
+                    if (lane > j && smax > R(0)) ssq = device::geqrf_detail::abs2_scaled(rA[j], smax);
+                    ssq = device::detail::butterfly<N, device::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
 
-                    const v2::ScaledSsq<R> nrm{smax, ssq};
-                    const v2::LarfgScalars<D> hh = v2::larfg_scalars<v2::conv::Lapack>(alpha, nrm);
+                    const device::ScaledSsq<R> nrm{smax, ssq};
+                    const device::LarfgScalars<D> hh = device::larfg_scalars<device::conv::Lapack>(alpha, nrm);
 
                     // NO `if (hh.identity) continue;`: the identity case is arithmetically
                     // inert (tau = 0, beta = alpha, scale = 1), and omitting the branch is
@@ -216,20 +212,20 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     for (int k0 = 0; k0 < N; k0 += C) {
                         if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
                         if (k0 >= n) continue;          // wholly past the runtime cap
-                        gd::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
+                        device::geqrf_detail::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
                         sycl::group_barrier(sg);
-                        gd::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
+                        device::geqrf_detail::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
                         sycl::group_barrier(sg);
                         // The two barriers above cover all three hazards ONLY because sy is a
                         // separate array; their count and placement are guarded by source text.
                         // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
-                        gd::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                        device::geqrf_detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
                     }
                     // No barrier between columns: column j+1's butterflies read rA[j+1], which
                     // this lane updated itself in frag_rank1 -- a register-private dependence.
                 }
 
-                tn::tiny_store_full<D, N>(rA, ap + off, ld, lane, n, row_live);
+                tiny_native::tiny_store_full<D, N>(rA, ap + off, ld, lane, n, row_live);
                 if (row_live) {
                     tp[static_cast<std::ptrdiff_t>(prob) * n + lane] = my_tau;
                 }
@@ -270,10 +266,10 @@ unsigned geqrf_tiny_debug_launch(Queue& ctx, int n) {
     const std::size_t budget =
         resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     if (n < 1 || n > geqrf_tiny_max_n_for_slm<T>(budget)) return 0u;
-    switch (tn::tiny_bucket_ge(n)) {
-        case 8:  return (8u << 16)  | unsigned(gn::geqrf_tiny_matrices_per_wg<8>());
-        case 16: return (16u << 16) | unsigned(gn::geqrf_tiny_matrices_per_wg<16>());
-        case 32: return (32u << 16) | unsigned(gn::geqrf_tiny_matrices_per_wg<32>());
+    switch (tiny_native::tiny_bucket_ge(n)) {
+        case 8:  return (8u << 16)  | unsigned(geqrf_native::geqrf_tiny_matrices_per_wg<8>());
+        case 16: return (16u << 16) | unsigned(geqrf_native::geqrf_tiny_matrices_per_wg<16>());
+        case 32: return (32u << 16) | unsigned(geqrf_native::geqrf_tiny_matrices_per_wg<32>());
         default: return 0u;
     }
 }
@@ -337,7 +333,7 @@ Event geqrf_tiny_dispatch(Queue& ctx,
 
     // Explicit throw, never a silent leading-submatrix solve. The N = 32 arm sits under
     // `if constexpr` so a ceiling-16 type does not INSTANTIATE an unreachable kernel.
-    const int bucket = tn::tiny_bucket_ge(n);
+    const int bucket = tiny_native::tiny_bucket_ge(n);
     if (bucket == 8) {
         return launch(std::integral_constant<int, 8>{});
     }

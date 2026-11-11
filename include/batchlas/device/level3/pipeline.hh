@@ -20,7 +20,7 @@ namespace batchlas::device::l3 {
 // Stages 1: load, barrier, compute, barrier per slab. Stages 2: slab t + 1 loads while slab t
 // computes, one barrier per slab. Exact: no tail, and the first load sits behind tiles > 0.
 template <int Stages, bool Exact, int TileK, class Ex, class Load, class Compute>
-BATCHLAS_DLA_INLINE void kloop(const Ex& ex, int tile_count, Load&& load, Compute&& compute) {
+BATCHLAS_DEVICE_INLINE void kloop(const Ex& ex, int tile_count, Load&& load, Compute&& compute) {
     static_assert(Stages == 1 || Stages == 2, "kloop: one or two local stages");
     if constexpr (Stages == 1) {
         for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
@@ -64,7 +64,7 @@ BATCHLAS_DLA_INLINE void kloop(const Ex& ex, int tile_count, Load&& load, Comput
 // the buffer slab s - 1 was read from, and that read ended before the barrier closing iteration
 // s - 1. Unrolled by two so buf is a constant. Ends without a barrier.
 template <int TileK, class Ex, class GLoad, class SStore, class Compute>
-BATCHLAS_DLA_INLINE void kloop_prefetch2(const Ex& ex, int slabs, GLoad&& gload, SStore&& sstore, Compute&& compute) {
+BATCHLAS_DEVICE_INLINE void kloop_prefetch2(const Ex& ex, int slabs, GLoad&& gload, SStore&& sstore, Compute&& compute) {
     gload(0);
     sstore(0);
     ex.barrier();
@@ -88,12 +88,12 @@ BATCHLAS_DLA_INLINE void kloop_prefetch2(const Ex& ex, int slabs, GLoad&& gload,
 // Stages - 2 groups are pending, drain() until none. Step s waits for slab s, barriers, refills the
 // buffer slab s - 1 was read from and computes; one commit per step (empty past the end).
 template <int Stages, int TileK, class Ex, class Issue, class Commit, class Wait, class Drain, class Compute>
-BATCHLAS_DLA_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Commit&& commit, Wait&& wait, Drain&& drain,
+BATCHLAS_DEVICE_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Commit&& commit, Wait&& wait, Drain&& drain,
                                      Compute&& compute) {
-    [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DLA_BODY {
+    [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DEVICE_BODY {
         ((J < slabs ? issue(J * TileK, std::integral_constant<int, J>{}) : void(), commit()), ...);
     }(std::make_integer_sequence<int, Stages - 1>{});
-    auto step = [&](int s, auto buf) BATCHLAS_DLA_BODY {
+    auto step = [&](int s, auto buf) BATCHLAS_DEVICE_BODY {
         constexpr int b = decltype(buf)::value;
         wait();
         ex.barrier();
@@ -102,7 +102,7 @@ BATCHLAS_DLA_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Com
         compute(b);
     };
     for (int s0 = 0; s0 < slabs; s0 += Stages) {
-        [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DLA_BODY {
+        [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DEVICE_BODY {
             ((s0 + J < slabs && (step(s0 + J, std::integral_constant<int, J>{}), true)) && ...);
         }(std::make_integer_sequence<int, Stages>{});
     }
@@ -116,7 +116,7 @@ BATCHLAS_DLA_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Com
 /// compute(buf); one commit per step, empty past the end, keeps the wait count at Stages - 2.
 /// Ends drained, without a barrier.
 template <int Stages, int TileK, class Ex, class Issue, class Compute>
-BATCHLAS_DLA_INLINE void kloop_async_ring(const Ex& ex, int slabs, int k_lo, Issue&& issue, Compute&& compute) {
+BATCHLAS_DEVICE_INLINE void kloop_async_ring(const Ex& ex, int slabs, int k_lo, Issue&& issue, Compute&& compute) {
 BATCHLAS_UNROLL_FULL
     for (int j = 0; j < Stages - 1; ++j) {
         if (j < slabs) issue(k_lo + j * TileK, j);

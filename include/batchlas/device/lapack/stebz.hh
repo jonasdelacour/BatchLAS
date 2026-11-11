@@ -57,7 +57,7 @@ template <class R> constexpr Layout<R> layout() {
 
 // [min_i d_i - r_i, max_i d_i + r_i], r_i = |e_{i-1}| + |e_i|: min, then max, then max.
 template <Scope S = Scope::Auto, class Ex, class D, class E>
-BATCHLAS_DLA_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& e) {
+BATCHLAS_DEVICE_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& e) {
     using R = elem_t<D>;
     const int n = d.size();
     R lo = std::numeric_limits<R>::max(), hi = -std::numeric_limits<R>::max(), e2 = R(0);
@@ -77,7 +77,7 @@ BATCHLAS_DLA_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& e) 
 
 // Sign count of q_i = d_i - x - e_{i-1}^2 / q_{i-1}; |q| < pivmin is clamped to -pivmin
 // (dlaebz), which keeps the count monotone in x.
-template <class D, class E, class R> BATCHLAS_DLA_INLINE int laebz_count(const Thread&, const D& d, const E& e, R x, R pivmin) {
+template <class D, class E, class R> BATCHLAS_DEVICE_INLINE int laebz_count(const Thread&, const D& d, const E& e, R x, R pivmin) {
     const int n = d.size();
     int count = 0;
     R q = d(0) - x;
@@ -95,7 +95,7 @@ template <class D, class E, class R> BATCHLAS_DLA_INLINE int laebz_count(const T
 // Eigenvalue j (0-based, ascending) in (lo, hi] with count(lo) <= j < count(hi): halves until
 // width <= tol, a midpoint that no longer moves, or max_iter; returns the final midpoint.
 template <class D, class E, class R>
-BATCHLAS_DLA_INLINE R laebz_bisect(const Thread& th, const D& d, const E& e, int j, R lo, R hi, R tol, R pivmin, int max_iter) {
+BATCHLAS_DEVICE_INLINE R laebz_bisect(const Thread& th, const D& d, const E& e, int j, R lo, R hi, R tol, R pivmin, int max_iter) {
     R left = lo, right = hi;
     for (int iter = 0; iter < max_iter; ++iter) {
         if ((right - left) <= tol) break;
@@ -136,7 +136,7 @@ template <class Tier, class T> constexpr WorkspaceSize stebz_buffer_size(int n) 
 // Workspace: stebz_buffer_size<Tier, T>(n) (local only). The interval and the selection are
 // published through local memory by the leader, as the host route does.
 template <class Tier, class Ex, class D, class E, class W, class R>
-BATCHLAS_DLA_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, int& m, const Workspace& ws,
+BATCHLAS_DEVICE_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, int& m, const Workspace& ws,
                               const stebz_detail::Params<R>& p) {
     using T = elem_t<D>;
     static_assert(std::is_same_v<T, R>, "stebz: params of the matrix's real type");

@@ -35,7 +35,6 @@ namespace sycl_getrs {
 namespace {
 
 using namespace batchlas::sycl_device;
-namespace v2 = batchlas::device;
 
 // nb must not exceed the sub-group size: the block solve is a sub-group shuffle
 // recurrence with lane i owning row i.
@@ -190,7 +189,7 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                      static_cast<std::size_t>(getrs_fused_blk_ld(nb))) * scalar_bytes);
 }
 
-// The getrs bodies are device LA v2 ops (v2 core plus lapack/getrs.hh): the RHS y is
+// The getrs bodies are device LA ops (the core plus lapack/getrs.hh): the RHS y is
 // resident in local memory, the block solve is getrs_detail::trsm_lane (one sub-group, lane i owns row i,
 // shuffles only), the off-diagonal update getrs_detail::gemm_nr (NoTrans: row-parallel axpy form; Trans:
 // one sub-group per column, a shift-down sum with no static local memory, which would reopen the
@@ -200,8 +199,8 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
 
 // Every staging copy (B <-> y, A's diagonal block -> blk): core lacpy on the hand loops'
 // (e % m, e / m) walk.
-template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void stage(const Ex& ex, const MA& a, const MB& b) {
-    v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, a, b);
+template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void stage(const Ex& ex, const MA& a, const MB& b) {
+    device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, a, b);
 }
 
 template <typename T, int NR> class GetrsFusedNKernel;
@@ -242,31 +241,31 @@ Event fused_launch_notrans(Queue& ctx,
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
-                const v2::RtGroup<> ex(it);
-                const v2::SubGroup<32> sx{sg};
+                const device::RtGroup<> ex(it);
+                const device::SubGroup<32> sx{sg};
 
-                const auto a = v2::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
-                const auto bm = v2::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
-                const auto y = v2::mat<v2::Mem::Local>(&slm[0], n, nrhs, n);
+                const auto a = device::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
+                const auto bm = device::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
+                const auto y = device::mat<device::Mem::Local>(&slm[0], n, nrhs, n);
                 D* const blk_p = &slm[rhs_elems];
-                const auto ipiv = v2::vec(piv + b * static_cast<std::size_t>(pstride), n);
+                const auto ipiv = device::vec(piv + b * static_cast<std::size_t>(pstride), n);
 
                 stage(ex, bm, y);
                 ex.barrier();
-                v2::laswp<v2::dir::Forward>(ex, y, ipiv, 0, n);  // F b: item c walks column c
+                device::laswp<device::dir::Forward>(ex, y, ipiv, 0, n);  // F b: item c walks column c
                 ex.barrier();
 
                 // L y = F b, unit lower, forward
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-                    const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, a.sub(j, j, jb, jb), blk);
                     ex.barrier();
                     if (c_active && jb > 1)
-                        v2::getrs_detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
+                        device::getrs_detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    v2::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
-                                                            y.sub(j, 0, jb, nrhs), v2::One{},
+                    device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                                                            y.sub(j, 0, jb, nrhs), device::One{},
                                                             y.sub(j + jb, 0, n - j - jb, nrhs));
                     ex.barrier();
                 }
@@ -275,14 +274,14 @@ Event fused_launch_notrans(Queue& ctx,
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-                    const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, a.sub(j0, j0, jb, jb), blk);
                     ex.barrier();
                     if (c_active)
-                        v2::getrs_detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
+                        device::getrs_detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    v2::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, a.sub(0, j0, j0, jb),
-                                                            y.sub(j0, 0, jb, nrhs), v2::One{}, y.sub(0, 0, j0, nrhs));
+                    device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(0, j0, j0, jb),
+                                                            y.sub(j0, 0, jb, nrhs), device::One{}, y.sub(0, 0, j0, nrhs));
                     ex.barrier();
                 }
 
@@ -331,14 +330,14 @@ Event fused_launch_trans(Queue& ctx,
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
-                const v2::RtGroup<> ex(it);
-                const v2::SubGroup<32> sx{sg};
+                const device::RtGroup<> ex(it);
+                const device::SubGroup<32> sx{sg};
 
-                const auto a = v2::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
-                const auto bm = v2::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
-                const auto y = v2::mat<v2::Mem::Local>(&slm[0], n, nrhs, n);
+                const auto a = device::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
+                const auto bm = device::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
+                const auto y = device::mat<device::Mem::Local>(&slm[0], n, nrhs, n);
                 D* const blk_p = &slm[rhs_elems];
-                const auto ipiv = v2::vec(piv + b * static_cast<std::size_t>(pstride), n);
+                const auto ipiv = device::vec(piv + b * static_cast<std::size_t>(pstride), n);
                 // op(A) = conj(A) when conj, read straight from A; blk holds op(A) and the block
                 // solves read it transposed, blk[s + t*bld], stride bld across lanes (the pad).
 
@@ -349,13 +348,13 @@ Event fused_launch_trans(Queue& ctx,
                 // form, one sub-group per column, its 32 lanes reading 32 consecutive elements.
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-                    const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
-                    stage(ex, v2::conj_if(a.sub(j, j, jb, jb), conj), blk);
-                    v2::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
-                                                          v2::One{}, y.sub(j, 0, jb, nrhs));
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, device::conj_if(a.sub(j, j, jb, jb), conj), blk);
+                    device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
+                                                          device::One{}, y.sub(j, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active)
-                        v2::getrs_detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
+                        device::getrs_detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
                                                                       cs);
                     ex.barrier();
                 }
@@ -364,21 +363,21 @@ Event fused_launch_trans(Queue& ctx,
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-                    const auto blk = v2::mat<v2::Mem::Local>(blk_p, jb, jb, bld);
-                    stage(ex, v2::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
-                    v2::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(a.sub(jend, j0, n - jend, jb), conj),
-                                                          y.sub(jend, 0, n - jend, nrhs), v2::One{},
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, device::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
+                    device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(jend, j0, n - jend, jb), conj),
+                                                          y.sub(jend, 0, n - jend, nrhs), device::One{},
                                                           y.sub(j0, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active && jb > 1)
-                        v2::getrs_detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, v2::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
+                        device::getrs_detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
                                                                    cs);
                     ex.barrier();
                 }
 
                 // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every transposition is
                 // its own inverse, so only the ORDER changes.
-                v2::laswp<v2::dir::Backward>(ex, y, ipiv, 0, n);
+                device::laswp<device::dir::Backward>(ex, y, ipiv, 0, n);
                 ex.barrier();
 
                 stage(ex, y, bm);
@@ -447,12 +446,12 @@ Event potrs_fused_launch(Queue& ctx,
                 const std::size_t nz = static_cast<std::size_t>(n);
                 const std::size_t bz = static_cast<std::size_t>(bld);
 
-                auto ld_a = [&](int i, int c) BATCHLAS_DLA_BODY {
+                auto ld_a = [&](int i, int c) BATCHLAS_DEVICE_BODY {
                     return Ab[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) * ldz];
                 };
                 // The adjoint's element, op(A)[i, c] = conj(A[c, i]), read at A[i, c].
-                auto ld_h = [&](int i, int c) BATCHLAS_DLA_BODY { return dev_conj(ld_a(i, c)); };
-                const auto add = [](D u, D v) { return v2::Arith<D>::add(u, v); };
+                auto ld_h = [&](int i, int c) BATCHLAS_DEVICE_BODY { return dev_conj(ld_a(i, c)); };
+                const auto add = [](D u, D v) { return device::Arith<D>::add(u, v); };
 
                 for (int e = tid; e < n * nrhs; e += wg) {
                     const int i = e % n, c = e / n;
@@ -476,7 +475,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int i = lane; i < j; i += 32) {
                                 const D a = ld_h(i, j + t);
                                 BATCHLAS_UNROLL_FULL
@@ -486,7 +485,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = v2::shift_reduce<32>(sg, acc[c], add);  // leader-only
+                                    const D s = device::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j + t] = dev_sub(y[c * nz + j + t], s);
                                 }
                         }
@@ -504,7 +503,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j + l] : v2::Arith<D>::zero();
+                            D v = on ? yc[j + l] : device::Arith<D>::zero();
                             for (int s = 0; s < jb; ++s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -521,7 +520,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = j + jb + tid; i < n; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j + kk);
                                 BATCHLAS_UNROLL_FULL
@@ -552,7 +551,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int i = jend + lane; i < n; i += 32) {
                                 const D a = ld_h(i, j0 + t);
                                 BATCHLAS_UNROLL_FULL
@@ -562,7 +561,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = v2::shift_reduce<32>(sg, acc[c], add);  // leader-only
+                                    const D s = device::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j0 + t] = dev_sub(y[c * nz + j0 + t], s);
                                 }
                         }
@@ -576,7 +575,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j0 + l] : v2::Arith<D>::zero();
+                            D v = on ? yc[j0 + l] : device::Arith<D>::zero();
                             for (int s = jb - 1; s >= 0; --s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -592,7 +591,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = tid; i < j0; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = v2::Arith<D>::zero();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j0 + kk);
                                 BATCHLAS_UNROLL_FULL

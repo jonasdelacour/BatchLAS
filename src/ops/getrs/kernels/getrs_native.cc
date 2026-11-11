@@ -29,7 +29,6 @@ namespace sycl_getrs {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 // Per-TU tag: this cluster's own instantiation of the shared LASWP kernel.
 struct GetrsLaswpTag {};
@@ -118,14 +117,14 @@ bool getrs_perm_gather_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group(0));
                 const int lid = static_cast<int>(it.get_local_id(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
-                const v2::RtGroup<> ex(it);
+                const device::RtGroup<> ex(it);
 
                 int* const idxs = &ints[0];
                 int* const ips = &ints[static_cast<std::size_t>(n)];
-                const auto bm = v2::mat_wide(bp + static_cast<std::ptrdiff_t>(b) * stride, n, nrhs, ld);
+                const auto bm = device::mat_wide(bp + static_cast<std::ptrdiff_t>(b) * stride, n, nrhs, ld);
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                v2::for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
                     int p = ip[i] - 1;  // GLOBAL 1-BASED on the wire
                     // ?GETRF guarantees p in [i, n); clamped anyway, since a bad value
                     // corrupts the index array for the WHOLE item.
@@ -133,29 +132,29 @@ bool getrs_perm_gather_launch(Queue& ctx,
                     ips[i] = p;
                     idxs[i] = i;
                 });
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
 
                 // idxs := the interchange list applied to the identity (an n x 1 laswp; ips is the
                 // clamped 0-based list, handed to laswp in LAPACK's 1-based form). REVERSE ORDER for
                 // the inverse: forwards, this list builds P, not P^T.
                 if (lid == 0) {
-                    const auto idx = v2::mat<v2::Mem::Local>(idxs, n, 1, n);
+                    const auto idx = device::mat<device::Mem::Local>(idxs, n, 1, n);
                     const auto ipiv1 = [ips](int k) { return ips[k] + 1; };
-                    if (forward) v2::laswp<v2::dir::Forward>(v2::Thread{}, idx, ipiv1, 0, n);
-                    else v2::laswp<v2::dir::Backward>(v2::Thread{}, idx, ipiv1, 0, n);
+                    if (forward) device::laswp<device::dir::Forward>(device::Thread{}, idx, ipiv1, 0, n);
+                    else device::laswp<device::dir::Backward>(device::Thread{}, idx, ipiv1, 0, n);
                 }
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
 
-                const auto tv = v2::mat(tile, n, Cs, ldt);
+                const auto tv = device::mat(tile, n, Cs, ldt);
                 for (int cb = 0; cb < nrhs; cb += Cs) {
                     const int cw = ((nrhs - cb) < Cs) ? (nrhs - cb) : Cs;
-                    v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Stepped>(ex, bm.sub(0, cb, n, cw),
+                    device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Stepped>(ex, bm.sub(0, cb, n, cw),
                                                                                  tv.sub(0, 0, n, cw));
-                    ex.barrier(v2::Mem::Global);
-                    v2::getrs_detail::lapmr_copy<v2::alg::Stepped>(ex, tv, v2::vec<v2::Mem::Local>(idxs, n),
+                    ex.barrier(device::Mem::Global);
+                    device::getrs_detail::lapmr_copy<device::alg::Stepped>(ex, tv, device::vec<device::Mem::Local>(idxs, n),
                                                          bm.sub(0, cb, n, cw));
                     // The write-back must finish before the next chunk overwrites the tile.
-                    ex.barrier(v2::Mem::Global);
+                    ex.barrier(device::Mem::Global);
                 }
             });
     });

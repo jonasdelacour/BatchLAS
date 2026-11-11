@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// v2 parity, level 1 and gemv: axpy(+scal), dot, nrm2, gemv N, gemv T (A, x in global memory).
+// device LA parity, level 1 and gemv: axpy(+scal), dot, nrm2, gemv N, gemv T (A, x in global memory).
 #include <benchmarks/sass_lab/v2lab.hh>
 
 namespace lab {
@@ -23,10 +23,10 @@ template <class T, int N, int V, int WG> sycl::event w_axpy(sycl::queue& q, Data
             lean::axpy(ex, av.col(0), av.col(1), alpha);
             lean::scal(ex, av.col(2), alpha);
         } else {
-            const dv2::WorkGroup<WG> ex{it};
-            const auto av = dv2::mat(a, n, n, ld);
-            dv2::axpy(ex, alpha, av.col(0), av.col(1));
-            dv2::scal(ex, alpha, av.col(2));
+            const batchlas::device::WorkGroup<WG> ex{it};
+            const auto av = batchlas::device::mat(a, n, n, ld);
+            batchlas::device::axpy(ex, alpha, av.col(0), av.col(1));
+            batchlas::device::scal(ex, alpha, av.col(2));
         }
     });
 }
@@ -53,13 +53,13 @@ template <bool Nrm, class Name, class T, int N, int V, int WG> sycl::event w_dot
             if constexpr (Nrm) r = sycl::sqrt(r);
         } else {
             auto body = [&](const auto& ex) {
-                if constexpr (!Nrm) r = dv2::dot(ex, dv2::vec(x, n), dv2::vec(y, n));
-                else if constexpr (V == kV2) r = dv2::nrm2<dv2::alg::Unscaled>(ex, dv2::vec(x, n));
-                else if constexpr (V == kV2Blue) r = dv2::nrm2<dv2::alg::Blue>(ex, dv2::vec(x, n));
-                else r = dv2::nrm2<dv2::alg::Scaled>(ex, dv2::vec(x, n));
+                if constexpr (!Nrm) r = batchlas::device::dot(ex, batchlas::device::vec(x, n), batchlas::device::vec(y, n));
+                else if constexpr (V == kV2) r = batchlas::device::nrm2<batchlas::device::alg::Unscaled>(ex, batchlas::device::vec(x, n));
+                else if constexpr (V == kV2Blue) r = batchlas::device::nrm2<batchlas::device::alg::Blue>(ex, batchlas::device::vec(x, n));
+                else r = batchlas::device::nrm2<batchlas::device::alg::Scaled>(ex, batchlas::device::vec(x, n));
             };
-            if constexpr (WG == 32) body(dv2::SubGroup<32>{it.get_sub_group()});
-            else body(dv2::WorkGroup<WG>{it});
+            if constexpr (WG == 32) body(batchlas::device::SubGroup<32>{it.get_sub_group()});
+            else body(batchlas::device::WorkGroup<WG>{it});
         }
         if (it.get_local_linear_id() == 0) dd.Out[static_cast<std::ptrdiff_t>(b) * Data<T>::ms] = r;
     });
@@ -67,7 +67,7 @@ template <bool Nrm, class Name, class T, int N, int V, int WG> sycl::event w_dot
 
 // out[b] = x.y, out[b] + ms/2 = y.y from one loop: the latrd gamma/delta pair. hand and lean are
 // the legacy idiom (one loop, two group reductions; lean has no fused pair, so it is the hand
-// body); v2 is dotN<2> without Scratch (one reduction per value, pack-expanded); kV2Scratch is
+// body); device is dotN<2> without Scratch (one reduction per value, pack-expanded); kV2Scratch is
 // dotN<2> with Scratch (one packed exchange).
 template <class T, int N, int V, int WG> sycl::event w_dotn2(sycl::queue& q, Data<T>& d, int n_rt) {
     const Data<T> dd = d;
@@ -88,11 +88,11 @@ template <class T, int N, int V, int WG> sycl::event w_dotn2(sycl::queue& q, Dat
             r0 = lab::group_sum(it.get_group(), a0);
             r1 = lab::group_sum(it.get_group(), a1);
         } else {
-            const dv2::WorkGroup<WG> ex{it};
-            const auto xs = std::array<decltype(dv2::vec(x, n)), 2>{dv2::vec(x, n), dv2::vec(y, n)};
+            const batchlas::device::WorkGroup<WG> ex{it};
+            const auto xs = std::array<decltype(batchlas::device::vec(x, n)), 2>{batchlas::device::vec(x, n), batchlas::device::vec(y, n)};
             std::array<T, 2> r;
-            if constexpr (V == kV2) r = dv2::dotN<2>(ex, xs, dv2::vec(y, n));
-            else r = dv2::dotN<2>(ex, dv2::Scratch<T, 2 * (WG / 32)>{raw(scr)}, xs, dv2::vec(y, n));
+            if constexpr (V == kV2) r = batchlas::device::dotN<2>(ex, xs, batchlas::device::vec(y, n));
+            else r = batchlas::device::dotN<2>(ex, batchlas::device::Scratch<T, 2 * (WG / 32)>{raw(scr)}, xs, batchlas::device::vec(y, n));
             r0 = r[0], r1 = r[1];
         }
         if (it.get_local_linear_id() == 0) {
@@ -133,8 +133,8 @@ template <Transpose TR, class Name, class T, int N, int V, int WG> sycl::event w
             if constexpr (TR == Transpose::NoTrans) lean::gemv_n(WgExec<WG>{it}, LMat<T>{a, n, n, ld}, LVec<T>{x, n}, LVec<T>{y, n});
             else lean::gemv_t(WgExec<WG>{it}, LMat<T>{a, n, n, ld}, LVec<T>{x, n}, LVec<T>{y, n});
         } else {
-            dv2::gemv<TR>(dv2::WorkGroup<WG>{it}, dv2::One{}, dv2::mat(a, n, n, ld), dv2::assume_published(dv2::vec(x, n)),
-                          dv2::Zero{}, dv2::vec(y, n));
+            batchlas::device::gemv<TR>(batchlas::device::WorkGroup<WG>{it}, batchlas::device::One{}, batchlas::device::mat(a, n, n, ld), batchlas::device::assume_published(batchlas::device::vec(x, n)),
+                          batchlas::device::Zero{}, batchlas::device::vec(y, n));
         }
     });
 }

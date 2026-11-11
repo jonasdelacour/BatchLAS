@@ -38,13 +38,10 @@ template <typename T, int N, int NC, int MinBlocks> class GetrfTinyKernel;
 
 namespace {
 
-namespace tn = ::batchlas::tiny_native;
-namespace v2 = ::batchlas::device;
-namespace g2 = ::batchlas::device::getf2_detail;
 
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
-constexpr int kTinyWg = tn::kTinyWgSize;
+constexpr int kTinyWg = tiny_native::kTinyWgSize;
 static_assert(kTinyWg == kGetrfTinyWgSize, "getrf.cc's can_run reads kGetrfTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time; per SUB-PARTITION,
@@ -78,7 +75,7 @@ struct TinyMat {
     using value_type = D;
     D* p;
     std::ptrdiff_t ld;
-    BATCHLAS_DLA_INLINE D& operator()(int r, int c) const {
+    BATCHLAS_DEVICE_INLINE D& operator()(int r, int c) const {
         return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
     }
 };
@@ -86,13 +83,13 @@ struct TinyPiv {
     int* p;
     int b;
     int n;
-    BATCHLAS_DLA_INLINE int& operator()(int i) const { return p[static_cast<std::ptrdiff_t>(b) * n + i]; }
+    BATCHLAS_DEVICE_INLINE int& operator()(int i) const { return p[static_cast<std::ptrdiff_t>(b) * n + i]; }
 };
 struct TinyInfo {
     int32_t* p;
     int b;
     template <typename Px>
-    BATCHLAS_DLA_INLINE void operator()(const Px& px, int32_t v) const {
+    BATCHLAS_DEVICE_INLINE void operator()(const Px& px, int32_t v) const {
         if (px.leader()) p[b] = v;
     }
 };
@@ -102,16 +99,16 @@ struct TinyInfo {
 // orders this store after every lane's reads two steps back. evidence: docs/perf/lu.md#the-local-memory-broadcast
 template <typename D, int NC, int Mpw>
 struct TinySlmBcast {
-    using R = v2::real_t<D>;
-    using R4 = tn::tiny_r4<R>;
-    static constexpr int kW = tn::tiny_r4_width<D>();
+    using R = device::real_t<D>;
+    using R4 = tiny_native::tiny_r4<R>;
+    static constexpr int kW = tiny_native::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;
     const sycl::local_accessor<R4, 1>& slm;
     sycl::sub_group sg;
     int pidx;
     int lane;
     mutable R4* sp = nullptr;
-    BATCHLAS_DLA_INLINE void publish(int j, const v2::Frag<D, NC>& rA, int, g2::PivotWinner w) const {
+    BATCHLAS_DEVICE_INLINE void publish(int j, const device::Frag<D, NC>& rA, int, device::getf2_detail::PivotWinner w) const {
         sp = &slm[((j & 1) * Mpw + pidx) * kNCV];
         if (lane == w.src) {
 BATCHLAS_UNROLL_FULL
@@ -122,11 +119,11 @@ BATCHLAS_UNROLL_FULL
         }
         sycl::group_barrier(sg);
     }
-    BATCHLAS_DLA_INLINE D pivot(int j, const v2::Frag<D, NC>&, g2::PivotWinner) const {
-        return tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
+    BATCHLAS_DEVICE_INLINE D pivot(int j, const device::Frag<D, NC>&, device::getf2_detail::PivotWinner) const {
+        return tiny_native::tiny_r4_get<D, R>(sp[j / kW], j % kW);
     }
     template <typename F>
-    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const v2::Frag<D, NC>&, g2::PivotWinner, F&& f) const {
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const device::Frag<D, NC>&, device::getf2_detail::PivotWinner, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int v = 0; v < kNCV; ++v) {
             if (v < j / kW || v * kW >= ncols) continue;
@@ -135,7 +132,7 @@ BATCHLAS_UNROLL_FULL
             for (int e = 0; e < kW; ++e) {
                 const int k = v * kW + e;
                 if (k <= j || k >= NC || k >= ncols) continue;
-                f(k, tn::tiny_r4_get<D, R>(x, e));
+                f(k, tiny_native::tiny_r4_get<D, R>(x, e));
             }
         }
     }
@@ -148,9 +145,9 @@ BATCHLAS_UNROLL_FULL
 // one shuffle per element (two per complex). evidence: docs/perf/lu.md#the-local-memory-broadcast
 template <typename D, int N, int NC, int Mpw, int MinBlocks, bool Slm>
 struct GetrfTinyBody {
-    using R = v2::real_t<D>;
-    using R4 = tn::tiny_r4<R>;
-    static constexpr int kW = tn::tiny_r4_width<D>();
+    using R = device::real_t<D>;
+    using R4 = tiny_native::tiny_r4<R>;
+    static constexpr int kW = tiny_native::tiny_r4_width<D>();
     static constexpr int kNCV = (NC + kW - 1) / kW;   // vectors per published row
     D* ap;
     int n;
@@ -166,10 +163,10 @@ struct GetrfTinyBody {
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
-        const v2::SgpPartition<N> px(sg);
+        const device::SgpPartition<N> px(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = px.lid();
-        const int pidx = tn::tiny_partition_id(sg, px.part);
+        const int pidx = tiny_native::tiny_partition_id(sg, px.part);
         const int prob_id = wg_id * kMpw + pidx;
 
         // CLAMP, DO NOT RETURN (as steqr_cta.cc does too): tiny_device.hh's
@@ -188,10 +185,10 @@ struct GetrfTinyBody {
         // rejects a heterogeneous batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
         if constexpr (Slm) {
             const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
-            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, bc, info);
+            device::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, bc, info);
         } else {
             // one select per element, two per complex
-            v2::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, g2::bcast_shuffle(px), info);
+            device::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, device::getf2_detail::bcast_shuffle(px), info);
         }
     }
 };
@@ -269,7 +266,7 @@ template <typename T, int N>
 Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
                            int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     if constexpr (getrf_tiny_slm<T>() && N >= 16) {
-        switch (tn::tiny_col_bucket(n, 2)) {
+        switch (tiny_native::tiny_col_bucket(n, 2)) {
 #define BATCHLAS_GETRF_TINY_NC(NCC)                                                            \
             case NCC:                                                                          \
                 if constexpr (NCC <= N && NCC > N / 2) {                                       \

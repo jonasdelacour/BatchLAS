@@ -28,7 +28,6 @@
 
 namespace batchlas {
 
-namespace v2 = batchlas::device;
 
 template <Backend B, typename T, int32_t P>
 class StedcFusedCtaMerge;
@@ -77,9 +76,9 @@ inline void load_local_problem_vectors(const Ex& ex,
                                        const VectorView<T>& z_prob_global,
                                        const VectorView<T>& d_prob,
                                        const VectorView<T>& z_prob) {
-    v2::copy(ex, d_prob_global, d_prob);
-    v2::copy(ex, z_prob_global, z_prob);
-    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+    device::copy(ex, d_prob_global, d_prob);
+    device::copy(ex, z_prob_global, z_prob);
+    device::sync<device::scope::Group>(ex, device::Mem::Global);
 }
 
 template <Backend B, typename T, int32_t P>
@@ -118,9 +117,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const v2::RtGroup<v2::Scope::Group, sg_size> wex{item};
+                const device::RtGroup<device::Scope::Group, sg_size> wex{item};
                 // One root per partition of P lanes; the solver's reductions are shuffles.
-                const v2::SgpPartition<P> pex{item.get_sub_group()};
+                const device::SgpPartition<P> pex{item.get_sub_group()};
                 const int32_t sg_id = static_cast<int32_t>(item.get_sub_group().get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(pex.part.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(pex.part.get_group_linear_id());
@@ -132,7 +131,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 }
 
                 auto Q_bid = Qview.batch_item(bid);
-                const auto Q = v2::mat(Q_bid);
+                const auto Q = device::mat(Q_bid);
                 const auto d_prob = VectorView<T>(util::get_raw_ptr(d_local), dd);
                 const auto z_prob = VectorView<T>(util::get_raw_ptr(z_local), dd);
                 load_local_problem_vectors(wex, eigenvalues.batch_item(bid), v.batch_item(bid), d_prob, z_prob);
@@ -142,7 +141,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 // Named before the call: the kernel's captures (its parameter layout) keep the
                 // order of first use they had with this body inline (params, temp_lambdas, ...).
                 const int32_t max_iter = static_cast<int32_t>(params.max_sec_iter);
-                const auto on_root = [&](int32_t root_ix, const v2::laed4_root<T>& root) {
+                const auto on_root = [&](int32_t root_ix, const device::laed4_root<T>& root) {
                     temp_lambdas(root_ix, bid) = root.origin + root.tau;
                     // This is the one merge arm that honours params.max_sec_iter, so it is also
                     // the one a forced-non-convergence test can drive from the public StedcParams.
@@ -152,7 +151,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                 };
                 // One root per partition, then the rescale and the vectors with one index per
                 // partition: laed3 (no work-group reduction per index).
-                v2::laed3<T>(wex, pex, part_id, parts_per_wg, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
+                device::laed3<T>(wex, pex, part_id, parts_per_wg, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
             });
     });
 }
@@ -190,7 +189,7 @@ void stedc_merge_fused_wg(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
-                const v2::RtGroup<> ex{item};
+                const device::RtGroup<> ex{item};
 
                 const int32_t dd = n_reduced[bid];
                 if (dd <= 0) {
@@ -198,7 +197,7 @@ void stedc_merge_fused_wg(Queue& ctx,
                 }
 
                 auto Q_bid = Qview.batch_item(bid);
-                const auto Q = v2::mat(Q_bid);
+                const auto Q = device::mat(Q_bid);
                 const auto d_prob = VectorView<T>(util::get_raw_ptr(d_local), dd);
                 const auto z_prob = VectorView<T>(util::get_raw_ptr(z_local), dd);
                 load_local_problem_vectors(ex, eigenvalues.batch_item(bid), v.batch_item(bid), d_prob, z_prob);
@@ -209,13 +208,13 @@ void stedc_merge_fused_wg(Queue& ctx,
                 // the rescale and the vectors sequentially over the index: laed3 with (0, 1).
                 // on_root named first: the capture order of the inline body (see the CTA kernel).
                 const int32_t max_iter = static_cast<int32_t>(params.max_sec_iter);
-                const auto on_root = [&](int32_t root_ix, const v2::laed4_root<T>& root) {
+                const auto on_root = [&](int32_t root_ix, const device::laed4_root<T>& root) {
                     temp_lambdas(root_ix, bid) = root.origin + root.tau;
                     if (!root.converged) {
                         detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
                     }
                 };
-                v2::laed3<T>(ex, ex, 0, 1, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
+                device::laed3<T>(ex, ex, 0, 1, dd, d_prob, z_prob, abs_2rho, max_iter, do_rescale, Q, Q_bid, v, bid, on_root);
             });
     });
 }

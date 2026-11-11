@@ -15,7 +15,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 // One work-item per matrix. The launch sits in a function per type, as in the legacy file, so
 // the kernels keep their names.
@@ -42,7 +41,7 @@ Event gebrd_unblocked_real(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
-            v2::gebd2_real<T>(v2::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
+            device::gebd2_real<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
         });
     });
 
@@ -70,7 +69,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
-            v2::gebd2_complex<T>(v2::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
+            device::gebd2_complex<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
         });
     });
     return ctx.get_event();

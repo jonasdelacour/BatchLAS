@@ -10,14 +10,13 @@
 
 namespace batchlas::sycl_gemv::dla {
 
-namespace v2 = batchlas::device;
 
 // Every lane of g must call (lockstep). Closed when Count * stride <= the sub-group size; lanes
 // at or above that shift in values no head lane reads.
-template <int Count, class G, class T, class Stride = v2::Unit>
-BATCHLAS_DLA_INLINE T fold_down(const G& g, T v, Stride stride = {}) {
+template <int Count, class G, class T, class Stride = device::Unit>
+BATCHLAS_DEVICE_INLINE T fold_down(const G& g, T v, Stride stride = {}) {
     static_assert(Count > 0 && (Count & (Count - 1)) == 0, "gemv fold_down: Count must be a power of two");
-    using A = v2::Arith<T>;
+    using A = device::Arith<T>;
     if constexpr (A::is_complex) {
         using R = typename A::real_t;
         R re = A::re(v), im = A::im(v);

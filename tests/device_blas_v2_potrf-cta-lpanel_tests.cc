@@ -33,14 +33,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace dla = batchlas::device::potrf_detail;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 template <class T> using DevT = typename sycl_device::DevMap<T>::type;
 
 constexpr int kBatch = 1024;
@@ -141,7 +139,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, ArithIsBitIdenticalToDeviceScalar) {
         const int g = static_cast<int>(it.get_global_linear_id());
         const D* x = reinterpret_cast<const D*>(in) + 4 * g;
         D* o = reinterpret_cast<D*>(out) + std::ptrdiff_t(g) * kArSlots * 3;
-        using A = v2::arith_t<v2::arith::Fma, D>;
+        using A = device::arith_t<device::arith::Fma, D>;
         const R s = sycl_device::dev_real(x[3]) + R(2);
         D acc = x[2];
         A::mac(acc, x[0], x[1]);
@@ -159,7 +157,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, ArithIsBitIdenticalToDeviceScalar) {
         o[kArSlots + kScaleReal] = sycl_device::dev_mul_real(x[0], s);
         o[kArSlots + kDivReal] = sycl_device::dev_div_real(x[0], s);
         o[kArSlots + kRealify] = sycl_device::dev_from_real<D>(sycl_device::dev_real(x[1]));
-        using S = v2::arith_t<v2::arith::Fma, T>;  // std::complex (or the real type itself)
+        using S = device::arith_t<device::arith::Fma, T>;  // std::complex (or the real type itself)
         const T* xs = reinterpret_cast<const T*>(x);
         T* os = reinterpret_cast<T*>(o + 2 * kArSlots);
         T sacc = xs[2];
@@ -278,7 +276,7 @@ template <class T> void check_factor(const HpdBatch<T>& m, const std::vector<T>&
 template <class T, class D, int NB, int TS, int WG>
 void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<int>& info) {
     using R = real_of<T>;
-    constexpr v2::Scope kScope = WG == 32 ? v2::Scope::Sub : v2::Scope::Group;
+    constexpr device::Scope kScope = WG == 32 ? device::Scope::Sub : device::Scope::Group;
     const int n = m.n, ldg = m.ld, lda = n + 2;
     const int Rt0 = ((n > NB ? n - NB : 0) + TS - 1) / TS;
     const std::size_t s_bytes = std::size_t(lda) * n * sizeof(D);
@@ -296,13 +294,13 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
             if constexpr (WG == 32) sycl::group_barrier(it.get_sub_group());
             else sycl::group_barrier(it.get_group());
         };
-        const v2::RtGroup<kScope> ex(it);
+        const device::RtGroup<kScope> ex(it);
         D* Ag = a + std::ptrdiff_t(b) * ldg * n;
-        const auto A = dla::slm_mat(S, lda, n, lda);
-        const v2::Vec<R, v2::Ext<NB>, v2::Unit, v2::Mem::Local> dg{diag, {}};
-        dla::lacpy_herm_lower(ex, dla::HermLower<D>{Ag, ldg, upper}, A, n);
-        v2::scal(ex, v2::Zero{}, dg);
-        dla::tri_tile_prefix_init(ex, off, Rt0);
+        const auto A = device::potrf_detail::slm_mat(S, lda, n, lda);
+        const device::Vec<R, device::Ext<NB>, device::Unit, device::Mem::Local> dg{diag, {}};
+        device::potrf_detail::lacpy_herm_lower(ex, device::potrf_detail::HermLower<D>{Ag, ldg, upper}, A, n);
+        device::scal(ex, device::Zero{}, dg);
+        device::potrf_detail::tri_tile_prefix_init(ex, off, Rt0);
         if (ex.leader()) *fail = 0;
         bar();
         bool ok = true;
@@ -311,21 +309,21 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
             const auto A11 = A.sub(j, j, ib, ib);
             const auto A21 = A.sub(j + ib, j, m2, ib);
             if (ok && it.get_sub_group().get_group_linear_id() == 0)
-                v2::potf2_sg_slm<NB, dla::InvSqrt>(v2::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
+                device::potf2_sg_slm<NB, device::potrf_detail::InvSqrt>(device::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
             bar();
             ok = (*fail == 0);
-            if (ok && m2 > 0) dla::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, A11, dg, A21, ib);
+            if (ok && m2 > 0) device::potrf_detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, A11, dg, A21, ib);
             bar();
             if (ok && m2 > 0) {
                 const int Rt = (m2 + TS - 1) / TS;
-                dla::herk_tiles<Uplo::Lower, TS>(ex, v2::NegOne{}, A21, v2::One{}, A.sub(j + ib, j + ib, m2, m2),
-                                                 dla::TriTilePrefix{off, Rt, Rt0 - Rt});
+                device::potrf_detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A21, device::One{}, A.sub(j + ib, j + ib, m2, m2),
+                                                 device::potrf_detail::TriTilePrefix{off, Rt, Rt0 - Rt});
             }
             bar();
         }
-        const auto G = v2::mat_wide(Ag, n, n, ldg);
-        if (upper) v2::lacpy<v2::Part::Upper, Transpose::ConjTrans>(ex, A.sub(0, 0, n, n), G);
-        else v2::lacpy<v2::Part::Lower>(ex, A.sub(0, 0, n, n), G);
+        const auto G = device::mat_wide(Ag, n, n, ldg);
+        if (upper) device::lacpy<device::Part::Upper, Transpose::ConjTrans>(ex, A.sub(0, 0, n, n), G);
+        else device::lacpy<device::Part::Lower>(ex, A.sub(0, 0, n, n), G);
         if (ex.leader()) inf[b] = *fail;
     });
     out = dev.down(reinterpret_cast<const T*>(a), m.h.size());
@@ -381,11 +379,11 @@ TYPED_TEST(DeviceBlasV2PotrfTest, TrsmRowfragRightLowerConjTrans) {
             const int b = static_cast<int>(it.get_group_linear_id());
             const int lid = static_cast<int>(it.get_local_linear_id());
             if (lid >= items) return;
-            const v2::Slot<> ex{lid, items};
-            const auto L = v2::mat(l + std::ptrdiff_t(b) * ldl * kb, kb, kb, ldl);
-            const auto X = v2::mat(x + std::ptrdiff_t(b) * ldx * kb, m, kb, ldx);
-            const v2::Vec<const R, v2::Ext<NB>> dv{d + std::ptrdiff_t(b) * NB, {}};
-            dla::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, L, dv, X, kb);
+            const device::Slot<> ex{lid, items};
+            const auto L = device::mat(l + std::ptrdiff_t(b) * ldl * kb, kb, kb, ldl);
+            const auto X = device::mat(x + std::ptrdiff_t(b) * ldx * kb, m, kb, ldx);
+            const device::Vec<const R, device::Ext<NB>> dv{d + std::ptrdiff_t(b) * NB, {}};
+            device::potrf_detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, L, dv, X, kb);
         });
         const auto got = this->dev.down(x, hx.size());
         int bitdiff = 0;
@@ -441,13 +439,13 @@ template <class T, int TS> void herk_case(Dev& dev, int mm, int k) {
     T* cc = dev.up(hc);
     dev.template run<WG>(kBatch, std::size_t(Rt0 + 1) * sizeof(int), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
+        const device::WorkGroup<WG> ex{it};
         int* off = reinterpret_cast<int*>(lm);
-        dla::tri_tile_prefix_init(ex, off, Rt0);
+        device::potrf_detail::tri_tile_prefix_init(ex, off, Rt0);
         ex.barrier();
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * lda * k, mm, k, lda);
-        const auto C = v2::mat(cc + std::ptrdiff_t(b) * ldc * mm, mm, mm, ldc);
-        dla::herk_tiles<Uplo::Lower, TS>(ex, v2::NegOne{}, A, v2::One{}, C, dla::TriTilePrefix{off, Rt, Rt0 - Rt});
+        const auto A = device::mat(a + std::ptrdiff_t(b) * lda * k, mm, k, lda);
+        const auto C = device::mat(cc + std::ptrdiff_t(b) * ldc * mm, mm, mm, ldc);
+        device::potrf_detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A, device::One{}, C, device::potrf_detail::TriTilePrefix{off, Rt, Rt0 - Rt});
     });
     const auto got = dev.down(cc, hc.size());
     int bitdiff = 0, poisonbad = 0, diagbad = 0;
@@ -506,7 +504,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
     D* a = reinterpret_cast<D*>(dev.up(m.h));
     int* inf = dev.up(std::vector<int>(kBatch, -7));
     dev.template run<WG>(kBatch / G, per * G, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        using Ar = v2::arith_t<v2::arith::Fma, D>;
+        using Ar = device::arith_t<device::arith::Fma, D>;
         const int lid = static_cast<int>(it.get_local_linear_id());
         const int slot = lid / SLOT, tid = lid % SLOT;
         const int b = static_cast<int>(it.get_group_linear_id()) * G + slot;
@@ -514,10 +512,10 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
         D* sB = reinterpret_cast<D*>(mine);
         D* sA = reinterpret_cast<D*>(mine + b_bytes);
         int* fail = reinterpret_cast<int*>(mine + b_bytes + std::size_t(slda) * NB * sizeof(D));
-        const v2::Slot<> ex{tid, SLOT};
-        const auto A = v2::mat_wide(a + std::ptrdiff_t(b) * ldg * n, n, n, ldg);
-        const auto P = dla::slm_mat(sA, n, NB, slda);
-        const auto B = dla::slm_tile<NB, NB>(sB);
+        const device::Slot<> ex{tid, SLOT};
+        const auto A = device::mat_wide(a + std::ptrdiff_t(b) * ldg * n, n, n, ldg);
+        const auto P = device::potrf_detail::slm_mat(sA, n, NB, slda);
+        const auto B = device::potrf_detail::slm_tile<NB, NB>(sB);
         auto bar = [&] { sycl::group_barrier(it.get_group()); };
         if (ex.leader()) *fail = 0;
         bar();
@@ -526,24 +524,24 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
         for (int j = 0; j < n; j += NB) {
             const int ib = std::min(NB, n - j);
             const bool panel_ok = ok, live = ok && row >= j && row < n;
-            v2::Frag<D, NB> rp, rS;
-            dla::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
-            v2::fill(rS, Ar::zero());
+            device::Frag<D, NB> rp, rS;
+            device::potrf_detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
+            device::fill(rS, Ar::zero());
             for (int k = 0; k < j; k += NB) {
                 const int kb = std::min(NB, j - k);
-                dla::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+                device::potrf_detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
                 bar();
                 if (live) {
-                    v2::Frag<D, NB> rA;
-                    v2::load_row(rA, A.sub(0, k, n, kb), row, kb);
-                    dla::gemv_n_slm_bcast<NB>(rS, rA, sB);
+                    device::Frag<D, NB> rA;
+                    device::load_row(rA, A.sub(0, k, n, kb), row, kb);
+                    device::potrf_detail::gemv_n_slm_bcast<NB>(rS, rA, sB);
                 }
                 bar();
             }
-            if (live) dla::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
+            if (live) device::potrf_detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
             bar();
-            ok = v2::potf2_panel_rows<dla::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
-            if (panel_ok) v2::lacpy<v2::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));
+            ok = device::potf2_panel_rows<device::potrf_detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
+            if (panel_ok) device::lacpy<device::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));
             bar();
         }
         if (ex.leader()) inf[b] = *fail;

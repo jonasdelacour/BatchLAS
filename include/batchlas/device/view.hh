@@ -24,9 +24,9 @@ template <class M> using view_elem2_t = std::remove_cvref_t<decltype(std::declva
 }  // namespace detail
 
 // ---- sub-operands as free functions (the members of Mat / Vec, for any operand) ----------
-template <class M> BATCHLAS_DLA_INLINE auto row(const M& a, int i) { return a.row(i); }
-template <class M> BATCHLAS_DLA_INLINE auto col(const M& a, int j) { return a.col(j); }
-template <class M> BATCHLAS_DLA_INLINE auto window(const M& a, int i0, int j0, int m, int n) { return a.sub(i0, j0, m, n); }
+template <class M> BATCHLAS_DEVICE_INLINE auto row(const M& a, int i) { return a.row(i); }
+template <class M> BATCHLAS_DEVICE_INLINE auto col(const M& a, int j) { return a.col(j); }
+template <class M> BATCHLAS_DEVICE_INLINE auto window(const M& a, int i0, int j0, int m, int n) { return a.sub(i0, j0, m, n); }
 
 // ---- flip: reversed index order ---------------------------------------------------------
 namespace axis {
@@ -39,22 +39,22 @@ struct Both {};
 template <class V> struct Flipped {
     V v;
     bool on;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return v(on ? v.size() - 1 - i : i); }
-    BATCHLAS_DLA_INLINE int size() const { return v.size(); }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return v(on ? v.size() - 1 - i : i); }
+    BATCHLAS_DEVICE_INLINE int size() const { return v.size(); }
 };
 // Matrix: rows (m - 1 - i), columns (n - 1 - j) or both reversed when on.
 template <class Axis, class M> struct FlippedMat {
     M a;
     bool on;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const {
         if constexpr (!std::is_same_v<Axis, axis::Cols>) i = on ? a.rows() - 1 - i : i;
         if constexpr (!std::is_same_v<Axis, axis::Rows>) j = on ? a.cols() - 1 - j : j;
         return a(i, j);
     }
-    BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
+    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
+    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
 };
-template <class Axis = axis::Rows, class X> BATCHLAS_DLA_INLINE auto flip(const X& x, bool on = true) {
+template <class Axis = axis::Rows, class X> BATCHLAS_DEVICE_INLINE auto flip(const X& x, bool on = true) {
     static_assert(std::is_same_v<Axis, axis::Rows> || std::is_same_v<Axis, axis::Cols> || std::is_same_v<Axis, axis::Both>,
                   "flip: axis::Rows, axis::Cols or axis::Both");
     if constexpr (detail::is_mat_like_v<X>) return FlippedMat<Axis, X>{x, on};
@@ -67,7 +67,7 @@ template <class Axis = axis::Rows, class X> BATCHLAS_DLA_INLINE auto flip(const 
 template <class X, bool Always = false> struct ConjView {
     X x;
     bool on;
-    template <class... I> BATCHLAS_DLA_INLINE auto operator()(I... i) const {
+    template <class... I> BATCHLAS_DEVICE_INLINE auto operator()(I... i) const {
         using T = std::remove_cvref_t<decltype(x(i...))>;
         if constexpr (Always && Arith<T>::is_complex) {
             return Arith<T>::conj(x(i...));
@@ -77,30 +77,30 @@ template <class X, bool Always = false> struct ConjView {
             else return v;
         }
     }
-    BATCHLAS_DLA_INLINE int size() const requires detail::is_vec_like_v<X> { return x.size(); }
-    BATCHLAS_DLA_INLINE int rows() const requires detail::is_mat_like_v<X> { return x.rows(); }
-    BATCHLAS_DLA_INLINE int cols() const requires detail::is_mat_like_v<X> { return x.cols(); }
+    BATCHLAS_DEVICE_INLINE int size() const requires detail::is_vec_like_v<X> { return x.size(); }
+    BATCHLAS_DEVICE_INLINE int rows() const requires detail::is_mat_like_v<X> { return x.rows(); }
+    BATCHLAS_DEVICE_INLINE int cols() const requires detail::is_mat_like_v<X> { return x.cols(); }
 };
-template <class X> BATCHLAS_DLA_INLINE ConjView<X, true> conj_view(const X& x) { return {x, true}; }
+template <class X> BATCHLAS_DEVICE_INLINE ConjView<X, true> conj_view(const X& x) { return {x, true}; }
 // Compile-time switch: the operand itself when !C (no view, no branch).
 template <class X> inline constexpr bool is_operand_v = detail::is_vec_like_v<X> || detail::is_mat_like_v<X>;
 template <bool C, class X>
     requires is_operand_v<X>
-BATCHLAS_DLA_INLINE auto conj_if(const X& x) {
+BATCHLAS_DEVICE_INLINE auto conj_if(const X& x) {
     if constexpr (C) return ConjView<X, true>{x, true};
     else return x;
 }
 // Run-time switch (uniform): one select per element.
 template <class X>
     requires is_operand_v<X>
-BATCHLAS_DLA_INLINE ConjView<X> conj_if(const X& x, bool on) { return {x, on}; }
+BATCHLAS_DEVICE_INLINE ConjView<X> conj_if(const X& x, bool on) { return {x, on}; }
 
 // ---- op(A) --------------------------------------------------------------------------------
 // op(A)(i, j) for a compile-time Transpose: NoTrans is A itself; Trans swaps indices (writable);
 // ConjTrans is conj(A(j, i)) by value.
 template <Transpose TR, class M> struct OpView {
     M a;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const {
         if constexpr (TR == Transpose::Trans) {
             return a(j, i);
         } else {
@@ -108,10 +108,10 @@ template <Transpose TR, class M> struct OpView {
             return Arith<T>::conj(static_cast<T>(a(j, i)));
         }
     }
-    BATCHLAS_DLA_INLINE int rows() const { return a.cols(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.rows(); }
+    BATCHLAS_DEVICE_INLINE int rows() const { return a.cols(); }
+    BATCHLAS_DEVICE_INLINE int cols() const { return a.rows(); }
 };
-template <Transpose TR, class M> BATCHLAS_DLA_INLINE auto op_view(const M& a) {
+template <Transpose TR, class M> BATCHLAS_DEVICE_INLINE auto op_view(const M& a) {
     if constexpr (TR == Transpose::NoTrans) return a;
     else return OpView<TR, M>{a};
 }
@@ -119,16 +119,16 @@ template <Transpose TR, class M> BATCHLAS_DLA_INLINE auto op_view(const M& a) {
 template <class M> struct RtOpView {
     M a;
     Transpose tr;
-    BATCHLAS_DLA_INLINE auto operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE auto operator()(int i, int j) const {
         using T = detail::view_elem2_t<M>;
         if (tr == Transpose::NoTrans) return static_cast<T>(a(i, j));
         const T v = a(j, i);
         return tr == Transpose::ConjTrans ? Arith<T>::conj(v) : v;
     }
-    BATCHLAS_DLA_INLINE int rows() const { return tr == Transpose::NoTrans ? a.rows() : a.cols(); }
-    BATCHLAS_DLA_INLINE int cols() const { return tr == Transpose::NoTrans ? a.cols() : a.rows(); }
+    BATCHLAS_DEVICE_INLINE int rows() const { return tr == Transpose::NoTrans ? a.rows() : a.cols(); }
+    BATCHLAS_DEVICE_INLINE int cols() const { return tr == Transpose::NoTrans ? a.cols() : a.rows(); }
 };
-template <class M> BATCHLAS_DLA_INLINE RtOpView<M> op_view(const M& a, Transpose tr) { return {a, tr}; }
+template <class M> BATCHLAS_DEVICE_INLINE RtOpView<M> op_view(const M& a, Transpose tr) { return {a, tr}; }
 
 // ---- Hermitian / symmetric full view of one stored triangle -------------------------------
 // herm_view<UL>(a)(i, j) = a(i, j) inside the stored UL triangle, conj(a(j, i)) outside (one
@@ -137,7 +137,7 @@ template <class M> BATCHLAS_DLA_INLINE RtOpView<M> op_view(const M& a, Transpose
 // sym_view is the same without the conj (complex symmetric, and every real matrix).
 template <Uplo UL, bool Conj, bool DiagReal, class M> struct HermView {
     M a;
-    BATCHLAS_DLA_INLINE auto operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE auto operator()(int i, int j) const {
         using T = detail::view_elem2_t<M>;
         using A = Arith<T>;
         const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
@@ -148,11 +148,11 @@ template <Uplo UL, bool Conj, bool DiagReal, class M> struct HermView {
         if constexpr (A::is_complex && Conj) return stored ? v : A::conj(v);
         else return v;
     }
-    BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
+    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
+    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
 };
-template <Uplo UL, bool DiagReal = false, class M> BATCHLAS_DLA_INLINE HermView<UL, true, DiagReal, M> herm_view(const M& a) { return {a}; }
-template <Uplo UL, class M> BATCHLAS_DLA_INLINE HermView<UL, false, false, M> sym_view(const M& a) { return {a}; }
+template <Uplo UL, bool DiagReal = false, class M> BATCHLAS_DEVICE_INLINE HermView<UL, true, DiagReal, M> herm_view(const M& a) { return {a}; }
+template <Uplo UL, class M> BATCHLAS_DEVICE_INLINE HermView<UL, false, false, M> sym_view(const M& a) { return {a}; }
 
 // The general Hermitian view (Im(diag) always dropped): herm_view<UL, Storage, Load>.
 //   storage::Full        a is the n x n matrix, its UL triangle stored
@@ -175,7 +175,7 @@ template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
     M a;
     int n;
     int kd;
-    BATCHLAS_DLA_INLINE auto operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE auto operator()(int i, int j) const {
         using T = detail::view_elem2_t<M>;
         using A = Arith<T>;
         const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
@@ -202,15 +202,15 @@ template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
             return v;
         }
     }
-    BATCHLAS_DLA_INLINE int rows() const { return n; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE int rows() const { return n; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <Uplo UL, class Storage, class Load = loads::One, class M> BATCHLAS_DLA_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& a) {
+template <Uplo UL, class Storage, class Load = loads::One, class M> BATCHLAS_DEVICE_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& a) {
     static_assert(std::is_same_v<Storage, storage::Full>, "herm_view<UL, storage::Band>: pass kd and n, herm_view<UL, storage::Band>(ab, n, kd)");
     return {a, a.rows(), 0};
 }
 template <Uplo UL, class Storage, class Load = loads::One, class M>
-BATCHLAS_DLA_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& ab, int n, int kd) {
+BATCHLAS_DEVICE_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& ab, int n, int kd) {
     return {ab, n, kd};
 }
 
@@ -219,24 +219,24 @@ BATCHLAS_DLA_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& ab, int 
 template <class X> struct Shifted {
     X x;
     int k, n;
-    BATCHLAS_DLA_INLINE auto operator()(int i) const {
+    BATCHLAS_DEVICE_INLINE auto operator()(int i) const {
         using T = detail::view_elem_t<X>;
         const int s = i - k;
         return (s >= 0 && s < x.size()) ? static_cast<T>(x(s)) : Arith<T>::zero();
     }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class X> BATCHLAS_DLA_INLINE Shifted<X> shifted(const X& x, int k, int n) { return {x, k, n}; }
+template <class X> BATCHLAS_DEVICE_INLINE Shifted<X> shifted(const X& x, int k, int n) { return {x, k, n}; }
 
 // N scalar references as a vector (element i is *p[i], writable): loose registers or fields as
 // an operand of the Thread ops.
 template <class T, int N> struct Refs {
     using value_type = std::remove_cv_t<T>;
     T* p[N];
-    BATCHLAS_DLA_INLINE T& operator()(int i) const { return *p[i]; }
-    BATCHLAS_DLA_INLINE constexpr int size() const { return N; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int i) const { return *p[i]; }
+    BATCHLAS_DEVICE_INLINE constexpr int size() const { return N; }
 };
-template <class T, class... U> BATCHLAS_DLA_INLINE Refs<T, 1 + int(sizeof...(U))> refs(T& a, U&... b) {
+template <class T, class... U> BATCHLAS_DEVICE_INLINE Refs<T, 1 + int(sizeof...(U))> refs(T& a, U&... b) {
     static_assert((std::is_same_v<T, U> && ...), "refs: every element has one type");
     return {{&a, &b...}};
 }
@@ -293,11 +293,11 @@ template <Uplo UL, class Order = order::ByCols> struct PackedTri {
 template <Uplo UL, class Order, class P> struct PackedMat {
     P p;  // T* or any base with p[k]
     int n;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return p[PackedTri<UL, Order>::index(i, j, n)]; }
-    BATCHLAS_DLA_INLINE int rows() const { return n; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const { return p[PackedTri<UL, Order>::index(i, j, n)]; }
+    BATCHLAS_DEVICE_INLINE int rows() const { return n; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <Uplo UL, class Order = order::ByCols, class P> BATCHLAS_DLA_INLINE PackedMat<UL, Order, P> packed(P p, int n) { return {p, n}; }
+template <Uplo UL, class Order = order::ByCols, class P> BATCHLAS_DEVICE_INLINE PackedMat<UL, Order, P> packed(P p, int n) { return {p, n}; }
 
 // ---- Packet: one vector-width unit as a plain struct ---------------------------------------
 // Bytes / sizeof(T) elements loaded or stored through a pointer the caller guarantees is
@@ -307,16 +307,16 @@ template <class T, int Bytes> struct Packet {
     static_assert(Bytes % sizeof(T) == 0 && (Bytes & (Bytes - 1)) == 0, "Packet: Bytes is a power of two multiple of sizeof(T)");
     static constexpr int n = Bytes / static_cast<int>(sizeof(T));
     T v[n];
-    BATCHLAS_DLA_INLINE T& operator[](int k) { return v[k]; }
-    BATCHLAS_DLA_INLINE const T& operator[](int k) const { return v[k]; }
-    BATCHLAS_DLA_INLINE static Packet load(const T* p) {
+    BATCHLAS_DEVICE_INLINE T& operator[](int k) { return v[k]; }
+    BATCHLAS_DEVICE_INLINE const T& operator[](int k) const { return v[k]; }
+    BATCHLAS_DEVICE_INLINE static Packet load(const T* p) {
         const T* a = static_cast<const T*>(__builtin_assume_aligned(p, Bytes));
         Packet r;
 #pragma unroll
         for (int k = 0; k < n; ++k) r.v[k] = a[k];
         return r;
     }
-    BATCHLAS_DLA_INLINE void store(T* p) const {
+    BATCHLAS_DEVICE_INLINE void store(T* p) const {
         T* a = static_cast<T*>(__builtin_assume_aligned(p, Bytes));
 #pragma unroll
         for (int k = 0; k < n; ++k) a[k] = v[k];
@@ -329,27 +329,27 @@ template <class T, int Bytes> struct Packet {
 template <class F> struct FnVec {
     int n;
     F f;
-    BATCHLAS_DLA_INLINE auto operator()(int i) const { return f(i); }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE auto operator()(int i) const { return f(i); }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class F> BATCHLAS_DLA_INLINE FnVec<F> fn_vec(int n, F f) { return {n, f}; }
-template <class X, class F> BATCHLAS_DLA_INLINE auto mapped(const X& x, F f) {
+template <class F> BATCHLAS_DEVICE_INLINE FnVec<F> fn_vec(int n, F f) { return {n, f}; }
+template <class X, class F> BATCHLAS_DEVICE_INLINE auto mapped(const X& x, F f) {
     return fn_vec(x.size(), [x, f](int i) { return f(x(i)); });
 }
 template <class X> struct Sliced {
     X x;
     int start, n, step;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return x(start + i * step); }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return x(start + i * step); }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class X> BATCHLAS_DLA_INLINE Sliced<X> slice(const X& x, int start, int n, int step = 1) { return {x, start, n, step}; }
+template <class X> BATCHLAS_DEVICE_INLINE Sliced<X> slice(const X& x, int start, int n, int step = 1) { return {x, start, n, step}; }
 template <class X, class P> struct Gathered {
     X x;
     P p;
     int n;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return x(static_cast<int>(p[i])); }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return x(static_cast<int>(p[i])); }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class X, class P> BATCHLAS_DLA_INLINE Gathered<X, P> gathered(const X& x, P p, int n) { return {x, p, n}; }
+template <class X, class P> BATCHLAS_DEVICE_INLINE Gathered<X, P> gathered(const X& x, P p, int n) { return {x, p, n}; }
 
 }  // namespace batchlas::device

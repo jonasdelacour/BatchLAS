@@ -29,14 +29,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace gd = batchlas::device::geqrf_detail;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
 
 constexpr int kBatch = 1024;
@@ -139,7 +137,7 @@ template <class T> class DeviceBlasV2GeqrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -150,7 +148,7 @@ TYPED_TEST_SUITE(DeviceBlasV2GeqrfTest, Types);
 // ---- Arith<sycl_device::Cx>: the predicates larfg_scalars reads on the kernels' scalar ----------
 template <class R> void cx_predicates() {
     using Cx = sycl_device::Cx<R>;
-    using A = v2::Arith<Cx>;
+    using A = device::Arith<Cx>;
     const R inf = std::numeric_limits<R>::infinity(), nan = std::numeric_limits<R>::quiet_NaN();
     const R den = std::numeric_limits<R>::denorm_min();
     const Cx cases[] = {{R(0), R(0)}, {R(-0.0), R(0)}, {R(0), R(-0.0)}, {den, R(0)}, {R(0), den}, {inf, R(0)},
@@ -181,11 +179,11 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
     this->dev.template run<32>(kBatch / 32, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_global_linear_id());
         const T a = in[std::ptrdiff_t(b) * 2];
-        const R s = v2::abs_inf(a);
+        const R s = device::abs_inf(a);
         o[b * 4 + 0] = s;
-        o[b * 4 + 1] = gd::abs2_scaled(a, s);
-        o[b * 4 + 2] = v2::op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
-        o[b * 4 + 3] = v2::op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
+        o[b * 4 + 1] = device::geqrf_detail::abs2_scaled(a, s);
+        o[b * 4 + 2] = device::op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
+        o[b * 4 + 3] = device::op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
     });
     const auto got = this->dev.down(o, ho.size());
     EXPECT_EQ(period_bitdiff(got, 4), 0);
@@ -208,7 +206,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
 TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
     using T = TypeParam;
     using R = real_of<T>;
-    using A = v2::Arith<T>;
+    using A = device::Arith<T>;
     auto h = batched<T>(32, 31, [](int, T*) {});
     for (std::size_t i = 0; i < h.size(); ++i) h[i] = h[i] * T(R(1 + (i % 32 % 7) * 1000));  // by lane: keeps period 4
     T* in = this->dev.up(h);
@@ -222,13 +220,13 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
         T* out = o + std::ptrdiff_t(b * 32 + l) * K;
         const auto sg = it.get_sub_group();
         const int lanes = static_cast<int>(sg.get_local_linear_range());
-        out[0] = v2::butterfly(sg, v, [](const T& p, const T& q) { return A::add(p, q); }, 1, lanes);
+        out[0] = device::butterfly(sg, v, [](const T& p, const T& q) { return A::add(p, q); }, 1, lanes);
         if constexpr (!is_cplx<T>) {
             const T vm = l == 5 ? std::numeric_limits<T>::quiet_NaN() : v;
-            const v2::SgpPartition<8> part{it.get_sub_group()};
-            out[1] = v2::butterfly(sg, vm, v2::op::FMax{}, 1, lanes);
-            out[2] = v2::butterfly<1, 8, v2::bfly::Asc>(part, v, sycl::plus<R>());
-            out[3] = v2::butterfly<1, 8, v2::bfly::Asc>(part, vm, v2::op::FMax{});
+            const device::SgpPartition<8> part{it.get_sub_group()};
+            out[1] = device::butterfly(sg, vm, device::op::FMax{}, 1, lanes);
+            out[2] = device::butterfly<1, 8, device::bfly::Asc>(part, v, sycl::plus<R>());
+            out[3] = device::butterfly<1, 8, device::bfly::Asc>(part, vm, device::op::FMax{});
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -268,7 +266,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, ButterflyOrdersAreBitExact) {
 // A (m x nc, ld m + 5) := (I - tau v v^H) A on rows j.., columns j+1.., v = [1; A(j+1:, j)],
 // j = 2. A(0:j, j) and the head A(j, j) hold finite poison: never read as v. Columns 0..j and
 // rows above j keep their bits.
-template <class T, int WG, v2::Scope S> void larf_case(Dev& dev, const char* what) {
+template <class T, int WG, device::Scope S> void larf_case(Dev& dev, const char* what) {
     constexpr int m = 41, nc = 11, ld = m + 5, j = 2, per = ld * nc + 1;
     auto h = batched<T>(per, 23, [&](int, T* p) {
         for (int r = 0; r <= j; ++r) p[j * ld + r] = poison_of<T>();
@@ -276,8 +274,8 @@ template <class T, int WG, v2::Scope S> void larf_case(Dev& dev, const char* wha
     T* d = dev.up(h);
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         T* p = d + std::ptrdiff_t(it.get_group_linear_id()) * per;
-        const v2::RtGroup<S> ex{it};
-        gd::larf_left_head(ex, ex.team_size(), p[ld * nc], v2::mat_wide(p, m, nc, ld), j, m, nc);
+        const device::RtGroup<S> ex{it};
+        device::geqrf_detail::larf_left_head(ex, ex.team_size(), p[ld * nc], device::mat_wide(p, m, nc, ld), j, m, nc);
     });
     const auto got = dev.down(d, h.size());
     EXPECT_EQ(period_bitdiff(got, per), 0) << what;
@@ -310,9 +308,9 @@ template <class T, int WG, v2::Scope S> void larf_case(Dev& dev, const char* wha
 
 TYPED_TEST(DeviceBlasV2GeqrfTest, LarfLeftHead) {
     using T = TypeParam;
-    larf_case<T, 96, v2::Scope::Group>(this->dev, "RtGroup<Group>@96");
-    larf_case<T, 1024, v2::Scope::Group>(this->dev, "RtGroup<Group>@1024");
-    larf_case<T, 32, v2::Scope::Sub>(this->dev, "RtGroup<Sub>@32");
+    larf_case<T, 96, device::Scope::Group>(this->dev, "RtGroup<Group>@96");
+    larf_case<T, 1024, device::Scope::Group>(this->dev, "RtGroup<Group>@1024");
+    larf_case<T, 32, device::Scope::Sub>(this->dev, "RtGroup<Sub>@32");
 }
 
 // ---- team slots --------------------------------------------------------------------------------
@@ -320,24 +318,24 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, LarfLeftHead) {
 // barrier, then folded in slot order; bit-exact against the host simulation.
 TYPED_TEST(DeviceBlasV2GeqrfTest, TeamSlotFolds) {
     using T = TypeParam;
-    using A = v2::Arith<T>;
+    using A = device::Arith<T>;
     constexpr int WG = 1024, NT = WG / 32;
     auto h = batched<T>(WG, 71, [](int, T*) {});
     T* in = this->dev.up(h);
     std::vector<T> ho(std::size_t(kBatch) * 2, nan_of<T>());
     T* o = this->dev.up(ho);
     this->dev.template run<WG>(kBatch, sizeof(T) * 2 * NT, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const v2::RtGroup<v2::Scope::Group> ex{it};
+        const device::RtGroup<device::Scope::Group> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
         T* slots = reinterpret_cast<T*>(lm);
         const T v = in[std::ptrdiff_t(b) * WG + ex.lid()];
         const auto add = [](const T& p, const T& q) { return A::add(p, q); };
-        gd::team_slot_put(ex, slots, 0, v2::butterfly(ex.sub(), v, add, 1, ex.team_size()));
-        if constexpr (!is_cplx<T>) gd::team_slot_put(ex, slots, NT, v2::butterfly(ex.sub(), sycl::fabs(v), v2::op::FMax{}, 1, ex.team_size()));
+        device::geqrf_detail::team_slot_put(ex, slots, 0, device::butterfly(ex.sub(), v, add, 1, ex.team_size()));
+        if constexpr (!is_cplx<T>) device::geqrf_detail::team_slot_put(ex, slots, NT, device::butterfly(ex.sub(), sycl::fabs(v), device::op::FMax{}, 1, ex.team_size()));
         ex.barrier();
         if (ex.leader()) {
-            o[b * 2] = gd::slot_fold_sum(slots, 0, ex.nteams());
-            if constexpr (!is_cplx<T>) o[b * 2 + 1] = gd::slot_fold_max(slots, NT, ex.nteams());
+            o[b * 2] = device::geqrf_detail::slot_fold_sum(slots, 0, ex.nteams());
+            if constexpr (!is_cplx<T>) o[b * 2 + 1] = device::geqrf_detail::slot_fold_max(slots, NT, ex.nteams());
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -385,7 +383,7 @@ template <class T> void host_frag_apply(const T* a, int m, int n, int j, T tau, 
 
 TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
     using T = TypeParam;
-    using A = v2::Arith<T>;
+    using A = device::Arith<T>;
     constexpr int N = 8, j = 2;
     // (a) slots: m = 50 rows of 64 items, n = 7 of N columns.
     {
@@ -394,7 +392,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
         T* d = this->dev.up(h);
         this->dev.template run<WG>(kBatch, sizeof(T) * (WG / 32) * N, [=](sycl::nd_item<1> it, unsigned char* lm) {
             T* p = d + std::ptrdiff_t(it.get_group_linear_id()) * per;
-            const v2::RtGroup<v2::Scope::Group> ex{it};
+            const device::RtGroup<device::Scope::Group> ex{it};
             T* sw = reinterpret_cast<T*>(lm);
             const int r = ex.lid();
             const bool live = r < m;
@@ -402,9 +400,9 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c) rA[c] = (live && c < n) ? p[c * m + r] : A::zero();
             const T v = (!live || r < j) ? A::zero() : (r == j ? A::one() : rA[j]);
-            gd::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
+            device::geqrf_detail::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
             ex.barrier();
-            gd::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
+            device::geqrf_detail::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)
                 if (live && c < n) p[c * m + r] = rA[c];
@@ -426,7 +424,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
         T* d = this->dev.up(h);
         this->dev.template run<32>(kBatch / 4, sizeof(T) * 4 * PB, [=](sycl::nd_item<1> it, unsigned char* lm) {
             const auto sg = it.get_sub_group();
-            const v2::SgpPartition<N> ex{sg};
+            const device::SgpPartition<N> ex{sg};
             const int lane = ex.lid();
             const int slot = static_cast<int>(sg.get_local_linear_id()) / N;
             T* p = d + (std::ptrdiff_t(it.get_group_linear_id()) * 4 + slot) * per;
@@ -439,11 +437,11 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int k0 = 0; k0 < N; k0 += C) {
                 if (k0 + C <= j + 1 || k0 >= n) continue;
-                gd::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
+                device::geqrf_detail::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
                 sycl::group_barrier(sg);
-                gd::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
+                device::geqrf_detail::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
                 sycl::group_barrier(sg);
-                gd::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                device::geqrf_detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
             }
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)

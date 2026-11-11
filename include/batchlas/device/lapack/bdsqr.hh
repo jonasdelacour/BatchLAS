@@ -65,21 +65,21 @@ template <class R> constexpr Layout<R> sweep_plan(int n) {
 }
 
 // (x0, x1) := (c x0 + s x1, -s x0 + c x1): DBDSQR's rotation in its expression order.
-template <class R> BATCHLAS_DLA_INLINE void rot_pair(R& x0, R& x1, R c, R s) {
+template <class R> BATCHLAS_DEVICE_INLINE void rot_pair(R& x0, R& x1, R c, R s) {
     const R a = x0, b = x1;
     x0 = c * a + s * b;
     x1 = -s * a + c * b;
 }
 // Columns c0, c1 of a over the rows the item owns; rows r0, r1 over the columns it owns.
-template <class Ex, class M, class R> BATCHLAS_DLA_INLINE void rot_cols(const Ex& ex, const M& a, int c0, int c1, R c, R s) {
+template <class Ex, class M, class R> BATCHLAS_DEVICE_INLINE void rot_cols(const Ex& ex, const M& a, int c0, int c1, R c, R s) {
     for_each_owned(ex, a.rows(), [&](int r) { rot_pair<R>(a(r, c0), a(r, c1), c, s); });
 }
-template <class Ex, class M, class R> BATCHLAS_DLA_INLINE void rot_rows(const Ex& ex, const M& a, int r0, int r1, R c, R s) {
+template <class Ex, class M, class R> BATCHLAS_DEVICE_INLINE void rot_rows(const Ex& ex, const M& a, int r0, int r1, R c, R s) {
     for_each_owned(ex, a.cols(), [&](int col) { rot_pair<R>(a(r0, col), a(r1, col), c, s); });
 }
 // The sort's interchange of elements (i0, j0) and (i1, j1) of a (any operand: ItemMat has no
 // col / row views for core swap).
-template <class M> BATCHLAS_DLA_INLINE void swap_at(const M& a, int i0, int j0, int i1, int j1) {
+template <class M> BATCHLAS_DEVICE_INLINE void swap_at(const M& a, int i0, int j0, int i1, int j1) {
     const auto tmp = a(i0, j0);
     a(i0, j0) = a(i1, j1);
     a(i1, j1) = tmp;
@@ -109,7 +109,7 @@ template <class Tier, class T> constexpr WorkspaceSize bdsqr_buffer_size(int n) 
 // return. Workspace: bdsqr_buffer_size<Tier, T>(n) on a work-group, none on Thread. Returns xBDSQR's
 // status as the host's flag: 0, or 1 when the sweep hit maxit or a singular value is NaN.
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV, class R>
-BATCHLAS_DLA_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
+BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
                               bool sort_desc, const bdsqr_detail::Params<R>& p) {
     using namespace bdsqr_detail;
     static_assert(std::is_same_v<elem_t<D>, R>, "bdsqr: params of the bidiagonal's real type");
@@ -380,13 +380,13 @@ BATCHLAS_DLA_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, 
 
 // The defaults: DBDSQR's tolerance and iteration cap for n = d.size().
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
-BATCHLAS_DLA_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
+BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
                               bool sort_desc = true) {
     return bdsqr<Tier>(ex, d, e, s, ws, U, Vh, sort_desc, bdsqr_detail::params<elem_t<D>>(d.size()));
 }
 // Singular values only (the host's values-only overload).
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S>
-BATCHLAS_DLA_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, bool sort_desc = true) {
+BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, bool sort_desc = true) {
     using R = elem_t<D>;
     const auto none = device::mat(static_cast<R*>(nullptr), 0, 0, 1);
     return bdsqr<Tier>(ex, d, e, s, ws, none, none, sort_desc, bdsqr_detail::params<R>(d.size()));

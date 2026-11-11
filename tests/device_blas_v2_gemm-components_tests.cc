@@ -31,14 +31,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace gc = batchlas::device::l3;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 template <class T> using DevT = typename sycl_device::DevMap<T>::type;
 
 constexpr int kBatch = 1024;
@@ -102,7 +100,7 @@ template <class T> class DeviceBlasV2GemmComponentsTest : public ::testing::Test
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -198,9 +196,9 @@ void run_register_tiled(Dev& dev, const Shape& s, T alpha, T beta, const char* w
         const T* a = A + std::ptrdiff_t(b) * sa;
         const T* bm = B + std::ptrdiff_t(b) * sb;
         T* c = C + std::ptrdiff_t(b) * sc;
-        const v2::WorkGroup<THR> ex{it};
-        v2::Tile<T, TR, TC> acc;
-        v2::fill(acc, T(0));
+        const device::WorkGroup<THR> ex{it};
+        device::Tile<T, TR, TC> acc;
+        device::fill(acc, T(0));
         auto load = [&](int kk0, int stage) {
             T* ta = sa_ + stage * SA;
             T* tb = sb_ + stage * SB;
@@ -208,26 +206,26 @@ void run_register_tiled(Dev& dev, const Shape& s, T alpha, T beta, const char* w
             auto dst_b = [&](int r, int cc) -> T& { return tb[cc * (TK + 1) + r]; };
             const int m0 = group_row * TM, n0 = group_col * TN;
             if constexpr (St == Stager::PacketAligned) {
-                gc::stage_block_packet_aligned<TM, TK, 4, THR>(lid, a, lda, m0, kk0, dst_a);
-                gc::stage_block_packet_aligned<TK, TN, 4, THR>(lid, bm, ldb, kk0, n0, dst_b);
+                device::l3::stage_block_packet_aligned<TM, TK, 4, THR>(lid, a, lda, m0, kk0, dst_a);
+                device::l3::stage_block_packet_aligned<TK, TN, 4, THR>(lid, bm, ldb, kk0, n0, dst_b);
             } else if constexpr (St == Stager::Packet) {
-                gc::stage_block_packet<OpA, TM, TK, 4, THR>(lid, a, lda, m0, kk0, m, k, dst_a);
-                gc::stage_block_packet<OpB, TK, TN, 4, THR>(lid, bm, ldb, kk0, n0, k, n, dst_b);
+                device::l3::stage_block_packet<OpA, TM, TK, 4, THR>(lid, a, lda, m0, kk0, m, k, dst_a);
+                device::l3::stage_block_packet<OpB, TK, TN, 4, THR>(lid, bm, ldb, kk0, n0, k, n, dst_b);
             } else {
-                gc::stage_block<OpA, TM, TK, THR>(lid, a, lda, m0, kk0, m, k, dst_a);
-                gc::stage_block<OpB, TK, TN, THR>(lid, bm, ldb, kk0, n0, k, n, dst_b);
+                device::l3::stage_block<OpA, TM, TK, THR>(lid, a, lda, m0, kk0, m, k, dst_a);
+                device::l3::stage_block<OpB, TK, TN, THR>(lid, bm, ldb, kk0, n0, k, n, dst_b);
             }
         };
         auto compute = [&](int stage, int kk0) {
             const T* ta = sa_ + stage * SA;
             const T* tb = sb_ + stage * SB;
-            gc::mma_slab<TK, 2, Exact>(
+            device::l3::mma_slab<TK, 2, Exact>(
                 acc, kk0, k, [&](int t, int i) { return ta[t * (TM + 1) + local_row * TR + i]; },
                 [&](int t, int j) { return tb[(local_col * TC + j) * (TK + 1) + t]; });
         };
         const int tiles = Exact ? k / TK : (k + TK - 1) / TK;
-        gc::kloop<Stages, Exact, TK>(ex, tiles, load, compute);
-        gc::store_tile_staged<TM, TN, THR, Stages * SA, Stages * SB>(ex, lid, local_row, local_col, acc, sa_, sb_, c, ldc,
+        device::l3::kloop<Stages, Exact, TK>(ex, tiles, load, compute);
+        device::l3::store_tile_staged<TM, TN, THR, Stages * SA, Stages * SB>(ex, lid, local_row, local_col, acc, sa_, sb_, c, ldc,
                                                                     group_row * TM, group_col * TN, m, n, alpha, beta);
     });
     check_gemm(s, OpA, OpB, alpha, beta, hA, hB, hC, dev.down(C, hC.size()), sa, sb, sc, where);
@@ -289,32 +287,32 @@ void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, 
         const D* Ab = A + std::ptrdiff_t(b) * sa;
         const D* Bb = B + std::ptrdiff_t(b) * sb;
         D* Cb = C + std::ptrdiff_t(b) * sc;
-        const v2::WorkGroup<kWg> ex{it};
-        using Ops = v2::arith::Fma;
-        v2::Frag<D, NB> a;
+        const device::WorkGroup<kWg> ex{it};
+        using Ops = device::arith::Fma;
+        device::Frag<D, NB> a;
         if (ta) {
-            gc::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, true, Ab, lda, false, ca, k, m,
+            device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, true, Ab, lda, false, ca, k, m,
                                     [&](int l, int rr) -> D& { return sB[rr + l * kLdb]; });
             ex.barrier();
-            v2::load(a, [&](int l) { return sB[r + l * kLdb]; });
+            device::load(a, [&](int l) { return sB[r + l * kLdb]; });
             ex.barrier();
         } else {
-            v2::load(a, [&](int l) {
+            device::load(a, [&](int l) {
                 D v{};
                 if (r < m && l < k) v = Ab[r + l * lda];
                 return v;
             });
         }
-        gc::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, true, Bb, ldb, tb, cb, k, n,
+        device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, true, Bb, ldb, tb, cb, k, n,
                                 [&](int l, int c) -> D& { return sB[l + c * kLdb]; });
         ex.barrier();
-        v2::Frag<D, kCpt> acc;
-        v2::fill(acc, D{});
-        gc::gemv_t_frag<Chunk, Ops>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
+        device::Frag<D, kCpt> acc;
+        device::fill(acc, D{});
+        device::l3::gemv_t_frag<Chunk, Ops>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
         if (r < m) {
             for (int j = 0; j < kCpt; ++j) {
                 const int c = c0 + j;
-                if (c < n) v2::store<v2::epi::MulMac, Ops>(alpha_d, acc[j], v2::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
+                if (c < n) device::store<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
             }
         }
     });
@@ -363,20 +361,20 @@ void run_tiled_general(Dev& dev, const Shape& s, T alpha, T beta, const char* wh
         T* const tb = ta + Tile * Tile;
         const T* a = A + std::ptrdiff_t(b) * sa;
         const T* bm = B + std::ptrdiff_t(b) * sb;
-        const v2::WorkGroup<Tile * Tile> ex{it};
+        const device::WorkGroup<Tile * Tile> ex{it};
         auto a_row = [&](int t) -> const T& { return ta[local_row * Tile + t]; };
         auto b_col = [&](int t) -> const T& { return tb[t * Tile + local_col]; };
         T sum = T(0);
         for (int kk0 = 0; kk0 < k; kk0 += Tile) {
             ta[local_row * Tile + local_col] =
-                (row < m && kk0 + local_col < k) ? gc::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
+                (row < m && kk0 + local_col < k) ? device::l3::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
             tb[local_row * Tile + local_col] =
-                (col < n && kk0 + local_row < k) ? gc::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
+                (col < n && kk0 + local_row < k) ? device::l3::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
             ex.barrier();
-            v2::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
+            device::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
             ex.barrier();
         }
-        if (row < m && col < n) gc::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
+        if (row < m && col < n) device::l3::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
     });
     check_gemm(s, OpA, OpB, alpha, beta, hA, hB, hC, dev.down(C, hC.size()), sa, sb, sc, where);
 }
@@ -404,12 +402,12 @@ template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char
     T* out = dev.up(hout);
     const std::size_t sx = std::size_t(ldx) * K;
     dev.template run<WG>(kBatch, sizeof(T) * S * WG * KT, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        using A = v2::Arith<T>;
+        using A = device::Arith<T>;
         const int b = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(it.get_local_linear_id());
         const T* x = X + std::ptrdiff_t(b) * sx;
         T* const sm = reinterpret_cast<T*>(lm);
-        const v2::WorkGroup<WG> ex{it};
+        const device::WorkGroup<WG> ex{it};
         T s = A::zero();
         auto compute = [&](int buf) {
             for (int j = 0; j < KT; ++j) s = A::add(s, sm[buf * WG * KT + ((lane + 1) % WG) * KT + j]);
@@ -419,7 +417,7 @@ template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char
             auto issue = [&](int k0, auto buf) {
                 for (int j = 0; j < KT; ++j) sm[decltype(buf)::value * WG * KT + lane * KT + j] = fetch(k0, j);
             };
-            gc::kloop_async<S, KT>(ex, slabs, issue, [] {}, [] {}, [] {}, compute);
+            device::l3::kloop_async<S, KT>(ex, slabs, issue, [] {}, [] {}, [] {}, compute);
         } else {
             T reg[KT];
             auto gload = [&](int k0) {
@@ -428,7 +426,7 @@ template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char
             auto sstore = [&](int buf) {
                 for (int j = 0; j < KT; ++j) sm[buf * WG * KT + lane * KT + j] = reg[j];
             };
-            gc::kloop_prefetch2<KT>(ex, slabs, gload, sstore, compute);
+            device::l3::kloop_prefetch2<KT>(ex, slabs, gload, sstore, compute);
         }
         out[std::ptrdiff_t(b) * WG + lane] = s;
     });
@@ -476,16 +474,16 @@ TYPED_TEST(DeviceBlasV2GemmComponentsTest, EpilogueAndOuterMacMatchTheHost) {
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         if (it.get_local_linear_id() != 0) return;
         D* const o = reinterpret_cast<D*>(out);
-        v2::store<v2::epi::MulMac, v2::arith::Fma>(ad, xd, v2::MaybeZero<D>{bd, true}, o[kFusedZero]);  // NaN destination, never read
-        v2::store<v2::epi::MulMac, v2::arith::Fma>(ad, xd, v2::MaybeZero<D>{bd, false}, o[kFused]);
+        device::store<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, true}, o[kFusedZero]);  // NaN destination, never read
+        device::store<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, false}, o[kFused]);
         T a3[3], b5[5];
         for (int i = 0; i < 3; ++i) a3[i] = av[i];
         for (int j = 0; j < 5; ++j) b5[j] = bv[j];
-        v2::Tile<T, 3, 5> full, plain;
-        v2::fill(full, prior);
-        v2::fill(plain, prior);
-        gc::outer_mac(full, a3, b5);
-        gc::outer_mac<false>(plain, a3, b5);
+        device::Tile<T, 3, 5> full, plain;
+        device::fill(full, prior);
+        device::fill(plain, prior);
+        device::l3::outer_mac(full, a3, b5);
+        device::l3::outer_mac<false>(plain, a3, b5);
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 5; ++j) {
                 out[kOuterFull0 + i * 5 + j] = full(i, j);

@@ -44,14 +44,14 @@ template <class T> struct alignas(16) Pack16 {
 };
 template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(Pack16<T>::e) / sizeof(T));
 
-BATCHLAS_DLA_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
+BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
 
 template <class H> struct HermCol {
     H h;
     int j;
     using value_type = typename H::value_type;
-    BATCHLAS_DLA_INLINE value_type operator()(int i) const { return h(i, j); }
-    BATCHLAS_DLA_INLINE int size() const { return h.rows(); }
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return h(i, j); }
+    BATCHLAS_DEVICE_INLINE int size() const { return h.rows(); }
 };
 
 // The Hermitian (or symmetric) matrix whose uplo triangle M stores (uplo at run time): the
@@ -60,21 +60,21 @@ template <class M> struct HermView {
     M a;
     Uplo uplo;
     using value_type = typename M::value_type;
-    BATCHLAS_DLA_INLINE value_type operator()(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i, int j) const {
         const bool own = in_triangle(uplo, i, j);  // one load, its address selected
         const value_type x = a(own ? i : j, own ? j : i);
         return i == j ? force_real(x) : own ? x : Arith<value_type>::conj(x);
     }
-    BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
-    BATCHLAS_DLA_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
+    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
+    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
+    BATCHLAS_DEVICE_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
 };
-template <class M> BATCHLAS_DLA_INLINE HermView<M> herm(M a, Uplo uplo) { return {a, uplo}; }
+template <class M> BATCHLAS_DEVICE_INLINE HermView<M> herm(M a, Uplo uplo) { return {a, uplo}; }
 
 // A group of `size` items over `tiles` m x m tiles, column by column: item lid owns row lid % m
 // of tile columns lid / m, lid / m + size / m, ...; f(tile, row, col). When m does not divide
 // size, the last items revisit columns another item covers: f must be idempotent.
-template <class F> BATCHLAS_DLA_INLINE void for_each_tile_col(int lid, int size, int m, int tiles, F&& f) {
+template <class F> BATCHLAS_DEVICE_INLINE void for_each_tile_col(int lid, int size, int m, int tiles, F&& f) {
     const int row = lid % m, step = size / m;
     for (int idx = lid / m; idx < tiles * m; idx += step) {
         const int g = idx / m, c = idx - g * m;
@@ -86,7 +86,7 @@ template <class F> BATCHLAS_DLA_INLINE void for_each_tile_col(int lid, int size,
 // goes to accumulator p mod W, summed as a tree. Solve: x_i = (x_i - sum) / a_ii, else
 // x_i = a_ii x_i + sum. In place, so i is visited before every entry whose sum still needs it.
 template <bool Below, bool Solve, bool Conj, int W, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
+BATCHLAS_DEVICE_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
     static_assert(W > 0 && (W & (W - 1)) == 0, "sygst trsv_packed/trmv_packed: W is a power of two");
     using A = Arith<T>;
     using Ar = arith_t<arith::Fma, T>;
@@ -96,7 +96,7 @@ BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
     static_assert(Trip <= N, "sygst trsv_packed/trmv_packed: the extent exceeds the fragment");
     constexpr bool ascending = Below == Solve;
     const int n = a.cols();
-    auto step = [&](T& acc, const T& aij, const T& xj) BATCHLAS_DLA_BODY {
+    auto step = [&](T& acc, const T& aij, const T& xj) BATCHLAS_DEVICE_BODY {
         if constexpr (Solve) Ar::msub(acc, Conj ? A::conj(aij) : aij, xj);  // acc - op(a) x
         else if constexpr (Conj) Ar::mac_conj(acc, aij, xj);
         else Ar::mac(acc, aij, xj);
@@ -143,14 +143,14 @@ BATCHLAS_DLA_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
 // diagonal; n is A's extent (compile-time for Ext<K>). Every column start of A is 16-byte
 // aligned. x is the caller's Frag: a by-value copy hoists every load of A (REG 37 -> 70).
 template <Uplo UL, Transpose TR, int W = 4, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE void trsv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
+BATCHLAS_DEVICE_INLINE void trsv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
     static_assert(TR != Transpose::NoTrans, "sygst trsv_packed: the column form is op(A) = A^T or A^H");
     coldot_tri<UL == Uplo::Upper, true, TR == Transpose::ConjTrans, W>(a, x);
 }
 
 // x := op(A) x in place, op = Trans or ConjTrans, A as for trsv_packed.
 template <Uplo UL, Transpose TR, int W = 4, class T, int N, class L, class MA>
-BATCHLAS_DLA_INLINE void trmv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
+BATCHLAS_DEVICE_INLINE void trmv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
     static_assert(TR != Transpose::NoTrans, "sygst trmv_packed: the column form is op(A) = A^T or A^H");
     coldot_tri<UL == Uplo::Upper, false, TR == Transpose::ConjTrans, W>(a, x);
 }
@@ -210,56 +210,55 @@ template <class D> constexpr CtaPlan<D> cta_plan(int n) {
 /// KB > 0 is a compile-time order (kb == KB); KB = 0 any kb <= NF. Every item of ex reaches the
 /// four barriers. The argument order is the hand kernel's capture order (its parameter order).
 template <bool Inverse, int KB, int NF = 32, class Ex, class D, class AOf, class Dead, class BOf, class Full>
-BATCHLAS_DLA_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower, std::size_t grp, int ipw, D* fbase,
+BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower, std::size_t grp, int ipw, D* fbase,
                                      int fper, const AOf& a_of, int sper, int lds, int wg, const Dead& dead,
                                      const BOf& b_of, int ldf, const Full& full) {
-    namespace sd = sygst_detail;
     static_assert(NF >= 1 && NF <= 32, "sygs2_group: the column fragment holds at most 32 rows");
-    using SMat = Mat<D, sd::KbExt<KB>, sd::KbExt<KB>, Dyn, Mem::Local, Cyclic, sd::Slm<D>>;
-    constexpr int A16 = sd::slm_align<D>;
+    using SMat = Mat<D, sygst_detail::KbExt<KB>, sygst_detail::KbExt<KB>, Dyn, Mem::Local, Cyclic, sygst_detail::Slm<D>>;
+    constexpr int A16 = sygst_detail::slm_align<D>;
     const int live = KB ? KB : kb;
-    const sd::KbExt<KB> kn = sd::kb_ext<KB>(kb);
+    const sygst_detail::KbExt<KB> kn = sygst_detail::kb_ext<KB>(kb);
     const Uplo ul = lower ? Uplo::Lower : Uplo::Upper;
     const std::ptrdiff_t first = static_cast<std::ptrdiff_t>(grp) * ipw;
     D* const sbase = fbase + ipw * fper;
     auto s_of = [=](int gi) { return mat_aligned<A16, Mem::Local>(sbase + gi * sper, kb, kb, lds); };
     // ?LACPY of A's uplo triangle into S and of B's into F (conjugate-transposed from U), column-wise
     // and coalesced. I2: a dead block is never loaded, computed or stored.
-    sd::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DLA_BODY {
+    sygst_detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
         const std::ptrdiff_t itm = first + gi;
-        if (row >= kb || dead(itm) || !sd::in_triangle(ul, row, c)) return;
+        if (row >= kb || dead(itm) || !sygst_detail::in_triangle(ul, row, c)) return;
         s_of(gi)(row, c) = a_of(itm)(row, c);
         const D bv = b_of(itm)(row, c);
         const auto fs = mat_aligned<A16, Mem::Local>(fbase + gi * fper, kb, kb, ldf);
-        if (lower) sd::fat<Inverse>(fs, row, c) = bv;
-        else sd::fat<Inverse>(fs, c, row) = Arith<D>::conj(bv);
+        if (lower) sygst_detail::fat<Inverse>(fs, row, c) = bv;
+        else sygst_detail::fat<Inverse>(fs, c, row) = Arith<D>::conj(bv);
     });
     const int g = t / kb, j = t - g * kb;
     // t < ipw * KB, not g < ipw: at ipw == 1 that becomes g == 0, never folded back to t < KB.
     const bool active = (KB ? t < ipw * KB : g < ipw) && !dead(first + g);
     const D* const f = fbase + (active ? g * fper : 0);
-    const SMat s{sd::Slm<D>{sbase + (active ? g * sper : 0)}, kn, kn, Dyn{lds}};
+    const SMat s{sygst_detail::Slm<D>{sbase + (active ? g * sper : 0)}, kn, kn, Dyn{lds}};
     sync(ex);
     // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
     Frag<D, NF> col{};
-    if (active) load(col, sd::herm(s, ul).col(j), live);
+    if (active) load(col, sygst_detail::herm(s, ul).col(j), live);
     sync(ex);
-    if (active) col = sd::apply<Inverse, KB>(col, f, ldf, kb);
+    if (active) col = sygst_detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
     sync(ex);
     // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
     if (active) load(col, conj_view(s.row(j)), live);
     sync(ex);
-    if (active) col = sd::apply<Inverse, KB>(col, f, ldf, kb);
+    if (active) col = sygst_detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
     sync(ex);
     // The Hermitian C (real diagonal) to `full` and its uplo triangle back to A.
-    sd::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DLA_BODY {
+    sygst_detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
         const std::ptrdiff_t itm = first + gi;
         if (row >= kb || dead(itm)) return;
-        const D v = sd::herm(s_of(gi), ul)(row, c);
+        const D v = sygst_detail::herm(s_of(gi), ul)(row, c);
         full(itm, row, c, v);
-        if (sd::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
+        if (sygst_detail::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
     });
 }
 
@@ -340,26 +339,26 @@ namespace sygst_detail {
 // sub-group in a wider group reaches each barrier twice and frees the other sub-groups a phase
 // early: their write-back read S before its last store (wrong columns from sub-group 1 on).
 template <bool Inverse, int NF, class Ex, class D, class MA, class MB, class Full>
-BATCHLAS_DLA_INLINE void sygs2_one(const Ex& ex, int kb, bool lower, D* f, const MA& a, const MB& b, const Full& full) {
+BATCHLAS_DEVICE_INLINE void sygs2_one(const Ex& ex, int kb, bool lower, D* f, const MA& a, const MB& b, const Full& full) {
     const int ldf = sygs2_ldf<D>(kb), lds = kb + 1;
-    auto run = [&](const auto& x) BATCHLAS_DLA_BODY {
+    auto run = [&](const auto& x) BATCHLAS_DEVICE_BODY {
         sygs2_group<Inverse, 0, NF>(
-            x, x.lid(), kb, lower, std::size_t(0), 1, f, kb * ldf, [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return a; }, kb * lds,
-            lds, std::remove_cvref_t<decltype(x)>::size, [](std::ptrdiff_t) BATCHLAS_DLA_BODY { return false; },
-            [&](std::ptrdiff_t) BATCHLAS_DLA_BODY { return b; }, ldf, full);
+            x, x.lid(), kb, lower, std::size_t(0), 1, f, kb * ldf, [&](std::ptrdiff_t) BATCHLAS_DEVICE_BODY { return a; }, kb * lds,
+            lds, std::remove_cvref_t<decltype(x)>::size, [](std::ptrdiff_t) BATCHLAS_DEVICE_BODY { return false; },
+            [&](std::ptrdiff_t) BATCHLAS_DEVICE_BODY { return b; }, ldf, full);
     };
     if constexpr (Ex::size <= Ex::sg_size) run(ex);
     else if (ex.sub().get_group_linear_id() == 0) run(SubGroup<Ex::sg_size>{ex.sub()});
 }
 
-template <class T> BATCHLAS_DLA_INLINE l3::Global<T> gsub(const l3::Global<T>& g, int r0, int c0, int m, int n) {
+template <class T> BATCHLAS_DEVICE_INLINE l3::Global<T> gsub(const l3::Global<T>& g, int r0, int c0, int m, int n) {
     return {g.p + r0 + c0 * g.ld, g.ld, m, n};
 }
 
 // C := alpha X Y^H + conj(alpha) Y X^H + C (Tr: X^H Y + ...) on C's UL triangle: her2k, or syr2k
 // for a real T (the host route's sym_r2k).
 template <Uplo UL, bool Tr, class Cfg, class Ex, class X, class Y, class C, class AS>
-BATCHLAS_DLA_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, AS alpha, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, AS alpha, l3::Smem<Cfg> sm) {
     if constexpr (Arith<typename Cfg::value_type>::is_complex)
         her2k<UL, Tr ? Transpose::ConjTrans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
     else syr2k<UL, Tr ? Transpose::Trans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
@@ -371,7 +370,7 @@ BATCHLAS_DLA_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, A
 // with the mirrored diagonal block H (LAPACK's hemm) and her2k / syr2k on the panel and trailing
 // parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
 template <int Itype, Uplo UL, int NB, class Ex, class D, class DB>
-BATCHLAS_DLA_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
+BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
     using Cfg = blocked_cfg_t<D>;
     using Ar = Arith<D>;
     using R = typename Ar::real_t;
@@ -379,23 +378,23 @@ BATCHLAS_DLA_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3:
     constexpr Transpose TH = Ar::is_complex ? Transpose::ConjTrans : Transpose::Trans;
     constexpr Transpose NT = Transpose::NoTrans;
     const l3::Smem<Cfg> sm{lmem};
-    auto lift = [](R x) BATCHLAS_DLA_BODY {
+    auto lift = [](R x) BATCHLAS_DEVICE_BODY {
         if constexpr (Ar::is_complex) return Ar::make(x, R(0));
         else return D(x);
     };
     const D half = lift(R(0.5)), mhalf = lift(R(-0.5));
     const int n = a.n;
     // Reduce the kb x kb diagonal block at `at`; with `full`, the whole Hermitian result goes to H.
-    auto diag = [&](int at, int kb, bool full) BATCHLAS_DLA_BODY {
+    auto diag = [&](int at, int kb, bool full) BATCHLAS_DEVICE_BODY {
         const auto ab = mat(a.p + at + at * a.ld, kb, kb, a.ld);
         const auto bb = mat(b.p + at + at * b.ld, kb, kb, b.ld);
-        sygs2_one<Itype == 1, NB>(ex, kb, lower, lmem, ab, bb, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DLA_BODY {
+        sygs2_one<Itype == 1, NB>(ex, kb, lower, lmem, ab, bb, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DEVICE_BODY {
             if (full) h[r + c * NB] = v;
         });
         sync(ex, Mem::Global);
     };
     // H := the whole Hermitian kb x kb block whose UL triangle A holds at `at` (real diagonal).
-    auto mirror = [&](int at, int kb) BATCHLAS_DLA_BODY {
+    auto mirror = [&](int at, int kb) BATCHLAS_DEVICE_BODY {
         lacpy(ex, herm_view<UL, true>(mat(a.p + at + at * a.ld, kb, kb, a.ld)), mat(h, kb, kb, NB));
         sync(ex, Mem::Global);
     };
@@ -468,7 +467,7 @@ BATCHLAS_DLA_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3:
 /// global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller than n x n);
 /// uniform over the executor.
 template <int Itype, Uplo UL, class Tier, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Tr = resolve_tier_t<routine::sygst<Itype, UL>, D, Tier>;
     static_assert(sygst_detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
@@ -481,7 +480,7 @@ BATCHLAS_DLA_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Work
         if (n == 0) return 0;
         D* const f = reinterpret_cast<D*>(carve_local(ws, sygst_detail::cta_plan<D>(n).block).get_raw());
         sygst_detail::sygs2_one<Itype == 1, N>(ex, n, UL == Uplo::Lower, f, a, b,
-                                               [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DLA_BODY {});
+                                               [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DEVICE_BODY {});
         sync(ex, Mem::Global);  // A's result visible to every item
         return 0;
     } else {

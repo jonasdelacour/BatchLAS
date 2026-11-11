@@ -30,8 +30,6 @@
 
 namespace batchlas {
 
-namespace v2 = device;
-namespace sv = syev_v2;
 
 namespace {
 
@@ -207,8 +205,8 @@ Event syev_blocked_part(Queue& ctx,
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // Lower: E is the subdiagonal.
-                sv::phase_similarity(v2::Thread{}, nn, v2::item(D, b), v2::item(E, b), v2::item(Dr, b), v2::item(Er, b),
-                                     v2::item(S, b), Uplo::Lower, want_phase);
+                syev_v2::phase_similarity(device::Thread{}, nn, device::item(D, b), device::item(E, b), device::item(Dr, b), device::item(Er, b),
+                                     device::item(S, b), Uplo::Lower, want_phase);
             });
         });
 
@@ -278,10 +276,10 @@ Event syev_blocked_part(Queue& ctx,
 
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = sv::batched_item(idx, nn);
+                    const int32_t b = syev_v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = sv::batched_rc(idx, b, nn);
-                    sv::dgmm_left_at(v2::item(S, b), v2::item(Z, b, nn, nn), v2::item(ZC, b, nn, nn), row, col);
+                    const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
+                    syev_v2::dgmm_left_at(device::item(S, b), device::item(Z, b, nn, nn), device::item(ZC, b, nn, nn), row, col);
                 });
             });
 
@@ -362,7 +360,7 @@ Event syev_blocked_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                     const int32_t b = static_cast<int32_t>(tid[0]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    sv::sign_similarity(v2::Thread{}, nn, v2::item(E, b), v2::item(S, b));
+                    syev_v2::sign_similarity(device::Thread{}, nn, device::item(E, b), device::item(S, b));
                 });
             });
         }
@@ -417,11 +415,11 @@ Event syev_blocked_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * nn * nn;
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = sv::batched_item(idx, nn);
+                    const int32_t b = syev_v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = sv::batched_rc(idx, b, nn);
-                    const auto Zb = v2::item(Z, b, nn, nn);
-                    sv::dgmm_left_at(v2::item(S, b), Zb, Zb, row, col);  // in place
+                    const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
+                    const auto Zb = device::item(Z, b, nn, nn);
+                    syev_v2::dgmm_left_at(device::item(S, b), Zb, Zb, row, col);  // in place
                 });
             });
 

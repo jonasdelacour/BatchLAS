@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// SASS lab, device LA v2 parity: hand vs lean vs v2 for each op at WG 64 and 256 (dot/nrm2
+// SASS lab, device LA parity: hand vs lean vs device for each op at WG 64 and 256 (dot/nrm2
 // also at 32 = one sub-group). Kernel names lab::KW<Op><T, N, V, WG>; sass_stats.py keys them
 // as "<Op>@<WG>". The hand and lean bodies are the lab's (ops_*.cc), with WG a parameter.
 #pragma once
@@ -10,12 +10,11 @@
 
 namespace lab {
 
-constexpr int kV2 = 9;        // device LA v2 (include/batchlas/device)
+constexpr int kV2 = 9;        // device LA (include/batchlas/device)
 constexpr int kV2Scaled = 10; // nrm2 only: alg::Scaled (two-pass lassq)
 constexpr int kV2Blue = 11;   // nrm2 only: alg::Blue (three accumulators, one exchange)
 constexpr int kV2Scratch = 12; // dotN2 only: dotN<2> with Scratch (one packed exchange)
 
-namespace dv2 = batchlas::device;
 
 template <class T, int N, int V, int WG> class KWAxpy;
 template <class T, int N, int V, int WG> class KWDot;

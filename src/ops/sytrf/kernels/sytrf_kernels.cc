@@ -40,11 +40,10 @@ template <typename T> class SytrfBlockedTrailKernel;
 
 namespace {
 
-namespace v2 = batchlas::device;
-template <typename D> using Tile = v2::sytrf_detail::RevMat<D>;
-template <typename D> using Vec = v2::sytrf_detail::RevVec<D>;
-using v2::sytrf_detail::ArgMaxScratch;
-using v2::sytrf_detail::rev_mat;
+template <typename D> using Tile = device::sytrf_detail::RevMat<D>;
+template <typename D> using Vec = device::sytrf_detail::RevVec<D>;
+using device::sytrf_detail::ArgMaxScratch;
+using device::sytrf_detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -86,7 +85,7 @@ Span<int32_t> info_layout(Queue& ctx, BumpAllocator& pool, Span<int32_t> info_ou
 // One launch for sytrf's `cta` and sysv's `cta`: B is null for the factor alone. Sub-group 0
 // factors (sub-group collectives only, so the factor is the same with or without B); sysv's
 // work-group has one sub-group per right-hand side (at most kSytrsCtaMaxSg), which then solve in
-// parallel with sytrs `cta`'s converted solve (v2::sytrs_cols).
+// parallel with sytrs `cta`'s converted solve (device::sytrs_cols).
 template <typename T>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int* piv, int32_t* info,
                  const MatrixView<T, MatrixFormat::Dense>* B, const std::uint8_t* mask) {
@@ -121,12 +120,12 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 D* const tp = &slm[0];
                 int* const pp = &slm_piv[0];
-                const v2::RtGroup<> all(it);
-                const v2::SubGroup<kSytrfCtaWg> g{sg};  // sub-group 0 factors
+                const device::RtGroup<> all(it);
+                const device::SubGroup<kSytrfCtaWg> g{sg};  // sub-group 0 factors
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Tile<D> S = rev_mat(tp, kLdt, n, false);
                 int* const gp = piv + b * n;
-                v2::sytrf_detail::sytrf_cta_factor(
+                device::sytrf_detail::sytrf_cta_factor(
                     all, g, sgid == 0, G, S, n, upper, ArgMaxScratch<R>{&red[0], &redi[0]},
                     [&](int k, int v) {
                         gp[k] = v;
@@ -137,10 +136,10 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                         pp[4 * kN + 1] = st;
                     });
                 if (bp == nullptr) return;
-                v2::sync<v2::scope::Group>(all, v2::Mem::Global);
+                device::sync<device::scope::Group>(all, device::Mem::Global);
                 if (pp[4 * kN + 1] != 0) return;
-                const v2::sytrs_detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
-                v2::sytrs_detail::sytrs_cta_solve<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
+                const device::sytrs_detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
+                device::sytrs_detail::sytrs_cta_solve<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -211,10 +210,10 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
                 if (mask != nullptr && mask[b] == 0) return;
-                const v2::RtGroup<> g(it);
+                const device::RtGroup<> g(it);
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 int* const gp = piv + b * n;
-                const int st = v2::sytf2(G, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]},
+                const int st = device::sytf2(G, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]},
                                                         [&](int k, int v) { gp[k] = v; });
                 if (lid == 0) info[b] = st;
             });
@@ -253,11 +252,11 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const std::ptrdiff_t b = grp / nrhs, c = grp % nrhs;
                 if (mask != nullptr && mask[b] == 0) return;
                 if (skip_info != nullptr && skip_info[b] != 0) return;
-                const v2::RtGroup<> g(it);
+                const device::RtGroup<> g(it);
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Vec<D> x{bp + b * strb + c * ldb, n, upper};
                 const int* const gp = piv + b * n;
-                v2::sytrs_col(G, n, upper, x, g, v2::sytrf_detail::SumScratch<R>{&red[0], &red[wg / 32]},
+                device::sytrs_col(G, n, upper, x, g, device::sytrf_detail::SumScratch<R>{&red[0], &red[wg / 32]},
                                         [&](int k) { return gp[k]; });
             });
     });
@@ -319,15 +318,15 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
-                const v2::RtGroup<> g(it);
+                const device::RtGroup<> g(it);
                 const ArgMaxScratch<R> am{&red[0], &redi[0]};
                 D* const item = ap + b * stra;
                 const Tile<D> S = rev_mat(item, lda, n, upper);
                 int* const gp = piv + b * n;
                 const int first = state[2 * b], end = state[2 * b + 1];
                 int st = info[b];
-                v2::sync<v2::scope::Group>(g, v2::Mem::Global);
-                v2::lasyf_undo(S, first, end, g, [&](int j, bool& two) {
+                device::sync<device::scope::Group>(g, device::Mem::Global);
+                device::lasyf_undo(S, first, end, g, [&](int j, bool& two) {
                     const int raw = gp[upper ? n - 1 - j : j];
                     two = raw < 0;
                     const int p = (raw < 0 ? -raw : raw) - 1;
@@ -337,13 +336,13 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                     const int sub = n - end;
                     const int off = upper ? 0 : end;
                     const Tile<D> T2 = rev_mat(item + off + static_cast<std::ptrdiff_t>(off) * lda, lda, sub, upper);
-                    const int t = sub > 0 ? v2::sytf2(T2, sub, upper, g, am, [&](int k, int v) {
+                    const int t = sub > 0 ? device::sytf2(T2, sub, upper, g, am, [&](int k, int v) {
                         gp[k + off] = v > 0 ? v + off : v - off;
                     }) : 0;
                     if (st == 0 && t > 0) st = t + off;
                 } else {
-                    const Tile<D> W = v2::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
-                    const int e = v2::lasyf(S, W, n, k0, nb, end, upper, g, am, st,
+                    const Tile<D> W = device::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                    const int e = device::lasyf(S, W, n, k0, nb, end, upper, g, am, st,
                                                           [&](int k, int v) { gp[k] = v; });
                     if (lid == 0) {
                         state[2 * b] = end;
@@ -362,7 +361,7 @@ template <typename T>
 void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool upper, int wg, int k0,
                    const int* state, const std::uint8_t* mask) {
     using D = Dev<T>;
-    using A = v2::arith_t<v2::arith::Fma, D>;
+    using A = device::arith_t<device::arith::Fma, D>;
     constexpr int nb = kSytrfBlockedNb, ub = kSytrfBlockedUb;
     const int kt = k0 + nb + 1;
     const int nblk = (n - kt + ub - 1) / ub + 1;
@@ -376,9 +375,9 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                 const std::ptrdiff_t b = grp / nblk;
                 if (mask != nullptr && mask[b] == 0) return;
                 const int t = static_cast<int>(grp % nblk);
-                const v2::RtGroup<> ex(it);
+                const device::RtGroup<> ex(it);
                 const Tile<D> S = rev_mat(ap + b * stra, lda, n, upper);
-                const Tile<D> W = v2::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                const Tile<D> W = device::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
                 const int rank = state[2 * b + 1] - k0;
                 // C(i, j) -= sum_l L(i, l) W(j, l), one term at a time from C (?gemmt, alpha -1).
                 auto upd = [&](int i, int j) {
@@ -387,11 +386,11 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                     S(i, j) = acc;
                 };
                 if (t == nblk - 1) {
-                    if (rank == nb) v2::for_each_owned(ex, v2::Range{kt - 1, n}, [&](int i) BATCHLAS_DLA_BODY { upd(i, kt - 1); });
+                    if (rank == nb) device::for_each_owned(ex, device::Range{kt - 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { upd(i, kt - 1); });
                     return;
                 }
                 const int j0 = kt + t * ub, jb = sycl::min(ub, n - j0);
-                v2::for_each_owned_2d<v2::alg::DivMod>(ex, jb, jb, [&](int r, int c) BATCHLAS_DLA_BODY {
+                device::for_each_owned_2d<device::alg::DivMod>(ex, jb, jb, [&](int r, int c) BATCHLAS_DEVICE_BODY {
                     const int i = j0 + r, j = j0 + c;
                     if (i >= j) upd(i, j);
                 });

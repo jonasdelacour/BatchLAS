@@ -46,7 +46,7 @@ template <int N, class T> constexpr SysvCtaPlan<N, T> sysv_cta_plan() {
 }
 
 template <Uplo UL, int N, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -76,7 +76,7 @@ BATCHLAS_DLA_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, const 
 }
 
 template <Uplo UL, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
     // Both halves carve the same workspace from offset 0: sytrf's ends on a barrier.
     const int info = sytrf_detail::sytrf_run<UL>(tier::Blocked<1>{}, ex, A, ipiv, ws);
     if (info != 0) return info;
@@ -86,7 +86,7 @@ BATCHLAS_DLA_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, co
 
 template <Uplo UL, int NB, class Ex, class MA, class MB>
     requires(NB > 1)
-BATCHLAS_DLA_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
     // As Blocked<1>: both halves carve from offset 0 of both spaces; sytrf's ends on a barrier.
     const int info = sytrf_detail::sytrf_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, ws);
     if (info != 0) return info;

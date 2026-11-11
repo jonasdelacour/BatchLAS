@@ -46,9 +46,8 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace dv = batchlas::device;
 using batchlas::verify::Check;
-using Tier = dv::tier::Blocked<1>;
+using Tier = device::tier::Blocked<1>;
 
 template <class T, JobType J> struct UserStedc;
 
@@ -57,7 +56,7 @@ namespace {
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
 constexpr int kInc = 2;
-constexpr int kWg = dv::stedc_detail::wg_size;
+constexpr int kWg = device::stedc_detail::wg_size;
 
 std::uint64_t mix(std::uint64_t x) {
     x += 0x9e3779b97f4a7c15ull;
@@ -169,7 +168,7 @@ protected:
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
         bool fits = false;
         try {
-            dv::with_tier<dv::routine::stedc<>, T>(dev.q().get_device(), 1, [&](auto) { fits = true; });
+            device::with_tier<device::routine::stedc<>, T>(dev.q().get_device(), 1, [&](auto) { fits = true; });
         } catch (const batchlas::invalid_argument&) {
         }
         if (!fits) GTEST_SKIP() << "no stedc tier fits this device (work-group 256, sub-group 32)";
@@ -184,23 +183,23 @@ TYPED_TEST_SUITE(DeviceApiStedc, RealTypes);
 template <class T, JobType J>
 void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const MatrixView<T, MatrixFormat::Dense>& Z,
                 std::byte* gws, std::int32_t* info, std::int32_t max_sec_iter, int n) {
-    const dv::WorkspaceSize sz = dv::stedc_buffer_size<J, Tier, T>(n);
+    const device::WorkspaceSize sz = device::stedc_buffer_size<J, Tier, T>(n);
     const auto Zk = Z.kernel_view();
-    dv::stedc_detail::Params<T> p;
+    device::stedc_detail::Params<T> p;
     p.max_sec_iter = max_sec_iter;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
            h.parallel_for<UserStedc<T, J>>(sycl::nd_range<1>(std::size_t(kBatch) * kWg, kWg),
                                            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                                               const dv::WorkGroup<kWg, 32> ex{it};
+                                               const device::WorkGroup<kWg, 32> ex{it};
                                                const int b = static_cast<int>(it.get_group_linear_id());
-                                               const dv::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
-                                                                      dv::global_slice(gws, sz, b)};
+                                               const device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
+                                                                      device::global_slice(gws, sz, b)};
                                                int ib = 0;
                                                if constexpr (J == JobType::EigenVectors)
-                                                   ib = dv::stedc<J, Tier>(ex, dv::item(d, b), dv::item(e, b), dv::item(w, b), ws, p,
-                                                                           dv::item(Zk, b, n, n));
-                                               else ib = dv::stedc<J, Tier>(ex, dv::item(d, b), dv::item(e, b), dv::item(w, b), ws, p);
+                                                   ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p,
+                                                                           device::item(Zk, b, n, n));
+                                               else ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p);
                                                if (ex.leader()) info[b] = ib;
                                            });
        }).wait_and_throw();
@@ -218,7 +217,7 @@ template <class T, JobType J> DeviceRun<T> run_device(Dev& dev, const Problem<T>
     r.w = dev.up(std::vector<T>(std::size_t(kBatch) * r.sw, poison<T>()));
     r.z = dev.up(std::vector<T>(std::size_t(kBatch) * r.sz, poison<T>()));
     r.info = dev.up(std::vector<std::int32_t>(kBatch, -7));
-    const auto gsz = dv::stedc_buffer_size<J, Tier, T>(n);
+    const auto gsz = device::stedc_buffer_size<J, Tier, T>(n);
     std::byte* gws = dev.up(std::vector<std::byte>(gsz.global_bytes * kBatch, std::byte{0xff}));
     const VectorView<T> dview(d, n, kBatch, kInc, P.sd);
     const VectorView<T> eview(e, std::max(n - 1, 0), kBatch, kInc, P.se);
@@ -373,21 +372,21 @@ TYPED_TEST(DeviceApiStedc, StedcInfoParityStraddlesTheSecularCap) {
 
 TYPED_TEST(DeviceApiStedc, StedcTierQueries) {
     using T = TypeParam;
-    using R = dv::routine::stedc<JobType::EigenVectors>;
-    using RN = dv::routine::stedc<JobType::NoEigenVectors>;
-    static_assert(std::is_same_v<dv::resolve_tier_t<R, T, dv::tier::upto<1 << 20>>, Tier>);
-    const auto lim = dv::DeviceLimits::of(this->dev.q().get_device());
+    using R = device::routine::stedc<JobType::EigenVectors>;
+    using RN = device::routine::stedc<JobType::NoEigenVectors>;
+    static_assert(std::is_same_v<device::resolve_tier_t<R, T, device::tier::upto<1 << 20>>, Tier>);
+    const auto lim = device::DeviceLimits::of(this->dev.q().get_device());
     for (int n : {1, 2, 65, 300, 5000}) {
         std::string got = "none";
-        dv::with_tier<R, T>(lim, n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
+        device::with_tier<R, T>(lim, n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
-        const auto sz = dv::stedc_buffer_size<JobType::EigenVectors, Tier, T>(n);
-        const auto szn = dv::stedc_buffer_size<JobType::NoEigenVectors, Tier, T>(n);
-        const auto L = dv::stedc_detail::dc_layout<T>(n, false);
+        const auto sz = device::stedc_buffer_size<JobType::EigenVectors, Tier, T>(n);
+        const auto szn = device::stedc_buffer_size<JobType::NoEigenVectors, Tier, T>(n);
+        const auto L = device::stedc_detail::dc_layout<T>(n, false);
         EXPECT_EQ(sz, L.size);
-        EXPECT_EQ(szn, dv::stedc_detail::dc_layout<T>(n, true).size);
+        EXPECT_EQ(szn, device::stedc_detail::dc_layout<T>(n, true).size);
         EXPECT_GE(szn.global_bytes, sz.global_bytes + std::size_t(n) * n * sizeof(T)) << n;
-        EXPECT_GE(sz.local_bytes, dv::l3::smem_bytes<dv::stedc_detail::gemm_cfg<T>>() + sizeof(std::int32_t));
+        EXPECT_GE(sz.local_bytes, device::l3::smem_bytes<device::stedc_detail::gemm_cfg<T>>() + sizeof(std::int32_t));
         const std::size_t nn = std::size_t(n) * n;
         for (const auto* s : {&L.qp, &L.tmp}) {
             EXPECT_LE(s->offset + nn * sizeof(T), sz.global_bytes) << n;
@@ -402,14 +401,14 @@ TYPED_TEST(DeviceApiStedc, StedcTierQueries) {
         if (small_slm) mock.local_mem_bytes = 1024;
         else mock.sub_group_sizes = {16};
         try {
-            dv::with_tier<RN, T>(mock, 64, [](auto) {});
+            device::with_tier<RN, T>(mock, 64, [](auto) {});
             ADD_FAILURE() << "with_tier admitted a device without " << (small_slm ? "the local memory" : "sub-group 32");
         } catch (const batchlas::invalid_argument& ex) {
             EXPECT_NE(std::string(ex.what()).find("stedc: no device tier admits n=64"), std::string::npos) << ex.what();
         }
     }
     try {
-        dv::with_tier<R, T>(lim, 0, [](auto) {});
+        device::with_tier<R, T>(lim, 0, [](auto) {});
         ADD_FAILURE() << "with_tier admitted n = 0";
     } catch (const batchlas::invalid_argument& ex) {
         EXPECT_NE(std::string(ex.what()).find("stedc: no device tier admits n=0"), std::string::npos) << ex.what();

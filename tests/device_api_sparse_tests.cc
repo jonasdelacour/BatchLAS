@@ -138,7 +138,7 @@ template <class T> Spmm<T> make_spmm(Transpose ta, Transpose tb, bool nan_a, boo
 template <class T>
 double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, int* pads_moved, const std::vector<T>* other = nullptr,
                   double* vs_other = nullptr) {
-    const bool az = dv::Arith<T>::is_zero(alpha), bz = dv::Arith<T>::is_zero(beta);
+    const bool az = batchlas::device::Arith<T>::is_zero(alpha), bz = batchlas::device::Arith<T>::is_zero(beta);
     double worst = 0;
     for (int q = 0; q < kPeriod; ++q) {
         std::vector<LD<T>> ref(std::size_t(d.rows_out) * d.nrhs, LD<T>(0));
@@ -174,16 +174,16 @@ double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, 
     return worst;
 }
 
-template <Transpose TA, Transpose TB, int WG, class Tier = dv::tier::upto<1>, class T>
+template <Transpose TA, Transpose TB, int WG, class Tier = batchlas::device::tier::upto<1>, class T>
 void device_spmm(sycl::queue& q, const Spmm<T>& d, KernelMatrixView<T, MatrixFormat::CSR> akv, const T* bp, T* cp, T alpha, T beta) {
     const int brows = d.brows, bcols = d.bcols, ldb = d.ldb, strb = d.strb, crows = d.rows_out, nrhs = d.nrhs, ldc = d.ldc,
               strc = d.strc;
     launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group(0));
-        const dv::WorkGroup<WG> ex{it};
-        const dv::ItemMat<const T> B{bp, b, strb, ldb, brows, bcols};
-        const dv::ItemMat<T> C{cp, b, strc, ldc, crows, nrhs};
-        (void)dv::spmm<TA, TB, Tier>(ex, dv::csr_item(akv, b), B, C, alpha, beta);
+        const batchlas::device::WorkGroup<WG> ex{it};
+        const batchlas::device::ItemMat<const T> B{bp, b, strb, ldb, brows, bcols};
+        const batchlas::device::ItemMat<T> C{cp, b, strc, ldc, crows, nrhs};
+        (void)batchlas::device::spmm<TA, TB, Tier>(ex, batchlas::device::csr_item(akv, b), B, C, alpha, beta);
     });
 }
 
@@ -197,7 +197,7 @@ template <class T> class DeviceApiSparse : public DeviceCoreTest<T> {
 
     // The host spmm pinned to `direct` (its reached row counted) and the device spmm, on copies of
     // one C; alpha_dev lets a break call the device op with other arguments than the host.
-    template <Transpose TA, Transpose TB, int WG, class Tier = dv::tier::upto<1>>
+    template <Transpose TA, Transpose TB, int WG, class Tier = batchlas::device::tier::upto<1>>
     Run run_spmm(T alpha, T beta, bool nan_a, bool nan_c, T alpha_dev) {
         Dev& dev = this->dev;
         const Spmm<T> d = make_spmm<T>(TA, TB, nan_a, nan_c);
@@ -231,7 +231,7 @@ template <class T> class DeviceApiSparse : public DeviceCoreTest<T> {
         return out;
     }
 
-    template <Transpose TA, Transpose TB, int WG = 128, class Tier = dv::tier::upto<1>>
+    template <Transpose TA, Transpose TB, int WG = 128, class Tier = batchlas::device::tier::upto<1>>
     void expect_thin_launcher(T alpha, T beta, bool nan_a, bool nan_c, const char* what) {
         const Run r = run_spmm<TA, TB, WG, Tier>(alpha, beta, nan_a, nan_c, alpha);
         EXPECT_GT(r.host_route_rows, 0) << what << ": the host spmm did not reach `direct`";
@@ -267,7 +267,7 @@ TYPED_TEST(DeviceApiSparse, SpmmNoTransIsTheHostGatherBitForBit) {
     this->template expect_thin_launcher<N, N>(alpha, T(0), false, true, "NN beta 0 over NaN C");
     this->template expect_thin_launcher<N, Cj>(T(0), beta, true, false, "NC alpha 0 over NaN A");
     // The column block does not reorder a sum: Blocked<2> (the host's nrhs <= 2 block) is the same bits.
-    this->template expect_thin_launcher<N, N, 128, dv::tier::Blocked<2>>(alpha, beta, false, false, "NN Blocked<2>");
+    this->template expect_thin_launcher<N, N, 128, batchlas::device::tier::Blocked<2>>(alpha, beta, false, false, "NN Blocked<2>");
 }
 
 TYPED_TEST(DeviceApiSparse, SpmmGatherIsIndependentOfTheWorkGroup) {
@@ -350,19 +350,19 @@ template <class T> void make_iluk(Iluk<T>& d, Queue& ctx) {
 
 // The device iluk_apply over every (item, column) system; skip_l breaks it (no L solve).
 template <int WG, class T> void device_iluk(sycl::queue& q, Iluk<T>& d, bool skip_l) {
-    const auto batch = dv::iluk_batch(d.M->view());
+    const auto batch = batchlas::device::iluk_batch(d.M->view());
     const T* rp = d.rhs.data();
     T* yp = d.out_dev.data();
     const int nrhs = Iluk<T>::nrhs, ld = d.ld, stride = d.stride;
     launch<WG>(q, std::size_t(kBatch) * nrhs, [=](sycl::nd_item<1> it) {
         const int g = static_cast<int>(it.get_group(0));
         const int b = g / nrhs, col = g % nrhs;
-        const dv::WorkGroup<WG> ex{it};
+        const batchlas::device::WorkGroup<WG> ex{it};
         auto F = batch.item(b);
         if (skip_l) F.l_levels = 0;
-        const dv::BasedVec<const T> r{rp, b * stride + col * ld};
-        const dv::BasedVec<T> y{yp, b * stride + col * ld};
-        (void)dv::iluk_apply<dv::tier::Blocked<1>>(ex, F, r, y);
+        const batchlas::device::BasedVec<const T> r{rp, b * stride + col * ld};
+        const batchlas::device::BasedVec<T> y{yp, b * stride + col * ld};
+        (void)batchlas::device::iluk_apply<batchlas::device::tier::Blocked<1>>(ex, F, r, y);
     });
 }
 
@@ -512,14 +512,14 @@ char iluk_pin() {
 // device iluk_factorize of every item in a user-style kernel: M at item stride mst, the value
 // every work-item returned at info[b * WG + lid].
 template <int WG, class T>
-void device_iluk_factorize(sycl::queue& q, const IlukA<T>& d, const dv::IlukPlan& plan, const dv::IlukOptions<T>& opts, T* mv, int mst,
+void device_iluk_factorize(sycl::queue& q, const IlukA<T>& d, const batchlas::device::IlukPlan& plan, const batchlas::device::IlukOptions<T>& opts, T* mv, int mst,
                            int* info) {
     const T* av = d.val.data();
     const int ms = d.ms;
     launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group(0));
-        const dv::WorkGroup<WG> ex{it};
-        const int r = dv::iluk_factorize<dv::tier::Blocked<1>>(ex, dv::BasedVec<const T>{av, b * ms}, plan, dv::BasedVec<T>{mv, b * mst}, opts);
+        const batchlas::device::WorkGroup<WG> ex{it};
+        const int r = batchlas::device::iluk_factorize<batchlas::device::tier::Blocked<1>>(ex, batchlas::device::BasedVec<const T>{av, b * ms}, plan, batchlas::device::BasedVec<T>{mv, b * mst}, opts);
         info[std::size_t(b) * WG + ex.lid()] = r;
     });
 }
@@ -530,7 +530,7 @@ struct FactorCmp {
     int bits = 0, unmatched = 0, pads = 0;
     double worst = 0;  // max over items of max |dev - want| / max |want|
 };
-template <class T> FactorCmp compare_factor(const dv::IlukPlan& plan, const T* dev, int mst, const ILUKPreconditioner<T>& M, int batch) {
+template <class T> FactorCmp compare_factor(const batchlas::device::IlukPlan& plan, const T* dev, int mst, const ILUKPreconditioner<T>& M, int batch) {
     FactorCmp r;
     const auto lu = M.lu.view();
     const T* hv = lu.data_ptr();
@@ -561,7 +561,7 @@ template <class T> FactorCmp compare_factor(const dv::IlukPlan& plan, const T* d
 }
 
 // Over the representatives: {fill slots kept, fill slots dropped} (fill = no entry of A lands there).
-template <class T> std::array<int, 2> fill_split(const dv::IlukPlan& plan, const T* dev, int mst) {
+template <class T> std::array<int, 2> fill_split(const batchlas::device::IlukPlan& plan, const T* dev, int mst) {
     std::vector<char> from_a(std::size_t(plan.nnz), 0);
     for (int p = 0; p < plan.a_nnz; ++p)
         if (plan.a_to_slot[p] >= 0) from_a[std::size_t(plan.a_to_slot[p])] = 1;
@@ -577,13 +577,13 @@ template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, c
     const auto A = d.view(kBatch);
     const auto host = iluk_factorize(*dev.ctx, A, params);
     const auto storage = sycl_iluk::iluk_plan(A, params);
-    const dv::IlukPlan plan = storage.plan();
+    const batchlas::device::IlukPlan plan = storage.plan();
     ASSERT_GT(plan.nnz, d.nnz) << what << ": the symbolic pattern has no fill";
     ASSERT_GT(plan.levels, 2) << what;
     const int mst = plan.nnz + 3;
     UnifiedVector<T> m(std::size_t(mst) * kBatch);
     UnifiedVector<int> info(std::size_t(kBatch) * 1024);
-    const auto opts = dv::iluk_options(params);
+    const auto opts = batchlas::device::iluk_options(params);
     auto check = [&](int wg, const char* how) {
         const FactorCmp c = compare_factor(plan, m.data(), mst, host, kBatch);
         EXPECT_EQ(c.bits, 0) << what << ", " << how << ": device iluk_factorize != host route";
@@ -661,8 +661,8 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeMatchesTheCpuPathAndSolvesInOneKernel) 
     const IlukA<T> d = make_iluk_a<T>(/*pad=*/0);
     const auto A = d.view(kBatch);
     const auto storage = sycl_iluk::iluk_plan(A, params);
-    const dv::IlukPlan plan = storage.plan();
-    const auto opts = dv::iluk_options(params);
+    const batchlas::device::IlukPlan plan = storage.plan();
+    const auto opts = batchlas::device::iluk_options(params);
     const int mst = plan.nnz + 3;
     UnifiedVector<T> m(std::size_t(mst) * kBatch);
     UnifiedVector<int> info(std::size_t(kBatch) * WG);
@@ -692,10 +692,10 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeMatchesTheCpuPathAndSolvesInOneKernel) 
     const int ms = d.ms;
     launch<WG>(this->dev.q(), kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group(0));
-        const dv::WorkGroup<WG> ex{it};
-        int r = dv::iluk_factorize<dv::tier::Blocked<1>>(ex, dv::BasedVec<const T>{av, b * ms}, plan, dv::BasedVec<T>{mp, b * mst}, opts);
-        r |= dv::iluk_apply<dv::tier::Blocked<1>>(ex, plan.factor<T>(mp + std::size_t(b) * mst, opts.diagonal_shift),
-                                                  dv::BasedVec<const T>{rp, b * ld}, dv::BasedVec<T>{yp, b * ld});
+        const batchlas::device::WorkGroup<WG> ex{it};
+        int r = batchlas::device::iluk_factorize<batchlas::device::tier::Blocked<1>>(ex, batchlas::device::BasedVec<const T>{av, b * ms}, plan, batchlas::device::BasedVec<T>{mp, b * mst}, opts);
+        r |= batchlas::device::iluk_apply<batchlas::device::tier::Blocked<1>>(ex, plan.factor<T>(mp + std::size_t(b) * mst, opts.diagonal_shift),
+                                                  batchlas::device::BasedVec<const T>{rp, b * ld}, batchlas::device::BasedVec<T>{yp, b * ld});
         if (ex.leader()) ip[b] = r;
     });
     double worst = 0;
@@ -737,7 +737,7 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeInfoIsTheFirstUnusablePivot) {
     const auto A = d.view(kBatch);
     EXPECT_THROW((void)iluk_factorize(*this->dev.ctx, A, params), batchlas::convergence_error);
     const auto storage = sycl_iluk::iluk_plan(A, params);
-    const dv::IlukPlan plan = storage.plan();
+    const batchlas::device::IlukPlan plan = storage.plan();
     const int mst = plan.nnz;
     UnifiedVector<T> m(std::size_t(mst) * kBatch);
     UnifiedVector<int> info(std::size_t(kBatch) * 128);
@@ -747,9 +747,9 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeInfoIsTheFirstUnusablePivot) {
             for (int l = 0; l < wg; ++l) wrong += info[std::size_t(b) * wg + l] != (b % kPeriod == 1 ? bad_row + 1 : 0);
         EXPECT_EQ(wrong, 0) << how << ": info is not row " << bad_row + 1 << " on the failing items (0 elsewhere) on every item";
     };
-    device_iluk_factorize<128>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    device_iluk_factorize<128>(this->dev.q(), d, plan, batchlas::device::iluk_options(params), m.data(), mst, info.data());
     expect_info(128, "WG 128");
-    device_iluk_factorize<32>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    device_iluk_factorize<32>(this->dev.q(), d, plan, batchlas::device::iluk_options(params), m.data(), mst, info.data());
     expect_info(32, "WG 32");
 }
 
@@ -762,13 +762,13 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeBreakIsSeenByBothComparators) {
     const auto A = d.view(kBatch);
     const auto host = iluk_factorize(*this->dev.ctx, A, params);
     const auto storage = sycl_iluk::iluk_plan(A, params);
-    dv::IlukPlan plan = storage.plan();
+    batchlas::device::IlukPlan plan = storage.plan();
     plan.levels = 0;  // the break: A scattered into the pattern, nothing eliminated
     const int mst = plan.nnz + 3;
     UnifiedVector<T> m(std::size_t(mst) * kBatch);
     UnifiedVector<int> info(std::size_t(kBatch) * 128);
     for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<T>();
-    device_iluk_factorize<128>(this->dev.q(), d, plan, dv::iluk_options(params), m.data(), mst, info.data());
+    device_iluk_factorize<128>(this->dev.q(), d, plan, batchlas::device::iluk_options(params), m.data(), mst, info.data());
     const FactorCmp c = compare_factor(plan, m.data(), mst, host, kBatch);
     EXPECT_GT(c.bits, 0) << "no elimination passed the bit comparison";
     EXPECT_FALSE(batchlas::verify::within<T>(Check::factorization, IlukA<T>::n, c.worst)) << "no elimination passed the tolerance";
@@ -777,32 +777,32 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeBreakIsSeenByBothComparators) {
 // ---- tiers and workspace --------------------------------------------------------------------
 TYPED_TEST(DeviceApiSparse, WithTierPicksTheOneTierAndNoWorkspace) {
     using T = TypeParam;
-    using S = dv::routine::spmm<N, Cj>;
-    using Blk = dv::tier::Blocked<dv::spmm_block_v<T>>;
-    static_assert(std::is_same_v<dv::resolve_tier_t<S, T, dv::tier::upto<1>>, Blk>);
-    static_assert(std::is_same_v<dv::resolve_tier_t<S, T, dv::tier::upto<100000>>, Blk>);
-    static_assert(dv::spmm_block_v<T> * sizeof(T) == 64);
-    static_assert(dv::spmm_buffer_size<N, Cj, dv::tier::upto<1>, T>(4096) == dv::WorkspaceSize{});
-    static_assert(dv::iluk_apply_buffer_size<dv::tier::Blocked<1>, T>(4096) == dv::WorkspaceSize{});
-    static_assert(dv::iluk_factorize_buffer_size<dv::tier::upto<100000>, T>(100000) == dv::WorkspaceSize{});
-    static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::iluk_factorize, T, dv::tier::upto<1>>, dv::tier::Blocked<1>>);
+    using S = batchlas::device::routine::spmm<N, Cj>;
+    using Blk = batchlas::device::tier::Blocked<batchlas::device::spmm_block_v<T>>;
+    static_assert(std::is_same_v<batchlas::device::resolve_tier_t<S, T, batchlas::device::tier::upto<1>>, Blk>);
+    static_assert(std::is_same_v<batchlas::device::resolve_tier_t<S, T, batchlas::device::tier::upto<100000>>, Blk>);
+    static_assert(batchlas::device::spmm_block_v<T> * sizeof(T) == 64);
+    static_assert(batchlas::device::spmm_buffer_size<N, Cj, batchlas::device::tier::upto<1>, T>(4096) == batchlas::device::WorkspaceSize{});
+    static_assert(batchlas::device::iluk_apply_buffer_size<batchlas::device::tier::Blocked<1>, T>(4096) == batchlas::device::WorkspaceSize{});
+    static_assert(batchlas::device::iluk_factorize_buffer_size<batchlas::device::tier::upto<100000>, T>(100000) == batchlas::device::WorkspaceSize{});
+    static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::iluk_factorize, T, batchlas::device::tier::upto<1>>, batchlas::device::tier::Blocked<1>>);
     for (int n : {0, 1, 150, 100000}) {
         std::string spmm_tier = "none", iluk_tier = "none", ilu_fac_tier = "none";
-        dv::with_tier<S, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) { spmm_tier = std::is_same_v<Tier, Blk> ? "blocked" : "other"; });
-        dv::with_tier<dv::routine::iluk_apply, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
-            iluk_tier = std::is_same_v<Tier, dv::tier::Blocked<1>> ? "blocked" : "other";
+        batchlas::device::with_tier<S, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) { spmm_tier = std::is_same_v<Tier, Blk> ? "blocked" : "other"; });
+        batchlas::device::with_tier<batchlas::device::routine::iluk_apply, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            iluk_tier = std::is_same_v<Tier, batchlas::device::tier::Blocked<1>> ? "blocked" : "other";
         });
-        dv::with_tier<dv::routine::iluk_factorize, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
-            ilu_fac_tier = std::is_same_v<Tier, dv::tier::Blocked<1>> ? "blocked" : "other";
+        batchlas::device::with_tier<batchlas::device::routine::iluk_factorize, T>(this->dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            ilu_fac_tier = std::is_same_v<Tier, batchlas::device::tier::Blocked<1>> ? "blocked" : "other";
         });
         EXPECT_EQ(spmm_tier, "blocked") << "n=" << n;
         EXPECT_EQ(iluk_tier, "blocked") << "n=" << n;
         EXPECT_EQ(ilu_fac_tier, "blocked") << "n=" << n;
     }
-    dv::DeviceLimits none = dv::DeviceLimits::of(this->dev.q().get_device());
+    batchlas::device::DeviceLimits none = batchlas::device::DeviceLimits::of(this->dev.q().get_device());
     none.sub_group_sizes = {8};
-    EXPECT_THROW((dv::with_tier<S, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
-    EXPECT_THROW((dv::with_tier<dv::routine::iluk_factorize, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
+    EXPECT_THROW((batchlas::device::with_tier<S, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
+    EXPECT_THROW((batchlas::device::with_tier<batchlas::device::routine::iluk_factorize, T>(none, 10, [](auto) {})), batchlas::invalid_argument);
 }
 
 }  // namespace

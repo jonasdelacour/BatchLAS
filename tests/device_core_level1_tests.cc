@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_level1_tests: level1.hh v2.2 additions (design A.2) against host references.
+// device_core_level1_tests: level1.hh additions (design A.2) against host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts; non-unit strides
 // (inc 3) on memory vectors; sizes that are not a multiple of the executor (n = 37 on 32 items),
 // odd and even reverse lengths; rscl's both arms (a finite reciprocal, and d below 1 / max where
@@ -41,12 +41,12 @@ TYPED_TEST(DeviceCoreLevel1Test, FillMapManyInterleaveReverse) {
     T* m2 = d.template alloc<T>(n, T(0));
     const T alpha = val<T>(99);
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::SubGroup<32> ex{it.get_sub_group()};
-        dv::interleave(ex, dv::vec(a, n), dv::vec(b, n - 1), dv::vec(y, 2 * n - 1));
-        dv::fill(ex, alpha, dv::vec(f, n, inc));
-        dv::map_many(ex, n, [&](int i) { m1[i] = a[i]; }, [&](int i) { m2[i] = dv::Arith<T>::add(a[i], m1[i]); });
-        dv::reverse(ex, dv::vec(r, n, inc));
-        if (ex.leader()) dv::reverse(dv::Thread{}, dv::vec(q, n - 1));
+        const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
+        batchlas::device::interleave(ex, batchlas::device::vec(a, n), batchlas::device::vec(b, n - 1), batchlas::device::vec(y, 2 * n - 1));
+        batchlas::device::fill(ex, alpha, batchlas::device::vec(f, n, inc));
+        batchlas::device::map_many(ex, n, [&](int i) { m1[i] = a[i]; }, [&](int i) { m2[i] = batchlas::device::Arith<T>::add(a[i], m1[i]); });
+        batchlas::device::reverse(ex, batchlas::device::vec(r, n, inc));
+        if (ex.leader()) batchlas::device::reverse(batchlas::device::Thread{}, batchlas::device::vec(q, n - 1));
     });
     const auto yh = d.down(y, 2 * n), fh = d.down(f, n * inc), rh = d.down(r, n * inc), qh = d.down(q, n - 1);
     const auto m1h = d.down(m1, n), m2h = d.down(m2, n);
@@ -74,9 +74,9 @@ TYPED_TEST(DeviceCoreLevel1Test, RsclTakesTheReciprocalOnlyWhenItIsFinite) {
     T* x1 = d.up(x_h);
     T* x2 = d.up(x_h);
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::SubGroup<32> ex{it.get_sub_group()};
-        dv::rscl(ex, d1, dv::vec(x1, n));
-        dv::rscl(ex, d2, dv::vec(x2, n));
+        const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
+        batchlas::device::rscl(ex, d1, batchlas::device::vec(x1, n));
+        batchlas::device::rscl(ex, d2, batchlas::device::vec(x2, n));
     });
     const auto g1 = d.down(x1, n), g2 = d.down(x2, n);
     for (int i = 0; i < n; ++i) {
@@ -98,13 +98,13 @@ TYPED_TEST(DeviceCoreLevel1Test, DotPartialDotSlabUpperBound) {
     T* y = d.up(y_h);
     T* out = d.template alloc<T>(3, T(0));
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::SubGroup<32> ex{it.get_sub_group()};
-        const T p = dv::dot_partial<true>(ex, dv::vec(x, n), dv::vec(y, n));
+        const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
+        const T p = batchlas::device::dot_partial<true>(ex, batchlas::device::vec(x, n), batchlas::device::vec(y, n));
         const T s = ex.team_reduce(p);
         if (ex.leader()) {
             out[0] = s;
-            T acc = dv::Arith<T>::zero();
-            dv::dot_slab<16>(acc, dv::vec(x + 8, n - 8), dv::vec(y + 8, n - 8), 8, 20);  // t < 12
+            T acc = batchlas::device::Arith<T>::zero();
+            batchlas::device::dot_slab<16>(acc, batchlas::device::vec(x + 8, n - 8), batchlas::device::vec(y + 8, n - 8), 8, 20);  // t < 12
             out[1] = acc;
         }
     });
@@ -116,10 +116,10 @@ TYPED_TEST(DeviceCoreLevel1Test, DotPartialDotSlabUpperBound) {
     EXPECT_LE(err(o[1], slab), tol<T>(4));
     using R = real_of<T>;
     const std::vector<R> asc{R(-2), R(-1), R(0.5), R(0.5), R(3), R(7)};
-    const auto av = dv::vec(const_cast<R*>(asc.data()), int(asc.size()));
-    EXPECT_EQ(dv::upper_bound(dv::Thread{}, av, R(0.5)), 4);
-    EXPECT_EQ(dv::upper_bound(dv::Thread{}, av, R(-3)), 0);
-    EXPECT_EQ(dv::upper_bound(dv::Thread{}, av, R(9)), 6);
+    const auto av = batchlas::device::vec(const_cast<R*>(asc.data()), int(asc.size()));
+    EXPECT_EQ(batchlas::device::upper_bound(batchlas::device::Thread{}, av, R(0.5)), 4);
+    EXPECT_EQ(batchlas::device::upper_bound(batchlas::device::Thread{}, av, R(-3)), 0);
+    EXPECT_EQ(batchlas::device::upper_bound(batchlas::device::Thread{}, av, R(9)), 6);
 }
 
 TYPED_TEST(DeviceCoreLevel1Test, ProdScaledSurvivesWhatAPlainProductCannot) {
@@ -135,12 +135,12 @@ TYPED_TEST(DeviceCoreLevel1Test, ProdScaledSurvivesWhatAPlainProductCannot) {
         R* out = d.template alloc<R>(2, R(0));
         int* ex_out = d.template alloc<int>(1, 0);
         d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-            const dv::WorkGroup<WG, 32> ex{it};
-            const auto q = dv::prod_scaled(ex, n, [&](int i) { return f[i]; });
+            const batchlas::device::WorkGroup<WG, 32> ex{it};
+            const auto q = batchlas::device::prod_scaled(ex, n, [&](int i) { return f[i]; });
             if (ex.leader()) {
                 out[0] = q.mant;
                 ex_out[0] = q.expo;
-                out[1] = dv::sqrt_scaled(q);
+                out[1] = batchlas::device::sqrt_scaled(q);
             }
         });
         const auto o = d.down(out, 2);
@@ -171,15 +171,15 @@ TYPED_TEST(DeviceCoreLevel1Test, ArgmaxThroughScratchHonoursRangeSkipTieAndNaN) 
     T* x = d.up(x_h);
     T* xn = d.up(nan_h);
     int* idx = d.template alloc<int>(4, -7);
-    using AM = dv::ArgMax<R>;
+    using AM = batchlas::device::ArgMax<R>;
     d.template run<WG>(1, 32 * sizeof(AM), [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const dv::Scratch<AM, 32> scr{reinterpret_cast<AM*>(lm)};
-        const dv::Range r{1, 2999};
-        const auto a = dv::argmax<dv::tie::Lowest>(ex, scr, dv::vec(x, n), r, 2001);
-        const auto b = dv::argmax<dv::tie::Highest>(ex, scr, dv::vec(x, n), r, 2001);
-        const auto c = dv::argmax<dv::tie::Lowest, dv::nan::First>(ex, scr, dv::vec(xn, n), r, 2001);
-        const auto e = dv::argmax<dv::tie::Lowest, dv::nan::Skip>(ex, scr, dv::vec(xn, n), r, 2001);
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const batchlas::device::Scratch<AM, 32> scr{reinterpret_cast<AM*>(lm)};
+        const batchlas::device::Range r{1, 2999};
+        const auto a = batchlas::device::argmax<batchlas::device::tie::Lowest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
+        const auto b = batchlas::device::argmax<batchlas::device::tie::Highest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
+        const auto c = batchlas::device::argmax<batchlas::device::tie::Lowest, batchlas::device::nan::First>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
+        const auto e = batchlas::device::argmax<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
         if (ex.leader()) {
             idx[0] = a.index;
             idx[1] = b.index;
@@ -202,15 +202,15 @@ TYPED_TEST(DeviceCoreLevel1Test, TeamLoopsAndTilesCoverTheirOutputsOnce) {
     int* trips = d.template alloc<int>(WG, 0);
     int* tiles = d.template alloc<int>(m * nn, 0);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::Teams<WG, 8> ex{it};  // 8 teams
+        const batchlas::device::Teams<WG, 8> ex{it};  // 8 teams
         int t = 0;
-        dv::for_each_team_owned(ex, nout, [&](int o, bool live) {
+        batchlas::device::for_each_team_owned(ex, nout, [&](int o, bool live) {
             ++t;
             if (live && ex.lane() == 0) sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>(hits[o]) += 1;
         });
         trips[it.get_local_linear_id()] = t;
-        const dv::WorkGroup<WG, 32> wg{it};
-        dv::for_each_owned_tiles<4, 3>(wg, m, nn, [&](int i0, int j0, int lr, int lc) {
+        const batchlas::device::WorkGroup<WG, 32> wg{it};
+        batchlas::device::for_each_owned_tiles<4, 3>(wg, m, nn, [&](int i0, int j0, int lr, int lc) {
             for (int j = 0; j < lc; ++j)
                 for (int i = 0; i < lr; ++i)
                     sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>(tiles[(j0 + j) * m + i0 + i]) += 1;

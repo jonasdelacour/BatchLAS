@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2, the batched 2-D executor and its host launcher: one item per matrix element,
+// Device LA, the batched 2-D executor and its host launcher: one item per matrix element,
 // 2-D indices (no % or /), the batch dimension grid-strided past the dimension-0 group limit.
 // for_each_owned_2d (level1.hh) on a Grid2D visits the item's one element.
 
@@ -20,28 +20,28 @@ template <int GR = 0, int GC = 0, int LB = 0> struct Grid2D {
     static constexpr int static_group_rows = GR, static_group_cols = GC, static_group_batch = LB;
     sycl::nd_item<3> it;
 
-    BATCHLAS_DLA_INLINE int group_rows() const {
+    BATCHLAS_DEVICE_INLINE int group_rows() const {
         if constexpr (GR > 0) return GR;
         else return static_cast<int>(it.get_local_range(2));
     }
-    BATCHLAS_DLA_INLINE int group_cols() const {
+    BATCHLAS_DEVICE_INLINE int group_cols() const {
         if constexpr (GC > 0) return GC;
         else return static_cast<int>(it.get_local_range(1));
     }
-    BATCHLAS_DLA_INLINE int lrow() const { return static_cast<int>(it.get_local_id(2)); }
-    BATCHLAS_DLA_INLINE int lcol() const { return static_cast<int>(it.get_local_id(1)); }
-    BATCHLAS_DLA_INLINE int row() const { return static_cast<int>(it.get_global_id(2)); }
-    BATCHLAS_DLA_INLINE int col() const { return static_cast<int>(it.get_global_id(1)); }
+    BATCHLAS_DEVICE_INLINE int lrow() const { return static_cast<int>(it.get_local_id(2)); }
+    BATCHLAS_DEVICE_INLINE int lcol() const { return static_cast<int>(it.get_local_id(1)); }
+    BATCHLAS_DEVICE_INLINE int row() const { return static_cast<int>(it.get_global_id(2)); }
+    BATCHLAS_DEVICE_INLINE int col() const { return static_cast<int>(it.get_global_id(1)); }
     // The first batch item of this item (the only one when the launch covers the batch).
-    BATCHLAS_DLA_INLINE int batch() const {
+    BATCHLAS_DEVICE_INLINE int batch() const {
         if constexpr (LB == 1) return static_cast<int>(it.get_group(0));
         else return static_cast<int>(it.get_global_id(0));
     }
-    template <class F> BATCHLAS_DLA_INLINE void for_each_batch(int nbatch, F&& f) const {
+    template <class F> BATCHLAS_DEVICE_INLINE void for_each_batch(int nbatch, F&& f) const {
         const int step = static_cast<int>(it.get_global_range(0));
         for (int b = batch(); b < nbatch; b += step) f(b);
     }
-    BATCHLAS_DLA_INLINE void barrier(Mem = Mem::Local) const { it.barrier(sycl::access::fence_space::local_space); }
+    BATCHLAS_DEVICE_INLINE void barrier(Mem = Mem::Local) const { it.barrier(sycl::access::fence_space::local_space); }
 };
 
 template <class Ex> inline constexpr bool is_grid2d_v = false;

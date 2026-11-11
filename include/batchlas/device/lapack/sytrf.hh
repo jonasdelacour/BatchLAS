@@ -42,14 +42,14 @@ template <class T> struct RevMat {
     int m;
     int n;
     bool rev;
-    BATCHLAS_DLA_HELPER int rows() const { return m; }
-    BATCHLAS_DLA_HELPER int cols() const { return n; }
-    BATCHLAS_DLA_HELPER T& operator()(int i, int j) const {
+    BATCHLAS_DEVICE_HELPER int rows() const { return m; }
+    BATCHLAS_DEVICE_HELPER int cols() const { return n; }
+    BATCHLAS_DEVICE_HELPER T& operator()(int i, int j) const {
         return p[static_cast<std::ptrdiff_t>(rev ? m - 1 - i : i) + static_cast<std::ptrdiff_t>(rev ? n - 1 - j : j) * ld];
     }
 };
-template <class T> BATCHLAS_DLA_INLINE RevMat<T> rev_mat(T* p, std::ptrdiff_t ld, int n, bool rev) { return {p, ld, n, n, rev}; }
-template <class T> BATCHLAS_DLA_INLINE RevMat<T> rev_mat(T* p, std::ptrdiff_t ld, int m, int n, bool rev) {
+template <class T> BATCHLAS_DEVICE_INLINE RevMat<T> rev_mat(T* p, std::ptrdiff_t ld, int n, bool rev) { return {p, ld, n, n, rev}; }
+template <class T> BATCHLAS_DEVICE_INLINE RevMat<T> rev_mat(T* p, std::ptrdiff_t ld, int m, int n, bool rev) {
     return {p, ld, m, n, rev};
 }
 
@@ -58,8 +58,8 @@ template <class T> struct RevVec {
     T* p;
     int n;
     bool rev;
-    BATCHLAS_DLA_HELPER int size() const { return n; }
-    BATCHLAS_DLA_HELPER T& operator()(int i) const { return p[rev ? n - 1 - i : i]; }
+    BATCHLAS_DEVICE_HELPER int size() const { return n; }
+    BATCHLAS_DEVICE_HELPER T& operator()(int i) const { return p[rev ? n - 1 - i : i]; }
 };
 
 // ---- deterministic group reductions -----------------------------------------------------------
@@ -77,11 +77,11 @@ template <class R> struct SumScratch {
 };
 
 // (ov, oi) beats (bv, bi): a larger value; on a tie the preferred index.
-template <class R> BATCHLAS_DLA_HELPER bool argmax_beats(R ov, int oi, R bv, int bi, bool prefer_low) {
+template <class R> BATCHLAS_DEVICE_HELPER bool argmax_beats(R ov, int oi, R bv, int bi, bool prefer_low) {
     return ov > bv || (ov == bv && (prefer_low ? oi < bi : oi > bi));
 }
 
-template <class Ex, class R> BATCHLAS_DLA_HELPER void argmax_reduce(const Ex& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
+template <class Ex, class R> BATCHLAS_DEVICE_HELPER void argmax_reduce(const Ex& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
     auto sg = ex.sub();
     // Member by member: AdaptiveCpp's Metal backend miscompiles a select of the whole struct.
     const ArgMax<R> m = butterfly<1, 32>(sg, ArgMax<R>{idx, v}, [&](const ArgMax<R>& a, const ArgMax<R>& o) {
@@ -107,7 +107,7 @@ template <class Ex, class R> BATCHLAS_DLA_HELPER void argmax_reduce(const Ex& ex
     sync<scope::Group>(ex, Mem::Global);
 }
 
-template <class Ex, class R> BATCHLAS_DLA_HELPER R sum_reduce_real(const Ex& ex, R v, R* slots) {
+template <class Ex, class R> BATCHLAS_DEVICE_HELPER R sum_reduce_real(const Ex& ex, R v, R* slots) {
     auto sg = ex.sub();
     v = butterfly<1, 32>(sg, v, sycl::plus<R>());
     const int nsg = detail::size_of(ex) / 32;
@@ -119,7 +119,7 @@ template <class Ex, class R> BATCHLAS_DLA_HELPER R sum_reduce_real(const Ex& ex,
     sync<scope::Group>(ex, Mem::Global);
     return v;
 }
-template <class Ex, class T, class R> BATCHLAS_DLA_HELPER T sum_reduce(const Ex& ex, SumScratch<R> scr, T v) {
+template <class Ex, class T, class R> BATCHLAS_DEVICE_HELPER T sum_reduce(const Ex& ex, SumScratch<R> scr, T v) {
     using A = arith_t<arith::Fma, T>;
     if constexpr (A::is_complex) {
         const R re = sum_reduce_real(ex, A::re(v), scr.re);
@@ -132,16 +132,16 @@ template <class Ex, class T, class R> BATCHLAS_DLA_HELPER T sum_reduce(const Ex&
 
 // A NaN key ranks above every number, so a NaN column is found and no lane's pick depends on a
 // NaN compare.
-template <class R> BATCHLAS_DLA_HELPER R nan_as_inf(R v) { return sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v; }
+template <class R> BATCHLAS_DEVICE_HELPER R nan_as_inf(R v) { return sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v; }
 
 // ?SYTF2's pivot search: the arg-max over i in r of nan_as_inf(abs1(x(i))) (LAPACK's CABS1),
 // ties to the lower index (prefer_low) or the higher; with Skip, index `skip` is left out. An
 // empty range gives {-1, -1}. Uniform; the barriers of argmax_reduce.
 template <bool Skip = false, class Ex, class R, class X>
-BATCHLAS_DLA_INLINE ArgMax<R> iamax_bk(const Ex& ex, ArgMaxScratch<R> scr, const X& x, Range r, bool prefer_low, int skip = -1) {
+BATCHLAS_DEVICE_INLINE ArgMax<R> iamax_bk(const Ex& ex, ArgMaxScratch<R> scr, const X& x, Range r, bool prefer_low, int skip = -1) {
     R cv = R(-1);
     int ci = -1;
-    for_each_owned(ex, r, [&](int i) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, r, [&](int i) BATCHLAS_DEVICE_BODY {
         if constexpr (Skip) {
             if (i == skip) return;
         }
@@ -162,9 +162,9 @@ inline constexpr int kBkNeedRow = 0;
 inline constexpr int kBkZero = 1;
 inline constexpr int kBkKeep = 2;
 
-template <class R> BATCHLAS_DLA_HELPER R bk_alpha() { return (R(1) + sycl::sqrt(R(17))) / R(8); }
+template <class R> BATCHLAS_DEVICE_HELPER R bk_alpha() { return (R(1) + sycl::sqrt(R(17))) / R(8); }
 
-template <class Ex, class R> BATCHLAS_DLA_HELPER int bk_stage(const Ex& ex, R absakk, R colmax, R alpha) {
+template <class Ex, class R> BATCHLAS_DEVICE_HELPER int bk_stage(const Ex& ex, R absakk, R colmax, R alpha) {
     return ex.uniform(sycl::fmax(absakk, colmax) == R(0) || sycl::isnan(absakk) ? kBkZero
                       : absakk >= alpha * colmax                                ? kBkKeep
                                                                                 : kBkNeedRow);
@@ -172,7 +172,7 @@ template <class Ex, class R> BATCHLAS_DLA_HELPER int bk_stage(const Ex& ex, R ab
 
 // ?SYTF2's second test after the row search: kp (k or imax) and kstep (1 or 2), item 0's.
 template <class Ex, class R>
-BATCHLAS_DLA_HELPER void bk_choice(const Ex& ex, R absakk, R colmax, R rowmax, R absimax, R alpha, int k, int imax, int& kp, int& kstep) {
+BATCHLAS_DEVICE_HELPER void bk_choice(const Ex& ex, R absakk, R colmax, R rowmax, R absimax, R alpha, int k, int imax, int& kp, int& kstep) {
     kp = imax;
     kstep = 1;
     if (absakk >= alpha * colmax * (colmax / rowmax)) kp = k;
@@ -188,10 +188,10 @@ template <class T> struct BkBlock2 {
     using A = arith_t<arith::Fma, T>;
     T d11, d22, e21;
     // The two entries of the row [xk xk1] D^-1.
-    BATCHLAS_DLA_INLINE T first(T xk, T xk1) const { return A::mul(e21, A::sub(A::mul(d11, xk), xk1)); }
-    BATCHLAS_DLA_INLINE T second(T xk, T xk1) const { return A::mul(e21, A::sub(A::mul(d22, xk1), xk)); }
+    BATCHLAS_DEVICE_INLINE T first(T xk, T xk1) const { return A::mul(e21, A::sub(A::mul(d11, xk), xk1)); }
+    BATCHLAS_DEVICE_INLINE T second(T xk, T xk1) const { return A::mul(e21, A::sub(A::mul(d22, xk1), xk)); }
 };
-template <class T> BATCHLAS_DLA_INLINE BkBlock2<T> bk_block2(T akk, T ak1k, T ak1k1) {
+template <class T> BATCHLAS_DEVICE_INLINE BkBlock2<T> bk_block2(T akk, T ak1k, T ak1k1) {
     using A = arith_t<arith::Fma, T>;
     const T d21 = ak1k;
     const T d11 = A::div(ak1k1, d21);
@@ -203,7 +203,7 @@ template <class T> BATCHLAS_DLA_INLINE BkBlock2<T> bk_block2(T akk, T ak1k, T ak
 // ?lasyf's W, nb + 1 columns: logical row i at physical row map(i), panel column c at physical
 // column c (Lower) or ncol-1-c (Upper), so W's physical column order is the order of the panel's
 // physical columns in A and the trailing gemm takes both as plain sub-views.
-template <class D> BATCHLAS_DLA_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t ld, int n, int ncol, bool rev) {
+template <class D> BATCHLAS_DEVICE_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t ld, int n, int ncol, bool rev) {
     return rev_mat(p, ld, n, ncol, rev);
 }
 
@@ -214,9 +214,8 @@ template <class D> BATCHLAS_DLA_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t ld,
 template <typename D, typename R, typename Ex, typename PivOut>
 inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g, sytrf_detail::ArgMaxScratch<R> am,
                  PivOut&& piv_out) {
-    namespace d = sytrf_detail;
     using A = arith_t<arith::Fma, D>;
-    const R alpha = d::bk_alpha<R>();
+    const R alpha = sytrf_detail::bk_alpha<R>();
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     int info = 0;
     int k = 0;
@@ -226,22 +225,22 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
         const R absakk = abs1(S(k, k));
         // ?sytf2's I?AMAX takes the first maximum in storage order: the smallest physical row,
         // which for the reversed (upper) form is the largest logical one.
-        const auto col = d::iamax_bk(g, am, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, !rev);
+        const auto col = sytrf_detail::iamax_bk(g, am, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, !rev);
         const R colmax = col.value < R(0) ? R(0) : col.value;
         const int imax = col.index;
-        const int stage = d::bk_stage(g, absakk, colmax, alpha);
-        if (stage == d::kBkNeedRow) {
-            const auto row = d::iamax_bk<true>(
+        const int stage = sytrf_detail::bk_stage(g, absakk, colmax, alpha);
+        if (stage == sytrf_detail::kBkNeedRow) {
+            const auto row = sytrf_detail::iamax_bk<true>(
                 g, am, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, true, imax);
-            d::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
+            sytrf_detail::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
         }
-        if (stage == d::kBkZero) {
+        if (stage == sytrf_detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
         } else {
             const int kk = k + kstep - 1;
             if (kp != kk) {  // the symmetric interchange of kk and kp
-                for_each_owned(g, Range{kp + 1, n}, [&](int i) BATCHLAS_DLA_BODY { std::swap(S(i, kk), S(i, kp)); });
-                for_each_owned(g, Range{kk + 1, kp}, [&](int j) BATCHLAS_DLA_BODY { std::swap(S(j, kk), S(kp, j)); });
+                for_each_owned(g, Range{kp + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { std::swap(S(i, kk), S(i, kp)); });
+                for_each_owned(g, Range{kk + 1, kp}, [&](int j) BATCHLAS_DEVICE_BODY { std::swap(S(j, kk), S(kp, j)); });
                 if (g.leader()) {
                     std::swap(S(kk, kk), S(kp, kp));
                     if (kstep == 2) std::swap(S(k + 1, k), S(kp, k));
@@ -252,21 +251,21 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
                 const D mr1 = A::neg(A::recip(S(k, k)));
                 for (int j = k + 1; j < n; ++j) {
                     const D t = A::mul(mr1, S(j, k));
-                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DLA_BODY { S(i, j) = A::add(S(i, j), A::mul(S(i, k), t)); });
+                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, j) = A::add(S(i, j), A::mul(S(i, k), t)); });
                 }
                 sync<scope::Group>(g, Mem::Global);
                 const D r1 = A::neg(mr1);
-                for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DLA_BODY { S(i, k) = A::mul(r1, S(i, k)); });
+                for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, k) = A::mul(r1, S(i, k)); });
             } else if (k < n - 2) {  // A22 -= A21 D^-1 A21^T, then L21 = A21 D^-1
-                const auto blk = d::bk_block2(S(k, k), S(k + 1, k), S(k + 1, k + 1));
+                const auto blk = sytrf_detail::bk_block2(S(k, k), S(k + 1, k), S(k + 1, k + 1));
                 for (int j = k + 2; j < n; ++j) {
                     const D a = blk.first(S(j, k), S(j, k + 1)), b = blk.second(S(j, k), S(j, k + 1));
-                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DLA_BODY {
+                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                         S(i, j) = A::sub(A::sub(S(i, j), A::mul(S(i, k), a)), A::mul(S(i, k + 1), b));
                     });
                 }
                 sync<scope::Group>(g, Mem::Global);
-                for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DLA_BODY {
+                for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                     const D a = blk.first(S(i, k), S(i, k + 1)), b = blk.second(S(i, k), S(i, k + 1));
                     S(i, k) = a;
                     S(i, k + 1) = b;
@@ -293,14 +292,13 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
 // the panel ends at k0 + nb or k0 + nb + 1, and the trailing update has one uniform rank, nb + 1.
 // W's columns the item did not compute are zero. Returns the end; *info as sytf2's.
 // evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
-// The loops stay hand-written: as v2 ops the W zero-fill unrolled fully at device link and the
+// The loops stay hand-written: as device ops the W zero-fill unrolled fully at device link and the
 // column update moved loads and FMAs (complex<float> registers 68 -> 128).
 template <typename D, typename R, typename Ex, typename PivOut>
 inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>& W, int n, int k0, int nb, int start, bool rev,
                  const Ex& g, sytrf_detail::ArgMaxScratch<R> am, int& info, PivOut&& piv_out) {
-    namespace d = sytrf_detail;
     using A = arith_t<arith::Fma, D>;
-    const R alpha = d::bk_alpha<R>();
+    const R alpha = sytrf_detail::bk_alpha<R>();
     const int lid = g.lid(), nl = detail::size_of(g);
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     for (int i = k0 + lid; i < n; i += nl)
@@ -325,29 +323,29 @@ inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>
         R cv = R(-1);
         int ci = -1;
         for (int i = k + 1 + lid; i < n; i += nl) {
-            const R v = d::nan_as_inf(abs1(W(i, c)));
-            if (d::argmax_beats(v, i, cv, ci, !rev)) { cv = v; ci = i; }
+            const R v = sytrf_detail::nan_as_inf(abs1(W(i, c)));
+            if (sytrf_detail::argmax_beats(v, i, cv, ci, !rev)) { cv = v; ci = i; }
         }
-        d::argmax_reduce(g, am, cv, ci, !rev);
+        sytrf_detail::argmax_reduce(g, am, cv, ci, !rev);
         const R colmax = cv < R(0) ? R(0) : cv;
         const int imax = ci;
-        const int stage = d::bk_stage(g, absakk, colmax, alpha);
-        if (stage == d::kBkNeedRow) {
+        const int stage = sytrf_detail::bk_stage(g, absakk, colmax, alpha);
+        if (stage == sytrf_detail::kBkNeedRow) {
             update_col(k, c + 1, imax, [&](int i) { return i < imax ? S(imax, i) : S(i, imax); });
             R rv = R(-1);
             int ri = -1;
             for (int j = k + lid; j < n; j += nl) {
                 if (j == imax) continue;
-                const R v = d::nan_as_inf(abs1(W(j, c + 1)));
-                if (d::argmax_beats(v, j, rv, ri, true)) { rv = v; ri = j; }
+                const R v = sytrf_detail::nan_as_inf(abs1(W(j, c + 1)));
+                if (sytrf_detail::argmax_beats(v, j, rv, ri, true)) { rv = v; ri = j; }
             }
-            d::argmax_reduce(g, am, rv, ri, true);
-            d::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
+            sytrf_detail::argmax_reduce(g, am, rv, ri, true);
+            sytrf_detail::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k)
                 for (int i = k + lid; i < n; i += nl) W(i, c) = W(i, c + 1);
             sync<scope::Group>(g, Mem::Global);
         }
-        if (stage == d::kBkZero) {
+        if (stage == sytrf_detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
             for (int i = k + lid; i < n; i += nl) S(i, k) = W(i, c);
         } else {
@@ -366,7 +364,7 @@ inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>
                 const D r1 = A::recip(W(k, c));
                 for (int i = k + lid; i < n; i += nl) S(i, k) = i == k ? W(k, c) : A::mul(r1, W(i, c));
             } else {
-                const auto blk = d::bk_block2(W(k, c), W(k + 1, c), W(k + 1, c + 1));
+                const auto blk = sytrf_detail::bk_block2(W(k, c), W(k + 1, c), W(k + 1, c + 1));
                 for (int j = k + 2 + lid; j < n; j += nl) {
                     const D wk = W(j, c), wk1 = W(j, c + 1);
                     S(j, k) = blk.first(wk, wk1);
@@ -493,7 +491,7 @@ template <class Ex> constexpr bool sytrf_exec_ok() {
     else return Ex::sg_size == 32 && Ex::size % 32 == 0;
 }
 // -1 when a run-time width is not whole sub-groups or exceeds Blocked<1>'s scratch, else 0.
-template <class Tier, class Ex> BATCHLAS_DLA_INLINE int sytrf_exec_check(const Ex& ex) {
+template <class Tier, class Ex> BATCHLAS_DEVICE_INLINE int sytrf_exec_check(const Ex& ex) {
     constexpr bool wg = std::is_same_v<Tier, tier::Blocked<1>>;
     if constexpr (is_runtime_v<Ex>) {
         const int w = detail::size_of(ex);
@@ -505,21 +503,21 @@ template <class Tier, class Ex> BATCHLAS_DLA_INLINE int sytrf_exec_check(const E
 }
 // Sub-group index and count inside ex: a whole-sub-group executor (SubGroup, Teams, a 32-item
 // group) is one sub-group whatever its team() says.
-template <class Ex> BATCHLAS_DLA_INLINE int sytrf_team(const Ex& ex) {
+template <class Ex> BATCHLAS_DEVICE_INLINE int sytrf_team(const Ex& ex) {
     if constexpr (Ex::sub_whole) return 0;
     else return ex.team();
 }
-template <class Ex> BATCHLAS_DLA_INLINE int sytrf_nteams(const Ex& ex) {
+template <class Ex> BATCHLAS_DEVICE_INLINE int sytrf_nteams(const Ex& ex) {
     if constexpr (Ex::sub_whole) return 1;
     else return detail::nteams_of(ex);
 }
-template <class MA> BATCHLAS_DLA_INLINE std::ptrdiff_t sytrf_ld(const MA& a) { return static_cast<int>(a.ld); }
+template <class MA> BATCHLAS_DEVICE_INLINE std::ptrdiff_t sytrf_ld(const MA& a) { return static_cast<int>(a.ld); }
 // A dense column-major operand (A(i, j) an lvalue, a member ld) as the routine's logical view.
-template <class MA> BATCHLAS_DLA_INLINE auto sytrf_view(const MA& a, bool rev) {
+template <class MA> BATCHLAS_DEVICE_INLINE auto sytrf_view(const MA& a, bool rev) {
     return rev_mat(&a(0, 0), sytrf_ld(a), a.rows(), rev);
 }
 // LAPACK's argument numbers: -2 (N: A not square or outside the tier), -4 (LDA < max(1, n)).
-template <class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int sytrf_check(const Ex& ex, const MA& a) {
+template <class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int sytrf_check(const Ex& ex, const MA& a) {
     if (const int e = sytrf_exec_check<Tier>(ex); e != 0) return e;
     const int n = a.rows();
     if (a.cols() != n || !detail::bound_admits<Tier>(n)) return -2;
@@ -532,7 +530,7 @@ template <class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int sytrf_check(co
 // items with `factors`) runs ?sytf2 on S, copies the factor back to G, and its leader calls
 // info_out(info). Returns ?sytf2's info on g, 0 elsewhere. No trailing barrier.
 template <class All, class Sub, typename D, typename R, typename PivOut, typename InfoOut>
-BATCHLAS_DLA_INLINE int sytrf_cta_factor(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
+BATCHLAS_DEVICE_INLINE int sytrf_cta_factor(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
                                          bool rev, ArgMaxScratch<R> am, PivOut&& piv_out, InfoOut&& info_out) {
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
     sync<scope::Group>(all, Mem::Global);
@@ -546,7 +544,7 @@ BATCHLAS_DLA_INLINE int sytrf_cta_factor(const All& all, const Sub& g, bool fact
 }
 
 template <Uplo UL, int N, class Ex, class MA>
-BATCHLAS_DLA_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -563,7 +561,7 @@ BATCHLAS_DLA_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, int* 
 }
 
 template <Uplo UL, class Ex, class MA>
-BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -581,7 +579,7 @@ BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, i
 // W's both reversed. evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
 template <Uplo UL, int NB, class Ex, class MA>
     requires(NB > 1)
-BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     using Cfg = sytrf_l3_cfg<D>;
@@ -617,8 +615,8 @@ BATCHLAS_DLA_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, 
         const l3::Global<D> c{rev ? a0 : a0 + e + e * lda, lda, m, m};
         const D* const lp = rev ? a0 + (n - k0 - rank) * lda : a0 + e + k0 * lda;
         const D* const wp = rev ? w + (NB + 1 - rank) * n : w + e;
-        const auto pass = l3::make_pass<true, false>(rank, [=](int r, int kk) BATCHLAS_DLA_BODY { return lp[r + kk * lda]; },
-                                                      [=](int kk, int col) BATCHLAS_DLA_BODY { return wp[col + kk * n]; });
+        const auto pass = l3::make_pass<true, false>(rank, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return lp[r + kk * lda]; },
+                                                      [=](int kk, int col) BATCHLAS_DEVICE_BODY { return wp[col + kk * n]; });
         l3::rank_update<Cfg, tri, false>(ex, sm, c, neg_one, one, pass);
         sync<scope::Group>(ex, Mem::Global);
     }

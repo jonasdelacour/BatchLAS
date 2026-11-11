@@ -35,8 +35,6 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace tdv2 = batchlas::device::tridiag;
 using batchlas::verify::Check;
 
 namespace {
@@ -131,11 +129,11 @@ TYPED_TEST(TridiagV2, ReductionsAtEveryRuntimeRange) {
         T* o = this->dev.up(ho);
         this->dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
             const int b = static_cast<int>(it.get_group_linear_id());
-            const v2::RtGroup<> ex{it};
-            const auto dv = v2::vec(d + std::ptrdiff_t(b) * n * incd, n, incd);
-            const auto ev = v2::vec(e + std::ptrdiff_t(b) * n * ince, n - 1, ince);
-            const T ln = v2::lanst<NormType::Inf>(ex, dv, ev);
-            const auto g = v2::stebz_gershgorin(ex, dv, ev);
+            const device::RtGroup<> ex{it};
+            const auto dv = device::vec(d + std::ptrdiff_t(b) * n * incd, n, incd);
+            const auto ev = device::vec(e + std::ptrdiff_t(b) * n * ince, n - 1, ince);
+            const T ln = device::lanst<NormType::Inf>(ex, dv, ev);
+            const auto g = device::stebz_gershgorin(ex, dv, ev);
             if (ex.leader()) {
                 T* ob = o + std::ptrdiff_t(b) * slots;
                 ob[0] = ln, ob[1] = g.lo, ob[2] = g.hi, ob[3] = g.e2max;
@@ -207,19 +205,19 @@ TYPED_TEST(TridiagV2, SturmBisectGradedAndStraddled) {
     int* cnt = this->dev.up(hc);
     this->dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex{it};
-        const v2::Thread th{};
-        const auto dv = v2::vec(d + std::ptrdiff_t(b) * n, n);
-        const auto ev = v2::vec(e + std::ptrdiff_t(b) * n, n - 1);
-        const auto g = v2::stebz_gershgorin(ex, dv, ev);
+        const device::RtGroup<> ex{it};
+        const device::Thread th{};
+        const auto dv = device::vec(d + std::ptrdiff_t(b) * n, n);
+        const auto ev = device::vec(e + std::ptrdiff_t(b) * n, n - 1);
+        const auto g = device::stebz_gershgorin(ex, dv, ev);
         const T norm = sycl::max(sycl::fabs(g.lo), sycl::fabs(g.hi));
         const T pad = std::numeric_limits<T>::epsilon() * norm * T(2) + std::numeric_limits<T>::min();
         const T pivmin = std::numeric_limits<T>::min() * sycl::max(T(1), g.e2max);
-        v2::for_each_owned(ex, n, [&](int j) {
-            lam[std::ptrdiff_t(b) * n + j] = v2::laebz_bisect(th, dv, ev, j, g.lo - pad, g.hi + pad, T(0), pivmin, 400);
+        device::for_each_owned(ex, n, [&](int j) {
+            lam[std::ptrdiff_t(b) * n + j] = device::laebz_bisect(th, dv, ev, j, g.lo - pad, g.hi + pad, T(0), pivmin, 400);
             const T xj = x[std::ptrdiff_t(b) * n + j];
-            cnt[(std::ptrdiff_t(b) * n + j) * 2] = v2::laebz_count(th, dv, ev, xj, pivmin);
-            cnt[(std::ptrdiff_t(b) * n + j) * 2 + 1] = v2::laebz_count(th, dv, ev, sycl::nextafter(xj, -std::numeric_limits<T>::infinity()), pivmin);
+            cnt[(std::ptrdiff_t(b) * n + j) * 2] = device::laebz_count(th, dv, ev, xj, pivmin);
+            cnt[(std::ptrdiff_t(b) * n + j) * 2 + 1] = device::laebz_count(th, dv, ev, sycl::nextafter(xj, -std::numeric_limits<T>::infinity()), pivmin);
         });
     });
     const auto gl = this->dev.down(lam, hl.size());
@@ -258,27 +256,27 @@ TYPED_TEST(TridiagV2, House2Refl2) {
     T* so = this->dev.up(hs);
     this->dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex{it};
+        const device::RtGroup<> ex{it};
         T* ob = vo + std::ptrdiff_t(b) * 4 * npair;
         if (ex.leader()) {
             for (int p = 0; p < npair; ++p) {
                 T x0 = pr[2 * p], x1 = pr[2 * p + 1];
-                const auto v = tdv2::house2(x0, x1);
-                v2::rot<v2::rot_conv::Reflector2>(v2::Givens<T>{v[0], v[1]}, x0, x1);
+                const auto v = device::tridiag::house2(x0, x1);
+                device::rot<device::rot_conv::Reflector2>(device::Givens<T>{v[0], v[1]}, x0, x1);
                 ob[4 * p] = v[0], ob[4 * p + 1] = v[1], ob[4 * p + 2] = x0, ob[4 * p + 3] = x1;
             }
             // A 3-stripe: x = pairs 1..3 first halves, y = their second halves.
             T s[2 * nstripe];
             for (int i = 0; i < nstripe; ++i) s[i] = pr[2 * (i + 1)], s[nstripe + i] = pr[2 * (i + 1) + 1];
-            const auto v = tdv2::house2(pr[0], pr[1]);
-            const v2::Givens<T> g{v[0], v[1]};
-            const auto x = v2::refs(s[0], s[1], s[2]), y = v2::refs(s[3], s[4], s[5]);
-            v2::static_for<nstripe>([&](auto i) { v2::rot<v2::rot_conv::Reflector2>(g, x(i), y(i)); });
+            const auto v = device::tridiag::house2(pr[0], pr[1]);
+            const device::Givens<T> g{v[0], v[1]};
+            const auto x = device::refs(s[0], s[1], s[2]), y = device::refs(s[3], s[4], s[5]);
+            device::static_for<nstripe>([&](auto i) { device::rot<device::rot_conv::Reflector2>(g, x(i), y(i)); });
             for (int i = 0; i < 2 * nstripe; ++i) so[std::ptrdiff_t(b) * 2 * nstripe + i] = s[i];
         }
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * 2 * ld, m, 2, ld);
-        const auto v = tdv2::house2(pr[0], pr[1]);
-        v2::rot<v2::rot_conv::Reflector2>(ex, v2::Givens<T>{v[0], v[1]}, A.col(0), A.col(1));
+        const auto A = device::mat(a + std::ptrdiff_t(b) * 2 * ld, m, 2, ld);
+        const auto v = device::tridiag::house2(pr[0], pr[1]);
+        device::rot<device::rot_conv::Reflector2>(ex, device::Givens<T>{v[0], v[1]}, A.col(0), A.col(1));
     });
     const auto gv = this->dev.down(vo, hv.size());
     const auto ga = this->dev.down(a, ha.size());
@@ -318,7 +316,7 @@ TYPED_TEST(TridiagV2, House2Refl2) {
             }
 }
 
-static_assert(v2::Refs<double, 3>{}.size() == 3);
-static_assert(std::is_same_v<v2::elem_t<v2::Refs<float, 2>>, float>);
+static_assert(device::Refs<double, 3>{}.size() == 3);
+static_assert(std::is_same_v<device::elem_t<device::Refs<float, 2>>, float>);
 
 }  // namespace

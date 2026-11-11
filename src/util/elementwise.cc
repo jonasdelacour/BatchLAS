@@ -44,18 +44,17 @@ void check_same_shape(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-namespace v2 = ::batchlas::device;
 
 // One batched 2-D launch over a rows x cols shape (no flat index, no % or /); f(ex, b) runs
 // for every active item b. Views are indexed per item, so submatrices (ld > rows) work, and
-// operands may alias: each item touches one element of each. Not v2::batched2d: that takes a
+// operands may alias: each item touches one element of each. Not device::batched2d: that takes a
 // sycl::queue&, which would bypass Queue's event recording.
 template <typename Name, typename F>
 Event launch_2d(Queue& ctx, int rows, int cols, int batch, const std::uint8_t* mask, F f) {
     if (rows == 0 || cols == 0 || batch == 0) return ctx.get_event();
-    ctx->parallel_for<Name>(v2::batched2d_range(batch, rows, cols, v2::batched2d_shape(rows, cols)),
+    ctx->parallel_for<Name>(device::batched2d_range(batch, rows, cols, device::batched2d_shape(rows, cols)),
                             [=](sycl::nd_item<3> item) {
-                                const v2::Grid2D<> ex{item};
+                                const device::Grid2D<> ex{item};
                                 ex.for_each_batch(batch, [&](int b) {
                                     if (mask && !mask[b]) return;
                                     f(ex, b);
@@ -81,8 +80,8 @@ Event elementwise_into(Queue& ctx,
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
     return launch_2d<ElementwiseBinaryKernel<T, Op>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
-        v2::glue::map2d(ex, v2::item(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, v2::item(Av, b, m, n),
-                        v2::item(Bv, b, m, n));
+        device::glue::map2d(ex, device::item(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, device::item(Av, b, m, n),
+                        device::item(Bv, b, m, n));
     });
 }
 
@@ -103,7 +102,7 @@ Event axpby_into(Queue& ctx,
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
     return launch_2d<AxpbyKernel<T>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
-        v2::glue::geam(ex, alpha, v2::item(Av, b, m, n), beta, v2::item(Bv, b, m, n), v2::item(Cv, b, m, n));
+        device::glue::geam(ex, alpha, device::item(Av, b, m, n), beta, device::item(Bv, b, m, n), device::item(Cv, b, m, n));
     });
 }
 
@@ -126,10 +125,10 @@ Event triangular_mask_into(Queue& ctx,
     const auto run = [&](auto uplo_tag) {
         return launch_2d<TriangularMaskKernel<T, decltype(uplo_tag)::value>>(ctx, m, n, A.batch_size(), mask,
                                                                             [=](const auto& ex, int b) {
-            v2::glue::trimask(ex, v2::glue::tri(uplo_tag, kc), v2::item(Av, b, m, n), v2::item(Cv, b, m, n));
+            device::glue::trimask(ex, device::glue::tri(uplo_tag, kc), device::item(Av, b, m, n), device::item(Cv, b, m, n));
         });
     };
-    return uplo == Uplo::Upper ? run(v2::glue::UpperC{}) : run(v2::glue::LowerC{});
+    return uplo == Uplo::Upper ? run(device::glue::UpperC{}) : run(device::glue::LowerC{});
 }
 
 template <typename T>

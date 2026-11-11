@@ -31,19 +31,17 @@ inline constexpr bool kAcpp = false;
 // QR steps allowed per eigenvalue before the item is reported unconverged (LAPACK ?steqr's MAXIT).
 inline constexpr int kTridiagMaxIterations = 30;
 
-namespace v2 = device;
-namespace tdv2 = device::tridiag;
 // The solver's launch is nd_range(batch * 32, 32). Loops stride by the runtime local range and
 // barriers fence global and local memory, as the legacy sycl::group_barrier: a constant stride
 // of 32 lets the compiler unroll every elementwise loop over the generic D/L/U pointers (+23%
 // instructions, +16 registers on sm_89).
-using TridiagEx = v2::RtGroup<>;
+using TridiagEx = device::RtGroup<>;
 
 // Q(:, k:k+1) := Q(:, k:k+1) H_k for the n reflectors H_k = I - 2 v_k v_k^T of one QR sweep.
 template <typename T>
 void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, const int m, const int ld, T* Q) {
-    const auto q = v2::mat(Q, m, n + 1, ld);
-    for (int k = 0; k < n; k++) v2::rot<v2::rot_conv::Reflector2>(ex, v2::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
+    const auto q = device::mat(Q, m, n + 1, ld);
+    for (int k = 0; k < n; k++) device::rot<device::rot_conv::Reflector2>(ex, device::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
 }
 
 // One explicit shifted QR step on the leading n x n block: T - shift = Q R, T := R Q + shift, Q
@@ -51,37 +49,37 @@ void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, co
 // the diagonal, sub- and super-diagonal; U[n+1:] is the second super-diagonal R fills in.
 template <typename T>
 void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, const Span<T> U, const Span<T> Vout, T shift=0) {
-    const auto d = v2::vec(D.data(), n);
+    const auto d = device::vec(D.data(), n);
     auto U2 = [&](int k) -> T& { return U[(n + 1) + k]; };
     // (I - 2 v v^T) on three scattered pairs, unrolled at compile time: the pointers stay in registers.
-    auto refl3 = [](const v2::Givens<T>& g, const auto& x, const auto& y) BATCHLAS_DLA_BODY {
-        v2::static_for<3>([&](auto i) BATCHLAS_DLA_BODY { v2::rot<v2::rot_conv::Reflector2>(g, x(i), y(i)); });
+    auto refl3 = [](const device::Givens<T>& g, const auto& x, const auto& y) BATCHLAS_DEVICE_BODY {
+        device::static_for<3>([&](auto i) BATCHLAS_DEVICE_BODY { device::rot<device::rot_conv::Reflector2>(g, x(i), y(i)); });
     };
 
     // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
     const T l_nm1 = L[n-1];
 
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 
-    v2::map(ex, d, [=](T x) { return x - shift; }, d);
-    v2::map(ex, v2::vec(U.data() + (n + 1), n), [] { return T(0); });
-    v2::copy(ex, v2::vec(L.data(), n - 1), v2::vec(U.data(), n - 1));
-    v2::map(ex, v2::vec(Vout.data(), 2 * (n - 1)), [] { return T(0); });
+    device::map(ex, d, [=](T x) { return x - shift; }, d);
+    device::map(ex, device::vec(U.data() + (n + 1), n), [] { return T(0); });
+    device::copy(ex, device::vec(L.data(), n - 1), device::vec(U.data(), n - 1));
+    device::map(ex, device::vec(Vout.data(), 2 * (n - 1)), [] { return T(0); });
     if (ex.leader()) {
         L[n - 1] = T(0);
         U[n - 1] = T(0);
     }
 
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 
     // Q^T from the left: H_k zeroes L[k] (rows k, k+1; columns k, k+1, k+2).
     if (ex.leader()) {
         for (int k = 0; k < n - 1; k++) {
             if (L[k] != T(0)) {
-                const auto v = tdv2::house2(D[k], L[k]);
+                const auto v = device::tridiag::house2(D[k], L[k]);
                 Vout[2 * k] = v[0];
                 Vout[2 * k + 1] = v[1];
-                refl3(v2::Givens<T>{v[0], v[1]}, v2::refs(D[k], U[k], U2(k)), v2::refs(L[k], D[k + 1], U[k + 1]));
+                refl3(device::Givens<T>{v[0], v[1]}, device::refs(D[k], U[k], U2(k)), device::refs(L[k], D[k + 1], U[k + 1]));
             }
         }
     }
@@ -90,32 +88,32 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         const std::array<T, 2> v{Vout[0], Vout[1]};
         const T t1 = T(0) + D[1] * v[1];
-        v2::rot<v2::rot_conv::Reflector2>(v2::Givens<T>{v[0], v[1]}, D[0], U[0]);
+        device::rot<device::rot_conv::Reflector2>(device::Givens<T>{v[0], v[1]}, D[0], U[0]);
         L[0] -= T(2) * v[0] * t1;
         D[1] -= T(2) * v[1] * t1;
     }
 
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 
     // H_k on columns k, k+1 (rows k-1, k, k+1).
     if (ex.leader()) {
         for (int k = 1; k < n - 1; k++) {
             const std::array<T, 2> v{Vout[2 * k], Vout[2 * k + 1]};
-            refl3(v2::Givens<T>{v[0], v[1]}, v2::refs(U[k - 1], D[k], L[k]), v2::refs(U2(k - 1), U[k], D[k + 1]));
+            refl3(device::Givens<T>{v[0], v[1]}, device::refs(U[k - 1], D[k], L[k]), device::refs(U2(k - 1), U[k], D[k + 1]));
         }
     }
 
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 
-    v2::map(ex, d, [=](T x) { return x + shift; }, d);
-    v2::copy(ex, v2::vec(U.data(), n - 1), v2::vec(L.data(), n - 1));
+    device::map(ex, d, [=](T x) { return x + shift; }, d);
+    device::copy(ex, device::vec(U.data(), n - 1), device::vec(L.data(), n - 1));
 
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 
     if (ex.leader()) {
         L[n-1] = l_nm1;
     }
-    ex.barrier(v2::Mem::Global);
+    ex.barrier(device::Mem::Global);
 }
 
 // Whether the four work arrays fit the local memory a 32-lane work-group may request (on Metal
@@ -167,18 +165,18 @@ Event tridiagonal_solver(Queue& ctx,
             bool failed = false;
             auto solve = [&](Span<T> D, Span<T> L, Span<T> U, Span<T> Vlocal) __attribute__((always_inline)) {
                 const int nn = int(n);
-                const auto d = v2::vec(D.data(), nn);
+                const auto d = device::vec(D.data(), nn);
                 T* batch_Q = Vdata + bid * Vstride;
 
-                if (jobz == JobType::EigenVectors) v2::laset(ex, v2::Zero{}, v2::One{}, v2::mat(batch_Q, nn, nn, int(Vld)));
-                // One fused pass with the legacy int64 bound. Two v2::copy calls, or one fused
+                if (jobz == JobType::EigenVectors) device::laset(ex, device::Zero{}, device::One{}, device::mat(batch_Q, nn, nn, int(Vld)));
+                // One fused pass with the legacy int64 bound. Two device::copy calls, or one fused
                 // for_each_owned over int n, cost 8 more registers for double on sm_89 (58 -> 66).
                 for (int i = ex.lid(); i < n; i += ex.width()) {
                     D[i] = alphas.data()[bid * n + i];
                     L[i] = betas.data()[bid * n + i];
                 }
 
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
 
                 // Every work-item reads the same local values after T_QTQ's closing barrier, so the
                 // loop decisions agree across the group. Relative deflation as LAPACK ?steqr.
@@ -193,7 +191,7 @@ Event tridiagonal_solver(Queue& ctx,
                     int it = 0;
                     while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
                         if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                        const auto [l0, l1] = v2::lae2(D[k-1], L[k-1], D[k]);
+                        const auto [l0, l1] = device::lae2(D[k-1], L[k-1], D[k]);
                         const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(ex, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {
@@ -203,8 +201,8 @@ Event tridiagonal_solver(Queue& ctx,
                 }
                 if (ex.leader()) status_ptr[bid] = failed ? 1 : 0;
 
-                v2::map(ex, v2::vec(W.data() + bid * n, nn), [](T x) -> real_t {
-                    if constexpr (v2::Arith<T>::is_complex) return x.real();
+                device::map(ex, device::vec(W.data() + bid * n, nn), [](T x) -> real_t {
+                    if constexpr (device::Arith<T>::is_complex) return x.real();
                     else return x;
                 }, d);
             };
@@ -212,11 +210,11 @@ Event tridiagonal_solver(Queue& ctx,
             // TRAP (Metal): no generic address space, so a pointer chosen between local and global
             // memory at run time is rejected ("Conflicting address space information in PHI node").
             // There the solve is emitted once per storage; elsewhere once, on selected pointers.
-            auto smem = [&]() BATCHLAS_DLA_BODY {
+            auto smem = [&]() BATCHLAS_DEVICE_BODY {
                 return std::array<Span<T>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
                                                Span(&U_smem[0], 2 * (n + 1)), Span(&V_smem[0], 2 * n)};
             };
-            auto gmem = [&]() BATCHLAS_DLA_BODY {
+            auto gmem = [&]() BATCHLAS_DEVICE_BODY {
                 return std::array<Span<T>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
                                                Span(L_global.data() + bid * n, n),
                                                Span(U_global.data() + bid * 2 * (n + 1), 2 * (n + 1)),

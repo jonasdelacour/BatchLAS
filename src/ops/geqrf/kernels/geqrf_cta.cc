@@ -29,8 +29,6 @@ namespace sycl_geqrf {
 
 namespace {
 
-namespace gn = ::batchlas::geqrf_native;
-namespace v2 = ::batchlas::device;
 
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
 // bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
@@ -97,10 +95,10 @@ GeqrfLeafLaunch geqrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int m
     return p;
 }
 
-template <typename T, gn::GeqrfScope SC> class GeqrfPanelResidentKernel;
+template <typename T, geqrf_native::GeqrfScope SC> class GeqrfPanelResidentKernel;
 template <typename T> class GeqrfPanelGlobalKernel;
 
-template <typename T, gn::GeqrfScope SC>
+template <typename T, geqrf_native::GeqrfScope SC>
 Event geqrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
@@ -114,7 +112,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     D* const tp = reinterpret_cast<D*>(tau_ptr);
-    static_assert(SC == gn::GeqrfScope::SubGroup || SC == gn::GeqrfScope::WorkGroup);
+    static_assert(SC == geqrf_native::GeqrfScope::SubGroup || SC == geqrf_native::GeqrfScope::WorkGroup);
 
     const int kmax = std::min(m, n);
     const std::size_t tile_elems =
@@ -137,7 +135,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
                 int b, slot, tid, lwg;
-                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
                     b = wg_id * G + sg_id;
                     slot = sg_id;
@@ -165,7 +163,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                     mine[e] = src[static_cast<std::ptrdiff_t>(r) +
                                   static_cast<std::ptrdiff_t>(c) * ld];
                 }
-                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
                     sycl::group_barrier(sg);                  // B0
                 } else {
                     sycl::group_barrier(it.get_group());      // B0
@@ -173,11 +171,11 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
                 // Raw-pointer tile: G panels share one local_accessor, so each needs its own
                 // base; ld unpadded.
-                using Ex = v2::RtGroup<SC == gn::GeqrfScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group>;
-                v2::geqr2(Ex{it}, v2::mat_wide(mine, m, n, m), kmax,
+                using Ex = device::RtGroup<SC == geqrf_native::GeqrfScope::SubGroup ? device::Scope::Sub : device::Scope::Group>;
+                device::geqr2(Ex{it}, device::mat_wide(mine, m, n, m), kmax,
                           tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
 
-                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
                     sycl::group_barrier(sg);                  // B4
                 } else {
                     sycl::group_barrier(it.get_group());      // B4
@@ -223,8 +221,8 @@ Event geqrf_panel_global_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
-                v2::geqr2(v2::RtGroup<v2::Scope::Group>{it},
-                          v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
+                device::geqr2(device::RtGroup<device::Scope::Group>{it},
+                          device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
                           tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
             });
     });
@@ -248,9 +246,9 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                              const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = v2::real_t<D>;
+    using R = device::real_t<D>;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    constexpr int N = gn::GeqrfPanelRegPlan<D>::cols;
+    constexpr int N = geqrf_native::GeqrfPanelRegPlan<D>::cols;
 
     // `if constexpr`, not a static_assert: geqrf_panel_factorize is instantiated for every
     // scalar and reaches this call, so a scalar whose row is off must COMPILE to a throw and
@@ -265,10 +263,10 @@ Event geqrf_panel_reg_launch(Queue& ctx,
     } else {
         D* const ap = reinterpret_cast<D*>(a_ptr);
         D* const tp = reinterpret_cast<D*>(tau_ptr);
-        const int wg = gn::geqrf_panel_reg_wg(m);
+        const int wg = geqrf_native::geqrf_panel_reg_wg(m);
         const int kmax = std::min(m, n);
-        const std::size_t rslots = gn::geqrf_panel_reg_real_slots(wg);
-        const std::size_t sslots = gn::geqrf_panel_reg_scalar_slots(wg, N);
+        const std::size_t rslots = geqrf_native::geqrf_panel_reg_real_slots(wg);
+        const std::size_t sslots = geqrf_native::geqrf_panel_reg_scalar_slots(wg, N);
 
         ctx->submit([&](sycl::handler& h) {
             sycl::local_accessor<R, 1> sred(sycl::range<1>(rslots), h);
@@ -280,8 +278,8 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                     const int b = static_cast<int>(it.get_group_linear_id());
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
-                    v2::geqr2_reg<N, D, R>(
-                        v2::RtGroup<v2::Scope::Group>{it}, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
+                    device::geqr2_reg<N, D, R>(
+                        device::RtGroup<device::Scope::Group>{it}, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
                         tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset,
                         &sred[0], &sw[0]);
                 });
@@ -294,12 +292,12 @@ Event geqrf_panel_reg_launch(Queue& ctx,
 // launch hole at every shipped (type, height). evidence: docs/perf/qr.md#the-48-kib-launch-hole
 template <typename D>
 constexpr std::size_t geqrf_panel_reg_worst_slm() {
-    if constexpr (gn::GeqrfPanelRegPlan<D>::cols < 1) {
+    if constexpr (geqrf_native::GeqrfPanelRegPlan<D>::cols < 1) {
         return 0;
     } else {
-        constexpr int wg = gn::geqrf_panel_reg_max_rows<D>();
-        return gn::geqrf_panel_reg_real_slots(wg) * sizeof(v2::real_t<D>) +
-               gn::geqrf_panel_reg_scalar_slots(wg, gn::GeqrfPanelRegPlan<D>::cols) * sizeof(D);
+        constexpr int wg = geqrf_native::geqrf_panel_reg_max_rows<D>();
+        return geqrf_native::geqrf_panel_reg_real_slots(wg) * sizeof(device::real_t<D>) +
+               geqrf_native::geqrf_panel_reg_scalar_slots(wg, geqrf_native::GeqrfPanelRegPlan<D>::cols) * sizeof(D);
     }
 }
 
@@ -308,7 +306,7 @@ constexpr std::size_t geqrf_panel_reg_worst_slm() {
 #define BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(D)                                               \
     static_assert(geqrf_panel_reg_worst_slm<D>() < kGeqrfHoleLo,                              \
                   "the register leaf's slot arrays have grown into the 48 KiB launch hole");  \
-    static_assert(gn::geqrf_panel_reg_row_is_current<D>(),                                    \
+    static_assert(geqrf_native::geqrf_panel_reg_row_is_current<D>(),                                    \
                   "the register panel leaf's probe row was measured at a different width "    \
                   "than the plan now uses -- re-run the probe or clear the row")
 
@@ -380,19 +378,19 @@ std::size_t geqrf_cta_buffer_size(Queue& ctx,
 // nothing from the device except MAX_WORK_GROUP_SIZE: the panel's work-group IS its height.
 template <typename T>
 int geqrf_panel_reg_cols() {
-    return gn::GeqrfPanelRegPlan<typename sycl_device::DevMap<T>::type>::cols;
+    return geqrf_native::GeqrfPanelRegPlan<typename sycl_device::DevMap<T>::type>::cols;
 }
 
 template <typename T>
 int geqrf_panel_reg_max_m() {
-    return gn::geqrf_panel_reg_max_rows<typename sycl_device::DevMap<T>::type>();
+    return geqrf_native::geqrf_panel_reg_max_rows<typename sycl_device::DevMap<T>::type>();
 }
 
 template <typename T>
 bool geqrf_panel_reg_fits(int m, int n, int device_max_wg) {
     const int cols = geqrf_panel_reg_cols<T>();
     if (cols < 1 || m < 1 || n < 1 || n > cols) return false;
-    const int wg = gn::geqrf_panel_reg_wg(m);
+    const int wg = geqrf_native::geqrf_panel_reg_wg(m);
     return m <= geqrf_panel_reg_max_m<T>() && wg <= device_max_wg;
 }
 
@@ -401,7 +399,7 @@ bool geqrf_panel_reg_fits(int m, int n, int device_max_wg) {
 // shape the shipped policy declines. evidence: docs/perf/qr.md#the-panel-height-window
 template <typename T>
 bool geqrf_panel_reg_preferred(int m, int n, int device_max_wg) {
-    return geqrf_panel_reg_fits<T>(m, n, device_max_wg) && m <= gn::kGeqrfPanelRegPolicyRows;
+    return geqrf_panel_reg_fits<T>(m, n, device_max_wg) && m <= geqrf_native::kGeqrfPanelRegPolicyRows;
 }
 
 template <typename T>
@@ -410,7 +408,7 @@ unsigned geqrf_panel_reg_debug_launch(Queue& ctx, int m, int n) {
         ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     if (!geqrf_panel_reg_fits<T>(m, n, max_wg)) return 0u;
     return (static_cast<unsigned>(GeqrfPanelLeaf::Register) << 16) |
-           static_cast<unsigned>(gn::geqrf_panel_reg_wg(m));
+           static_cast<unsigned>(geqrf_native::geqrf_panel_reg_wg(m));
 }
 
 template <typename T>
@@ -470,11 +468,11 @@ Event geqrf_panel_factorize(Queue& ctx,
 
     const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
-        return geqrf_panel_resident_launch<T, gn::GeqrfScope::SubGroup>(
+        return geqrf_panel_resident_launch<T, geqrf_native::GeqrfScope::SubGroup>(
             ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
             p.wg, p.G, mask);
     }
-    return geqrf_panel_resident_launch<T, gn::GeqrfScope::WorkGroup>(
+    return geqrf_panel_resident_launch<T, geqrf_native::GeqrfScope::WorkGroup>(
         ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
         p.wg, 1, mask);
 }

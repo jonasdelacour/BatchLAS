@@ -31,8 +31,6 @@
 
 namespace batchlas {
 
-namespace v2 = device;
-namespace sv = syev_v2;
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.
@@ -84,7 +82,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // The tile layout of the one body (device/lapack/syev.hh cta_layout: real vectors on
         // ONE P+1-padded tile, Hermitian vectors with a separate real accumulator).
-        using Lay = v2::syev_detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
+        using Lay = device::syev_detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
         constexpr int32_t LDQ = Lay::ldq;
         constexpr int32_t LDA = Lay::lda;
         constexpr bool kSeparateQTile = Lay::separate_q;
@@ -168,13 +166,13 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                const v2::syev_detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
+                const device::syev_detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
                 // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
                 // back-transform; the stores skip a dead chunk.
-                v2::syev_detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
+                device::syev_detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
                     part, solve_part, A_local, base_a, V_local, base_v, W_local, base_w, Q_local, base_q, A_prob,
-                    v2::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
-                    [&](bool failed) BATCHLAS_DLA_BODY {
+                    device::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
+                    [&](bool failed) BATCHLAS_DEVICE_BODY {
                         // A STORE, not a raise: the kernel is the item's single writer, so it
                         // needs no separate clear (a second submission, racy out of order).
                         if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);

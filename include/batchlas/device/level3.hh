@@ -19,7 +19,7 @@ namespace batchlas::device {
 
 namespace detail {
 // op(A)(i, j) of a register tile.
-template <Transpose TR, class T, int R, int C> BATCHLAS_DLA_INLINE T tile_op(const Tile<T, R, C>& a, int i, int j) {
+template <Transpose TR, class T, int R, int C> BATCHLAS_DEVICE_INLINE T tile_op(const Tile<T, R, C>& a, int i, int j) {
     if constexpr (TR == Transpose::NoTrans) return a(i, j);
     else if constexpr (TR == Transpose::Trans) return a(j, i);
     else return Arith<T>::conj(a(j, i));
@@ -33,7 +33,7 @@ template <Transpose TR, int R, int C> inline constexpr int op_cols = TR == Trans
 // element (Shape: epi::Sum default; see arith.hh store).
 template <Transpose TA = Transpose::NoTrans, Transpose TB = Transpose::NoTrans, class Shape = epi::Sum, class Ops = arith::Explicit,
           class AS, class BS, class T, int AR, int AC, int BR, int BC, int M, int N>
-BATCHLAS_DLA_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>& A, const Tile<T, BR, BC>& B, BS beta, Tile<T, M, N>& C) {
+BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>& A, const Tile<T, BR, BC>& B, BS beta, Tile<T, M, N>& C) {
     constexpr int K = detail::op_cols<TA, AR, AC>;
     static_assert(detail::op_rows<TA, AR, AC> == M && detail::op_cols<TB, BR, BC> == N && detail::op_rows<TB, BR, BC> == K,
                   "gemm (register tile): op(A) is M x K, op(B) is K x N, C is M x N");
@@ -52,7 +52,7 @@ BATCHLAS_DLA_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>& A,
 // C -= A B on tiles, one Ops::msub per term in k order (Ops = arith::FmaSplit: sub(c, mul(a, b)),
 // the two-rounding hand form; arith::Fma: one fused msub).
 template <class Ops = arith::Explicit, class T, int M, int K, int N>
-BATCHLAS_DLA_INLINE void gemm_sub(const Thread&, const Tile<T, M, K>& A, const Tile<T, K, N>& B, Tile<T, M, N>& C) {
+BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread&, const Tile<T, M, K>& A, const Tile<T, K, N>& B, Tile<T, M, N>& C) {
     using Ar = ops_arith_t<Ops, T>;
 #pragma unroll
     for (int j = 0; j < N; ++j)
@@ -67,7 +67,7 @@ BATCHLAS_DLA_INLINE void gemm_sub(const Thread&, const Tile<T, M, K>& A, const T
 // read); DG = Unit never reads the diagonal. Substitution order is the reference BLAS order
 // (dtrsm), so a real Ops::msub chain matches it term by term.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class AS, class T, int NA, int M, int N>
-BATCHLAS_DLA_INLINE void trsm(const Thread&, AS alpha_, const Tile<T, NA, NA>& A, Tile<T, M, N>& B) {
+BATCHLAS_DEVICE_INLINE void trsm(const Thread&, AS alpha_, const Tile<T, NA, NA>& A, Tile<T, M, N>& B) {
     using Ar = ops_arith_t<Ops, T>;
     const auto alpha = as_tag(alpha_);
     if constexpr (!std::is_same_v<std::remove_cv_t<decltype(alpha)>, One>) {

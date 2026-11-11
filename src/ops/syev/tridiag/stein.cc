@@ -32,7 +32,6 @@ struct SteinIterateKernel;
 template <Backend B, typename T>
 struct SteinOrthoKernel;
 
-namespace v2 = device;
 
 template <Backend B, typename T>
 Event stein(Queue& ctx,
@@ -103,17 +102,17 @@ Event stein(Queue& ctx,
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const v2::RtGroup<> ex{item};
+                const device::RtGroup<> ex{item};
                 // Valid prefix for this item. Slots [kb, k) of w are undefined -- for a stebz
                 // value range the count is data-dependent and per item.
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
                 const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
-                const v2::stein_detail::Params<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
+                const device::stein_detail::Params<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
                 const int b = static_cast<int>(bid);
-                const v2::stein_detail::Scratch<T> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
+                const device::stein_detail::Scratch<T> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      dl_ptr, dd_ptr, du_ptr, du2_ptr, xb_ptr, piv_ptr, bid * k};
-                v2::stein_detail::iterate(ex, v2::item(d, b), v2::item(e, b), v2::item(w, b), kb,
-                                          v2::item(Zv, b, int(n), int(k)), s, p);
+                device::stein_detail::iterate(ex, device::item(d, b), device::item(e, b), device::item(w, b), kb,
+                                          device::item(Zv, b, int(n), int(k)), s, p);
             });
     });
 
@@ -133,20 +132,20 @@ Event stein(Queue& ctx,
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const v2::RtGroup<> ex{item};
-                const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
-                const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
-                const auto Zb = v2::mat(Zv.data() + bid * Zv.stride(), int(n), int(k), int(Zv.ld()));
+                const device::RtGroup<> ex{item};
+                const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
+                const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
+                const auto Zb = device::mat(Zv.data() + bid * Zv.stride(), int(n), int(k), int(Zv.ld()));
 
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
                 const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
                 // Stopping at kb, not k, is a COST bound (a stale tail forms one bogus cluster);
                 // phase 1's kb bound is the one that protects correctness.
                 // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
-                const v2::stein_detail::Params<T> p{max_iter, ortho_threshold, seed};
-                const v2::stein_detail::Scratch<T> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
+                const device::stein_detail::Params<T> p{max_iter, ortho_threshold, seed};
+                const device::stein_detail::Scratch<T> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0};
-                v2::stein_detail::reorthogonalize(ex, dv, ev, v2::item(w, static_cast<int>(bid)), kb, Zb, s, p);
+                device::stein_detail::reorthogonalize(ex, dv, ev, device::item(w, static_cast<int>(bid)), kb, Zb, s, p);
             });
     });
 

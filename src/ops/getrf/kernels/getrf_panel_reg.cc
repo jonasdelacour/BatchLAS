@@ -31,7 +31,6 @@ template <typename T, int NB> class GetrfPanelRegKernel;
 
 namespace {
 
-namespace gn = ::batchlas::getrf_native;
 
 // A launch ABORT, not a slowdown, so every cap below is compile-time. The per-BLOCK file
 // is not what binds on sm_89: registers are owned per sub-partition, and the whole-block
@@ -137,9 +136,9 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
         // Under a kilobyte for every instantiation: the 48 KB hole cannot be reached.
         sycl::local_accessor<D, 1> sx(sycl::range<1>(static_cast<std::size_t>(NB)), h);
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
 
         batchlas::impl::parallel_for<GetrfPanelRegKernel<T, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
@@ -148,7 +147,7 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
-                gn::getf2_panel_reg_device<D, NB>(
+                getrf_native::getf2_panel_reg_device<D, NB>(
                     it, ap + static_cast<std::ptrdiff_t>(b) * strp, ld,
                     m, ncols, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
@@ -183,7 +182,7 @@ bool getrf_panel_reg_fits(int m, int n, int max_wg) {
     if (m > getrf_panel_reg_max_m<T>()) return false;
     const int wg = panel_reg_wg(m);
     // kLuRedSlots argmax slots is the cross-sub-group scan's whole capacity.
-    if (wg > kPanelRegWgQuantum * gn::kLuRedSlots) return false;
+    if (wg > kPanelRegWgQuantum * getrf_native::kLuRedSlots) return false;
     return wg <= max_wg;
 }
 

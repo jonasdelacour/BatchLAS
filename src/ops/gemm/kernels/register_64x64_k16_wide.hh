@@ -991,11 +991,11 @@ BATCHLAS_UNROLL_FULL
                 ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
                 gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
             };
-            gc::kloop_async_ring<Stages, TileK>(v2::Grid2D<>{item}, slabs, 0, issue, compute);
+            device::l3::kloop_async_ring<Stages, TileK>(device::Grid2D<>{item}, slabs, 0, issue, compute);
         } else {
             // An odd slab count ends in buffer 0, with no barrier after. origin above stays the
             // first direct operator() call, so the SemaSYCL body does not move (F4).
-            gc::kloop_prefetch2<TileK>(v2::Grid2D<>{item}, slabs, load, store, compute);
+            device::l3::kloop_prefetch2<TileK>(device::Grid2D<>{item}, slabs, load, store, compute);
         }
 
         // The NN kernel's epilogue: the 16-byte band store for a group inside C with 16-byte

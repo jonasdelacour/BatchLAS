@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The elementwise-glue family's private Device LA v2 ops (src/kernels/common/elementwise_glue_v2.hh:
+// The elementwise-glue family's private Device LA ops (src/kernels/common/elementwise_glue_v2.hh:
 // map2d, trimask, tri_expand, geam, the SLM tile moves) and the core lange norm.cc calls, against
 // host references. The core ops they build on (Grid2D, for_each_owned_2d, mat_wide, item) are covered by
 // device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): ld != rows on every
@@ -31,14 +31,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace glue = batchlas::device::glue;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -126,7 +124,7 @@ template <class T> class DeviceBlasV2GlueTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -176,21 +174,21 @@ TYPED_TEST(DeviceBlasV2GlueTest, Grid2DOpsMatchHostAndNeverReadUnreferencedStora
     T* B = this->dev.up(hB);
     T* Bn = this->dev.up(hBn);
     const std::size_t per_out = std::size_t(kSlots2d) * per;
-    for (const auto& [shape, g0] : {std::pair{v2::batched2d_shape(m, n), 65535}, std::pair{v2::Shape2D{4, 4, 8}, 37}}) {
+    for (const auto& [shape, g0] : {std::pair{device::batched2d_shape(m, n), 65535}, std::pair{device::Shape2D{4, 4, 8}, 37}}) {
         T* o = this->dev.up(std::vector<T>(std::size_t(kBatch) * per_out, sentinel));
-        this->dev.template run3<T>(v2::batched2d_range(kBatch, m, n, shape, g0), 0, [=](sycl::nd_item<3> it, T*) {
-            const v2::Grid2D<> ex{it};
+        this->dev.template run3<T>(device::batched2d_range(kBatch, m, n, shape, g0), 0, [=](sycl::nd_item<3> it, T*) {
+            const device::Grid2D<> ex{it};
             ex.for_each_batch(kBatch, [&](int b) {
                 const std::ptrdiff_t off = std::ptrdiff_t(b) * per;
-                const auto a = v2::mat(A + off, m, n, ld);
-                const auto O = [&](int s) { return v2::mat(o + std::ptrdiff_t(b) * per_out + s * per, m, n, ld); };
-                glue::map2d(ex, O(kMap), [](T x, T y) { return v2::Arith<T>::add(x, y); }, a, v2::mat(B + off, m, n, ld));
-                glue::trimask(ex, glue::tri(glue::UpperC{}, -2), a, O(kMaskU));
-                glue::trimask(ex, glue::tri(Uplo::Lower, 1), a, O(kMaskL));
-                glue::tri_expand(ex, glue::LowerC{}, glue::DiagC<Diag::Unit>{}, v2::mat_wide(Al + off, m, n, ld), O(kExpandLU));
-                glue::tri_expand(ex, Uplo::Upper, Diag::NonUnit, v2::mat_wide(Au + off, m, n, ld), O(kExpandUN));
-                glue::geam(ex, al, a, v2::Zero{}, v2::mat(Bn + off, m, n, ld), O(kGeam0));
-                glue::geam(ex, al, a, be, v2::mat(B + off, m, n, ld), O(kGeam));
+                const auto a = device::mat(A + off, m, n, ld);
+                const auto O = [&](int s) { return device::mat(o + std::ptrdiff_t(b) * per_out + s * per, m, n, ld); };
+                device::glue::map2d(ex, O(kMap), [](T x, T y) { return device::Arith<T>::add(x, y); }, a, device::mat(B + off, m, n, ld));
+                device::glue::trimask(ex, device::glue::tri(device::glue::UpperC{}, -2), a, O(kMaskU));
+                device::glue::trimask(ex, device::glue::tri(Uplo::Lower, 1), a, O(kMaskL));
+                device::glue::tri_expand(ex, device::glue::LowerC{}, device::glue::DiagC<Diag::Unit>{}, device::mat_wide(Al + off, m, n, ld), O(kExpandLU));
+                device::glue::tri_expand(ex, Uplo::Upper, Diag::NonUnit, device::mat_wide(Au + off, m, n, ld), O(kExpandUN));
+                device::glue::geam(ex, al, a, device::Zero{}, device::mat(Bn + off, m, n, ld), O(kGeam0));
+                device::glue::geam(ex, al, a, be, device::mat(B + off, m, n, ld), O(kGeam));
             });
         });
         const auto g = this->dev.down(o, std::size_t(kBatch) * per_out);
@@ -240,11 +238,11 @@ template <class T, int WG> void lange_case(Dev& dev, int m, int n, int ld, real_
     T* w = dev.up(std::vector<T>(std::size_t(kBatch) * per, T(-777)));
     dev.template run1<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
-        const auto a = v2::mat(A + std::ptrdiff_t(b) * per, m, n, ld);
-        const R r0 = v2::lange<NormType::Max>(ex, a), r1 = v2::lange<NormType::One>(ex, a), r2 = v2::lange<NormType::Inf>(ex, a);
-        const R r3 = v2::lange<NormType::Frobenius>(ex, a), r4 = v2::lange<NormType::Frobenius, v2::alg::Scaled>(ex, a);
-        glue::map2d(ex, v2::mat(w + std::ptrdiff_t(b) * per, m, n, ld), [](T v) { return v2::Arith<T>::add(v, v); }, a);
+        const device::WorkGroup<WG> ex{it};
+        const auto a = device::mat(A + std::ptrdiff_t(b) * per, m, n, ld);
+        const R r0 = device::lange<NormType::Max>(ex, a), r1 = device::lange<NormType::One>(ex, a), r2 = device::lange<NormType::Inf>(ex, a);
+        const R r3 = device::lange<NormType::Frobenius>(ex, a), r4 = device::lange<NormType::Frobenius, device::alg::Scaled>(ex, a);
+        device::glue::map2d(ex, device::mat(w + std::ptrdiff_t(b) * per, m, n, ld), [](T v) { return device::Arith<T>::add(v, v); }, a);
         T* ob = o + std::ptrdiff_t(b) * kSlotsL;
         if (ex.leader()) ob[kMax] = T(r0), ob[kOne] = T(r1), ob[kInf] = T(r2), ob[kFro] = T(r3), ob[kFroS] = T(r4);
     });
@@ -310,13 +308,13 @@ TYPED_TEST(DeviceBlasV2GlueTest, TileTransposeAndMirrorMatchHost) {
         const auto up = [](int x) { return std::size_t((x + TL - 1) / TL) * TL; };
         this->dev.template run3<T>(sycl::nd_range<3>({std::size_t(kBatch), up(cols), up(rows)}, {1, TL, TL}), TL * (TL + 1),
                                    [=](sycl::nd_item<3> it, T* lm) {
-                                       const v2::Grid2D<TL, TL, 1> ex{it};
+                                       const device::Grid2D<TL, TL, 1> ex{it};
                                        const int b = ex.batch();
                                        const int r0 = static_cast<int>(it.get_group(2)) * TL, c0 = static_cast<int>(it.get_group(1)) * TL;
-                                       const auto t = v2::mat<v2::Mem::Local>(lm, TL, TL, TL + 1);
-                                       glue::tile_load_trans<TL>(ex, v2::mat(A + std::ptrdiff_t(b) * pa, rows, cols, lda), r0, c0, t);
+                                       const auto t = device::mat<device::Mem::Local>(lm, TL, TL, TL + 1);
+                                       device::glue::tile_load_trans<TL>(ex, device::mat(A + std::ptrdiff_t(b) * pa, rows, cols, lda), r0, c0, t);
                                        ex.barrier();
-                                       glue::tile_store<TL>(ex, t, v2::mat(Bo + std::ptrdiff_t(b) * pb, cols, rows, ldb), c0, r0);
+                                       device::glue::tile_store<TL>(ex, t, device::mat(Bo + std::ptrdiff_t(b) * pb, cols, rows, ldb), c0, r0);
                                    });
         const auto g = this->dev.down(Bo, std::size_t(kBatch) * pb);
         EXPECT_EQ(twin_diffs(g, pb), 0);
@@ -342,22 +340,22 @@ TYPED_TEST(DeviceBlasV2GlueTest, TileTransposeAndMirrorMatchHost) {
         this->dev.template run3<T>(
             sycl::nd_range<3>({std::size_t(kBatch), std::size_t(tiles) * GC, std::size_t(tiles) * TM}, {1, GC, TM}), TM * (TM + 1),
             [=](sycl::nd_item<3> it, T* lm) {
-                const v2::Grid2D<TM, GC, 1> ex{it};
+                const device::Grid2D<TM, GC, 1> ex{it};
                 const int ti = static_cast<int>(it.get_group(1)), tj = static_cast<int>(it.get_group(2));
                 if (ti < tj) return;
                 const int b = ex.batch();
                 const int r0 = (lower ? ti : tj) * TM, c0 = (lower ? tj : ti) * TM;
-                const auto a = v2::mat_wide(A + std::ptrdiff_t(b) * pa, n, n, lda);
-                const auto o = v2::mat_wide(O + std::ptrdiff_t(b) * po, n, n, ldo);
-                const auto t = v2::mat<v2::Mem::Local>(lm, TM, TM, TM + 1);
-                glue::tile_load<TM>(ex, a, r0, c0, t);
+                const auto a = device::mat_wide(A + std::ptrdiff_t(b) * pa, n, n, lda);
+                const auto o = device::mat_wide(O + std::ptrdiff_t(b) * po, n, n, ldo);
+                const auto t = device::mat<device::Mem::Local>(lm, TM, TM, TM + 1);
+                device::glue::tile_load<TM>(ex, a, r0, c0, t);
                 sycl::group_barrier(it.get_group());
                 if (lower) {
-                    if (ti == tj) glue::tile_store_diag<true, TM>(ex, Uplo::Lower, t, o, r0);
-                    else glue::tile_store_pair<true, TM>(ex, t, o, r0, c0);
+                    if (ti == tj) device::glue::tile_store_diag<true, TM>(ex, Uplo::Lower, t, o, r0);
+                    else device::glue::tile_store_pair<true, TM>(ex, t, o, r0, c0);
                 } else {
-                    if (ti == tj) glue::tile_store_diag<false, TM>(ex, glue::UpperC{}, t, o, r0);
-                    else glue::tile_store_pair<false, TM>(ex, t, o, r0, c0);
+                    if (ti == tj) device::glue::tile_store_diag<false, TM>(ex, device::glue::UpperC{}, t, o, r0);
+                    else device::glue::tile_store_pair<false, TM>(ex, t, o, r0, c0);
                 }
             });
         const auto g = this->dev.down(O, std::size_t(kBatch) * po);

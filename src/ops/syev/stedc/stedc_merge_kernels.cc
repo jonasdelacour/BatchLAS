@@ -14,7 +14,6 @@
 
 namespace batchlas {
 
-namespace v2 = batchlas::device;
 
 template <Backend B, typename T> class StedcFusedMerge;
 
@@ -46,25 +45,25 @@ void stedc_merge_fused(Queue& ctx,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const auto bid = item.get_group_linear_id();
-                const v2::RtGroup<> ex{item};
+                const device::RtGroup<> ex{item};
                 auto Q_bid = Qview.batch_item(bid);
                 const int dd = n_reduced[bid];
 
                 if (dd <= 0) {
                     return;
                 }
-                const auto Q = v2::mat(Q_bid).sub(0, 0, dd, dd);
-                const auto vb = v2::vec(v.batch_item(bid));
+                const auto Q = device::mat(Q_bid).sub(0, 0, dd, dd);
+                const auto vb = device::vec(v.batch_item(bid));
 
                 // Root solve IN PLACE on column k of Q_bid (poles in every column), so
                 // apply_shift_to_poles updates Q_bid(:, k) directly. Keep it in place: a
                 // private-array copy of the poles broke orthogonality.
                 // evidence: docs/perf/stedc.md#stedc-the-rejected-private-pole-fast-path
-                const auto poles = v2::vec(eigenvalues.batch_item(bid));
-                v2::for_each_owned_2d<v2::alg::DivMod>(ex, dd, dd, [&](int i, int j) { Q(i, j) = poles(i); });
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                const auto poles = device::vec(eigenvalues.batch_item(bid));
+                device::for_each_owned_2d<device::alg::DivMod>(ex, dd, dd, [&](int i, int j) { Q(i, j) = poles(i); });
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
 
-                v2::for_each_owned(ex, dd, [&](int k) {
+                device::for_each_owned(ex, dd, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // The flag sec_solve_* has always computed. Several threads of the same
                     // work-group may report the same item; the report is an atomic
@@ -81,17 +80,17 @@ void stedc_merge_fused(Queue& ctx,
                                             1);
                     }
                 });
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
 
-                v2::laed3_detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::laed3_detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.
                 for (int eig = 0; eig < dd; ++eig) {
                     const auto q = Q.col(eig);
-                    v2::map(ex, q, [](T zi, T den) { return zi / den; }, vb, q);
-                    const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
-                    v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
+                    device::map(ex, q, [](T zi, T den) { return zi / den; }, vb, q);
+                    const T nrm = device::nrm2<device::alg::Blue>(ex, q);
+                    device::map(ex, q, [=](T qi) { return qi / nrm; }, q);
                 }
             });
     });

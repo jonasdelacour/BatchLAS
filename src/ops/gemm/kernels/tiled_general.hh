@@ -11,8 +11,6 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device;
-namespace gc = batchlas::device::l3;
 using batchlas::device::l3::LinearEpilogue;
 using batchlas::device::l3::OperandAccessor;
 
@@ -68,7 +66,7 @@ Event launch_tiled_general(Queue& ctx,
             const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
             const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
             T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-            const v2::Grid2D<> ex{item};
+            const device::Grid2D<> ex{item};
             // This item's row of the A tile and column of the B tile, read through the accessors
             // (shared address space; a generic-pointer Vec cost 4 REG on complex<float> N/T x C).
             auto a_row = [&](int t) -> const T& { return tile_a[local_row * Tile + t]; };
@@ -83,7 +81,7 @@ Event launch_tiled_general(Queue& ctx,
                 tile_b[local_row * Tile + local_col] =
                     (col < n && tile_row < k) ? OperandAccessor<T, OpB>::load(b_item, ldb, 0, tile_row, col) : T(0);
                 ex.barrier();
-                v2::dot_slab<Tile, v2::arith::Native>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
+                device::dot_slab<Tile, device::arith::Native>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
                 ex.barrier();
             }
 

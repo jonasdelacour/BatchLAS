@@ -42,7 +42,7 @@ template <Side SD> constexpr std::size_t larfb_work_elems(int m, int n, int k) {
 
 /// The executor a blocked QR op runs on: a WorkGroup of Cfg::threads items in 32-wide sub-groups
 /// (larft's gemv packs over 32 lanes).
-template <class Cfg, class Ex> BATCHLAS_DLA_INLINE constexpr void larfb_check_ex() {
+template <class Cfg, class Ex> BATCHLAS_DEVICE_INLINE constexpr void larfb_check_ex() {
     static_assert(is_work_group_v<Ex>, "larfb: the executor is a WorkGroup<WG, 32>");
     static_assert(Ex::size == Cfg::threads, "larfb: the WorkGroup has the tier's l3 Cfg::threads items");
     static_assert(Ex::sg_size == 32, "larfb: sub-group size 32 (larft)");
@@ -50,7 +50,7 @@ template <class Cfg, class Ex> BATCHLAS_DLA_INLINE constexpr void larfb_check_ex
 
 /// This matrix's tau as a pointer: a T* passes through, a vector operand gives &tau(0) (unit
 /// stride, as geqrf writes it).
-template <class Tau> BATCHLAS_DLA_INLINE auto larfb_tau_base(const Tau& tau) {
+template <class Tau> BATCHLAS_DEVICE_INLINE auto larfb_tau_base(const Tau& tau) {
     if constexpr (std::is_pointer_v<Tau>) return tau;
     else return &tau(0);
 }
@@ -67,7 +67,7 @@ template <class Tau> BATCHLAS_DLA_INLINE auto larfb_tau_base(const Tau& tau) {
 /// @param smem  the work-group's l3::Smem<Cfg>
 template <Side SD, Transpose TR, class Direct, class Cfg, class Ex, class MV, class MT, class MC, class W>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const MC& C, W* work, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const MC& C, W* work, l3::Smem<Cfg> smem) {
     static_assert(std::is_same_v<Direct, dir::Forward>, "larfb: Direct = dir::Forward (larft's only direction)");
     using T = typename Cfg::value_type;
     static_assert(std::is_same_v<std::remove_cv_t<W>, T>, "larfb: work holds the Cfg's scalar type");
@@ -95,7 +95,7 @@ BATCHLAS_DLA_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const MC
 /// tau(i0 :)) (tbuf, ld ldt >= ib), then larfb<SD, TR> on c (a.m - i0 rows for Left, columns
 /// for Right). a's diagonal and upper triangle are not read. Collective; c visible on return.
 template <Side SD, Transpose TR, class Cfg, class Ex, class T>
-BATCHLAS_DLA_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& a, int i0, int ib, const T* tau, const l3::Global<T>& c,
+BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& a, int i0, int ib, const T* tau, const l3::Global<T>& c,
                                           T* vbuf, T* tbuf, int ldt, T* work, l3::Smem<Cfg> smem) {
     const int mv = a.m - i0;
     const auto panel = mat(a.p + i0 + static_cast<std::ptrdiff_t>(i0) * a.ld, mv, ib, a.ld);

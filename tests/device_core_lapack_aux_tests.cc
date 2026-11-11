@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_lapack_aux_tests: lapack_aux.hh v2.2 additions (design A.2) against host
+// device_core_lapack_aux_tests: lapack_aux.hh additions (design A.2) against host
 // references (scalar long-double code written here, never the op under test).
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts and Im(diag) != 0;
 // ld = m + 3 with a NaN-poisoned pad that must stay untouched; an A smaller than B (lacpy Edge);
@@ -58,16 +58,16 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LacpyEdgesAndDiagFillLasetOffsetAndRegisterF
     T* rf = d.template alloc<T>(16 + 12, T(0));
     const T alpha = val<T>(3), beta = val<T>(4);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto A = dv::mat(a, ma, na, lda);
-        dv::lacpy<dv::Part::Lower, Transpose::ConjTrans, dv::alg::Walk, dv::edge::ZeroPad, dv::diag_fill::Real>(ex, A, dv::mat(bz, mb, nb, ldb));
-        dv::lacpy<dv::Part::Full, Transpose::NoTrans, dv::alg::Walk, dv::edge::Guard, dv::diag_fill::Unit>(ex, A, dv::mat(bg, mb, nb, ldb));
-        dv::laset<dv::Part::Upper>(ex, alpha, beta, dv::mat(bs, mb, nb, ldb), 2);
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto A = batchlas::device::mat(a, ma, na, lda);
+        batchlas::device::lacpy<batchlas::device::Part::Lower, Transpose::ConjTrans, batchlas::device::alg::Walk, batchlas::device::edge::ZeroPad, batchlas::device::diag_fill::Real>(ex, A, batchlas::device::mat(bz, mb, nb, ldb));
+        batchlas::device::lacpy<batchlas::device::Part::Full, Transpose::NoTrans, batchlas::device::alg::Walk, batchlas::device::edge::Guard, batchlas::device::diag_fill::Unit>(ex, A, batchlas::device::mat(bg, mb, nb, ldb));
+        batchlas::device::laset<batchlas::device::Part::Upper>(ex, alpha, beta, batchlas::device::mat(bs, mb, nb, ldb), 2);
         if (ex.leader()) {
-            dv::Frag<T, 8> f;
-            dv::laset(f, alpha, beta, 5);
-            dv::Tile<T, 3, 4> t;
-            dv::laset(t, alpha, beta, -1);
+            batchlas::device::Frag<T, 8> f;
+            batchlas::device::laset(f, alpha, beta, 5);
+            batchlas::device::Tile<T, 3, 4> t;
+            batchlas::device::laset(t, alpha, beta, -1);
             for (int r = 0; r < 8; ++r) rf[r] = f[r];
             for (int j = 0; j < 4; ++j)
                 for (int i = 0; i < 3; ++i) rf[16 + j * 3 + i] = t(i, j);
@@ -117,13 +117,13 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LaswpIndexGatherAndLapmr) {
     int* ip = d.up(ipiv_h);
     int* pm = d.up(perm_h);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto P = dv::vec(ip, m);
-        dv::laswp(ex, dv::mat(sw, m, n, ld), P, 1, m);  // in place, rows 1 .. m-1 forward
-        dv::laswp_gather(ex, dv::mat(a, m, n, ld), P, 1, m, dv::mat(ga, m, n, ld));
-        dv::laswp_gather<dv::dir::Backward>(ex, dv::mat(a, m, n, ld), P, 1, m, dv::mat(gb, m, n, ld));
-        dv::lapmr(ex, dv::mat(a, m, n, ld), dv::vec(pm, m), dv::mat(pf, m, n, ld));
-        dv::lapmr<dv::dir::Backward>(ex, dv::mat(a, m, n, ld), dv::vec(pm, m), dv::mat(pb, m, n, ld));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto P = batchlas::device::vec(ip, m);
+        batchlas::device::laswp(ex, batchlas::device::mat(sw, m, n, ld), P, 1, m);  // in place, rows 1 .. m-1 forward
+        batchlas::device::laswp_gather(ex, batchlas::device::mat(a, m, n, ld), P, 1, m, batchlas::device::mat(ga, m, n, ld));
+        batchlas::device::laswp_gather<batchlas::device::dir::Backward>(ex, batchlas::device::mat(a, m, n, ld), P, 1, m, batchlas::device::mat(gb, m, n, ld));
+        batchlas::device::lapmr(ex, batchlas::device::mat(a, m, n, ld), batchlas::device::vec(pm, m), batchlas::device::mat(pf, m, n, ld));
+        batchlas::device::lapmr<batchlas::device::dir::Backward>(ex, batchlas::device::mat(a, m, n, ld), batchlas::device::vec(pm, m), batchlas::device::mat(pb, m, n, ld));
     });
     // host: the sequential interchanges
     std::vector<int> rowf(m), rowb(m);
@@ -141,7 +141,7 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LaswpIndexGatherAndLapmr) {
             EXPECT_TRUE(same_bits(gpb[j * ld + perm_h[i] - 1], a_h[j * ld + i])) << "lapmr back " << i;
         }
     std::vector<int> sink(4, 0);
-    const dv::IpivSink s{sink.data(), 30};
+    const batchlas::device::IpivSink s{sink.data(), 30};
     s.set(2, 4);
     EXPECT_EQ(sink[2], 35);
 }
@@ -168,14 +168,14 @@ TYPED_TEST(DeviceCoreLapackAuxTest, RotationVectorsMatchLapackFormulas) {
     T* r2 = d.up(x_h);
     T* r2y = d.up(y_h);
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::SubGroup<32> ex{it.get_sub_group()};
-        dv::largv(ex, dv::vec(gx, n), dv::vec(gy, n), dv::vec(gc, n));
+        const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
+        batchlas::device::largv(ex, batchlas::device::vec(gx, n), batchlas::device::vec(gy, n), batchlas::device::vec(gc, n));
         // apply rotation i (from largv) to (tx, ty), and the 2x2 similarity to (lx, ly, lz)
-        dv::lartv(ex, dv::vec(tx, n), dv::vec(ty, n), dv::vec(gc, n), dv::vec(gy, n));
-        dv::lar2v(ex, dv::vec(lx, n), dv::vec(ly, n), dv::vec(lz, n), dv::vec(gc, n), dv::vec(gy, n));
+        batchlas::device::lartv(ex, batchlas::device::vec(tx, n), batchlas::device::vec(ty, n), batchlas::device::vec(gc, n), batchlas::device::vec(gy, n));
+        batchlas::device::lar2v(ex, batchlas::device::vec(lx, n), batchlas::device::vec(ly, n), batchlas::device::vec(lz, n), batchlas::device::vec(gc, n), batchlas::device::vec(gy, n));
         if constexpr (!is_cplx<T>) {
             const R v0 = R(0.6), v1 = R(0.8);
-            dv::rot<dv::rot_conv::Reflector2>(ex, dv::Givens<R>{v0, v1}, dv::vec(r2, n), dv::vec(r2y, n));
+            batchlas::device::rot<batchlas::device::rot_conv::Reflector2>(ex, batchlas::device::Givens<R>{v0, v1}, batchlas::device::vec(r2, n), batchlas::device::vec(r2y, n));
         }
     });
     const auto cx = d.down(gx, n), cs = d.down(gy, n);
@@ -224,22 +224,22 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LarfFormsLoopsAndLaneLarfg) {
     T* xl = d.up(xl_h);
     T* tau_out = d.template alloc<T>(1, T(0));
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::Teams<WG, 8> tm{it};
-        const auto V = dv::assume_published(dv::vec(v, m));
-        dv::larf<Side::Left, dv::arith::Explicit, dv::larf_form::ScaleW, dv::loop::Lockstep>(tm, tau, V, dv::mat(c1, m, n, ld));
-        dv::larf<Side::Left, dv::arith::Explicit, dv::larf_form::ScaleV, dv::loop::Lockstep>(tm, tau, V, dv::mat(c2, m, n, ld));
+        const batchlas::device::Teams<WG, 8> tm{it};
+        const auto V = batchlas::device::assume_published(batchlas::device::vec(v, m));
+        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::larf_form::ScaleW, batchlas::device::loop::Lockstep>(tm, tau, V, batchlas::device::mat(c1, m, n, ld));
+        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::larf_form::ScaleV, batchlas::device::loop::Lockstep>(tm, tau, V, batchlas::device::mat(c2, m, n, ld));
         const int g = static_cast<int>(it.get_local_linear_id());
         if (g < n) {  // the register column form: item g holds column g of cf
-            dv::Frag<T, m> col;
+            batchlas::device::Frag<T, m> col;
             for (int r = 0; r < m; ++r) col[r] = cf[g * ld + r];
-            dv::larf<Side::Left>(col, V, tau);
+            batchlas::device::larf<Side::Left>(col, V, tau);
             for (int r = 0; r < m; ++r) cf[g * ld + r] = col[r];
         }
         // larfg on one element per lane of a 16-lane partition: lane 0 alpha, lanes 1 .. 10 x
-        const dv::Partition<16> part{it.get_sub_group()};
+        const batchlas::device::Partition<16> part{it.get_sub_group()};
         const int l = part.lid();
         T e = xl[l];
-        const T t = dv::larfg(part, 11, 0, e, e, l >= 1 && l < 11);
+        const T t = batchlas::device::larfg(part, 11, 0, e, e, l >= 1 && l < 11);
         if (g < 16) xl[l] = (l < 11) ? e : xl[l];
         if (g == 0) tau_out[0] = t;
     });
@@ -306,25 +306,25 @@ TYPED_TEST(DeviceCoreLapackAuxTest, NormsScalingConjugationPacking) {
     R* nrm = d.template alloc<R>(8, R(0));
     char* eq = d.template alloc<char>(4, '?');
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto D = dv::vec(dd, n);
-        const auto E = dv::vec(ee, n - 1);
-        const auto A = dv::mat(a, n, n, ld);
-        const R n0 = dv::lanst<NormType::Max>(ex, D, E);
-        const R n1 = dv::lanst<NormType::One>(ex, D, dv::vec(ee, n - 1));
-        const R n2 = dv::lange<NormType::Max>(ex, A);
-        const R n3 = dv::lange<NormType::One>(ex, A);
-        const R n4 = dv::lange<NormType::Inf>(ex, A);
-        const R n5 = dv::lange<NormType::Frobenius, dv::alg::Scaled>(ex, A);
-        dv::lascl<dv::Part::Lower>(ex, tiny, big, dv::mat(as, n, n, ld));
-        const char e0 = dv::laqge(ex, dv::mat(aq, n, n, ld), dv::vec(rs, n), dv::vec(cs, n), R(1), R(1), R(1));
-        const char e1 = dv::laqge(ex, dv::mat(aq, n, n, ld), dv::vec(rs, n), dv::vec(cs, n), R(0.01), R(1), R(1));
-        const char e2 = dv::laqge(ex, dv::mat(aq, n, n, ld), dv::vec(rs, n), dv::vec(cs, n), R(1), R(0.01), R(1));
-        const char e3 = dv::laqge(ex, dv::mat(aq, n, n, ld), dv::vec(rs, n), dv::vec(cs, n), R(0.01), R(0.01), R(1));
-        dv::lacgv(ex, dv::vec(ac, n));
-        dv::trttp<Uplo::Upper>(ex, A, dv::vec(ap, n * (n + 1) / 2));
-        ex.barrier(dv::Mem::Global);
-        dv::tpttr<Uplo::Upper>(ex, dv::vec(ap, n * (n + 1) / 2), dv::mat(au, n, n, ld));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto D = batchlas::device::vec(dd, n);
+        const auto E = batchlas::device::vec(ee, n - 1);
+        const auto A = batchlas::device::mat(a, n, n, ld);
+        const R n0 = batchlas::device::lanst<NormType::Max>(ex, D, E);
+        const R n1 = batchlas::device::lanst<NormType::One>(ex, D, batchlas::device::vec(ee, n - 1));
+        const R n2 = batchlas::device::lange<NormType::Max>(ex, A);
+        const R n3 = batchlas::device::lange<NormType::One>(ex, A);
+        const R n4 = batchlas::device::lange<NormType::Inf>(ex, A);
+        const R n5 = batchlas::device::lange<NormType::Frobenius, batchlas::device::alg::Scaled>(ex, A);
+        batchlas::device::lascl<batchlas::device::Part::Lower>(ex, tiny, big, batchlas::device::mat(as, n, n, ld));
+        const char e0 = batchlas::device::laqge(ex, batchlas::device::mat(aq, n, n, ld), batchlas::device::vec(rs, n), batchlas::device::vec(cs, n), R(1), R(1), R(1));
+        const char e1 = batchlas::device::laqge(ex, batchlas::device::mat(aq, n, n, ld), batchlas::device::vec(rs, n), batchlas::device::vec(cs, n), R(0.01), R(1), R(1));
+        const char e2 = batchlas::device::laqge(ex, batchlas::device::mat(aq, n, n, ld), batchlas::device::vec(rs, n), batchlas::device::vec(cs, n), R(1), R(0.01), R(1));
+        const char e3 = batchlas::device::laqge(ex, batchlas::device::mat(aq, n, n, ld), batchlas::device::vec(rs, n), batchlas::device::vec(cs, n), R(0.01), R(0.01), R(1));
+        batchlas::device::lacgv(ex, batchlas::device::vec(ac, n));
+        batchlas::device::trttp<Uplo::Upper>(ex, A, batchlas::device::vec(ap, n * (n + 1) / 2));
+        ex.barrier(batchlas::device::Mem::Global);
+        batchlas::device::tpttr<Uplo::Upper>(ex, batchlas::device::vec(ap, n * (n + 1) / 2), batchlas::device::mat(au, n, n, ld));
         if (ex.leader()) {
             nrm[0] = n0; nrm[1] = n1; nrm[2] = n2; nrm[3] = n3; nrm[4] = n4; nrm[5] = n5;
             eq[0] = e0; eq[1] = e1; eq[2] = e2; eq[3] = e3;

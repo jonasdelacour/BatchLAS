@@ -47,9 +47,8 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace dv = batchlas::device;
 using batchlas::verify::Check;
-using Tier = dv::tier::Blocked<1>;
+using Tier = device::tier::Blocked<1>;
 
 template <class T> struct UserStebz;
 template <class T> struct UserStein;
@@ -169,7 +168,7 @@ template <class T> StebzParams<T> params_for(const Sel& s, int n) {
     }
     return p;
 }
-template <class T> dv::stebz_detail::Params<T> device_params(const StebzParams<T>& p, int n) {
+template <class T> device::stebz_detail::Params<T> device_params(const StebzParams<T>& p, int n) {
     const bool index = p.range == EigenRangeType::Index;
     return {p.range == EigenRangeType::Value,
             index ? p.il : 0,
@@ -190,18 +189,18 @@ template <class T> struct WOut {
 // The device op from a user kernel: WorkGroup<256, 32>, one matrix per work-group.
 template <class T>
 void user_stebz(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, std::int32_t* m, std::int32_t* info,
-                const dv::stebz_detail::Params<T>& p, int n) {
+                const device::stebz_detail::Params<T>& p, int n) {
     constexpr int WG = 256;
-    const dv::WorkspaceSize sz = dv::stebz_buffer_size<Tier, T>(n);
+    const device::WorkspaceSize sz = device::stebz_buffer_size<Tier, T>(n);
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
            h.parallel_for<UserStebz<T>>(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG),
                                         [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                                            const dv::WorkGroup<WG, 32> ex{it};
+                                            const device::WorkGroup<WG, 32> ex{it};
                                             const int b = static_cast<int>(it.get_group_linear_id());
                                             int mb = -1;
-                                            const int ib = dv::stebz<Tier>(ex, dv::item(d, b), dv::item(e, b), dv::item(w, b), mb,
-                                                                           dv::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
+                                            const int ib = device::stebz<Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), mb,
+                                                                           device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
                                             if (ex.leader()) {
                                                 m[b] = mb;
                                                 info[b] = ib;
@@ -279,21 +278,21 @@ TYPED_TEST(DeviceApiStebzStein, StebzMatchesHostRoute) {
 
 TYPED_TEST(DeviceApiStebzStein, StebzTierQueries) {
     using T = TypeParam;
-    using R = dv::routine::stebz;
-    static_assert(std::is_same_v<dv::resolve_tier_t<R, T, dv::tier::upto<1 << 20>>, Tier>);
+    using R = device::routine::stebz;
+    static_assert(std::is_same_v<device::resolve_tier_t<R, T, device::tier::upto<1 << 20>>, Tier>);
     for (int n : {1, 2, 33, 300, 100000}) {
         std::string got = "none";
-        dv::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
+        device::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
-        const auto sz = dv::stebz_buffer_size<Tier, T>(n);
-        const auto L = dv::stebz_detail::layout<T>();
+        const auto sz = device::stebz_buffer_size<Tier, T>(n);
+        const auto L = device::stebz_detail::layout<T>();
         EXPECT_EQ(sz, L.size);
         EXPECT_EQ(sz.global_bytes, 0u);
         EXPECT_GE(sz.local_bytes, L.found.offset + 2 * sizeof(std::int32_t));
         EXPECT_EQ(L.found.offset % alignof(std::int32_t), 0u);
     }
     try {
-        dv::with_tier<R, T>(this->dev.q().get_device(), 0, [](auto) {});
+        device::with_tier<R, T>(this->dev.q().get_device(), 0, [](auto) {});
         ADD_FAILURE() << "with_tier admitted n = 0";
     } catch (const batchlas::invalid_argument& ex) {
         EXPECT_NE(std::string(ex.what()).find("stebz: no device tier admits n=0"), std::string::npos) << ex.what();
@@ -308,7 +307,7 @@ template <class T>
 void user_stein(Dev& dev, int wg, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const std::int32_t* counts,
                 const MatrixView<T, MatrixFormat::Dense>& Z, std::byte* gws, std::int32_t* info, std::uint32_t seed) {
     const int n = d.size(), k = Z.cols();
-    const dv::WorkspaceSize sz = dv::stein_buffer_size<Tier, T>(n, k);
+    const device::WorkspaceSize sz = device::stein_buffer_size<Tier, T>(n, k);
     const auto Zk = Z.kernel_view();
     const SteinParams<T> hp;
     const std::int32_t max_iter = std::max<std::int32_t>(1, hp.max_iterations);
@@ -316,16 +315,16 @@ void user_stein(Dev& dev, int wg, const VectorView<T>& d, const VectorView<T>& e
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
            h.parallel_for<UserStein<T>>(sycl::nd_range<1>(std::size_t(kBatch) * wg, wg), [=](sycl::nd_item<1> it) {
-               const dv::RtGroup<> ex{it};
+               const device::RtGroup<> ex{it};
                const int b = static_cast<int>(it.get_group_linear_id());
                const int kb = counts ? std::clamp<int>(counts[b], 0, k) : k;
-               const dv::stein_detail::Params<T> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
-               const auto dvec = dv::vec(d.data_ptr() + std::int64_t(b) * d.stride(), n, d.inc());
-               const auto evec = dv::vec(e.data_ptr() + std::int64_t(b) * e.stride(), n - 1, e.inc());
-               const auto Zb = dv::mat(Zk.data() + std::int64_t(b) * Zk.stride(), n, k, Zk.ld());
-               const int ib = dv::stein<Tier>(ex, dvec, evec, dv::item(w, b), kb, Zb,
-                                              dv::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
-                                                            dv::global_slice(gws, sz, b)},
+               const device::stein_detail::Params<T> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
+               const auto dvec = device::vec(d.data_ptr() + std::int64_t(b) * d.stride(), n, d.inc());
+               const auto evec = device::vec(e.data_ptr() + std::int64_t(b) * e.stride(), n - 1, e.inc());
+               const auto Zb = device::mat(Zk.data() + std::int64_t(b) * Zk.stride(), n, k, Zk.ld());
+               const int ib = device::stein<Tier>(ex, dvec, evec, device::item(w, b), kb, Zb,
+                                              device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
+                                                            device::global_slice(gws, sz, b)},
                                               p);
                if (ex.leader()) info[b] = ib;
            });
@@ -364,7 +363,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinMatchesHostRoute) {
             stein(*dev.ctx, dview, eview, wview, std::size_t(k), counts, Zh, Span<std::byte>(hws, bytes), sp);
             dev.ctx->wait();
 
-            const auto gsz = dv::stein_buffer_size<Tier, T>(n, k);
+            const auto gsz = device::stein_buffer_size<Tier, T>(n, k);
             std::byte* gws = dev.up(std::vector<std::byte>(gsz.global_bytes * kBatch));
             std::int32_t* info = dev.up(std::vector<std::int32_t>(kBatch, -7));
             const int wg = std::min({256, dev.max_wg(), std::max(n, 1)});
@@ -394,14 +393,14 @@ TYPED_TEST(DeviceApiStebzStein, SteinMatchesHostRoute) {
 
 TYPED_TEST(DeviceApiStebzStein, SteinTierQueries) {
     using T = TypeParam;
-    using R = dv::routine::stein;
+    using R = device::routine::stein;
     for (int n : {1, 2, 33, 300}) {
         std::string got = "none";
-        dv::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
+        device::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
         for (int k : {1, n}) {
-            const auto sz = dv::stein_buffer_size<Tier, T>(n, k);
-            const auto L = dv::stein_detail::layout<T>(n, k);
+            const auto sz = device::stein_buffer_size<Tier, T>(n, k);
+            const auto L = device::stein_detail::layout<T>(n, k);
             EXPECT_EQ(sz, L.size);
             const std::size_t nk = std::size_t(n) * k;
             // Every global slot fits inside one matrix's slice and is aligned for its type.
@@ -415,7 +414,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinTierQueries) {
         }
     }
     try {
-        dv::with_tier<R, T>(this->dev.q().get_device(), 0, [](auto) {});
+        device::with_tier<R, T>(this->dev.q().get_device(), 0, [](auto) {});
         ADD_FAILURE() << "with_tier admitted n = 0";
     } catch (const batchlas::invalid_argument& ex) {
         EXPECT_NE(std::string(ex.what()).find("stein: no device tier admits n=0"), std::string::npos) << ex.what();

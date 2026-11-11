@@ -78,7 +78,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 // Worst relative error over the representatives; pads (and the elements between y's strides)
 // that are no longer poison are counted.
 template <class T> double gemv_worst(const Gemv<T>& d, const std::vector<T>& got, T alpha, T beta, int* pads_moved) {
-    const bool bz = dv::Arith<T>::is_zero(beta);
+    const bool bz = batchlas::device::Arith<T>::is_zero(beta);
     double worst = 0;
     for (int q = 0; q < kPeriod; ++q)
         for (int o = 0; o < d.out; ++o) {
@@ -107,18 +107,18 @@ template <class T> double gemv_worst(const Gemv<T>& d, const std::vector<T>& got
 }
 
 template <Transpose TR, int WG, class T> void device_gemv(sycl::queue& q, const Gemv<T>& d, const T* ap, const T* xp, T* yp, T alpha, T beta) {
-    using Alg = std::conditional_t<TR == N, dv::alg::RowOwner, dv::alg::ColDot<1>>;
+    using Alg = std::conditional_t<TR == N, batchlas::device::alg::RowOwner, batchlas::device::alg::ColDot<1>>;
     const int lda = d.lda, sa = d.sa, incx = d.incx, sx = d.sx, incy = d.incy, sy = d.sy, out = d.out, red = d.red;
-    const bool az = dv::Arith<T>::is_zero(alpha), bz = dv::Arith<T>::is_zero(beta);
+    const bool az = batchlas::device::Arith<T>::is_zero(alpha), bz = batchlas::device::Arith<T>::is_zero(beta);
     q.submit([&](sycl::handler& h) {
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG), [=](sycl::nd_item<1> it) {
              const int b = static_cast<int>(it.get_group(0));
-             const dv::WorkGroup<WG> ex{it};
-             const dv::ItemMat<const T> A{ap, b, sa, lda, kM, kN};
-             const dv::ItemVec<const T> x{xp, b, sx, incx, red};
-             const dv::ItemVec<T> y{yp, b, sy, incy, out};
-             dv::gemv<TR, Alg, dv::arith::Fma, dv::epi::MacChain>(ex, dv::MaybeZero<T>{alpha, az}, A, dv::assume_published(x),
-                                                                   dv::MaybeZero<T>{beta, bz}, y);
+             const batchlas::device::WorkGroup<WG> ex{it};
+             const batchlas::device::ItemMat<const T> A{ap, b, sa, lda, kM, kN};
+             const batchlas::device::ItemVec<const T> x{xp, b, sx, incx, red};
+             const batchlas::device::ItemVec<T> y{yp, b, sy, incy, out};
+             batchlas::device::gemv<TR, Alg, batchlas::device::arith::Fma, batchlas::device::epi::MacChain>(ex, batchlas::device::MaybeZero<T>{alpha, az}, A, batchlas::device::assume_published(x),
+                                                                   batchlas::device::MaybeZero<T>{beta, bz}, y);
          });
      }).wait_and_throw();
 }

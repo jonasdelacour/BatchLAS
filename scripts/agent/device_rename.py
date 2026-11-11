@@ -12,10 +12,12 @@ string and character literals are masked), except where a rule names comments. S
       closing comments `// namespace batchlas::device::inline v2...` likewise (every C++ file), and
       the placement allowlist's `batchlas::device::v2::` names.
   R2  include/: `v2::` self-qualifications -> '' (code only).
-  R3  src/ tests/ examples/ benchmarks/ tools/: delete `namespace (v2|dv|dv2|dla|gc) = batchlas::device[::l3];`
-      and rewrite its uses to `device::` / `device::l3::` (`batchlas::device::` in a file without
-      `using namespace batchlas;` or a `namespace batchlas` scope, or with `using namespace sycl;`).
-      Aliases onto other namespaces are R5's.
+  R3  include/ src/ tests/ examples/ benchmarks/ tools/: delete every `namespace A = T;` whose T is in the
+      device LA layer (batchlas::device[::sub], a sibling <routine>_detail, a src device namespace such
+      as syev_v2, tiny_native, sycl_device, sycl_trsm::dla) and rewrite `A::` inside the alias's scope to
+      the qualified T (`device::...`; `batchlas::device::...` in a file without `using namespace
+      batchlas;` or a `namespace batchlas` scope, or with `using namespace sycl;`; relative in include/).
+      Host aliases (ops::<op>, select, test_support, std::filesystem, GEMM wide_v2) stay.
   R4  BATCHLAS_DLA_{INLINE,HELPER,BODY} -> BATCHLAS_DEVICE_* (every text file, scripts and fixtures too).
   R5  `<routine>_detail` -> `detail` (openers, closers, qualifiers, aliases onto them), colliding
       names first get the routine prefix (COLLIDE); batchlas::sgp / batchlas::sycl_impl ->
@@ -107,34 +109,130 @@ def r2(rel, text):
     return text, n, bad
 
 
-R3_ALIAS = re.compile(r"^[ \t]*namespace\s+(v2|dv|dv2|dla|gc)\s*=\s*(?:::)?(?:batchlas::)?device(::l3)?\s*;[^\n]*\n",
-                      re.M)
+R3_ALIAS = re.compile(r"^[ \t]*namespace\s+(\w+)\s*=\s*(?:::)?([\w:]+?)\s*;[^\n]*\n", re.M)
+# Alias targets in the device LA layer: batchlas::device[::sub], a sibling <routine>_detail (include/),
+# and the src namespaces that hold device code (plan section 1 "Banned"). Host aliases stay.
+R3_DEVICE = re.compile(r"(?:batchlas::)?device(?:::\w+)*|\w+_detail")
+R3_SRC = re.compile(r"(?:batchlas::)?(?:syev_v2|stedc_v2|krylov_v2|tiny_native|geqrf_native|getrf_native|"
+                    r"potrf_native|sycl_device|sycl_potri|sycl_trsm::dla|sycl_gemv::dla)")
+
+
+def block_end(code, pos):
+    """End of the block scope that encloses pos; len(code) at namespace or file scope (a namespace
+    alias in an unnamed or reopened namespace stays visible after its closing brace)."""
+    depth = 0
+    for i in range(pos - 1, -1, -1):
+        c = code[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                break
+            depth -= 1
+    else:
+        return len(code)
+    if re.search(r"\bnamespace(?:\s+[\w:]+(?:\s+inline\s+\w+)?)?\s*$", code[max(0, i - 200):i]):
+        return len(code)
+    depth = 0
+    for j in range(pos, len(code)):
+        if code[j] == "{":
+            depth += 1
+        elif code[j] == "}":
+            if depth == 0:
+                return j
+            depth -= 1
+    return len(code)
+
+
+def r3_spelling(rel, target, prefix):
+    """The qualified spelling R3 writes for an alias target (without the trailing ::)."""
+    target = re.sub(r"^batchlas::", "", target)
+    if rel.startswith("include/"):   # already inside batchlas::device
+        return re.sub(r"^device(::)?", "", target) or "device"
+    return prefix + target
+
+
+def r3_decls(code, raw=None):
+    """[(start, end, scope end, alias, target)] of the device-layer aliases declared in code."""
+    decls, raw = [], dict(raw or {})
+    for m in R3_ALIAS.finditer(code):
+        alias, target = m.group(1), re.sub(r"^batchlas::", "", m.group(2))
+        head, _, rest = target.partition("::")
+        if head in raw and rest:    # an alias of an alias (`tr = dv::tier`)
+            target = f"{raw[head]}::{rest}"
+        elif not (R3_DEVICE.fullmatch(target) or R3_SRC.fullmatch(target)):
+            continue
+        raw[alias] = target
+        decls.append((m.start(), m.end(), block_end(code, m.start()), alias, target))
+    return decls
+
+
+_R3_TREE = {}
+
+
+def r3_inherited(rel):
+    """Aliases rel sees at namespace scope from the repo headers it includes (transitively), read
+    from disk once, before any file is rewritten."""
+    if not _R3_TREE:
+        exports, incs = {}, {}
+        for f in files():
+            if not f.endswith(CXX_EXT):
+                continue
+            code = code_only(open(os.path.join(REPO, f), errors="surrogateescape").read())
+            exports[f] = {d[3]: d[4] for d in r3_decls(code) if d[2] == len(code)}
+            incs[f] = re.findall(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"]+)[>"]', code, re.M)
+        _R3_TREE.update(exports=exports, incs=incs)
+    exports, incs = _R3_TREE["exports"], _R3_TREE["incs"]
+
+    def resolve(src, inc):
+        for base in (os.path.dirname(src), "include", "", "tests", "src"):
+            cand = os.path.normpath(os.path.join(base, inc))
+            if cand in exports:
+                return cand
+        return None
+    seen, todo, out = {rel}, [rel], {}
+    while todo:
+        cur = todo.pop()
+        for inc in incs.get(cur, ()):
+            h = resolve(cur, inc)
+            if h and h not in seen:
+                seen.add(h)
+                todo.append(h)
+                for a, t in exports[h].items():
+                    out.setdefault(a, t)
+    return out
 
 
 def r3(rel, text):
-    if not (rel.startswith(ALIAS_SCOPES) and rel.endswith(CXX_EXT)):
+    if not (rel.startswith(ALIAS_SCOPES + ("include/",)) and rel.endswith(CXX_EXT)):
         return text, 0, []
     code = code_only(text)
-    targets = {}
-    for m in R3_ALIAS.finditer(code):
-        tgt = "device::l3" if m.group(2) else "device"
-        if targets.setdefault(m.group(1), tgt) != tgt:
-            return text, 0, [f"{rel}: alias {m.group(1)} names two targets"]
-    if not targets:
-        return text, 0, []
     sycl = re.search(r"\busing\s+namespace\s+(?:::)?sycl\s*;", code)
     inside = re.search(r"\busing\s+namespace\s+(?:::)?batchlas\s*;|\bnamespace\s+batchlas\b(?!\s*=)", code)
     prefix = "" if inside and not sycl else "batchlas::"
-    n_lines = 0
-    spans = [m.span() for m in R3_ALIAS.finditer(code)]
-    for a, b in reversed(spans):
-        text = text[:a] + text[b:]
-        n_lines += 1
-    total = n_lines
-    for alias, tgt in targets.items():
-        text, n = sub_kinds(text, re.compile(rf"(?<![\w:]){alias}::"), f"{prefix}{tgt}::")
-        total += n
-    return text, total, []
+    inherited = r3_inherited(rel)
+    # An included header's alias is a declaration at offset 0 that deletes nothing.
+    decls = [(0, 0, len(code), a, t) for a, t in sorted(inherited.items())] + r3_decls(code, inherited)
+    decls = [(a, b, e, al, r3_spelling(rel, t, prefix)) for a, b, e, al, t in decls]
+    if not decls:
+        return text, 0, []
+    # Edits in original coordinates: delete each declaration line, and rewrite each use with the
+    # innermost (latest) declaration of that name whose scope covers it.
+    edits = {a: (b, "") for a, b, _, _, _ in decls if b > a}
+    for alias in {d[3] for d in decls}:
+        for u in re.finditer(rf"(?<![\w:]){alias}::", code):
+            cover = [d for d in decls if d[3] == alias and d[1] <= u.start() < d[2]]
+            if cover and not any(d[0] <= u.start() < d[1] for d in decls):
+                edits[u.start()] = (u.end(), f"{cover[-1][4]}::")
+    for a in sorted(edits, reverse=True):
+        b, rep = edits[a]
+        text = text[:a] + rep + text[b:]
+    total, problems = len(edits), []
+    left_code = code_only(text)
+    for alias in sorted({d[3] for d in decls}):
+        if re.search(rf"(?<![\w:]){alias}::", left_code) and not re.search(rf"\bnamespace\s+{alias}\b", left_code):
+            problems.append(f"{rel}: `{alias}::` used outside the scope of its removed alias")
+    return text, total, problems
 
 
 R4_MACRO = re.compile(r"\bBATCHLAS_DLA_(INLINE|HELPER|BODY)\b")
@@ -143,8 +241,13 @@ R4_MACRO = re.compile(r"\bBATCHLAS_DLA_(INLINE|HELPER|BODY)\b")
 def r4(rel, text):
     if not rel.endswith(TEXT_EXT):
         return text, 0, []
-    text, n = R4_MACRO.subn(r"BATCHLAS_DEVICE_\1", text)
-    return text, n, []
+    total, out = 0, []
+    for line in text.splitlines(keepends=True):
+        if "BREAK L6" not in line:   # the placement guard's fixture of the old spelling keeps it
+            line, n = R4_MACRO.subn(r"BATCHLAS_DEVICE_\1", line)
+            total += n
+        out.append(line)
+    return "".join(out), total, []
 
 
 # R5 tables. COLLIDE: names defined in more than one <routine>_detail (l1_collide.txt). A type

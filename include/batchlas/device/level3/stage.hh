@@ -48,7 +48,7 @@ struct OperandAccessor {
 // operand's contiguous index so a warp reads consecutive addresses whatever dst's slot map is.
 // The bounds are references for the same reason as mma_slab's k (the reg tiles' REG and LDG/STS).
 template <bool RowFastest, int R, int C, int Threads, class T, class Read, class Dst>
-BATCHLAS_DLA_INLINE void stage_block_read(int lid, int r0, int c0, const int& mr, const int& mc, Read&& read, Dst&& dst) {
+BATCHLAS_DEVICE_INLINE void stage_block_read(int lid, int r0, int c0, const int& mr, const int& mc, Read&& read, Dst&& dst) {
     for (int index = lid; index < R * C; index += Threads) {
         const int r = RowFastest ? index % R : index / C;
         const int c = RowFastest ? index / R : index % C;
@@ -61,10 +61,10 @@ BATCHLAS_DLA_INLINE void stage_block_read(int lid, int r0, int c0, const int& mr
 // stage_block_read of op(X)(row, col) of a column-major X. x and ld are references (the
 // closure fields of the reg tiles' kernel lambda, read where the tuned loop read them).
 template <Transpose Op, int R, int C, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr, const int& mc,
+BATCHLAS_DEVICE_INLINE void stage_block(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr, const int& mc,
                                      Dst&& dst) {
     stage_block_read<Op == Transpose::NoTrans, R, C, Threads, T>(
-        lid, r0, c0, mr, mc, [&](int row, int col) BATCHLAS_DLA_BODY { return OperandAccessor<T, Op>::load(x, ld, 0, row, col); },
+        lid, r0, c0, mr, mc, [&](int row, int col) BATCHLAS_DEVICE_BODY { return OperandAccessor<T, Op>::load(x, ld, 0, row, col); },
         dst);
 }
 
@@ -72,7 +72,7 @@ BATCHLAS_DLA_INLINE void stage_block(int lid, const T* const& x, const int& ld, 
 // aligned for every in-range packet: the caller's ld and base test); a packet that crosses the
 // matrix edge falls back to predicated scalars.
 template <Transpose Op, int R, int C, int V, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block_packet(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr,
+BATCHLAS_DEVICE_INLINE void stage_block_packet(int lid, const T* const& x, const int& ld, int r0, int c0, const int& mr,
                                             const int& mc, Dst&& dst) {
     if constexpr (Op == Transpose::NoTrans) {
         constexpr int PacketsPerCol = R / V;
@@ -118,7 +118,7 @@ BATCHLAS_DLA_INLINE void stage_block_packet(int lid, const T* const& x, const in
 // The unpredicated NoTrans form: the block lies inside X and every packet is aligned. One
 // statically unrolled pass per Threads packets (core static_for).
 template <int R, int C, int V, int Threads, class T, class Dst>
-BATCHLAS_DLA_INLINE void stage_block_packet_aligned(int lid, const T* const& x, const int& ld, int r0, int c0, Dst&& dst) {
+BATCHLAS_DEVICE_INLINE void stage_block_packet_aligned(int lid, const T* const& x, const int& ld, int r0, int c0, Dst&& dst) {
     constexpr int PacketsPerCol = R / V;
     constexpr int PacketCount = PacketsPerCol * C;
     constexpr int Iterations = (PacketCount + Threads - 1) / Threads;
@@ -139,7 +139,7 @@ BATCHLAS_DLA_INLINE void stage_block_packet_aligned(int lid, const T* const& x, 
 // Zero where !live or outside [0, mi) x [0, mj); conj conjugates. trans and
 // conj are runtime values (one kernel serves every form); a constant folds.
 template <int Step, class S0, class S1, class T, class Ld, class Dst>
-BATCHLAS_DLA_INLINE void stage_storage(int start, S0 s0n, S1 s1n, bool live, const T* x, Ld ld, bool trans, bool conj, int mi,
+BATCHLAS_DEVICE_INLINE void stage_storage(int start, S0 s0n, S1 s1n, bool live, const T* x, Ld ld, bool trans, bool conj, int mi,
                                        int mj, Dst&& dst) {
     for (int e = start; e < int(s0n) * int(s1n); e += Step) {
         const int s0 = e % int(s0n), s1 = e / int(s0n);

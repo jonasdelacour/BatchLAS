@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_arith_tests: the v2.2 arith.hh additions (design A.2) against scalar host references.
+// device_core_arith_tests: the arith.hh additions (design A.2) against scalar host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts; NaN-poisoned y for
 // every "never reads y" claim (Zero beta, a set MaybeZero flag) and the one shape that reads it
 // anyway (LinearNegZero); signed-zero cases that tell MacChain (0 + acc) from Sum (acc); the
@@ -22,7 +22,7 @@ TYPED_TEST_SUITE(DeviceCoreArithTest, AllTypes);
 
 constexpr int kBatch = 1024;
 
-template <class T> T nan_of() { return dv::qnan<T>(); }
+template <class T> T nan_of() { return batchlas::device::qnan<T>(); }
 
 // One y per item and case; out[c * kBatch + b] = y after case c.
 enum Case : int { kSumZero, kSumMaybeZeroSet, kSumMaybeZeroClear, kSumOne, kSumValue, kMacChain, kMacChainMaybeZero, kMulMac,
@@ -48,17 +48,17 @@ TYPED_TEST(DeviceCoreArithTest, StoreShapesMatchTheirSourceExpressions) {
             f(y);
             out[c * kBatch + b] = y;
         };
-        put(kSumZero, [&](T& y) { dv::store<dv::epi::Sum>(alpha, a, dv::Zero{}, y); });
-        put(kSumMaybeZeroSet, [&](T& y) { dv::store<dv::epi::Sum>(alpha, a, dv::MaybeZero<T>{beta, true}, y); });
-        put(kSumMaybeZeroClear, [&](T& y) { dv::store<dv::epi::Sum>(alpha, a, dv::MaybeZero<T>{beta, false}, y); });
-        put(kSumOne, [&](T& y) { dv::store<dv::epi::Sum>(dv::One{}, a, dv::One{}, y); });
-        put(kSumValue, [&](T& y) { dv::store<dv::epi::Sum>(alpha, a, beta, y); });
-        put(kMacChain, [&](T& y) { dv::store<dv::epi::MacChain, dv::arith::Fma>(alpha, a, beta, y); });
-        put(kMacChainMaybeZero, [&](T& y) { dv::store<dv::epi::MacChain, dv::arith::Fma>(alpha, a, dv::MaybeZero<T>{beta, true}, y); });
-        put(kMulMac, [&](T& y) { dv::store<dv::epi::MulMac, dv::arith::Fma>(alpha, a, dv::MaybeZero<T>{beta, false}, y); });
-        put(kLinear, [&](T& y) { dv::store<dv::epi::Linear>(alpha, a, beta, y); });
-        put(kLinearBetaZero, [&](T& y) { dv::store<dv::epi::Linear>(alpha, a, T(0), y); });
-        put(kLinearNegZeroBetaZero, [&](T& y) { dv::store<dv::epi::LinearNegZero>(alpha, a, T(0), y); });
+        put(kSumZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::Zero{}, y); });
+        put(kSumMaybeZeroSet, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
+        put(kSumMaybeZeroClear, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
+        put(kSumOne, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(batchlas::device::One{}, a, batchlas::device::One{}, y); });
+        put(kSumValue, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, beta, y); });
+        put(kMacChain, [&](T& y) { batchlas::device::store<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, beta, y); });
+        put(kMacChainMaybeZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
+        put(kMulMac, [&](T& y) { batchlas::device::store<batchlas::device::epi::MulMac, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
+        put(kLinear, [&](T& y) { batchlas::device::store<batchlas::device::epi::Linear>(alpha, a, beta, y); });
+        put(kLinearBetaZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::Linear>(alpha, a, T(0), y); });
+        put(kLinearNegZeroBetaZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::LinearNegZero>(alpha, a, T(0), y); });
     });
     const auto got = d.down(out, std::size_t(kNumCases) * kBatch);
     for (int b = 0; b < kBatch; ++b) {
@@ -91,12 +91,12 @@ TYPED_TEST(DeviceCoreArithTest, MacChainAndSumDifferOnlyInTheSignOfZero) {
     auto& d = this->dev;
     T* out = d.template alloc<T>(4, T(1));
     d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
-        const T negzero = dv::lift<T>(R(-0.0));
+        const T negzero = batchlas::device::lift<T>(R(-0.0));
         T y0 = T(0), y1 = T(0), y2 = T(0), y3 = T(0);
-        dv::store<dv::epi::Sum>(dv::One{}, negzero, dv::Zero{}, y0);
-        dv::store<dv::epi::MacChain>(dv::One{}, negzero, dv::Zero{}, y1);
-        dv::store<dv::epi::MulMac>(dv::One{}, negzero, dv::Zero{}, y2);
-        dv::store<dv::epi::LinearNegZero>(T(1), dv::lift<T>(R(0)), T(0), y3);  // 1 * 0 + (-0) * 0 = +0
+        batchlas::device::store<batchlas::device::epi::Sum>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y0);
+        batchlas::device::store<batchlas::device::epi::MacChain>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y1);
+        batchlas::device::store<batchlas::device::epi::MulMac>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y2);
+        batchlas::device::store<batchlas::device::epi::LinearNegZero>(T(1), batchlas::device::lift<T>(R(0)), T(0), y3);  // 1 * 0 + (-0) * 0 = +0
         out[0] = y0;
         out[1] = y1;
         out[2] = y2;
@@ -128,18 +128,18 @@ TYPED_TEST(DeviceCoreArithTest, ScalarHelpersMatchHost) {
         const T a = x[i], c = z[i];
         const R r = s[i];
         T* o = out + i * kOut;
-        o[0] = dv::force_real(a);
-        o[1] = dv::conj_if<true>(a);
-        o[2] = dv::conj_if<false>(a);
-        o[3] = dv::conj_if(i % 2 == 0, a);
-        o[4] = dv::scale_real(r, a);
-        o[5] = dv::div_real(a, r);
-        o[6] = dv::sub_scale_real(c, r, a);
+        o[0] = batchlas::device::force_real(a);
+        o[1] = batchlas::device::conj_if<true>(a);
+        o[2] = batchlas::device::conj_if<false>(a);
+        o[3] = batchlas::device::conj_if(i % 2 == 0, a);
+        o[4] = batchlas::device::scale_real(r, a);
+        o[5] = batchlas::device::div_real(a, r);
+        o[6] = batchlas::device::sub_scale_real(c, r, a);
         T acc = c;
-        dv::tag_mac(acc, dv::MaybeZero<T>{a, i % 3 == 0}, a);
+        batchlas::device::tag_mac(acc, batchlas::device::MaybeZero<T>{a, i % 3 == 0}, a);
         o[7] = acc;
-        rout[i * 3 + 0] = dv::abs_inf(a);
-        const auto p = dv::by_parts(a);
+        rout[i * 3 + 0] = batchlas::device::abs_inf(a);
+        const auto p = batchlas::device::by_parts(a);
         rout[i * 3 + 1] = p.re;
         rout[i * 3 + 2] = p.im;
     });
@@ -181,8 +181,8 @@ TYPED_TEST(DeviceCoreArithTest, FmaSplitRoundsTwiceFmaOnce) {
         T* out = d.template alloc<T>(2, T(0));
         d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
             T c1 = p[2], c2 = p[2];
-            dv::ops_arith_t<dv::arith::FmaSplit, T>::msub(c1, p[0], p[1]);
-            dv::ops_arith_t<dv::arith::Fma, T>::msub(c2, p[0], p[1]);
+            batchlas::device::ops_arith_t<batchlas::device::arith::FmaSplit, T>::msub(c1, p[0], p[1]);
+            batchlas::device::ops_arith_t<batchlas::device::arith::Fma, T>::msub(c2, p[0], p[1]);
             out[0] = c1;
             out[1] = c2;
         });

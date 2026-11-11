@@ -62,7 +62,6 @@ using namespace batchlas;
 namespace {
 
 namespace ts = test_support;
-namespace dv = batchlas::device;
 using ts::Live;
 
 template <typename T>
@@ -73,27 +72,27 @@ constexpr std::size_t kCanary = 64;
 constexpr int32_t kPivSentinel = 0x0BADBEEF;
 
 // ---- the plans, pinned (each tier's buffer_size is what its body carves) ----------------------
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sytrf<Uplo::Lower>, float, dv::tier::upto<32>>, dv::tier::Cta<32>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sytrf<Uplo::Lower>, float, dv::tier::upto<33>>, dv::tier::Blocked<1>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sytrs<Uplo::Upper>, double, dv::tier::upto<50>>, dv::tier::Cta<64>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sytrs<Uplo::Upper>, double, dv::tier::upto<129>>, dv::tier::Blocked<1>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sysv<Uplo::Lower>, float, dv::tier::upto<20>>, dv::tier::Cta<32>>);
-static_assert(dv::sytrf_buffer_size<Uplo::Lower, dv::tier::Cta<32>, float>(7).local_bytes == 33 * 32 * 4);
-static_assert(dv::sytrf_buffer_size<Uplo::Lower, dv::tier::Cta<32>, float>(7).global_bytes == 0);
-static_assert(dv::sytrf_buffer_size<Uplo::Upper, dv::tier::Blocked<1>, double>(1000).local_bytes == 8 * 8 + 8 * 4);
-static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Cta<32>, float>(5).local_bytes == 128 + 64);  // 30 floats, 16 ints
-static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<1>, std::complex<float>>(9).local_bytes == 16 * 4);
-static_assert(dv::sysv_buffer_size<Uplo::Upper, dv::tier::Cta<32>, double>(3).local_bytes == 9232);  // 1088 doubles, 130 ints
-static_assert(dv::sysv_buffer_size<Uplo::Lower, dv::tier::Blocked<1>, float>(3).local_bytes == 64);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sytrf<Uplo::Lower>, float, device::tier::upto<32>>, device::tier::Cta<32>>);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sytrf<Uplo::Lower>, float, device::tier::upto<33>>, device::tier::Blocked<1>>);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sytrs<Uplo::Upper>, double, device::tier::upto<50>>, device::tier::Cta<64>>);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sytrs<Uplo::Upper>, double, device::tier::upto<129>>, device::tier::Blocked<1>>);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sysv<Uplo::Lower>, float, device::tier::upto<20>>, device::tier::Cta<32>>);
+static_assert(device::sytrf_buffer_size<Uplo::Lower, device::tier::Cta<32>, float>(7).local_bytes == 33 * 32 * 4);
+static_assert(device::sytrf_buffer_size<Uplo::Lower, device::tier::Cta<32>, float>(7).global_bytes == 0);
+static_assert(device::sytrf_buffer_size<Uplo::Upper, device::tier::Blocked<1>, double>(1000).local_bytes == 8 * 8 + 8 * 4);
+static_assert(device::sytrs_buffer_size<Uplo::Lower, device::tier::Cta<32>, float>(5).local_bytes == 128 + 64);  // 30 floats, 16 ints
+static_assert(device::sytrs_buffer_size<Uplo::Lower, device::tier::Blocked<1>, std::complex<float>>(9).local_bytes == 16 * 4);
+static_assert(device::sysv_buffer_size<Uplo::Upper, device::tier::Cta<32>, double>(3).local_bytes == 9232);  // 1088 doubles, 130 ints
+static_assert(device::sysv_buffer_size<Uplo::Lower, device::tier::Blocked<1>, float>(3).local_bytes == 64);
 // Blocked<31>: local = the arg-max scratch (8 R, 8 int) then the L3 tile (552 T); global = W.
-static_assert(dv::sytrf_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(100) == dv::WorkspaceSize{2272, 100 * 32 * 4, 16});
-static_assert(dv::sytrf_buffer_size<Uplo::Upper, dv::tier::Blocked<31>, std::complex<double>>(10) == dv::WorkspaceSize{8928, 5120, 16});
+static_assert(device::sytrf_buffer_size<Uplo::Lower, device::tier::Blocked<31>, float>(100) == device::WorkspaceSize{2272, 100 * 32 * 4, 16});
+static_assert(device::sytrf_buffer_size<Uplo::Upper, device::tier::Blocked<31>, std::complex<double>>(10) == device::WorkspaceSize{8928, 5120, 16});
 // sytrs: local = flag, the L3 tile; global = L (n n), y (n nrhs), five int vectors (n each).
-static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(10, 3) == dv::WorkspaceSize{2224, 736, 16});
-static_assert(dv::sytrs_buffer_size<Uplo::Lower, dv::tier::Blocked<31>, float>(1000, 1).local_bytes == 2224);
-static_assert(dv::sysv_buffer_size<Uplo::Upper, dv::tier::Blocked<31>, float>(10, 3) == dv::WorkspaceSize{2272, 1280, 16});
+static_assert(device::sytrs_buffer_size<Uplo::Lower, device::tier::Blocked<31>, float>(10, 3) == device::WorkspaceSize{2224, 736, 16});
+static_assert(device::sytrs_buffer_size<Uplo::Lower, device::tier::Blocked<31>, float>(1000, 1).local_bytes == 2224);
+static_assert(device::sysv_buffer_size<Uplo::Upper, device::tier::Blocked<31>, float>(10, 3) == device::WorkspaceSize{2272, 1280, 16});
 // The default lists never hold Blocked<NB> (no measured win; design F6): upto stays on Blocked<1>.
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::sysv<Uplo::Upper>, float, dv::tier::upto<4096>>, dv::tier::Blocked<1>>);
+static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sysv<Uplo::Upper>, float, device::tier::upto<4096>>, device::tier::Blocked<1>>);
 
 // ---- data ---------------------------------------------------------------------------------------
 template <typename T>
@@ -272,7 +271,7 @@ void launch(sycl::queue& q, int wg, std::size_t local, F f, int batch = kBatch) 
      }).wait_and_throw();
 }
 
-inline dv::Workspace local_ws(unsigned char* lm, std::size_t offset, std::byte* global = nullptr) {
+inline device::Workspace local_ws(unsigned char* lm, std::size_t offset, std::byte* global = nullptr) {
     return {sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                 reinterpret_cast<std::byte*>(lm + offset)),
             global};
@@ -320,8 +319,8 @@ inline void canary_get(sycl::nd_item<1> it, const unsigned char* lm, std::size_t
 // The executor a user kernel builds: WorkGroup<WG, 32> for WG > 0, an RtGroup for WG == 0.
 template <int WG, class F>
 void with_exec(sycl::nd_item<1> it, F&& f) {
-    if constexpr (WG == 0) f(dv::RtGroup<>(it));
-    else f(dv::WorkGroup<WG, 32>{it});
+    if constexpr (WG == 0) f(device::RtGroup<>(it));
+    else f(device::WorkGroup<WG, 32>{it});
 }
 
 struct Outs {
@@ -332,7 +331,7 @@ struct Outs {
 template <Uplo UL, class Tier, int WG, typename T>
 void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0, Gws gw = {}) {
     const int n = a.rows();
-    const std::size_t need = dv::sytrf_buffer_size<UL, Tier, T>(n).local_bytes;
+    const std::size_t need = device::sytrf_buffer_size<UL, Tier, T>(n).local_bytes;
     const auto av = a.kernel_view();
     launch(
         q, wg, need + kCanary,
@@ -341,7 +340,7 @@ void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg
             canary_set(it, lm, need);
             with_exec<WG>(it, [&](const auto& ex) {
                 o.ret[std::size_t(b) * wg + it.get_local_linear_id()] =
-                    dv::sytrf<UL, Tier>(ex, dv::item(av, b, n, n), ipiv + std::size_t(b) * n, local_ws(lm, ws_offset, gw.at(b)));
+                    device::sytrf<UL, Tier>(ex, device::item(av, b, n, n), ipiv + std::size_t(b) * n, local_ws(lm, ws_offset, gw.at(b)));
             });
             canary_get(it, lm, need, o.canary);
         },
@@ -351,7 +350,7 @@ void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg
 template <Uplo UL, class Tier, int WG, typename T>
 void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = dv::sytrs_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
+    const std::size_t need = device::sytrs_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
     launch(
@@ -360,8 +359,8 @@ void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const in
             const int b = static_cast<int>(it.get_group_linear_id());
             canary_set(it, lm, need);
             with_exec<WG>(it, [&](const auto& ex) {
-                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sytrs<UL, Tier>(
-                    ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
+                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = device::sytrs<UL, Tier>(
+                    ex, device::item(av, b, n, n), device::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
             });
             canary_get(it, lm, need, o.canary);
         },
@@ -371,7 +370,7 @@ void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const in
 template <Uplo UL, class Tier, int WG, typename T>
 void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = dv::sysv_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
+    const std::size_t need = device::sysv_buffer_size<UL, Tier, T>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
     launch(
@@ -380,8 +379,8 @@ void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* 
             const int b = static_cast<int>(it.get_group_linear_id());
             canary_set(it, lm, need);
             with_exec<WG>(it, [&](const auto& ex) {
-                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = dv::sysv<UL, Tier>(
-                    ex, dv::item(av, b, n, n), dv::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
+                o.ret[std::size_t(b) * wg + it.get_local_linear_id()] = device::sysv<UL, Tier>(
+                    ex, device::item(av, b, n, n), device::item(bv, b, n, nrhs), ipiv + std::size_t(b) * n, local_ws(lm, 0, gw.at(b)));
             });
             canary_get(it, lm, need, o.canary);
         },
@@ -564,8 +563,8 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
     // forced ipiv, A's poison, both canaries, and the device factor solving through sytrs `wg`.
     template <Uplo UL, int NB>
     void sytrf_blocked_case(int n, int batch) {
-        using Tier = dv::tier::Blocked<NB>;
-        constexpr int wg = dv::tier_info<dv::routine::sytrf<UL>, Tier, T>::wg_size;
+        using Tier = device::tier::Blocked<NB>;
+        constexpr int wg = device::tier_info<device::routine::sytrf<UL>, Tier, T>::wg_size;
         const Matrix<T> full = blocked_batch<T>(n, batch, UL, 8000u + unsigned(n));
         Matrix<T> ah = stored(full, UL), ad = ah.clone();
         UnifiedVector<int64_t> hp(std::size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
@@ -576,7 +575,7 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
         }));
         UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * wg, -12345);
         UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
-        GlobalWs gw(dv::sytrf_buffer_size<UL, Tier, T>(n).global_bytes, batch);
+        GlobalWs gw(device::sytrf_buffer_size<UL, Tier, T>(n).global_bytes, batch);
         dev_sytrf<UL, Tier, wg>(q(), ad, dp.data(), Outs{ret.data(), can.data()}, wg, 0, gw.view());
         const int32_t* hpi = reinterpret_cast<const int32_t*>(hp.data());
         EXPECT_TRUE(uniform_returns(ret, wg, hi.data())) << "n " << n;
@@ -603,8 +602,8 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
     // invalid list (item 1) all NaN on both sides, the residual of both solves.
     template <Uplo UL, int NB>
     void sytrs_blocked_case(int n, int nrhs, int batch) {
-        using Tier = dv::tier::Blocked<NB>;
-        constexpr int wg = dv::tier_info<dv::routine::sytrs<UL>, Tier, T>::wg_size;
+        using Tier = device::tier::Blocked<NB>;
+        constexpr int wg = device::tier_info<device::routine::sytrs<UL>, Tier, T>::wg_size;
         const Matrix<T> full = blocked_batch<T>(n, batch, UL, 6000u + unsigned(n));
         Matrix<T> a = stored(full, UL);
         UnifiedVector<int64_t> hp(std::size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
@@ -624,7 +623,7 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
         }));
         UnifiedVector<int32_t> ret(std::size_t(batch) * wg, -12345);
         UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
-        GlobalWs gw(dv::sytrs_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
+        GlobalWs gw(device::sytrs_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
         dev_sytrs<UL, Tier, wg>(q(), a, bd, hpi, Outs{ret.data(), can.data()}, wg, gw.view());
         EXPECT_TRUE(same_storage(a0, a, "A (read only)")) << "n " << n;
         EXPECT_TRUE(ts::unwritten_outside<T>(bd, Live::block())) << "n " << n;
@@ -646,8 +645,8 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
     // ipiv, a singular item's B as given (bit for bit), the residual of every solvable item.
     template <Uplo UL, int NB>
     void sysv_blocked_case(int n, int nrhs, int batch) {
-        using Tier = dv::tier::Blocked<NB>;
-        constexpr int wg = dv::tier_info<dv::routine::sysv<UL>, Tier, T>::wg_size;
+        using Tier = device::tier::Blocked<NB>;
+        constexpr int wg = device::tier_info<device::routine::sysv<UL>, Tier, T>::wg_size;
         const Matrix<T> full = blocked_batch<T>(n, batch, UL, 10000u + unsigned(n));
         Matrix<T> ah = stored(full, UL), ad = ah.clone();
         Matrix<T> bh = rhs<T>(n, nrhs, 11000u + unsigned(n), batch), bd = bh.clone();
@@ -662,7 +661,7 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
         }));
         UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * wg, -12345);
         UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
-        GlobalWs gw(dv::sysv_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
+        GlobalWs gw(device::sysv_buffer_size<UL, Tier, T>(n, nrhs).global_bytes, batch);
         dev_sysv<UL, Tier, wg>(q(), ad, bd, dp.data(), Outs{ret.data(), can.data()}, wg, gw.view());
         EXPECT_TRUE(uniform_returns(ret, wg, hi.data())) << "n " << n;
         EXPECT_TRUE(forced_parity(dp.data(), hi.data(), n, batch, UL, "device")) << "n " << n;
@@ -688,34 +687,34 @@ TYPED_TEST_SUITE(DeviceApiSytrfTest, DeviceApiSytrfTypes);
 TYPED_TEST(DeviceApiSytrfTest, SytrfCtaIsTheHostCtaRouteBitForBit) {
     const ops::sytrf::SytrfChoice cta{ops::sytrf::Cta{}};
     for (int n : {1, 2, 17, 31, 32}) {
-        this->template sytrf_case<Uplo::Lower, dv::tier::Cta<32>, 32>(n, cta, "cta");
-        this->template sytrf_case<Uplo::Upper, dv::tier::Cta<32>, 32>(n, cta, "cta");
+        this->template sytrf_case<Uplo::Lower, device::tier::Cta<32>, 32>(n, cta, "cta");
+        this->template sytrf_case<Uplo::Upper, device::tier::Cta<32>, 32>(n, cta, "cta");
     }
     // Two sub-groups: team 0 factors, the info is broadcast; and an RtGroup of 96.
-    this->template sytrf_case<Uplo::Lower, dv::tier::Cta<32>, 64>(32, cta, "cta");
-    this->template sytrf_case<Uplo::Upper, dv::tier::Cta<32>, 0>(29, cta, "cta", 96);
+    this->template sytrf_case<Uplo::Lower, device::tier::Cta<32>, 64>(32, cta, "cta");
+    this->template sytrf_case<Uplo::Upper, device::tier::Cta<32>, 0>(29, cta, "cta", 96);
 }
 
 TYPED_TEST(DeviceApiSytrfTest, SytrfBlocked1IsTheHostWgRouteBitForBit) {
     const ops::sytrf::SytrfChoice wg{ops::sytrf::Wg{}};
     for (int n : {33, 64, 129, 257}) {
-        this->template sytrf_case<Uplo::Lower, dv::tier::Blocked<1>, 256>(n, wg, "wg");
-        this->template sytrf_case<Uplo::Upper, dv::tier::Blocked<1>, 0>(n, wg, "wg", host_width(n));
+        this->template sytrf_case<Uplo::Lower, device::tier::Blocked<1>, 256>(n, wg, "wg");
+        this->template sytrf_case<Uplo::Upper, device::tier::Blocked<1>, 0>(n, wg, "wg", host_width(n));
     }
-    this->template sytrf_case<Uplo::Lower, dv::tier::Blocked<1>, 32>(5, wg, "wg");  // one sub-group
+    this->template sytrf_case<Uplo::Lower, device::tier::Blocked<1>, 32>(5, wg, "wg");  // one sub-group
 }
 
 TYPED_TEST(DeviceApiSytrfTest, SytrsCtaIsTheHostCtaRouteBitForBit) {
     const ops::sytrs::SytrsChoice cta{ops::sytrs::Cta{}};
     // A pinned route that cannot run throws: every order is checked against this device's local memory.
-    this->template sytrs_case<Uplo::Lower, dv::tier::Cta<32>, 32>(1, 2, cta, "cta");
-    this->template sytrs_case<Uplo::Upper, dv::tier::Cta<32>, 32>(32, 3, cta, "cta");
-    if (this->cta_fits(33)) this->template sytrs_case<Uplo::Lower, dv::tier::Cta<64>, 64>(33, 5, cta, "cta");  // 2 columns per sub-group
-    if (this->cta_fits(64)) this->template sytrs_case<Uplo::Upper, dv::tier::Cta<64>, 0>(64, 2, cta, "cta", 128);
+    this->template sytrs_case<Uplo::Lower, device::tier::Cta<32>, 32>(1, 2, cta, "cta");
+    this->template sytrs_case<Uplo::Upper, device::tier::Cta<32>, 32>(32, 3, cta, "cta");
+    if (this->cta_fits(33)) this->template sytrs_case<Uplo::Lower, device::tier::Cta<64>, 64>(33, 5, cta, "cta");  // 2 columns per sub-group
+    if (this->cta_fits(64)) this->template sytrs_case<Uplo::Upper, device::tier::Cta<64>, 0>(64, 2, cta, "cta", 128);
     for (int n : {65, 100, 128})
         if (this->cta_fits(n)) {
-            this->template sytrs_case<Uplo::Lower, dv::tier::Cta<128>, 32>(n, 3, cta, "cta");
-            this->template sytrs_case<Uplo::Upper, dv::tier::Cta<128>, 32>(n, 1, cta, "cta");
+            this->template sytrs_case<Uplo::Lower, device::tier::Cta<128>, 32>(n, 3, cta, "cta");
+            this->template sytrs_case<Uplo::Upper, device::tier::Cta<128>, 32>(n, 1, cta, "cta");
         }
 }
 
@@ -723,25 +722,25 @@ TYPED_TEST(DeviceApiSytrfTest, SytrsBlocked1IsTheHostWgRouteBitForBit) {
     const ops::sytrs::SytrsChoice wg{ops::sytrs::Wg{}};
     // The sums reduce over the executor's width: the host's width is the parity width.
     for (int n : {3, 40, 129, 300}) {
-        this->template sytrs_case<Uplo::Lower, dv::tier::Blocked<1>, 0>(n, 2, wg, "wg", host_width(n));
-        this->template sytrs_case<Uplo::Upper, dv::tier::Blocked<1>, 0>(n, 3, wg, "wg", host_width(n));
+        this->template sytrs_case<Uplo::Lower, device::tier::Blocked<1>, 0>(n, 2, wg, "wg", host_width(n));
+        this->template sytrs_case<Uplo::Upper, device::tier::Blocked<1>, 0>(n, 3, wg, "wg", host_width(n));
     }
-    this->template sytrs_case<Uplo::Lower, dv::tier::Blocked<1>, 256>(300, 1, wg, "wg");
+    this->template sytrs_case<Uplo::Lower, device::tier::Blocked<1>, 256>(300, 1, wg, "wg");
 }
 
 TYPED_TEST(DeviceApiSytrfTest, SysvCtaIsTheHostCtaRouteBitForBit) {
     const ops::sysv::SysvChoice cta{ops::sysv::Cta{}};
     for (int n : {1, 7, 32}) {
-        this->template sysv_case<Uplo::Lower, dv::tier::Cta<32>, 32>(n, 3, cta, "cta", false);
-        this->template sysv_case<Uplo::Upper, dv::tier::upto<32>, 128>(n, 5, cta, "cta", false);  // four sub-groups
+        this->template sysv_case<Uplo::Lower, device::tier::Cta<32>, 32>(n, 3, cta, "cta", false);
+        this->template sysv_case<Uplo::Upper, device::tier::upto<32>, 128>(n, 5, cta, "cta", false);  // four sub-groups
     }
 }
 
 TYPED_TEST(DeviceApiSytrfTest, SysvBlocked1IsTheHostComposeOverWgBitForBit) {
     const ops::sysv::SysvChoice compose{ops::sysv::Compose{}};
     for (int n : {33, 150}) {
-        this->template sysv_case<Uplo::Lower, dv::tier::Blocked<1>, 0>(n, 2, compose, "compose", true, host_width(n));
-        this->template sysv_case<Uplo::Upper, dv::tier::Blocked<1>, 0>(n, 1, compose, "compose", true, host_width(n));
+        this->template sysv_case<Uplo::Lower, device::tier::Blocked<1>, 0>(n, 2, compose, "compose", true, host_width(n));
+        this->template sysv_case<Uplo::Upper, device::tier::Blocked<1>, 0>(n, 1, compose, "compose", true, host_width(n));
     }
 }
 
@@ -778,7 +777,7 @@ TYPED_TEST(DeviceApiSytrfTest, SysvBlockedAgreesWithTheHostComposeOverBlocked) {
 // to item 0, A, ipiv and the return value.
 TYPED_TEST(DeviceApiSytrfTest, SytrfBlockedSaturatingBatchIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
-    using Tier = dv::tier::Blocked<kNb>;
+    using Tier = device::tier::Blocked<kNb>;
     const int n = 94;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         Matrix<T> one = blocked_batch<T>(n, 1, uplo, 4242u);
@@ -790,11 +789,11 @@ TYPED_TEST(DeviceApiSytrfTest, SytrfBlockedSaturatingBatchIsBitIdenticalToItemZe
         UnifiedVector<int32_t> dp(std::size_t(n) * kBatch, kPivSentinel), ret(std::size_t(kBatch) * 256, -12345);
         UnifiedVector<unsigned char> can(std::size_t(kBatch) * kCanary, 0);
         if (uplo == Uplo::Lower) {
-            GlobalWs gw(dv::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, kBatch);
+            GlobalWs gw(device::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, kBatch);
             dev_sytrf<Uplo::Lower, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view());
             EXPECT_TRUE(gw.intact());
         } else {
-            GlobalWs gw(dv::sytrf_buffer_size<Uplo::Upper, Tier, T>(n).global_bytes, kBatch);
+            GlobalWs gw(device::sytrf_buffer_size<Uplo::Upper, Tier, T>(n).global_bytes, kBatch);
             dev_sytrf<Uplo::Upper, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view());
             EXPECT_TRUE(gw.intact());
         }
@@ -809,12 +808,12 @@ TYPED_TEST(DeviceApiSytrfTest, SytrfBlockedSaturatingBatchIsBitIdenticalToItemZe
 // The global canary's own red case: W carved 64 bytes late runs into it, so it must fail.
 TYPED_TEST(DeviceApiSytrfTest, ShiftedGlobalWorkspaceBreaksTheCanary) {
     using T = typename TestFixture::T;
-    using Tier = dv::tier::Blocked<kNb>;
+    using Tier = device::tier::Blocked<kNb>;
     const int n = 40, batch = 32;  // n > NB: the first panel zero-fills all of W
     Matrix<T> a = stored(blocked_batch<T>(n, batch, Uplo::Lower, 78u), Uplo::Lower);
     UnifiedVector<int32_t> dp(std::size_t(n) * batch, kPivSentinel), ret(std::size_t(batch) * 256, -12345);
     UnifiedVector<unsigned char> can(std::size_t(batch) * kCanary, 0);
-    GlobalWs gw(dv::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, batch);
+    GlobalWs gw(device::sytrf_buffer_size<Uplo::Lower, Tier, T>(n).global_bytes, batch);
     dev_sytrf<Uplo::Lower, Tier, 256>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 256, 0, gw.view(kCanary));
     EXPECT_FALSE(gw.intact()) << "the global canary did not see a write past buffer_size";
 }
@@ -826,7 +825,7 @@ TYPED_TEST(DeviceApiSytrfTest, ShiftedWorkspaceBreaksTheCanary) {
     Matrix<T> a = stored(symmetric_batch<T>(n, 77u), Uplo::Lower);
     UnifiedVector<int32_t> dp(std::size_t(n) * kBatch, kPivSentinel), ret(std::size_t(kBatch) * 32, -12345);
     UnifiedVector<unsigned char> can(std::size_t(kBatch) * kCanary, 0);
-    dev_sytrf<Uplo::Lower, dv::tier::Cta<32>, 32>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 32, kCanary);
+    dev_sytrf<Uplo::Lower, device::tier::Cta<32>, 32>(this->q(), a, dp.data(), Outs{ret.data(), can.data()}, 32, kCanary);
     EXPECT_FALSE(canary_intact(can)) << "the canary did not see a write past buffer_size";
 }
 
@@ -854,41 +853,41 @@ TYPED_TEST(DeviceApiSytrfTest, ArgumentErrorsAreUniformAndWriteNothing) {
         return first;
     };
     // n = 17 above Cta<16>: -2 (N).
-    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  return dv::sytrf<Uplo::Lower, dv::tier::Cta<16>>(dv::WorkGroup<32, 32>{it}, dv::item(av, b, n, n), ip + b * n, w);
+    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  return device::sytrf<Uplo::Lower, device::tier::Cta<16>>(device::WorkGroup<32, 32>{it}, device::item(av, b, n, n), ip + b * n, w);
               }),
               -2);
     // ld = n - 1: -4 (LDA).
-    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  const dv::Mat<T> m{av.data() + std::ptrdiff_t(b) * av.stride(), dv::Dyn{n}, dv::Dyn{n}, dv::Dyn{n - 1}};
-                  return dv::sytrf<Uplo::Lower, dv::tier::Cta<32>>(dv::WorkGroup<32, 32>{it}, m, ip + b * n, w);
+    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  const device::Mat<T> m{av.data() + std::ptrdiff_t(b) * av.stride(), device::Dyn{n}, device::Dyn{n}, device::Dyn{n - 1}};
+                  return device::sytrf<Uplo::Lower, device::tier::Cta<32>>(device::WorkGroup<32, 32>{it}, m, ip + b * n, w);
               }),
               -4);
     // B with n - 1 rows: -7 (B), sytrs and sysv alike.
-    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  return dv::sytrs<Uplo::Lower, dv::tier::Cta<32>>(dv::WorkGroup<32, 32>{it}, dv::item(av, b, n, n),
-                                                                   dv::item(bv, b, n - 1, nrhs), ip + b * n, w);
+    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  return device::sytrs<Uplo::Lower, device::tier::Cta<32>>(device::WorkGroup<32, 32>{it}, device::item(av, b, n, n),
+                                                                   device::item(bv, b, n - 1, nrhs), ip + b * n, w);
               }),
               -7);
-    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  return dv::sysv<Uplo::Upper, dv::tier::Cta<32>>(dv::WorkGroup<32, 32>{it}, dv::item(av, b, n, n),
-                                                                  dv::item(bv, b, n - 1, nrhs), ip + b * n, w);
+    EXPECT_EQ(run(32, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  return device::sysv<Uplo::Upper, device::tier::Cta<32>>(device::WorkGroup<32, 32>{it}, device::item(av, b, n, n),
+                                                                  device::item(bv, b, n - 1, nrhs), ip + b * n, w);
               }),
               -7);
     // A run-time width of 48 (a partial sub-group): -1 (the executor), before any collective.
-    EXPECT_EQ(run(48, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  return dv::sytrf<Uplo::Lower, dv::tier::Blocked<1>>(dv::RtGroup<>(it), dv::item(av, b, n, n), ip + b * n, w);
+    EXPECT_EQ(run(48, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  return device::sytrf<Uplo::Lower, device::tier::Blocked<1>>(device::RtGroup<>(it), device::item(av, b, n, n), ip + b * n, w);
               }),
               -1);
     // Blocked<31> checks first as well: ld = n - 1 (-4), B with n - 1 rows (-7), no workspace touched.
-    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  const dv::Mat<T> m{av.data() + std::ptrdiff_t(b) * av.stride(), dv::Dyn{n}, dv::Dyn{n}, dv::Dyn{n - 1}};
-                  return dv::sytrf<Uplo::Upper, dv::tier::Blocked<31>>(dv::WorkGroup<256, 32>{it}, m, ip + b * n, w);
+    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  const device::Mat<T> m{av.data() + std::ptrdiff_t(b) * av.stride(), device::Dyn{n}, device::Dyn{n}, device::Dyn{n - 1}};
+                  return device::sytrf<Uplo::Upper, device::tier::Blocked<31>>(device::WorkGroup<256, 32>{it}, m, ip + b * n, w);
               }),
               -4);
-    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, dv::Workspace w) {
-                  return dv::sysv<Uplo::Lower, dv::tier::Blocked<31>>(dv::WorkGroup<256, 32>{it}, dv::item(av, b, n, n),
-                                                                     dv::item(bv, b, n - 1, nrhs), ip + b * n, w);
+    EXPECT_EQ(run(256, [=](sycl::nd_item<1> it, int b, device::Workspace w) {
+                  return device::sysv<Uplo::Lower, device::tier::Blocked<31>>(device::WorkGroup<256, 32>{it}, device::item(av, b, n, n),
+                                                                     device::item(bv, b, n - 1, nrhs), ip + b * n, w);
               }),
               -7);
     EXPECT_TRUE(same_storage(a0, a, "A"));
@@ -897,13 +896,13 @@ TYPED_TEST(DeviceApiSytrfTest, ArgumentErrorsAreUniformAndWriteNothing) {
 }
 
 // ---- with_tier: host side, mock device limits ----------------------------------------------------
-dv::DeviceLimits big_limits() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
+device::DeviceLimits big_limits() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
 
-template <class Rt, class T, class List = dv::tiers_t<Rt, T>>
-std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class Rt, class T, class List = device::tiers_t<Rt, T>>
+std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Rt, T, List>(lim, n, [&]<class Tier>(Tier) {
+        device::with_tier<Rt, T, List>(lim, n, [&]<class Tier>(Tier) {
             if constexpr (requires { Tier::nb; }) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });
@@ -913,9 +912,9 @@ std::string pick(const dv::DeviceLimits& lim, int n) {
     return got;
 }
 
-using SytrfL = dv::routine::sytrf<Uplo::Lower>;
-using SytrsU = dv::routine::sytrs<Uplo::Upper>;
-using SysvL = dv::routine::sysv<Uplo::Lower>;
+using SytrfL = device::routine::sytrf<Uplo::Lower>;
+using SytrsU = device::routine::sytrs<Uplo::Upper>;
+using SysvL = device::routine::sysv<Uplo::Lower>;
 
 TEST(DeviceApiSytrfTiers, WithTierPicksTheFirstAdmittingTierAtEveryBoundary) {
     const auto lim = big_limits();
@@ -935,23 +934,23 @@ TEST(DeviceApiSytrfTiers, WithTierPicksTheFirstAdmittingTierAtEveryBoundary) {
 
 TEST(DeviceApiSytrfTiers, EachDeviceFilterRemovesItsTier) {
     // sytrs Cta<128> float at n = 100: fits its buffer_size exactly, not one byte less.
-    const std::size_t need = dv::sytrs_buffer_size<Uplo::Upper, dv::tier::Cta<128>, float>(100).local_bytes;
-    dv::DeviceLimits slm = big_limits();
+    const std::size_t need = device::sytrs_buffer_size<Uplo::Upper, device::tier::Cta<128>, float>(100).local_bytes;
+    device::DeviceLimits slm = big_limits();
     slm.local_mem_bytes = need;
     EXPECT_EQ((pick<SytrsU, float>(slm, 100)), "cta128");
     slm.local_mem_bytes = need - 1;
     EXPECT_EQ((pick<SytrsU, float>(slm, 100)), "blocked1");
     // No fp64: no double tier at all; float unaffected.
-    dv::DeviceLimits nofp64 = big_limits();
+    device::DeviceLimits nofp64 = big_limits();
     nofp64.fp64 = false;
     EXPECT_EQ((pick<SytrfL, float>(nofp64, 10)), "cta32");
     EXPECT_EQ((pick<SytrfL, double>(nofp64, 10)), "throw:sytrf: no device tier admits n=10");
     // No sub-group size 32: nothing.
-    dv::DeviceLimits sg16 = big_limits();
+    device::DeviceLimits sg16 = big_limits();
     sg16.sub_group_sizes = {16};
     EXPECT_EQ((pick<SytrsU, float>(sg16, 5)), "throw:sytrs: no device tier admits n=5");
     // A 128-item ceiling drops Blocked<1> (256 items), not Cta (32).
-    dv::DeviceLimits narrow = big_limits();
+    device::DeviceLimits narrow = big_limits();
     narrow.max_work_group_size = 128;
     EXPECT_EQ((pick<SysvL, float>(narrow, 20)), "cta32");
     EXPECT_EQ((pick<SysvL, float>(narrow, 40)), "throw:sysv: no device tier admits n=40");
@@ -960,20 +959,19 @@ TEST(DeviceApiSytrfTiers, EachDeviceFilterRemovesItsTier) {
 // Blocked<31> is the caller's to list: first after the small tiers, and filtered by its 256 items
 // and its local part (one byte short drops it).
 TEST(DeviceApiSytrfTiers, WithTierTakesBlockedFromACallerList) {
-    namespace tr = dv::tier;
-    using SytrfList = tr::list<tr::Cta<32>, tr::Blocked<31>>;
-    using SytrsList = tr::list<tr::Cta<32>, tr::Cta<64>, tr::Cta<128>, tr::Blocked<31>>;
+    using SytrfList = device::tier::list<device::tier::Cta<32>, device::tier::Blocked<31>>;
+    using SytrsList = device::tier::list<device::tier::Cta<32>, device::tier::Cta<64>, device::tier::Cta<128>, device::tier::Blocked<31>>;
     const auto lim = big_limits();
     EXPECT_EQ((pick<SytrfL, float, SytrfList>(lim, 32)), "cta32");
     EXPECT_EQ((pick<SytrfL, float, SytrfList>(lim, 33)), "blocked31");
     EXPECT_EQ((pick<SytrfL, std::complex<double>, SytrfList>(lim, 5000)), "blocked31");
     EXPECT_EQ((pick<SytrsU, float, SytrsList>(lim, 129)), "blocked31");
     EXPECT_EQ((pick<SysvL, double, SytrfList>(lim, 33)), "blocked31");
-    dv::DeviceLimits narrow = big_limits();
+    device::DeviceLimits narrow = big_limits();
     narrow.max_work_group_size = 128;
     EXPECT_EQ((pick<SytrfL, float, SytrfList>(narrow, 33)), "throw:sytrf: no device tier admits n=33");
-    const std::size_t need = dv::sytrf_buffer_size<Uplo::Lower, tr::Blocked<31>, float>(33).local_bytes;
-    dv::DeviceLimits slm = big_limits();
+    const std::size_t need = device::sytrf_buffer_size<Uplo::Lower, device::tier::Blocked<31>, float>(33).local_bytes;
+    device::DeviceLimits slm = big_limits();
     slm.local_mem_bytes = need;
     EXPECT_EQ((pick<SytrfL, float, SytrfList>(slm, 33)), "blocked31");
     slm.local_mem_bytes = need - 1;

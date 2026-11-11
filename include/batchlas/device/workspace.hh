@@ -66,16 +66,16 @@ class Plan {
 
 // The typed pointer of a slot inside this matrix's workspace: a decorated local pointer for a
 // Local slot (a generic T* would lose the shared address space: generic LD/ST), a T* for Global.
-template <class T> BATCHLAS_DLA_INLINE local_mptr<T> carve_local(const Workspace& w, const ws::Slot<T>& s) {
+template <class T> BATCHLAS_DEVICE_INLINE local_mptr<T> carve_local(const Workspace& w, const ws::Slot<T>& s) {
     return sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
         reinterpret_cast<T*>(w.local.get_raw() + s.offset));
 }
-template <class T> BATCHLAS_DLA_INLINE T* carve_global(const Workspace& w, const ws::Slot<T>& s) {
+template <class T> BATCHLAS_DEVICE_INLINE T* carve_global(const Workspace& w, const ws::Slot<T>& s) {
     return reinterpret_cast<T*>(w.global + s.offset);
 }
 
 // Matrix b's slice of the caller's global buffer of batch * global_bytes.
-BATCHLAS_DLA_INLINE std::byte* global_slice(std::byte* base, const WorkspaceSize& sz, std::int64_t b) {
+BATCHLAS_DEVICE_INLINE std::byte* global_slice(std::byte* base, const WorkspaceSize& sz, std::int64_t b) {
     return base + static_cast<std::ptrdiff_t>(b) * static_cast<std::ptrdiff_t>(sz.global_bytes);
 }
 

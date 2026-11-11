@@ -23,10 +23,9 @@
 namespace device_core_test {
 
 using namespace batchlas;
-namespace dv = batchlas::device;
 
-template <class T> using real_of = typename dv::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = dv::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 inline std::uint64_t mix(std::uint64_t x) {
     x += 0x9e3779b97f4a7c15ull;

@@ -75,7 +75,7 @@ struct Potf2Result {
     d.scale(k, akk, act);                                                                 \
     d.update(k, act);
 
-template <Uplo UL, class Dist> BATCHLAS_DLA_INLINE potrf_detail::Potf2Result potf2(const Dist& d, bool live = true) {
+template <Uplo UL, class Dist> BATCHLAS_DEVICE_INLINE potrf_detail::Potf2Result potf2(const Dist& d, bool live = true) {
     static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
     using R = typename Dist::R;
     bool alive = live;
@@ -99,7 +99,7 @@ namespace potrf_detail {
 // potf2's Rsqrt policy for the SLM forms: core inv_sqrt (rsqrt.approx + one Newton step on NVPTX
 // float, decision 10).
 struct InvSqrt {
-    template <class R> BATCHLAS_DLA_INLINE static R inv_sqrt(R a, R sqrt_a) { return ::batchlas::device::inv_sqrt(a, sqrt_a); }
+    template <class R> BATCHLAS_DEVICE_INLINE static R inv_sqrt(R a, R sqrt_a) { return ::batchlas::device::inv_sqrt(a, sqrt_a); }
 };
 
 // ---- the register tier: one matrix per Partition<N>, lane r holds row r of L ---------------
@@ -158,15 +158,15 @@ template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct 
     const Bcast& bc;
     int lane;
 
-    BATCHLAS_DLA_INLINE bool skip(int j) const { return j >= n; }
-    BATCHLAS_DLA_INLINE bool col_live(int j) const { return j < n; }
-    BATCHLAS_DLA_INLINE R pivot(int j) const { return part.bcast(S::re(rA[j]), static_cast<std::uint32_t>(j)); }
-    BATCHLAS_DLA_INLINE void scale(int j, R akk, bool act) const {
+    BATCHLAS_DEVICE_INLINE bool skip(int j) const { return j >= n; }
+    BATCHLAS_DEVICE_INLINE bool col_live(int j) const { return j < n; }
+    BATCHLAS_DEVICE_INLINE R pivot(int j) const { return part.bcast(S::re(rA[j]), static_cast<std::uint32_t>(j)); }
+    BATCHLAS_DEVICE_INLINE void scale(int j, R akk, bool act) const {
         const R dkk = act ? sycl::sqrt(akk) : R(1);
         const R rinv = ::batchlas::device::inv_sqrt<InvSqrtEdge::Exact>(akk, dkk);  // NOT rsqrt: rsqrt.approx is not the reference
         rA[j] = ::batchlas::device::select(act, ::batchlas::device::select(lane == j, S::from_real(dkk), S::mul_real(rA[j], rinv)), rA[j]);
     }
-    BATCHLAS_DLA_INLINE void update(int j, bool act) const {
+    BATCHLAS_DEVICE_INLINE void update(int j, bool act) const {
         if constexpr (std::is_same_v<Bcast, bcast_policy::Shuffle>) {
 BATCHLAS_UNROLL_FULL
             for (int k = j + 1; k < NC; ++k) {
@@ -212,7 +212,7 @@ BATCHLAS_UNROLL_FULL
 
 // potf2 on the RowFrag rA; returns the 1-based first failing column (0: success), partition-uniform.
 template <class D, int N, int NC, OrderGuard G = OrderGuard::Predicate, class Part, class Bcast>
-BATCHLAS_DLA_INLINE std::int32_t potf2_reg(const Part& part, Frag<D, NC, RowFrag>& rA, int n, bool live, Bcast bc) {
+BATCHLAS_DEVICE_INLINE std::int32_t potf2_reg(const Part& part, Frag<D, NC, RowFrag>& rA, int n, bool live, Bcast bc) {
     const RegRows<D, N, NC, G, Part, Bcast> d{part, rA, n, bc, part.lid()};
     return potf2<Uplo::Lower>(d, live).info;
 }
@@ -270,7 +270,7 @@ BATCHLAS_UNROLL_FULL
 // the partition `part` (lane = its lane, live = this partition's matrix exists). Upper at run
 // time: the host route launches one kernel for both triangles.
 template <class D, int N, class Part>
-BATCHLAS_DLA_INLINE std::int32_t potrf_reg(const Part& part, D* a, int ld, int lane, int n, bool live, bool upper) {
+BATCHLAS_DEVICE_INLINE std::int32_t potrf_reg(const Part& part, D* a, int ld, int lane, int n, bool live, bool upper) {
     constexpr bool real_diag = Arith<D>::is_complex;
     const bool row_live = live && (lane < n);
     Frag<D, N> rA;
@@ -301,14 +301,14 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
     int lane;
     Frag<D, NB>& d;
 
-    BATCHLAS_DLA_INLINE bool col_live(int k) const { return k < ib; }
-    BATCHLAS_DLA_INLINE void fail(int k) const {
+    BATCHLAS_DEVICE_INLINE bool col_live(int k) const { return k < ib; }
+    BATCHLAS_DEVICE_INLINE void fail(int k) const {
         if (lane == 0) *info = info_base + k + 1;
     }
-    BATCHLAS_DLA_INLINE R pivot(int k) const {
+    BATCHLAS_DEVICE_INLINE R pivot(int k) const {
         return sycl::select_from_group(ex.sg, A::re(d[k]), static_cast<std::uint32_t>(k));
     }
-    BATCHLAS_DLA_INLINE void scale(int k, R akk, bool active) const {
+    BATCHLAS_DEVICE_INLINE void scale(int k, R akk, bool active) const {
         const R dkk = active ? sycl::sqrt(akk) : R(1);
         const R r = Rsqrt::inv_sqrt(active ? akk : R(1), dkk);
         if (active) {
@@ -319,7 +319,7 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
         }
         sycl::group_barrier(ex.sg);
     }
-    BATCHLAS_DLA_INLINE void update(int k, bool active) const {
+    BATCHLAS_DEVICE_INLINE void update(int k, bool active) const {
         if (active) {
             BATCHLAS_UNROLL_FULL
             for (int c = k + 1; c < NB; ++c) {
@@ -331,7 +331,7 @@ template <int NB, class Rsqrt, int SG, class MA, class DV> struct SgSlm {
 
 // The first bad pivot sets *info := info_base + k + 1 (lane 0, SgSlm::fail).
 template <int NB, class Rsqrt, int SG, class MA, class DV>
-BATCHLAS_DLA_HELPER void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV diag, int* info, int info_base) {
+BATCHLAS_DEVICE_HELPER void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV diag, int* info, int info_base) {
     using D = typename MA::value_type;
     static_assert(NB <= SG, "potf2_sg_slm: one lane per row");
     const int lane = ex.lid();
@@ -360,13 +360,13 @@ template <class Rsqrt, class PM, class Bar> struct PanelRows {
     bool leader;
     int* info;
 
-    BATCHLAS_DLA_INLINE int cols() const { return kb; }
-    BATCHLAS_DLA_INLINE bool col_live(int) const { return true; }
-    BATCHLAS_DLA_INLINE void fail(int i) const {
+    BATCHLAS_DEVICE_INLINE int cols() const { return kb; }
+    BATCHLAS_DEVICE_INLINE bool col_live(int) const { return true; }
+    BATCHLAS_DEVICE_INLINE void fail(int i) const {
         if (leader) *info = c0 + i + 1;
     }
-    BATCHLAS_DLA_INLINE R pivot(int i) const { return A::re(p(c0 + i, i)); }
-    BATCHLAS_DLA_INLINE void scale(int i, R d, bool act) const {
+    BATCHLAS_DEVICE_INLINE R pivot(int i) const { return A::re(p(c0 + i, i)); }
+    BATCHLAS_DEVICE_INLINE void scale(int i, R d, bool act) const {
         bar();  // WAR: every item read the pivot cell above, item c0 + i overwrites it below
         if (act) {
             const R dkk = sycl::sqrt(d);
@@ -376,7 +376,7 @@ template <class Rsqrt, class PM, class Bar> struct PanelRows {
         }
         bar();
     }
-    BATCHLAS_DLA_INLINE void update(int i, bool act) const {
+    BATCHLAS_DEVICE_INLINE void update(int i, bool act) const {
         if (row > c0 + i && act && row < n) {  // this operand order keeps PotrfLpanel's SASS
             const D lri = p(row, i);
             for (int c = i + 1; c < kb; ++c) {
@@ -393,7 +393,7 @@ template <class Rsqrt, class PM, class Bar> struct PanelRows {
 // by-value phase op the inliner takes after simplifying it alone (its column-0..3 reciprocal
 // shapes depend on it). Complex T: inlined at the call; out of line the by-value operands spill.
 template <int NB, class Rsqrt, int SG, class MA, class DV>
-BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info,
+BATCHLAS_DEVICE_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info,
                                       int info_base) {
     if constexpr (arith_t<arith::Fma, typename MA::value_type>::is_complex) {
         [[clang::always_inline]] potrf_detail::potf2_sg_slm_body<NB, Rsqrt>(ex, a, ib, diag, info, info_base);
@@ -405,7 +405,7 @@ BATCHLAS_DLA_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int i
 // potf2 of the panel P, one item per row (PanelRows above). `ok` is sticky: returns it, and the
 // first bad pivot sets *info := c0 + i + 1 (leader).
 template <class Rsqrt, class Ex, class PM, class Bar>
-BATCHLAS_DLA_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info,
+BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info,
                                           Bar&& bar) {
     using B = std::remove_reference_t<Bar>;
     const potrf_detail::PanelRows<Rsqrt, PM, B> dist{p, c0, kb, n, bar, ex.lid(), ex.leader(), info};
@@ -426,7 +426,7 @@ template <class T> struct HermLower {
     T* p;
     int ld;
     bool upper;
-    BATCHLAS_DLA_INLINE value_type operator()(int i, int c) const {
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i, int c) const {
         return upper ? arith_t<arith::Fma, value_type>::conj(p[c + static_cast<std::ptrdiff_t>(i) * ld]) : p[i + static_cast<std::ptrdiff_t>(c) * ld];
     }
 };
@@ -437,21 +437,21 @@ template <class T> using local_ptr_t = sycl::multi_ptr<T, sycl::access::address_
 template <class T> using SlmMat = Mat<T, Dyn, Dyn, Dyn, Mem::Local, Cyclic, local_ptr_t<T>, std::ptrdiff_t>;
 template <int M, int N, class T> using SlmTile = Mat<T, Ext<M>, Ext<N>, Ext<M>, Mem::Local, Cyclic, local_ptr_t<T>, int>;
 
-template <class T> BATCHLAS_DLA_INLINE local_ptr_t<T> local_ptr(T* p) {
+template <class T> BATCHLAS_DEVICE_INLINE local_ptr_t<T> local_ptr(T* p) {
     return sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(p);
 }
-template <class T> BATCHLAS_DLA_INLINE SlmMat<T> slm_mat(T* p, int m, int n, int ld) {
+template <class T> BATCHLAS_DEVICE_INLINE SlmMat<T> slm_mat(T* p, int m, int n, int ld) {
     return {local_ptr(p), Dyn{m}, Dyn{n}, Dyn{ld}};
 }
-template <int M, int N, class T> BATCHLAS_DLA_INLINE SlmTile<M, N, T> slm_tile(T* p) { return {local_ptr(p), {}, {}, {}}; }
+template <int M, int N, class T> BATCHLAS_DEVICE_INLINE SlmTile<M, N, T> slm_tile(T* p) { return {local_ptr(p), {}, {}, {}}; }
 
 // dst(i, c) := src(i, c) for c <= i < n, diagonal made real (Hermitian input), and 0 in every
 // other row i < dst.rows(): the whole dst.rows() x n block (pad rows too) is written once.
-template <class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_herm_lower(const Ex& ex, const MS& src, const MD& dst, int n) {
+template <class Ex, class MS, class MD> BATCHLAS_DEVICE_INLINE void lacpy_herm_lower(const Ex& ex, const MS& src, const MD& dst, int n) {
     using D = typename MD::value_type;
     using A = arith_t<arith::Fma, D>;
     for (int c = 0; c < n; ++c) {
-        for_each_owned(ex, dst.rows(), [&](int i) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, dst.rows(), [&](int i) BATCHLAS_DEVICE_BODY {
             D v{};
             if (i < n && i >= c) {
                 v = src(i, c);
@@ -464,10 +464,10 @@ template <class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_herm_lowe
 
 // dst := conj(src) zero-padded to dst's static NB x NB (src r x c, r, c <= NB); the NB*NB
 // elements are distributed flat (e -> (e mod NB, e / NB)).
-template <int NB, class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_conj_pad(const Ex& ex, const MS& src, const MD& dst) {
+template <int NB, class Ex, class MS, class MD> BATCHLAS_DEVICE_INLINE void lacpy_conj_pad(const Ex& ex, const MS& src, const MD& dst) {
     using D = typename MD::value_type;
     const int r = src.rows(), c = src.cols();
-    for_each_owned(ex, NB * NB, [&](int e) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, NB * NB, [&](int e) BATCHLAS_DEVICE_BODY {
         const int i = e % NB;
         const int kk = e / NB;
         D v{};
@@ -480,7 +480,7 @@ template <int NB, class Ex, class MS, class MD> BATCHLAS_DLA_INLINE void lacpy_c
 // barrier); L is kb x kb lower (kb <= NB) whose diagonal is read from the real vector `ldiag`.
 // Divides by the diagonal, as reference trsm does (potf2 scales by a reciprocal).
 template <Side S, Uplo UL, Transpose TR, int NB, class Ex, class ML, class DV, class MX>
-BATCHLAS_DLA_HELPER void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag, const MX& x, int kb) {
+BATCHLAS_DEVICE_HELPER void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag, const MX& x, int kb) {
     static_assert(S == Side::Right && UL == Uplo::Lower && TR == Transpose::ConjTrans,
                   "trsm_rowfrag: only Right / Lower / ConjTrans is implemented");
     using D = typename MX::value_type;
@@ -515,8 +515,8 @@ struct TriTilePrefix {
     const int* off;
     int Rt;
     int dR;
-    BATCHLAS_DLA_INLINE int count() const { return Rt * (Rt + 1) / 2; }
-    BATCHLAS_DLA_INLINE TileRC operator()(int t) const {
+    BATCHLAS_DEVICE_INLINE int count() const { return Rt * (Rt + 1) / 2; }
+    BATCHLAS_DEVICE_INLINE TileRC operator()(int t) const {
         int lo = 0, hi = Rt - 1;
         while (lo < hi) {
             const int mid = (lo + hi + 1) >> 1;
@@ -526,7 +526,7 @@ struct TriTilePrefix {
         return {lo + (t - (off[lo] - lo * dR)), lo};
     }
 };
-template <class Ex> BATCHLAS_DLA_INLINE void tri_tile_prefix_init(const Ex& ex, int* off, int Rt0) {
+template <class Ex> BATCHLAS_DEVICE_INLINE void tri_tile_prefix_init(const Ex& ex, int* off, int Rt0) {
     for (int c = ex.lid(); c <= Rt0; c += detail::size_of(ex)) off[c] = c * Rt0 - ((c * (c - 1)) >> 1);
 }
 
@@ -534,7 +534,7 @@ template <class Ex> BATCHLAS_DLA_INLINE void tri_tile_prefix_init(const Ex& ex, 
 // Cyclic over ex in map's order; diagonal tiles are trimmed element-wise (r >= c), so the strict
 // upper triangle is never written. Complex: the diagonal is stored real (LAPACK herk). No barrier.
 template <Uplo UL, int TS, class Ex, class AS, class MA, class BS, class MC, class Map>
-BATCHLAS_DLA_HELPER void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC& c, const Map& map) {
+BATCHLAS_DEVICE_HELPER void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC& c, const Map& map) {
     static_assert(UL == Uplo::Lower, "herk_tiles: only Uplo::Lower is implemented");
     static_assert(std::is_same_v<AS, NegOne> && std::is_same_v<BS, One>, "herk_tiles: alpha = NegOne, beta = One");
     using D = typename MC::value_type;
@@ -583,7 +583,7 @@ BATCHLAS_DLA_HELPER void herk_tiles(const Ex& ex, AS, const MA& a, BS, const MC&
 
 // f(i) := a(row, c0 + i) where live, i < kb and the element is in the lower triangle (row >= c0+i),
 // diagonal made real; 0 elsewhere (the strict upper triangle is never read).
-template <int NB, class MA, class F> BATCHLAS_DLA_INLINE void frag_load_row_herm_lower(F& f, const MA& a, int row, int c0, int kb, bool live) {
+template <int NB, class MA, class F> BATCHLAS_DEVICE_INLINE void frag_load_row_herm_lower(F& f, const MA& a, int row, int c0, int kb, bool live) {
     using D = typename MA::value_type;
     using A = arith_t<arith::Fma, D>;
     BATCHLAS_UNROLL_FULL
@@ -599,7 +599,7 @@ template <int NB, class MA, class F> BATCHLAS_DLA_INLINE void frag_load_row_herm
 
 // p(row, i) := g(i) for i < kb where row >= c0 + i (diagonal made real), 0 above the diagonal:
 // column i of p is global column c0 + i of a lower-stored Hermitian block.
-template <int NB, class PM, class G> BATCHLAS_DLA_INLINE void frag_store_row_herm_lower(const PM& p, int row, int c0, int kb, G&& g) {
+template <int NB, class PM, class G> BATCHLAS_DEVICE_INLINE void frag_store_row_herm_lower(const PM& p, int row, int c0, int kb, G&& g) {
     using D = typename PM::value_type;
     using A = arith_t<arith::Fma, D>;
     BATCHLAS_UNROLL_FULL
@@ -617,7 +617,7 @@ template <int NB, class PM, class G> BATCHLAS_DLA_INLINE void frag_store_row_her
 
 // y(i) += sum_kk B(i, kk) x(kk) for the NB x NB column-major tile B in local memory, read as
 // 16-byte vectors (every item reads the same column: a broadcast); each y(i) sums kk ascending.
-template <int NB, class D, class FY, class FX> BATCHLAS_DLA_INLINE void gemv_n_slm_bcast(FY& y, const FX& x, D* b) {
+template <int NB, class D, class FY, class FX> BATCHLAS_DEVICE_INLINE void gemv_n_slm_bcast(FY& y, const FX& x, D* b) {
     using V = sycl::vec<float, 4>;
     constexpr int VW = 16 / static_cast<int>(sizeof(D));
     static_assert((NB * sizeof(D)) % 16 == 0, "gemv_n_slm_bcast: a column must be whole 16-byte vectors");
@@ -752,10 +752,10 @@ template <class R> struct dev_scalar<std::complex<R>> {
     using type = Cx<R>;
 };
 template <class T> using dev_scalar_t = typename dev_scalar<std::remove_cv_t<T>>::type;
-template <class MA> BATCHLAS_DLA_INLINE dev_scalar_t<typename MA::value_type>* base_ptr(const MA& a) {
+template <class MA> BATCHLAS_DEVICE_INLINE dev_scalar_t<typename MA::value_type>* base_ptr(const MA& a) {
     return reinterpret_cast<dev_scalar_t<typename MA::value_type>*>(&a(0, 0));
 }
-template <class MA> BATCHLAS_DLA_INLINE int ld_of(const MA& a) { return static_cast<int>(a.ld); }
+template <class MA> BATCHLAS_DEVICE_INLINE int ld_of(const MA& a) { return static_cast<int>(a.ld); }
 
 // The register tier's order ceiling per type (complex<double>: a 32-row RowFrag spills).
 template <class T> inline constexpr int reg_max_n = (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32;
@@ -765,7 +765,7 @@ template <int N, bool E> inline constexpr bool is_reg_v<tier::Reg<N, E>> = true;
 template <class Tier> inline constexpr bool is_cta_v = false;
 template <int N, class Alg> inline constexpr bool is_cta_v<tier::Cta<N, Alg>> = true;
 
-template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DLA_INLINE int potrf_reg_op(const Ex& ex, const MA& a) {
+template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a) {
     using T = typename MA::value_type;
     static_assert(Ex::size == N, "potrf: tier::Reg<N> runs on a Partition<N> (one lane per row)");
     static_assert(N <= reg_max_n<T>, "potrf: tier::Reg<32> does not hold a complex<double> row; use Reg<16> or Cta");
@@ -778,7 +778,7 @@ template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DLA_INLINE int potrf_reg_
 }
 
 template <Uplo UL, int N, class Alg, int WG, int SG, class MA>
-BATCHLAS_DLA_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
     static_assert(SG == 32, "potrf: tier::Cta runs potf2 on one 32-wide sub-group");
     static_assert(std::is_same_v<Alg, alg::Default>, "potrf: tier::Cta has one algorithm");
     using D = dev_scalar_t<typename MA::value_type>;
@@ -830,7 +830,7 @@ template <class T, int NB> struct BlockedPlan {
 
 // The Workspace a Blocked tier was handed: a 16-byte aligned local slice, and a global one when
 // the plan has global bytes.
-BATCHLAS_DLA_INLINE bool blocked_ws_ok(const Workspace& ws, bool need_global) {
+BATCHLAS_DEVICE_INLINE bool blocked_ws_ok(const Workspace& ws, bool need_global) {
     const std::byte* const lb = ws.local.get_raw();
     if (lb == nullptr || reinterpret_cast<std::uintptr_t>(lb) % 16 != 0) return false;
     return !need_global || (ws.global != nullptr && reinterpret_cast<std::uintptr_t>(ws.global) % 16 == 0);
@@ -842,7 +842,7 @@ BATCHLAS_DLA_INLINE bool blocked_ws_ok(const Workspace& ws, bool need_global) {
 // schedule: U12 := U11^-H A12, A22 -= U12^H U12. A failing panel stops the loop after its write
 // back (LAPACK: no later column changes); info is local, so it is uniform.
 template <Uplo UL, int NB, class Alg, int WG, int SG, class MA>
-BATCHLAS_DLA_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
     using D = dev_scalar_t<T>;
     using R = real_t<D>;
@@ -935,7 +935,7 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrf_buffer_siz
 
 // A := L L^H (Lower) / U^H U (Upper) of the n x n Hermitian positive definite A (its UL triangle
 // read and overwritten, the other neither read nor written); returns info (see the file head).
-template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}) {
+template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potrf<UL>, T, Tier>;
     if constexpr (potrf_detail::is_reg_v<Tr>) {

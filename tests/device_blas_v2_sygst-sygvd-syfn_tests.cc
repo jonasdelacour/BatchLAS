@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // sygst_detail of lapack/sygst.hh (the ?sygs2 body's helpers) against host references; the core
-// ops they compose with (v2::load / store, arith::Fma) are covered by device_blas_v2_tests.
+// ops they compose with (device::load / store, arith::Fma) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): pack-padded, non-natural ld and inc, complex
 // data, every Uplo x {Trans, ConjTrans}, a NaN-poisoned unread triangle, pad and fragment tail,
 // a poisoned Im(diag) the ops must not read, compile-time and run-time extents (n not a multiple
@@ -25,14 +25,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace dla = batchlas::device::sygst_detail;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -118,7 +116,7 @@ template <class T> class DeviceBlasV2SygstTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -137,7 +135,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 }
 
 template <class NE> NE make_ne(int n) {
-    if constexpr (v2::static_extent_v<NE> > 0) return NE{};
+    if constexpr (device::static_extent_v<NE> > 0) return NE{};
     else return NE{n};
 }
 
@@ -148,7 +146,7 @@ template <class NE> NE make_ne(int n) {
 // padding NaN, Im(diag) 1e3.
 template <class T, Uplo UP, Transpose TR, bool Solve, class NE, int N>
 void check_tri(Dev& dev, int n, const char* what) {
-    constexpr int V = dla::pack16_elems<T>;
+    constexpr int V = device::sygst_detail::pack16_elems<T>;
     const int ld = (n + V - 1) / V * V + V, per_a = ld * n;
     const auto upper = UP == Uplo::Upper;
     auto ha = batched<T>(per_a, 11, [&](T* a) {
@@ -167,17 +165,17 @@ void check_tri(Dev& dev, int n, const char* what) {
     T* Y = dev.up(hy);
     dev.template run<32>(kBatch / 32, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id()) * 32 + static_cast<int>(it.get_local_linear_id());
-        const v2::Thread th{};
+        const device::Thread th{};
         const NE ne = make_ne<NE>(n);
-        const v2::Mat<const T, NE, NE, v2::Dyn> a{A + std::ptrdiff_t(b) * per_a, ne, ne, v2::Dyn{ld}};
-        v2::Frag<T, N> x;
-        v2::load(x, v2::vec(X + std::ptrdiff_t(b) * n, n), n);
+        const device::Mat<const T, NE, NE, device::Dyn> a{A + std::ptrdiff_t(b) * per_a, ne, ne, device::Dyn{ld}};
+        device::Frag<T, N> x;
+        device::load(x, device::vec(X + std::ptrdiff_t(b) * n, n), n);
 #pragma unroll
         for (int i = 0; i < N; ++i)
-            if (i >= n) x[i] = v2::Arith<T>::make(std::numeric_limits<real_of<T>>::quiet_NaN(), real_of<T>(0));
-        if constexpr (Solve) dla::trsv_packed<UP, TR>(th, a, x);
-        else dla::trmv_packed<UP, TR>(th, a, x);
-        v2::store(x, v2::vec(Y + std::ptrdiff_t(b) * 2 * n, n, 2), n);
+            if (i >= n) x[i] = device::Arith<T>::make(std::numeric_limits<real_of<T>>::quiet_NaN(), real_of<T>(0));
+        if constexpr (Solve) device::sygst_detail::trsv_packed<UP, TR>(th, a, x);
+        else device::sygst_detail::trmv_packed<UP, TR>(th, a, x);
+        device::store(x, device::vec(Y + std::ptrdiff_t(b) * 2 * n, n, 2), n);
     });
     const auto got = dev.down(Y, hy.size());
     EXPECT_EQ(twin_diffs(got, std::size_t(2) * n), 0) << what << ": items differ from their representative";
@@ -221,8 +219,8 @@ void check_tri(Dev& dev, int n, const char* what) {
 }
 
 template <class T, Uplo UP, Transpose TR, bool Solve> void check_tri_extents(Dev& dev, const char* what) {
-    check_tri<T, UP, TR, Solve, v2::Ext<16>, 16>(dev, 16, what);  // compile-time order, whole packs
-    check_tri<T, UP, TR, Solve, v2::Dyn, 32>(dev, 13, what);       // run-time order < N, partial last pack
+    check_tri<T, UP, TR, Solve, device::Ext<16>, 16>(dev, 16, what);  // compile-time order, whole packs
+    check_tri<T, UP, TR, Solve, device::Dyn, 32>(dev, 13, what);       // run-time order < N, partial last pack
 }
 
 TYPED_TEST(DeviceBlasV2SygstTest, TrsvPackedEveryUploAndTranspose) {
@@ -241,11 +239,11 @@ TYPED_TEST(DeviceBlasV2SygstTest, TrmvPackedEveryUploAndTranspose) {
     check_tri_extents<T, Uplo::Lower, Transpose::ConjTrans, false>(this->dev, "trmv L C");  // sygst itype 2, 3
 }
 
-// ---- herm / v2::conj_view through v2::load, and v2::lacpy on an ElemAt ------------------------
+// ---- herm / device::conj_view through device::load, and device::lacpy on an ElemAt ------------------------
 
 // S stores one triangle (the other 1e6, Im(diag) 1e3). Per column j: O1(:, j) = column j of the
 // Hermitian S, O2(:, j) = conj(row j of S), loaded into a Frag and stored; O3 = herm(S) by
-// v2::lacpy element by element. Rows n.. of O1, O2, O3 (ld n + 2) stay NaN.
+// device::lacpy element by element. Rows n.. of O1, O2, O3 (ld n + 2) stay NaN.
 template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
     const int lds = n + 3, ldo = n + 2, per_s = lds * n, per_o = ldo * n;
     auto hs = batched<T>(per_s, 21, [&](T* s) {
@@ -263,17 +261,17 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
     dev.template run<32>(kBatch / 32, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id()) * 32 + static_cast<int>(it.get_local_linear_id());
         const NE ne = make_ne<NE>(n);
-        const v2::Mat<const T, NE, NE, v2::Dyn> s{S + std::ptrdiff_t(b) * per_s, ne, ne, v2::Dyn{lds}};
-        const v2::Mat<T, NE, NE, v2::Dyn> o1{O1 + std::ptrdiff_t(b) * per_o, ne, ne, v2::Dyn{ldo}};
-        const v2::Mat<T, NE, NE, v2::Dyn> o2{O2 + std::ptrdiff_t(b) * per_o, ne, ne, v2::Dyn{ldo}};
-        const v2::Mat<T, NE, NE, v2::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, v2::Dyn{ldo}};
+        const device::Mat<const T, NE, NE, device::Dyn> s{S + std::ptrdiff_t(b) * per_s, ne, ne, device::Dyn{lds}};
+        const device::Mat<T, NE, NE, device::Dyn> o1{O1 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
+        const device::Mat<T, NE, NE, device::Dyn> o2{O2 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
+        const device::Mat<T, NE, NE, device::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
         for (int j = 0; j < n; ++j) {
-            v2::Frag<T, N> x{};
-            v2::load(x, dla::herm(s, ul).col(j), n);
-            v2::store(x, o1.col(j), n);
-            v2::load(x, v2::conj_view(s.row(j)), n);
-            v2::store(x, o2.col(j), n);
-            for (int i = 0; i < n; ++i) v2::lacpy(v2::ElemAt<true>{i, j}, dla::herm(s, ul), o3);
+            device::Frag<T, N> x{};
+            device::load(x, device::sygst_detail::herm(s, ul).col(j), n);
+            device::store(x, o1.col(j), n);
+            device::load(x, device::conj_view(s.row(j)), n);
+            device::store(x, o2.col(j), n);
+            for (int i = 0; i < n; ++i) device::lacpy(device::ElemAt<true>{i, j}, device::sygst_detail::herm(s, ul), o3);
         }
     });
     const auto g1 = dev.down(O1, ho.size()), g2 = dev.down(O2, ho.size()), g3 = dev.down(O3, ho.size());
@@ -298,8 +296,8 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
 TYPED_TEST(DeviceBlasV2SygstTest, HermAndConjViewsThroughLoadAndLacpyAt) {
     using T = TypeParam;
     for (Uplo ul : {Uplo::Lower, Uplo::Upper}) {
-        check_views<T, v2::Ext<8>, 8>(this->dev, ul, 8);
-        check_views<T, v2::Dyn, 16>(this->dev, ul, 11);
+        check_views<T, device::Ext<8>, 8>(this->dev, ul, 8);
+        check_views<T, device::Dyn, 16>(this->dev, ul, 11);
     }
 }
 
@@ -318,7 +316,7 @@ TYPED_TEST(DeviceBlasV2SygstTest, ForEachTileColCoversEveryTileElement) {
         int* cnt = this->dev.up(hc);
         this->dev.template run<128>(1, [=](sycl::nd_item<1> it) {
             const int lid = static_cast<int>(it.get_local_linear_id());
-            dla::for_each_tile_col(lid, 128, m, tiles, [&](int g, int row, int c) {
+            device::sygst_detail::for_each_tile_col(lid, 128, m, tiles, [&](int g, int row, int c) {
                 using Ref = sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>;
                 Ref(cnt[g * m * m + row + c * m]).fetch_add(1);

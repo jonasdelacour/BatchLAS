@@ -149,7 +149,6 @@ template <typename P> void row_swaps(Queue& ctx, const MV<P>& M, const std::vect
 // x <- H_0 ... H_{k-1} x for each column of X; reflector i below F's diagonal, tau a k x 1 batch.
 template <typename P> void apply_q(Queue& ctx, const MV<P>& X, const MV<P>& F, const MV<P>& tau, int k) {
     using D = Dev<P>;
-    namespace sd = sycl_device;
     D* x = dev_ptr(X);
     const D *f = dev_ptr(F), *t = dev_ptr(tau);
     const int m = X.rows(), cols = X.cols(), ldx = X.ld(), ldf = F.ld();
@@ -162,10 +161,10 @@ template <typename P> void apply_q(Queue& ctx, const MV<P>& X, const MV<P>& F, c
         const D* fi = f + it * sf;
         for (int i = k - 1; i >= 0; --i) {
             D s = v[i];
-            for (int r = i + 1; r < m; ++r) sd::fma_acc(s, sd::dev_conj(fi[static_cast<long long>(i) * ldf + r]), v[r]);
-            s = sd::dev_mul(s, t[it * st + i]);
-            v[i] = sd::dev_sub(v[i], s);
-            for (int r = i + 1; r < m; ++r) v[r] = sd::dev_sub(v[r], sd::dev_mul(s, fi[static_cast<long long>(i) * ldf + r]));
+            for (int r = i + 1; r < m; ++r) sycl_device::fma_acc(s, sycl_device::dev_conj(fi[static_cast<long long>(i) * ldf + r]), v[r]);
+            s = sycl_device::dev_mul(s, t[it * st + i]);
+            v[i] = sycl_device::dev_sub(v[i], s);
+            for (int r = i + 1; r < m; ++r) v[r] = sycl_device::dev_sub(v[r], sycl_device::dev_mul(s, fi[static_cast<long long>(i) * ldf + r]));
         }
     });
 }
@@ -175,7 +174,6 @@ template <typename P> double componentwise(Queue& ctx, const MV<P>& A, Transpose
                                         const MV<P>* C, std::optional<Uplo> tri, P alpha, P beta, bool c0_real_diag, bool den_only) {
     using D = Dev<P>;
     using R = typename sycl_device::DevMap<P>::real;
-    namespace sd = sycl_device;
     const int m = ta == Transpose::NoTrans ? A.rows() : A.cols(), kk = ta == Transpose::NoTrans ? A.cols() : A.rows();
     const int n = tb == Transpose::NoTrans ? B.cols() : B.rows(), g = A.batch_size();
     const std::size_t per = std::size_t(m) * n, total = per * g;
@@ -190,23 +188,23 @@ template <typename P> double componentwise(Queue& ctx, const MV<P>& A, Transpose
     if (total) ctx->parallel_for(sycl::range<1>(total), [=](sycl::id<1> id) {
         const int it = int(id[0] / per), i = int(id[0] % per % std::size_t(m)), j = int(id[0] % per / std::size_t(m));
         if ((lo && i < j) || (hi && i > j)) { o[id[0]] = 0; return; }
-        D acc = sd::dev_from_real<D>(R(0));
+        D acc = sycl_device::dev_from_real<D>(R(0));
         double magsum = 0;
         for (int l = 0; l < kk; ++l) {
             const D u = dev_op(a, lda, sa, it, ta, i, l), w = dev_op(b, ldb, sb, it, tb, l, j);
-            sd::fma_acc(acc, u, w);
-            magsum += double(sd::dev_abs(u)) * double(sd::dev_abs(w));
+            sycl_device::fma_acc(acc, u, w);
+            magsum += double(sycl_device::dev_abs(u)) * double(sycl_device::dev_abs(w));
         }
-        D want = sd::dev_mul(al, acc);
+        D want = sycl_device::dev_mul(al, acc);
         double den = aa * magsum;
         if (c0) {
             D z = c0[it * sc0 + static_cast<long long>(j) * ldc0 + i];
-            if (c0_real_diag && i == j) z = sd::dev_from_real<D>(sd::dev_real(z));
-            sd::fma_acc(want, be, z);
-            den += ab * double(sd::dev_abs(z));
+            if (c0_real_diag && i == j) z = sycl_device::dev_from_real<D>(sycl_device::dev_real(z));
+            sycl_device::fma_acc(want, be, z);
+            den += ab * double(sycl_device::dev_abs(z));
         }
         if (den_only) { o[id[0]] = den; return; }
-        const double num = double(sd::dev_abs(sd::dev_sub(c[it * sc + static_cast<long long>(j) * ldc + i], want)));
+        const double num = double(sycl_device::dev_abs(sycl_device::dev_sub(c[it * sc + static_cast<long long>(j) * ldc + i], want)));
         o[id[0]] = sycl::isnan(num) || sycl::isnan(den) ? kNaN : (den > 0 ? num / den : num);
     });
     ctx.wait();
@@ -245,15 +243,14 @@ Event MatrixView<T, MType>::product(const Queue& ctx, const MatrixView& A, Trans
     if (total == 0) return ctx.get_event();
     using D = Dev<T>;
     using R = typename sycl_device::DevMap<T>::real;
-    namespace sd = sycl_device;
     const D *a = reinterpret_cast<const D*>(A.data_ptr()), *b = reinterpret_cast<const D*>(B.data_ptr());
     D* c = reinterpret_cast<D*>(C.data_ptr());
     const int lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     const long long sa = A.batch_size() == 1 ? 0 : A.stride(), sb = B.batch_size() == 1 ? 0 : B.stride(), sc = C.stride();
     ctx->parallel_for(sycl::range<1>(total), [=](sycl::id<1> id) {
         const int it = int(id[0] / per), i = int(id[0] % per % std::size_t(m)), j = int(id[0] % per / std::size_t(m));
-        D acc = sd::dev_from_real<D>(R(0));
-        for (int l = 0; l < kk; ++l) sd::fma_acc(acc, dev_op(a, lda, sa, it, ta, i, l), dev_op(b, ldb, sb, it, tb, l, j));
+        D acc = sycl_device::dev_from_real<D>(R(0));
+        for (int l = 0; l < kk; ++l) sycl_device::fma_acc(acc, dev_op(a, lda, sa, it, ta, i, l), dev_op(b, ldb, sb, it, tb, l, j));
         c[it * sc + static_cast<long long>(j) * ldc + i] = acc;
     });
     return ctx.get_event();

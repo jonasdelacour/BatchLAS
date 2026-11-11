@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_level2_tests: level2.hh v2.2 additions (design A.2) against host references.
+// device_core_level2_tests: level2.hh additions (design A.2) against host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts, Im(diag) != 0 on
 // the Hermitian inputs (her2 must zero it on a triangle and keep it on Full); a non-natural
 // ld = m + 3 whose pad is poisoned (NaN) and must not be read or written; rectangular m != n
@@ -55,13 +55,13 @@ TYPED_TEST(DeviceCoreLevel2Test, GemvTeamPerRowColDotAndAlphaRight) {
     T* yc = d.up(y0t_h);
     T* yr = d.template alloc<T>(m, T(0));
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto A = dv::mat(a, m, n, ld);
-        dv::gemv<Transpose::NoTrans, dv::alg::TeamPerRow>(ex, alpha, A, dv::assume_published(dv::vec(xn, n)), beta, dv::vec(yn, m));
-        dv::gemv<Transpose::Trans, dv::alg::ColDot<4>>(ex, alpha, A, dv::assume_published(dv::vec(xt, m)), beta, dv::vec(yt, n));
-        dv::gemv<Transpose::ConjTrans, dv::alg::ColDot<4>>(ex, alpha, A, dv::assume_published(dv::vec(xt, m)), beta, dv::vec(yc, n));
-        dv::gemv<Transpose::NoTrans, void, dv::arith::Explicit, dv::epi::Sum, dv::alpha_side::Right>(
-            ex, alpha, A, dv::assume_published(dv::vec(xn, n)), dv::Zero{}, dv::vec(yr, m));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto A = batchlas::device::mat(a, m, n, ld);
+        batchlas::device::gemv<Transpose::NoTrans, batchlas::device::alg::TeamPerRow>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xn, n)), beta, batchlas::device::vec(yn, m));
+        batchlas::device::gemv<Transpose::Trans, batchlas::device::alg::ColDot<4>>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xt, m)), beta, batchlas::device::vec(yt, n));
+        batchlas::device::gemv<Transpose::ConjTrans, batchlas::device::alg::ColDot<4>>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xt, m)), beta, batchlas::device::vec(yc, n));
+        batchlas::device::gemv<Transpose::NoTrans, void, batchlas::device::arith::Explicit, batchlas::device::epi::Sum, batchlas::device::alpha_side::Right>(
+            ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xn, n)), batchlas::device::Zero{}, batchlas::device::vec(yr, m));
     });
     const auto gn = d.down(yn, m), gt = d.down(yt, n), gc = d.down(yc, n), gr = d.down(yr, m);
     for (int r = 0; r < m; ++r) {
@@ -93,14 +93,14 @@ TYPED_TEST(DeviceCoreLevel2Test, GerFlatAndRegisterRow) {
     T* x = d.up(x_h);
     T* y = d.up(y_h);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        dv::gerc<dv::alg::Flat>(ex, alpha, dv::assume_published(dv::vec(x, m)), dv::assume_published(dv::vec(y, n)), dv::mat(a, m, n, ld));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        batchlas::device::gerc<batchlas::device::alg::Flat>(ex, alpha, batchlas::device::assume_published(batchlas::device::vec(x, m)), batchlas::device::assume_published(batchlas::device::vec(y, n)), batchlas::device::mat(a, m, n, ld));
         const int r = ex.lid();
         if (r < m) {  // the register-row form: item r holds row r of B
-            dv::Frag<T, 16> row;
-            dv::load_row(row, dv::mat(b, m, n, ld), r, n);
-            dv::ger_row<true>(alpha, x[r], dv::vec(y, n), row, n);
-            dv::store_row(row, dv::mat(b, m, n, ld), r, n);
+            batchlas::device::Frag<T, 16> row;
+            batchlas::device::load_row(row, batchlas::device::mat(b, m, n, ld), r, n);
+            batchlas::device::ger_row<true>(alpha, x[r], batchlas::device::vec(y, n), row, n);
+            batchlas::device::store_row(row, batchlas::device::mat(b, m, n, ld), r, n);
         }
     });
     const auto ga = d.down(a, a_h.size()), gb = d.down(b, a_h.size());
@@ -128,11 +128,11 @@ TYPED_TEST(DeviceCoreLevel2Test, Her2OnATriangleAndOnTheFullSquare) {
     T* x = d.up(x_h);
     T* y = d.up(y_h);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto X = dv::assume_published(dv::vec(x, n));
-        const auto Y = dv::assume_published(dv::vec(y, n));
-        dv::her2<dv::Part::Lower>(ex, alpha, X, Y, dv::mat(al, n, n, ld));
-        dv::her2<dv::Part::Full, dv::alg::TeamPerRow>(ex, alpha, X, Y, dv::mat(af, n, n, ld));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto X = batchlas::device::assume_published(batchlas::device::vec(x, n));
+        const auto Y = batchlas::device::assume_published(batchlas::device::vec(y, n));
+        batchlas::device::her2<batchlas::device::Part::Lower>(ex, alpha, X, Y, batchlas::device::mat(al, n, n, ld));
+        batchlas::device::her2<batchlas::device::Part::Full, batchlas::device::alg::TeamPerRow>(ex, alpha, X, Y, batchlas::device::mat(af, n, n, ld));
     });
     const auto gl = d.down(al, a_h.size()), gf = d.down(af, a_h.size());
     for (int j = 0; j < n; ++j)
@@ -164,23 +164,23 @@ TYPED_TEST(DeviceCoreLevel2Test, TrsvDiagonalPoliciesAndLanePerRow) {
     T* outs = d.template alloc<T>(5 * n, T(0));
     T* b = d.up(b_h);
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const auto A = dv::mat(a, n, n, ld);
-        const dv::Partition<16> part{it.get_sub_group()};
+        const auto A = batchlas::device::mat(a, n, n, ld);
+        const batchlas::device::Partition<16> part{it.get_sub_group()};
         const int l = part.lid();
         T xl = l < n ? b[l] : T(0);
-        dv::trsv<Uplo::Lower, Transpose::NoTrans, dv::tri_diag::Div, dv::alg::LanePerRow>(part, A, xl, n);
+        batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Div, batchlas::device::alg::LanePerRow>(part, A, xl, n);
         if (it.get_local_linear_id() < 16 && l < n) outs[4 * n + l] = xl;
         if (it.get_local_linear_id() == 0) {
-            const dv::Thread th;
-            dv::Frag<T, N> f0, f1, f2, f3;
-            dv::load(f0, dv::vec(b, n), n);
+            const batchlas::device::Thread th;
+            batchlas::device::Frag<T, N> f0, f1, f2, f3;
+            batchlas::device::load(f0, batchlas::device::vec(b, n), n);
             f1 = f0;
             f2 = f0;
             f3 = f0;
-            dv::trsv<Uplo::Lower, Transpose::NoTrans, dv::tri_diag::Div>(th, A, f0, n);
-            dv::trsv<Uplo::Lower, Transpose::NoTrans, dv::tri_diag::Recip>(th, A, f1, n);
-            dv::trsv<Uplo::Lower, Transpose::ConjTrans, dv::tri_diag::Real>(th, A, f2, n);
-            dv::trsv<Uplo::Lower, Transpose::NoTrans, dv::tri_diag::Unit>(th, A, f3, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Div>(th, A, f0, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Recip>(th, A, f1, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::ConjTrans, batchlas::device::tri_diag::Real>(th, A, f2, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Unit>(th, A, f3, n);
             for (int i = 0; i < n; ++i) {
                 outs[i] = f0[i];
                 outs[n + i] = f1[i];
@@ -248,11 +248,11 @@ TYPED_TEST(DeviceCoreLevel2Test, DgmmBothSidesAndGbmv) {
     T* x = d.up(x_h);
     T* y = d.up(y0_h);
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        dv::dgmm<Side::Left>(ex, dv::vec(dl, m), dv::mat(bl, m, n, ld));
-        dv::dgmm<Side::Right>(ex, dv::vec(dr, n), dv::mat(br, m, n, ld));
-        dv::dgmm<Side::Right>(ex, dv::vec(dc, n), dv::mat(bl, m, n, ld), dv::mat(cc, m, n, ld));
-        dv::gbmv<KL, KU>(ex, alpha, dv::mat(ab, ldb, n, ldb), dv::assume_published(dv::vec(x, n)), beta, dv::vec(y, m));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        batchlas::device::dgmm<Side::Left>(ex, batchlas::device::vec(dl, m), batchlas::device::mat(bl, m, n, ld));
+        batchlas::device::dgmm<Side::Right>(ex, batchlas::device::vec(dr, n), batchlas::device::mat(br, m, n, ld));
+        batchlas::device::dgmm<Side::Right>(ex, batchlas::device::vec(dc, n), batchlas::device::mat(bl, m, n, ld), batchlas::device::mat(cc, m, n, ld));
+        batchlas::device::gbmv<KL, KU>(ex, alpha, batchlas::device::mat(ab, ldb, n, ldb), batchlas::device::assume_published(batchlas::device::vec(x, n)), beta, batchlas::device::vec(y, m));
     });
     const auto gl = d.down(bl, b_h.size()), gr = d.down(br, b_h.size()), gc = d.down(cc, b_h.size()), gy = d.down(y, m);
     for (int j = 0; j < n; ++j)

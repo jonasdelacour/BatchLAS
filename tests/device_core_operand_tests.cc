@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_operand_tests: operand.hh v2.2 additions (design A.2) against host references.
+// device_core_operand_tests: operand.hh additions (design A.2) against host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts and Im(diag) != 0
 // (load_row<Herm> must drop it); every unit_head form read at the head (whose stored value is
 // poisoned NaN and must never be returned), above and below it; lane-cyclic register vectors
@@ -32,11 +32,11 @@ TYPED_TEST(DeviceCoreOperandTest, UnitHeadFormsNeverReadTheHead) {
     constexpr int n = 9, head = 4;
     auto v_h = vals<T>(n, 1);
     v_h[head] = T(std::numeric_limits<R>::quiet_NaN());
-    const auto v = dv::vec(v_h.data(), n);
-    const auto qr = dv::unit_head<dv::refl::QR>(v, head);
-    const auto ql = dv::unit_head<dv::refl::QL>(v, head);
-    const auto keep = dv::unit_head<dv::refl::QL, dv::unit_fill::Keep>(v, head);
-    const auto old = dv::unit_head(v, head);
+    const auto v = batchlas::device::vec(v_h.data(), n);
+    const auto qr = batchlas::device::unit_head<batchlas::device::refl::QR>(v, head);
+    const auto ql = batchlas::device::unit_head<batchlas::device::refl::QL>(v, head);
+    const auto keep = batchlas::device::unit_head<batchlas::device::refl::QL, batchlas::device::unit_fill::Keep>(v, head);
+    const auto old = batchlas::device::unit_head(v, head);
     for (int i = 0; i < n; ++i) {
         const T one = T(1), zero = T(0);
         EXPECT_TRUE(same_bits(qr(i), i == head ? one : (i > head ? v_h[i] : zero))) << "QR " << i;
@@ -58,10 +58,10 @@ template <class T, int P, class MakeEx> void check_frag_moves(Dev& d, MakeEx mak
         const auto ex = make(it);
         const int g = static_cast<int>(it.get_local_linear_id());
         const int blk = g - g % P, lane = g % P;
-        dv::Frag<T, R> f, u, w;
+        batchlas::device::Frag<T, R> f, u, w;
         for (int r = 0; r < R; ++r) f[r] = x[(blk + lane) * R + r];  // block-local element lane + P r
-        for (int k = 0; k < len; ++k) bc[g * len + k] = dv::frag_bcast(ex, f, k);
-        dv::neighbor_exchange(ex, f, u, w);
+        for (int k = 0; k < len; ++k) bc[g * len + k] = batchlas::device::frag_bcast(ex, f, k);
+        batchlas::device::neighbor_exchange(ex, f, u, w);
         for (int r = 0; r < R; ++r) {
             up[g * R + r] = u[r];
             dn[g * R + r] = w[r];
@@ -82,8 +82,8 @@ template <class T, int P, class MakeEx> void check_frag_moves(Dev& d, MakeEx mak
 
 TYPED_TEST(DeviceCoreOperandTest, FragBcastAndNeighbourExchangeCrossRegisterBoundaries) {
     using T = TypeParam;
-    check_frag_moves<T, 8>(this->dev, [](sycl::nd_item<1> it) { return dv::Partition<8>{it.get_sub_group()}; });
-    check_frag_moves<T, 32>(this->dev, [](sycl::nd_item<1> it) { return dv::SubGroup<32>{it.get_sub_group()}; });
+    check_frag_moves<T, 8>(this->dev, [](sycl::nd_item<1> it) { return batchlas::device::Partition<8>{it.get_sub_group()}; });
+    check_frag_moves<T, 32>(this->dev, [](sycl::nd_item<1> it) { return batchlas::device::SubGroup<32>{it.get_sub_group()}; });
 }
 
 TYPED_TEST(DeviceCoreOperandTest, RowMovesOnATrianglePlusLaneVecAndStridedAndLocalViews) {
@@ -101,26 +101,26 @@ TYPED_TEST(DeviceCoreOperandTest, RowMovesOnATrianglePlusLaneVecAndStridedAndLoc
     T* lin = d.up(lane_h);
     d.template run<32>(1, 64 * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int r = static_cast<int>(it.get_local_linear_id());
-        const auto A = dv::mat(a, n, n, ld);
+        const auto A = batchlas::device::mat(a, n, n, ld);
         if (r < n) {
-            dv::Frag<T, N> f;
-            dv::load_row<dv::Part::Lower, true>(f, A, r, c0, n - c0);
+            batchlas::device::Frag<T, N> f;
+            batchlas::device::load_row<batchlas::device::Part::Lower, true>(f, A, r, c0, n - c0);
             for (int j = 0; j < N; ++j) out[r * N + j] = f[j];
-            dv::store_row<dv::Part::StrictUpper>(f, dv::mat(st, n, n, ld), r, c0, n - c0);
+            batchlas::device::store_row<batchlas::device::Part::StrictUpper>(f, batchlas::device::mat(st, n, n, ld), r, c0, n - c0);
         }
         // LaneVec window [3, 20) of a sub-group: reverse it and find its first negative real part
-        const dv::Partition<32> part{it.get_sub_group()};
+        const batchlas::device::Partition<32> part{it.get_sub_group()};
         T v = lin[r];
-        const auto x = dv::lane_vec(v, 3, 20);
-        dv::reverse(part, x, true);
+        const auto x = batchlas::device::lane_vec(v, 3, 20);
+        batchlas::device::reverse(part, x, true);
         lv[r] = v;
         // a 3 x 4 local tile through a decorated pointer; a row-major strided view of global
         T* slm = reinterpret_cast<T*>(lm);
         const auto p = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(slm);
-        const auto tile = dv::tile_local<3, 4>(p, 5, 1);
+        const auto tile = batchlas::device::tile_local<3, 4>(p, 5, 1);
         if (r < 12) tile(r % 3, r / 3) = lin[r];
         sycl::group_barrier(it.get_sub_group());
-        const auto rm = dv::mat_strided(tl, 3, 4, 4, 1);  // row major
+        const auto rm = batchlas::device::mat_strided(tl, 3, 4, 4, 1);  // row major
         if (r < 12) rm(r % 3, r / 3) = slm[1 + (r / 3) * 5 + r % 3];
     });
     const auto g = d.down(out, n * N), gs = d.down(st, a_h.size()), gl = d.down(lv, 32), gt = d.down(tl, 12);

@@ -65,7 +65,6 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace dv = batchlas::device;
 using batchlas::verify::Check;
 
 namespace {
@@ -195,17 +194,17 @@ protected:
         const VectorView<R> dvw(d.p, g.n, kBatch, 2, g.sd), evw(e.p, g.n - 1, kBatch, 1, g.se);
         const VectorView<R> tqv(tq.p, g.n, kBatch, 1, g.st), tpv(tp.p, g.n, kBatch, 1, g.st);
         const int n = g.n;
-        using CtaTiers = dv::tier::list<dv::tier::Cta<4>, dv::tier::Cta<8>, dv::tier::Cta<16>, dv::tier::Cta<32>>;
-        dv::with_tier<dv::routine::gebrd, R, CtaTiers>(q().get_device(), n, [&]<class Tier>(Tier) {
+        using CtaTiers = device::tier::list<device::tier::Cta<4>, device::tier::Cta<8>, device::tier::Cta<16>, device::tier::Cta<32>>;
+        device::with_tier<device::routine::gebrd, R, CtaTiers>(q().get_device(), n, [&]<class Tier>(Tier) {
             constexpr int P = Tier::n_max;
             constexpr int mats = kWg / P;
-            const std::size_t lb = dv::gebrd_buffer_size<Tier, R>(n).local_bytes;
+            const std::size_t lb = device::gebrd_buffer_size<Tier, R>(n).local_bytes;
             const int groups = (kBatch + mats - 1) / mats;
             q().submit([&](sycl::handler& h) {
                    sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(lb * (mats + 1)), h);
                    h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                        const auto sg = it.get_sub_group();
-                       const dv::SgpPartition<P> ex{sg};
+                       const device::SgpPartition<P> ex{sg};
                        const int part = static_cast<int>(sg.get_group_linear_id()) * (32 / P) +
                                         static_cast<int>(ex.part.get_group_linear_id());
                        const int b = static_cast<int>(it.get_group_linear_id()) * mats + part;
@@ -216,9 +215,9 @@ protected:
 #else
                        const std::size_t slice = 0;
 #endif
-                       const dv::Workspace w{slm.template get_multi_ptr<sycl::access::decorated::yes>() + slice, nullptr};
-                       (void)dv::gebrd<Tier>(ex, it, dv::item(akv, pb, n, n), dv::item(dvw, pb), dv::item(evw, pb), dv::item(tqv, pb),
-                                             dv::item(tpv, pb), w, live);
+                       const device::Workspace w{slm.template get_multi_ptr<sycl::access::decorated::yes>() + slice, nullptr};
+                       (void)device::gebrd<Tier>(ex, it, device::item(akv, pb, n, n), device::item(dvw, pb), device::item(evw, pb), device::item(tqv, pb),
+                                             device::item(tpv, pb), w, live);
                    });
                }).wait_and_throw();
         });
@@ -233,7 +232,7 @@ TYPED_TEST_SUITE(DeviceApiSvd, Types);
 TYPED_TEST(DeviceApiSvd, GebrdCtaDeviceCallIsBitIdenticalToTheHostRoute) {
     using T = typename TypeParam::ScalarType;
     constexpr Backend B = TestFixture::B;
-    if constexpr (dv::Arith<T>::is_complex) {
+    if constexpr (device::Arith<T>::is_complex) {
         GTEST_SKIP() << "gebrd tier::Cta is real only (the throw is covered by WithTierPicksTheCtaWidthPerN)";
     } else if constexpr (B == Backend::NETLIB) {
         GTEST_SKIP() << "the gebrd_cta host route has no CPU image (batchlas_extensions_cta is GPU-only)";
@@ -279,10 +278,10 @@ TYPED_TEST(DeviceApiSvd, GebrdCtaDeviceCallIsBitIdenticalToTheHostRoute) {
 // complex n, each filter alone removes a tier, nothing admits n = 0, and the throw names gebrd and n.
 TYPED_TEST(DeviceApiSvd, WithTierPicksTheCtaWidthPerN) {
     using T = typename TypeParam::ScalarType;
-    auto pick = [](const dv::DeviceLimits& lim, int n) {
+    auto pick = [](const device::DeviceLimits& lim, int n) {
         int got = 0;
         try {
-            dv::with_tier<dv::routine::gebrd, T>(lim, n, [&]<class Tier>(Tier) {
+            device::with_tier<device::routine::gebrd, T>(lim, n, [&]<class Tier>(Tier) {
                 if constexpr (requires { Tier::nb; }) got = 1000 + Tier::nb;
                 else got = Tier::n_max;
             });
@@ -292,15 +291,15 @@ TYPED_TEST(DeviceApiSvd, WithTierPicksTheCtaWidthPerN) {
         }
         return got;
     };
-    const dv::DeviceLimits big{std::size_t(100) << 10, {16, 32}, 1024, true};
-    if constexpr (dv::Arith<T>::is_complex) {
+    const device::DeviceLimits big{std::size_t(100) << 10, {16, 32}, 1024, true};
+    if constexpr (device::Arith<T>::is_complex) {
         EXPECT_EQ(pick(big, 4), 1016) << "tier::Cta is real only: complex takes tier::Blocked";
         EXPECT_EQ(pick(big, 0), -1);
     } else {
         const std::pair<int, int> want[] = {{1, 4}, {4, 4}, {5, 8}, {8, 8}, {9, 16}, {16, 16}, {17, 32}, {32, 32}, {33, 1016}, {0, -1}};
         for (const auto& [n, p] : want) EXPECT_EQ(pick(big, n), p) << "n " << n;
         constexpr std::size_t t32 = std::size_t(32) * 32 * sizeof(T);
-        static_assert(dv::gebrd_buffer_size<dv::tier::Blocked<16>, T>(17).local_bytes < t32 - 1);
+        static_assert(device::gebrd_buffer_size<device::tier::Blocked<16>, T>(17).local_bytes < t32 - 1);
         EXPECT_EQ(pick({t32, {32}, 1024, true}, 17), 32) << "a local memory of exactly one Cta<32> tile";
         EXPECT_EQ(pick({t32 - 1, {32}, 1024, true}, 17), 1016) << "one byte short of a Cta<32> tile: Blocked<16> fits";
         EXPECT_EQ(pick({t32 - 1, {32}, 1024, true}, 16), 16) << "Cta<16> still fits";
@@ -315,20 +314,20 @@ TYPED_TEST(DeviceApiSvd, WithTierPicksTheCtaWidthPerN) {
 // offset 0, rounded to the plan's alignment), the same for every n the tier admits.
 TYPED_TEST(DeviceApiSvd, UptoAndBufferSizeMatchThePlan) {
     using T = typename TypeParam::ScalarType;
-    using dv::tier::Cta;
-    if constexpr (!dv::Arith<T>::is_complex) {
-        static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::gebrd, T, dv::tier::upto<4>>, Cta<4>>);
-        static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::gebrd, T, dv::tier::upto<5>>, Cta<8>>);
-        static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::gebrd, T, dv::tier::upto<17>>, Cta<32>>);
-        static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::gebrd, T, Cta<16>>, Cta<16>>);
-        static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::gebrd, T, dv::tier::upto<33>>, dv::tier::Blocked<16>>);
+    using device::tier::Cta;
+    if constexpr (!device::Arith<T>::is_complex) {
+        static_assert(std::is_same_v<device::resolve_tier_t<device::routine::gebrd, T, device::tier::upto<4>>, Cta<4>>);
+        static_assert(std::is_same_v<device::resolve_tier_t<device::routine::gebrd, T, device::tier::upto<5>>, Cta<8>>);
+        static_assert(std::is_same_v<device::resolve_tier_t<device::routine::gebrd, T, device::tier::upto<17>>, Cta<32>>);
+        static_assert(std::is_same_v<device::resolve_tier_t<device::routine::gebrd, T, Cta<16>>, Cta<16>>);
+        static_assert(std::is_same_v<device::resolve_tier_t<device::routine::gebrd, T, device::tier::upto<33>>, device::tier::Blocked<16>>);
         auto check = [](auto tier) {
             using Tier = decltype(tier);
             constexpr int P = Tier::n_max;
-            constexpr auto plan = dv::gebrd_detail::cta_plan<P, T>();
+            constexpr auto plan = device::gebrd_detail::cta_plan<P, T>();
             static_assert(plan.tile.offset == 0 && plan.tile.count == std::size_t(P) * P);
             for (int n = 1; n <= P; ++n) {
-                const auto sz = dv::gebrd_buffer_size<Tier, T>(n);
+                const auto sz = device::gebrd_buffer_size<Tier, T>(n);
                 EXPECT_EQ(sz.local_bytes, std::size_t(P) * P * sizeof(T)) << "P " << P << " n " << n;
                 EXPECT_EQ(sz.global_bytes, 0u);
                 EXPECT_EQ(sz, plan.size);
@@ -343,16 +342,16 @@ TYPED_TEST(DeviceApiSvd, UptoAndBufferSizeMatchThePlan) {
 
 // ==== tier::Blocked: one matrix per work-group of 256 =========================================
 constexpr int kBwg = 256;
-using Blk = dv::tier::Blocked<16>;
+using Blk = device::tier::Blocked<16>;
 using LC = std::complex<long double>;
-template <class T> using real_of = typename dv::Arith<T>::real_t;
+template <class T> using real_of = typename device::Arith<T>::real_t;
 
 template <class T> LC lc(const T& v) {
-    if constexpr (dv::Arith<T>::is_complex) return LC(v.real(), v.imag());
+    if constexpr (device::Arith<T>::is_complex) return LC(v.real(), v.imag());
     else return LC(static_cast<long double>(v), 0.0L);
 }
 template <class T> T sval(std::uint64_t i) {
-    if constexpr (dv::Arith<T>::is_complex) return T(uval<real_of<T>>(i), uval<real_of<T>>(i ^ 0x9e3779b9u));
+    if constexpr (device::Arith<T>::is_complex) return T(uval<real_of<T>>(i), uval<real_of<T>>(i ^ 0x9e3779b9u));
     else return uval<T>(i);
 }
 
@@ -467,18 +466,18 @@ template <class R> std::vector<long double> bidiag_svals(const std::vector<R>& d
 }
 // The user-style launch: kBatch work-groups of kBwg, group b's global slice at b * global_bytes
 // (BLOCKED_BREAK: odd groups half a slice lower), f(ex, b, ws) per group.
-template <class F> void launch_blocked(sycl::queue& q, const dv::WorkspaceSize& sz, F f) {
+template <class F> void launch_blocked(sycl::queue& q, const device::WorkspaceSize& sz, F f) {
     std::byte* g = sycl::malloc_device<std::byte>(sz.global_bytes * kBatch + 64, q);
     q.submit([&](sycl::handler& h) {
          sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(std::max<std::size_t>(sz.local_bytes, 16)), h);
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * kBwg, kBwg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-             const dv::WorkGroup<kBwg, 32> ex{it};
+             const device::WorkGroup<kBwg, 32> ex{it};
              const int b = static_cast<int>(it.get_group_linear_id());
-             std::byte* gb = dv::global_slice(g, sz, b);
+             std::byte* gb = device::global_slice(g, sz, b);
 #ifdef BATCHLAS_DEVICE_API_SVD_BLOCKED_BREAK
              if (b & 1) gb -= sz.global_bytes / 32 * 16;
 #endif
-             f(ex, b, dv::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), gb});
+             f(ex, b, device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), gb});
          });
      }).wait_and_throw();
     sycl::free(g, q);
@@ -497,7 +496,7 @@ bool blocked_runs(const sycl::queue& q) {
 TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
     using T = typename TypeParam::ScalarType;
     constexpr Backend B = TestFixture::B;
-    if constexpr (dv::Arith<T>::is_complex) {
+    if constexpr (device::Arith<T>::is_complex) {
         GTEST_SKIP() << "bdsqr is real (gebrd hands it a real bidiagonal for every T)";
     } else {
         if (!blocked_runs(this->q())) GTEST_SKIP() << "tier::Blocked needs sub-group size 32 and a work-group of 256";
@@ -538,15 +537,15 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
             T* const vp = v2.p;
             std::int32_t* const ip = i2.p;
             const int ld = U.ld, st = U.stride;
-            launch_blocked(this->q(), dv::bdsqr_buffer_size<dv::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const dv::Workspace& w) {
+            launch_blocked(this->q(), device::bdsqr_buffer_size<device::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const device::Workspace& w) {
                 const std::ptrdiff_t q = b;
-                const int r = dv::bdsqr<dv::tier::Blocked<1>>(ex, dv::vec(dp + q * sd, n), dv::vec(ep + q * se, std::max(n - 1, 0)),
-                                                              dv::vec(sp + q * ss, n), w, dv::mat(up + q * st, n, n, ld),
-                                                              dv::mat(vp + q * st, n, n, ld));
+                const int r = device::bdsqr<device::tier::Blocked<1>>(ex, device::vec(dp + q * sd, n), device::vec(ep + q * se, std::max(n - 1, 0)),
+                                                              device::vec(sp + q * ss, n), w, device::mat(up + q * st, n, n, ld),
+                                                              device::mat(vp + q * st, n, n, ld));
                 if (ex.leader()) ip[b] = r;
             });
-            // The Thread executor from a one-item-per-matrix user kernel (v2 Mat operands, the
-            // default params) vs the host launcher (v1 item operands, host-formed params): s, U,
+            // The Thread executor from a one-item-per-matrix user kernel (device Mat operands, the
+            // default params) vs the host launcher (host-view item operands, host-formed params): s, U,
             // V^H and info BIT FOR BIT.
             DevBuf<T> d3(this->q(), d), e3(this->q(), e), u3(this->q(), U.h), v3(this->q(), Vh.h);
             DevBuf<T> s3(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
@@ -562,10 +561,10 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
                     .parallel_for(sycl::range<1>(std::size_t(kBatch)),
                                   [=](sycl::id<1> id) {
                                       const std::ptrdiff_t q = static_cast<std::ptrdiff_t>(id[0]);
-                                      iq[q] = dv::bdsqr<dv::tier::Blocked<1>>(dv::Thread{}, dv::vec(dq + q * sd, n),
-                                                                              dv::vec(eq + q * se, std::max(n - 1, 0)), dv::vec(sq + q * ss, n),
-                                                                              dv::Workspace{}, dv::mat(uq + q * st, n, n, ld),
-                                                                              dv::mat(vq + q * st, n, n, ld));
+                                      iq[q] = device::bdsqr<device::tier::Blocked<1>>(device::Thread{}, device::vec(dq + q * sd, n),
+                                                                              device::vec(eq + q * se, std::max(n - 1, 0)), device::vec(sq + q * ss, n),
+                                                                              device::Workspace{}, device::mat(uq + q * st, n, n, ld),
+                                                                              device::mat(vq + q * st, n, n, ld));
                                   })
                     .wait_and_throw();
             }
@@ -610,7 +609,7 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
 TYPED_TEST(DeviceApiSvd, BdsdcBlockedMatchesTheHostBdsdc) {
     using T = typename TypeParam::ScalarType;
     constexpr Backend B = TestFixture::B;
-    if constexpr (dv::Arith<T>::is_complex) {
+    if constexpr (device::Arith<T>::is_complex) {
         GTEST_SKIP() << "bdsdc is real (gebrd hands it a real bidiagonal for every T)";
     } else {
         if (!blocked_runs(this->q())) GTEST_SKIP() << "tier::Blocked needs sub-group size 32 and a work-group of 256";
@@ -648,12 +647,12 @@ TYPED_TEST(DeviceApiSvd, BdsdcBlockedMatchesTheHostBdsdc) {
             T* const vp = v2.p;
             std::int32_t* const ip = i2.p;
             const int ld = U.ld, st = U.stride;
-            launch_blocked(this->q(), dv::bdsdc_buffer_size<dv::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const dv::Workspace& w) {
+            launch_blocked(this->q(), device::bdsdc_buffer_size<device::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const device::Workspace& w) {
                 const std::ptrdiff_t q = b;
-                const auto dd = dv::vec(dp + q * sd, n), ee = dv::vec(ep + q * se, std::max(n - 1, 0));
-                const int r = dv::bdsdc(ex, dd, ee, dv::vec(sp + q * ss, n), w, dv::mat(up + q * st, n, n, ld), dv::mat(vp + q * st, n, n, ld));
-                const auto none = dv::mat(static_cast<T*>(nullptr), 0, 0, 1);
-                const int r3 = dv::bdsdc(ex, dd, ee, dv::vec(s3p + q * ss, n), w, none, none);
+                const auto dd = device::vec(dp + q * sd, n), ee = device::vec(ep + q * se, std::max(n - 1, 0));
+                const int r = device::bdsdc(ex, dd, ee, device::vec(sp + q * ss, n), w, device::mat(up + q * st, n, n, ld), device::mat(vp + q * st, n, n, ld));
+                const auto none = device::mat(static_cast<T*>(nullptr), 0, 0, 1);
+                const int r3 = device::bdsdc(ex, dd, ee, device::vec(s3p + q * ss, n), w, none, none);
                 if (ex.leader()) ip[b] = r | (r3 << 4);
             });
             const auto hi = i1.down(), gi = i2.down();
@@ -719,13 +718,13 @@ TYPED_TEST(DeviceApiSvd, GebrdBlockedAndOrmbrReconstructA) {
         T* const tqp = tq.p;
         T* const tpp = tp.p;
         const int lda = A.ld, sa = A.stride, ldq = Q.ld, sq = Q.stride, ldp = Ph.ld, sp = Ph.stride;
-        launch_blocked(this->q(), dv::gebrd_buffer_size<Blk, T>(m, n), [=](const auto& ex, int b, const dv::Workspace& w) {
+        launch_blocked(this->q(), device::gebrd_buffer_size<Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
             const std::ptrdiff_t q = b;
-            const auto Am = dv::mat(ap + q * sa, m, n, lda);
-            const auto tauq = dv::vec(tqp + q * st, n), taup = dv::vec(tpp + q * st, n);
-            (void)dv::gebrd<Blk>(ex, Am, dv::vec(dp + q * sd, n, 2), dv::vec(ep + q * se, std::max(n - 1, 0), 1), tauq, taup, w);
-            (void)dv::ormbr<'Q', Side::Left, Transpose::NoTrans>(ex, Am, tauq, dv::mat(qp + q * sq, m, m, ldq), dv::Workspace{});
-            (void)dv::ormbr<'P', Side::Right, Transpose::ConjTrans>(ex, Am, taup, dv::mat(pp + q * sp, n, n, ldp), dv::Workspace{});
+            const auto Am = device::mat(ap + q * sa, m, n, lda);
+            const auto tauq = device::vec(tqp + q * st, n), taup = device::vec(tpp + q * st, n);
+            (void)device::gebrd<Blk>(ex, Am, device::vec(dp + q * sd, n, 2), device::vec(ep + q * se, std::max(n - 1, 0), 1), tauq, taup, w);
+            (void)device::ormbr<'Q', Side::Left, Transpose::NoTrans>(ex, Am, tauq, device::mat(qp + q * sq, m, m, ldq), device::Workspace{});
+            (void)device::ormbr<'P', Side::Right, Transpose::ConjTrans>(ex, Am, taup, device::mat(pp + q * sp, n, n, ldp), device::Workspace{});
         });
         const Mats<T> ga = A.with(a.down()), gq = Q.with(qb.down()), gp = Ph.with(pb.down());
         const auto gd = d.down(), ge = e.down();
@@ -806,10 +805,10 @@ template <SvdVectors JU, SvdVectors JVT, Backend B, class T> void check_gesvd_bl
     R* const sp = s2.p;
     std::int32_t* const ip = i2.p;
     const int lda = A.ld, sa = A.stride, ldu = U.ld, su = U.stride, ldv = Vh.ld, sv = Vh.stride;
-    launch_blocked(dq, dv::gesvd_buffer_size<JU, JVT, Blk, T>(m, n), [=](const auto& ex, int b, const dv::Workspace& w) {
+    launch_blocked(dq, device::gesvd_buffer_size<JU, JVT, Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
         const std::ptrdiff_t q = b;
-        const int r = dv::gesvd<JU, JVT, Blk>(ex, dv::mat(ap + q * sa, m, n, lda), dv::vec(sp + q * ss, k), dv::mat(up + q * su, um, un, ldu),
-                                              dv::mat(vp + q * sv, vm, vn, ldv), w);
+        const int r = device::gesvd<JU, JVT, Blk>(ex, device::mat(ap + q * sa, m, n, lda), device::vec(sp + q * ss, k), device::mat(up + q * su, um, un, ldu),
+                                              device::mat(vp + q * sv, vm, vn, ldv), w);
         if (ex.leader()) ip[b] = r;
     });
     const auto hi = i1.down(), gi = i2.down();
@@ -870,20 +869,20 @@ TYPED_TEST(DeviceApiSvd, GesvdBlockedMatchesThePinnedHostBlockedRoute) {
 TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
     using T = typename TypeParam::ScalarType;
     constexpr auto All = SvdVectors::All;
-    using Ro = dv::routine::gesvd<All, All>;
-    auto pick = [](const dv::DeviceLimits& lim, int n) {
+    using Ro = device::routine::gesvd<All, All>;
+    auto pick = [](const device::DeviceLimits& lim, int n) {
         int got = 0;
         try {
-            dv::with_tier<Ro, T>(lim, n, [&]<class Tier>(Tier) { got = Tier::nb; });
+            device::with_tier<Ro, T>(lim, n, [&]<class Tier>(Tier) { got = Tier::nb; });
         } catch (const batchlas::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("gesvd: no device tier admits n=" + std::to_string(n)), std::string::npos) << e.what();
             got = -1;
         }
         return got;
     };
-    const std::size_t lb = dv::gesvd_buffer_size<All, All, Blk, T>(64, 64).local_bytes;
+    const std::size_t lb = device::gesvd_buffer_size<All, All, Blk, T>(64, 64).local_bytes;
     const int no_fp64 = std::is_same_v<real_of<T>, double> ? -1 : 16;
-    const dv::DeviceLimits big{std::size_t(100) << 10, {16, 32}, 1024, true};
+    const device::DeviceLimits big{std::size_t(100) << 10, {16, 32}, 1024, true};
     EXPECT_EQ(pick(big, 1), 16);
     EXPECT_EQ(pick(big, 1000), 16);
     EXPECT_EQ(pick(big, 0), -1);
@@ -892,11 +891,11 @@ TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
     EXPECT_EQ(pick({lb, {16}, 1024, true}, 64), -1) << "no sub-group size 32";
     EXPECT_EQ(pick({lb, {32}, std::size_t(kBwg) - 1, true}, 64), -1) << "a work-group ceiling below 256";
     EXPECT_EQ(pick({lb, {32}, 1024, false}, 64), no_fp64) << "no fp64";
-    static_assert(std::is_same_v<dv::resolve_tier_t<Ro, T, dv::tier::upto<4096>>, Blk>);
+    static_assert(std::is_same_v<device::resolve_tier_t<Ro, T, device::tier::upto<4096>>, Blk>);
     const std::pair<int, int> shapes[] = {{1, 1}, {16, 17}, {64, 33}, {33, 64}};
     for (const auto& [m, n] : shapes) {
-        const auto plan = dv::gesvd_detail::driver_plan<All, All, 16, T>(m, n);
-        EXPECT_EQ((dv::gesvd_buffer_size<All, All, Blk, T>(m, n)), plan.size) << m << " x " << n;
+        const auto plan = device::gesvd_detail::driver_plan<All, All, 16, T>(m, n);
+        EXPECT_EQ((device::gesvd_buffer_size<All, All, Blk, T>(m, n)), plan.size) << m << " x " << n;
         EXPECT_EQ(plan.size.local_bytes, lb) << "local bytes depend on neither m nor n";
         EXPECT_EQ(plan.at.count, m < n ? std::size_t(m) * n : 0u) << "A^H only on the m < n path";
         EXPECT_GE(plan.size.global_bytes, plan.bdsqr_global.offset + plan.bdsqr_global.count);

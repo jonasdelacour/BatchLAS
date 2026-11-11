@@ -45,10 +45,10 @@ namespace {
 
 constexpr int kWG = 256;
 constexpr int kPeriod = 3;
-using Blk32 = dv::tier::Blocked<32>;
-using Blk64 = dv::tier::Blocked<64>;
-static_assert(dv::tier_info<dv::routine::sy2sb<Uplo::Lower>, Blk32, float>::wg_size == kWG);
-static_assert(dv::tier_info<dv::routine::sy2sb<Uplo::Lower>, Blk64, std::complex<double>>::wg_size == kWG);
+using Blk32 = batchlas::device::tier::Blocked<32>;
+using Blk64 = batchlas::device::tier::Blocked<64>;
+static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower>, Blk32, float>::wg_size == kWG);
+static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower>, Blk64, std::complex<double>>::wg_size == kWG);
 
 template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
 template <class T> double re_of(T v) {
@@ -105,22 +105,22 @@ template <class T, class Tier> Out<T> run_device(Dev& dev, const Problem<T>& p, 
     const int ab_rows = g.ab_rows < 0 ? p.kd + 1 : g.ab_rows, tau_len = g.tau_len < 0 ? p.ntau : g.tau_len;
     const int a_cols = g.a_cols < 0 ? n : g.a_cols;
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const dv::WorkspaceSize sz = dv::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, std::max(kd, 0));
+    const batchlas::device::WorkspaceSize sz = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, std::max(kd, 0));
     T* a = dev.up(p.a);
     T* ab = dev.up(p.ab);
     T* tau = dev.up(p.tau);
     int* info = dev.up(std::vector<int>(p.items, 12345));
     std::byte* gws = dev.up(std::vector<std::byte>(std::max<std::size_t>(sz.global_bytes * p.items, 1), std::byte{0xff}));
     dev.template run<kWG>(p.items, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const dv::WorkGroup<kWG> ex{it};
+        const batchlas::device::WorkGroup<kWG> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
-        const dv::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
+        const batchlas::device::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                                    reinterpret_cast<std::byte*>(lm)),
-                               dv::global_slice(gws, sz, b)};
-        const int r = dv::sy2sb<Uplo::Lower, Tier>(ex, dv::mat(a + sa * b, n, a_cols, lda), dv::mat(ab + sab * b, ab_rows, n, ldab),
-                                                   dv::vec(tau + stau * b, tau_len), kd, ws);
+                               batchlas::device::global_slice(gws, sz, b)};
+        const int r = batchlas::device::sy2sb<Uplo::Lower, Tier>(ex, batchlas::device::mat(a + sa * b, n, a_cols, lda), batchlas::device::mat(ab + sab * b, ab_rows, n, ldab),
+                                                   batchlas::device::vec(tau + stau * b, tau_len), kd, ws);
         if (ex.leader()) info[b] = r;
-        ex.barrier(dv::Mem::Global);
+        ex.barrier(batchlas::device::Mem::Global);
         if (r != ex.bcast(r, 0)) info[b] = -999;  // not uniform
     });
     return {dev.down(a, p.a.size()), dev.down(ab, p.ab.size()), dev.down(tau, p.tau.size()), dev.down(info, std::size_t(p.items))};
@@ -321,8 +321,8 @@ template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem
     using R = real_of<T>;
     const int n = p.n, kd = p.kd, lda = p.lda, ldab = p.ldab, ntau = p.ntau, nm1 = std::max(0, n - 1);
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const dv::WorkspaceSize s1 = dv::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, kd);
-    const dv::WorkspaceSize s2 = dv::sb2st_buffer_size<Uplo::Lower, Blk32, T>(n, kd);
+    const batchlas::device::WorkspaceSize s1 = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, kd);
+    const batchlas::device::WorkspaceSize s2 = batchlas::device::sb2st_buffer_size<Uplo::Lower, Blk32, T>(n, kd);
     T* a = dev.up(p.a);
     T* ab = dev.up(p.ab);
     T* tau = dev.up(p.tau);
@@ -333,23 +333,23 @@ template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem
     std::byte* g1 = dev.up(std::vector<std::byte>(std::max<std::size_t>(s1.global_bytes * p.items, 1), std::byte{0xff}));
     std::byte* g2 = dev.up(std::vector<std::byte>(std::max<std::size_t>(s2.global_bytes * p.items, 1), std::byte{0xff}));
     dev.template run<kWG>(p.items, s1.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const dv::WorkGroup<kWG> ex{it};
+        const batchlas::device::WorkGroup<kWG> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto local = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
             reinterpret_cast<std::byte*>(lm));
-        const auto AB = dv::mat(ab + sab * b, kd + 1, n, ldab);
-        int r = dv::sy2sb<Uplo::Lower, Tier>(ex, dv::mat(a + sa * b, n, n, lda), AB, dv::vec(tau + stau * b, ntau), kd,
-                                             dv::Workspace{local, dv::global_slice(g1, s1, b)});
+        const auto AB = batchlas::device::mat(ab + sab * b, kd + 1, n, ldab);
+        int r = batchlas::device::sy2sb<Uplo::Lower, Tier>(ex, batchlas::device::mat(a + sa * b, n, n, lda), AB, batchlas::device::vec(tau + stau * b, ntau), kd,
+                                             batchlas::device::Workspace{local, batchlas::device::global_slice(g1, s1, b)});
         (void)d, (void)e, (void)tau2, (void)g2, (void)s2;  // the same captures in every image
         if constexpr (kChaseCompiled<T>) {
             if (ex.team() == 0) {  // one sub-group chases the band the work-group just produced
-                const dv::SgpPartition<32> pex{it.get_sub_group()};
-                r |= dv::sb2st<Uplo::Lower, Blk32>(pex, AB, dv::vec(d + std::ptrdiff_t(b) * n, n), dv::vec(e + std::ptrdiff_t(b) * nm1, nm1),
-                                                   dv::vec(tau2 + std::ptrdiff_t(b) * nm1, nm1), kd,
-                                                   dv::Workspace{local, dv::global_slice(g2, s2, b)});
+                const batchlas::device::SgpPartition<32> pex{it.get_sub_group()};
+                r |= batchlas::device::sb2st<Uplo::Lower, Blk32>(pex, AB, batchlas::device::vec(d + std::ptrdiff_t(b) * n, n), batchlas::device::vec(e + std::ptrdiff_t(b) * nm1, nm1),
+                                                   batchlas::device::vec(tau2 + std::ptrdiff_t(b) * nm1, nm1), kd,
+                                                   batchlas::device::Workspace{local, batchlas::device::global_slice(g2, s2, b)});
             }
         }
-        ex.barrier(dv::Mem::Global);
+        ex.barrier(batchlas::device::Mem::Global);
         if (ex.leader()) info[b] = r;
     });
     return {dev.down(d, std::size_t(p.items) * n), dev.down(e, std::size_t(p.items) * nm1), dev.down(info, std::size_t(p.items))};
@@ -411,19 +411,19 @@ TYPED_TEST(DeviceApiSy2sbTest, FusedTwoStageMatchesTheInputAndTheHostPipeline) {
 
 // ---- host side: the workspace plan and with_tier ------------------------------------------
 
-using Lower16 = dv::routine::sy2sb<Uplo::Lower, 16>;
-constexpr auto kLay = dv::sy2sb_detail::panel_layout<Blk32, std::complex<double>>(37, 5);
-static_assert(kLay.smem.space == dv::ws::Space::Local && kLay.smem.count == std::size_t(dv::l3::smem_elems<dv::sy2sb_detail::cfg_t<Blk32, std::complex<double>>>()));
+using Lower16 = batchlas::device::routine::sy2sb<Uplo::Lower, 16>;
+constexpr auto kLay = batchlas::device::sy2sb_detail::panel_layout<Blk32, std::complex<double>>(37, 5);
+static_assert(kLay.smem.space == batchlas::device::ws::Space::Local && kLay.smem.count == std::size_t(batchlas::device::l3::smem_elems<batchlas::device::sy2sb_detail::cfg_t<Blk32, std::complex<double>>>()));
 static_assert(kLay.size.local_bytes >= kLay.smem.count * sizeof(std::complex<double>));
 static_assert(kLay.taup.offset == 0 && kLay.v.offset % 16 == 0 && kLay.v.offset >= 5 * sizeof(std::complex<double>));
 static_assert(kLay.m2.offset + 5 * 5 * sizeof(std::complex<double>) <= kLay.size.global_bytes && kLay.v.count == 32 * 5);
-static_assert(dv::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(8, 8) == dv::WorkspaceSize{});
-static_assert(dv::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(9, 0) == dv::WorkspaceSize{});
+static_assert(batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(8, 8) == batchlas::device::WorkspaceSize{});
+static_assert(batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(9, 0) == batchlas::device::WorkspaceSize{});
 
-template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Lower16, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
+        batchlas::device::with_tier<Lower16, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string("throw:") + e.what();
     }
@@ -432,10 +432,10 @@ template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
 
 TEST(DeviceApiSy2sbHost, WithTierFiltersAndBufferSizeIsTheCarve) {
     const int n = 100;
-    const dv::WorkspaceSize need = dv::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(n, 16);
-    EXPECT_EQ(need, (dv::tier_info<Lower16, Blk32, float>::buffer_size(n)));
-    EXPECT_EQ(need, (dv::sy2sb_detail::panel_layout<Blk32, float>(n, 16).size));
-    dv::DeviceLimits lim{need.local_bytes, {32}, 1024, true};
+    const batchlas::device::WorkspaceSize need = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(n, 16);
+    EXPECT_EQ(need, (batchlas::device::tier_info<Lower16, Blk32, float>::buffer_size(n)));
+    EXPECT_EQ(need, (batchlas::device::sy2sb_detail::panel_layout<Blk32, float>(n, 16).size));
+    batchlas::device::DeviceLimits lim{need.local_bytes, {32}, 1024, true};
     EXPECT_EQ(pick<float>(lim, n), "blocked32");
     lim.local_mem_bytes = need.local_bytes - 1;
     EXPECT_EQ(pick<float>(lim, n), "throw:sy2sb: no device tier admits n=100");

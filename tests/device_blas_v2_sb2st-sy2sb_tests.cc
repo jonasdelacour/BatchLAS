@@ -25,14 +25,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace sbd = batchlas::device::sb2st_detail;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -103,7 +101,7 @@ struct Dev {
 template <class T> class DeviceBlasV2BandTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -129,7 +127,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 }
 template <class T> T nan_t() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
 
-// Host view of lower band storage s (ld, kd): the same mirror / zero rule as sbd::HermBandLower.
+// Host view of lower band storage s (ld, kd): the same mirror / zero rule as device::sb2st_detail::HermBandLower.
 template <class T> struct HostBand {
     const T* s;
     int ld, kd;
@@ -165,24 +163,24 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
     T* p = dev.up(hp);
     dev.template run<WG>(kBatch, 2 * m * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
-        const v2::Teams<WG, 8, O> rows{it};
+        const device::WorkGroup<WG> ex{it};
+        const device::Teams<WG, 8, O> rows{it};
         T* vl = reinterpret_cast<T*>(lm);
         T* wl = vl + m;
-        const sbd::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
-        v2::for_each_owned(ex, m, [&](int i) {
+        const device::sb2st_detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        device::for_each_owned(ex, m, [&](int i) {
             vl[i] = x[std::ptrdiff_t(b) * m + i];
             wl[i] = T(std::numeric_limits<real_of<T>>::quiet_NaN());
         });
-        v2::sync(ex, v2::Mem::Global);
+        device::sync(ex, device::Mem::Global);
         const auto W = A.sub(a, a, m, m);
-        const auto v = v2::vec<v2::Mem::Local>(vl, m);
-        const auto w = v2::vec<v2::Mem::Local>(wl, m);
-        sbd::hemv_band<Uplo::Lower>(rows, v2::One{}, W, v2::assume_published(v), v2::Zero{}, w);
-        v2::sync(ex, v2::Mem::Global);
-        v2::for_each_owned(ex, m, [&](int i) { p[std::ptrdiff_t(b) * m + i] = wl[i]; });
-        v2::her2<v2::Part::Lower, v2::alg::TeamPerRow, v2::arith::Native>(rows, v2::NegOne{}, v2::assume_published(w),
-                                                                          v2::assume_published(v), W);
+        const auto v = device::vec<device::Mem::Local>(vl, m);
+        const auto w = device::vec<device::Mem::Local>(wl, m);
+        device::sb2st_detail::hemv_band<Uplo::Lower>(rows, device::One{}, W, device::assume_published(v), device::Zero{}, w);
+        device::sync(ex, device::Mem::Global);
+        device::for_each_owned(ex, m, [&](int i) { p[std::ptrdiff_t(b) * m + i] = wl[i]; });
+        device::her2<device::Part::Lower, device::alg::TeamPerRow, device::arith::Native>(rows, device::NegOne{}, device::assume_published(w),
+                                                                          device::assume_published(v), W);
     });
     const auto gs = dev.down(s, hs.size());
     const auto gp = dev.down(p, hp.size());
@@ -220,9 +218,9 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
     EXPECT_VERIFY(T, Check::blas, 2 * m, worst);
 }
 
-TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowTeamsUp) { run_band_hemv_her2<TypeParam, 256, v2::bfly::Asc>(this->dev); }
-TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowTeamsDown) { run_band_hemv_her2<TypeParam, 256, v2::bfly::Down>(this->dev); }
-TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowCeilingLaunch) { run_band_hemv_her2<TypeParam, 1024, v2::bfly::Asc>(this->dev); }
+TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowTeamsUp) { run_band_hemv_her2<TypeParam, 256, device::bfly::Asc>(this->dev); }
+TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowTeamsDown) { run_band_hemv_her2<TypeParam, 256, device::bfly::Down>(this->dev); }
+TYPED_TEST(DeviceBlasV2BandTest, HemvHer2OnBandWindowCeilingLaunch) { run_band_hemv_her2<TypeParam, 1024, device::bfly::Asc>(this->dev); }
 
 // ---- larf on a band, an SLM row-major tile and a global matrix ----------------------------------
 
@@ -266,16 +264,16 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfOnBandWindows) {
     T* vg = this->dev.up(hv);
     this->dev.template run<256>(kBatch, (nc + mr1) * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<256> ex{it};
-        const v2::Teams<256, 8, v2::bfly::Asc> rows{it};
+        const device::WorkGroup<256> ex{it};
+        const device::Teams<256, 8, device::bfly::Asc> rows{it};
         T* vl = reinterpret_cast<T*>(lm);
-        v2::copy(ex, v2::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), v2::vec(vl, nc + mr1));
-        v2::sync(ex, v2::Mem::Global);
-        const sbd::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
-        sbd::larf_right(rows, tau, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
-        v2::sync(ex, v2::Mem::Global);
-        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleW, v2::loop::Lockstep>(
-            rows, tau1, v2::assume_published(v2::vec<v2::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
+        device::copy(ex, device::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), device::vec(vl, nc + mr1));
+        device::sync(ex, device::Mem::Global);
+        const device::sb2st_detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        device::sb2st_detail::larf_right(rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
+        device::sync(ex, device::Mem::Global);
+        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleW, device::loop::Lockstep>(
+            rows, tau1, device::assume_published(device::vec<device::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
     });
     const auto gs = this->dev.down(s, hs.size());
     EXPECT_EQ(bitdiff_vs_rep(gs, ld * n), 0) << "items differ from their representative";
@@ -342,36 +340,36 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfColumnTeamsOnTilesAndGlobal) {
     T* v3 = this->dev.up(hv3);
     this->dev.template run<32>(kBatch, rows * C * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<32> ex{it};
-        const sbd::StridedTeams<C> cols{it};
+        const device::WorkGroup<32> ex{it};
+        const device::sb2st_detail::StridedTeams<C> cols{it};
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z + std::ptrdiff_t(b) * rows * C;
-        v2::for_each_owned(ex, rows * C, [&](int i) { zl[i] = zb[i]; });
-        v2::sync(cols);
-        const auto V = v2::mat(vg + std::ptrdiff_t(b) * ldv * S2, L, S2, ldv);
-        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-            cols, tau, v2::assume_published(V.col(1)), v2::StridedMat<T, v2::Ext<C>, v2::Unit>{zl + s * C, L, C});
-        v2::sync(cols);
-        v2::for_each_owned(ex, rows * C, [&](int i) { zb[i] = zl[i]; });
+        device::for_each_owned(ex, rows * C, [&](int i) { zl[i] = zb[i]; });
+        device::sync(cols);
+        const auto V = device::mat(vg + std::ptrdiff_t(b) * ldv * S2, L, S2, ldv);
+        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+            cols, tau, device::assume_published(V.col(1)), device::StridedMat<T, device::Ext<C>, device::Unit>{zl + s * C, L, C});
+        device::sync(cols);
+        device::for_each_owned(ex, rows * C, [&](int i) { zb[i] = zl[i]; });
         // (3) on global memory, the same work-group
-        const auto Z3 = v2::mat(z3 + std::ptrdiff_t(b) * ldz * ncol3, rows, ncol3, ldz);
-        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-            ex, tau, v2::assume_published(v2::vec(v3 + std::ptrdiff_t(b) * L3, L3)), Z3.sub(s3, 0, L3, ncol3));
+        const auto Z3 = device::mat(z3 + std::ptrdiff_t(b) * ldz * ncol3, rows, ncol3, ldz);
+        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+            ex, tau, device::assume_published(device::vec(v3 + std::ptrdiff_t(b) * L3, L3)), Z3.sub(s3, 0, L3, ncol3));
     });
     this->dev.template run<128>(kBatch, rows * C2 * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<128> ex{it};
-        const sbd::StridedTeams<C2, 128> cols{it};
+        const device::WorkGroup<128> ex{it};
+        const device::sb2st_detail::StridedTeams<C2, 128> cols{it};
         const int g = static_cast<int>(it.get_local_linear_id()) / 32;
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z2 + std::ptrdiff_t(b) * rows * C2;
-        v2::for_each_owned(ex, rows * C2, [&](int i) { zl[i] = zb[i]; });
-        v2::sync(ex, v2::Mem::Global);
-        const auto V = v2::mat(vg + std::ptrdiff_t(b) * ldv * S2, L2, S2, ldv);
-        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-            cols, tau, v2::assume_published(V.col(g)), v2::StridedMat<T, v2::Ext<C2>, v2::Unit>{zl + g * 10 * C2, L2, C2});
-        v2::sync(ex, v2::Mem::Global);
-        v2::for_each_owned(ex, rows * C2, [&](int i) { zb[i] = zl[i]; });
+        device::for_each_owned(ex, rows * C2, [&](int i) { zl[i] = zb[i]; });
+        device::sync(ex, device::Mem::Global);
+        const auto V = device::mat(vg + std::ptrdiff_t(b) * ldv * S2, L2, S2, ldv);
+        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+            cols, tau, device::assume_published(V.col(g)), device::StridedMat<T, device::Ext<C2>, device::Unit>{zl + g * 10 * C2, L2, C2});
+        device::sync(ex, device::Mem::Global);
+        device::for_each_owned(ex, rows * C2, [&](int i) { zb[i] = zl[i]; });
     });
     const auto gz = this->dev.down(z, hz.size());
     const auto gz2 = this->dev.down(z2, hz2.size());
@@ -432,12 +430,12 @@ template <class T> struct TestRot {
     static void rot_pair(T& x, T& y, R c, const T& s) {
         const T xt = x, yt = y;
         x = T(c) * xt + s * yt;
-        y = T(c) * yt - v2::arith_t<v2::arith::Native, T>::conj(s) * xt;
+        y = T(c) * yt - device::arith_t<device::arith::Native, T>::conj(s) * xt;
     }
     static void lar2v_pair(T& x, T& y, T& z, R c, const T& s) {
         const T xo = x, yo = y, zo = z;
         x = T(c) * xo + s * zo;
-        y = T(c) * yo - v2::arith_t<v2::arith::Native, T>::conj(s) * zo;
+        y = T(c) * yo - device::arith_t<device::arith::Native, T>::conj(s) * zo;
         z = zo * T(c) + xo - yo;
     }
 };
@@ -467,19 +465,19 @@ TYPED_TEST(DeviceBlasV2BandTest, PlaneRotationsDistributeOverStrides) {
     const R c1 = R(0.28);
     this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const std::ptrdiff_t o = std::ptrdiff_t(it.get_group_linear_id()) * per;
-        const v2::WorkGroup<WG> ex{it};
+        const device::WorkGroup<WG> ex{it};
         // largv: x (stride 7) <- r, y (stride 5) <- s, c (stride 3) <- c
-        v2::largv<TestRot<T>>(ex, v2::vec(x + o, nr, ix), v2::vec(y + o, nr, iy), v2::vec(c + o, nr, ic));
-        v2::sync(ex, v2::Mem::Global);
+        device::largv<TestRot<T>>(ex, device::vec(x + o, nr, ix), device::vec(y + o, nr, iy), device::vec(c + o, nr, ic));
+        device::sync(ex, device::Mem::Global);
         // lartv with the c just written and an independent s (stride 2) on fresh x2 / y2
-        v2::lartv<TestRot<T>>(ex, v2::vec(x2 + o, nr, ix), v2::vec(y2 + o, nr, iy), v2::vec(c + o, nr, ic), v2::vec(sv + o, nr, is));
-        v2::lar2v<TestRot<T>>(ex, v2::vec(x4 + o, nr, ix), v2::vec(y4 + o, nr, iy), v2::vec(z4 + o, nr), v2::vec(c + o, nr, ic),
-                              v2::vec(sv + o, nr, is));
-        sbd::rot_by<TestRot<T>>(ex, v2::vec(x3 + o, nrot, ix), v2::vec(y3 + o, nrot, iy), c1, s1);
+        device::lartv<TestRot<T>>(ex, device::vec(x2 + o, nr, ix), device::vec(y2 + o, nr, iy), device::vec(c + o, nr, ic), device::vec(sv + o, nr, is));
+        device::lar2v<TestRot<T>>(ex, device::vec(x4 + o, nr, ix), device::vec(y4 + o, nr, iy), device::vec(z4 + o, nr), device::vec(c + o, nr, ic),
+                              device::vec(sv + o, nr, is));
+        device::sb2st_detail::rot_by<TestRot<T>>(ex, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy), c1, s1);
         // the Thread pass reaches x3 / y3 through fn_vec index maps returning references
-        const auto xs = sbd::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
-        const auto ys = sbd::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
-        if (ex.leader()) sbd::rot_by<TestRot<T>>(v2::Thread{}, xs, ys, c1, s1);
+        const auto xs = device::sb2st_detail::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
+        const auto ys = device::sb2st_detail::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
+        if (ex.leader()) device::sb2st_detail::rot_by<TestRot<T>>(device::Thread{}, xs, ys, c1, s1);
     });
     const auto gx = this->dev.down(x, hx.size()), gy = this->dev.down(y, hy.size()), gx2 = this->dev.down(x2, hx.size()),
                gy2 = this->dev.down(y2, hy.size()), gx3 = this->dev.down(x3, hx.size()), gy3 = this->dev.down(y3, hy.size()),

@@ -12,21 +12,21 @@
 #include <batchlas/blas/enums.hh>
 
 // Inline policy (synthesis 2.9): an op takes the attribute of the code it replaces.
-//   BATCHLAS_DLA_INLINE  always_inline: leaf arithmetic, accessors, ops replacing expression text
-//   BATCHLAS_DLA_HELPER  plain inline: ops replacing a plain-inline hand helper (phases,
+//   BATCHLAS_DEVICE_INLINE  always_inline: leaf arithmetic, accessors, ops replacing expression text
+//   BATCHLAS_DEVICE_HELPER  plain inline: ops replacing a plain-inline hand helper (phases,
 //                        reductions, bcast, epilogues); LLVM unrolls the caller's loop while
 //                        the call is still there, as it did for the hand helper
-//   BATCHLAS_DLA_BODY    on a lambda passed to a loop op, `[&](int i) BATCHLAS_DLA_BODY {...}`:
+//   BATCHLAS_DEVICE_BODY    on a lambda passed to a loop op, `[&](int i) BATCHLAS_DEVICE_BODY {...}`:
 //                        a lambda body is otherwise optimised alone (LFTR, IV canonicalisation)
 // Each is overridable (-D) for a backend whose inliner needs another spelling.
-#ifndef BATCHLAS_DLA_INLINE
-#define BATCHLAS_DLA_INLINE __attribute__((always_inline)) inline
+#ifndef BATCHLAS_DEVICE_INLINE
+#define BATCHLAS_DEVICE_INLINE __attribute__((always_inline)) inline
 #endif
-#ifndef BATCHLAS_DLA_HELPER
-#define BATCHLAS_DLA_HELPER inline
+#ifndef BATCHLAS_DEVICE_HELPER
+#define BATCHLAS_DEVICE_HELPER inline
 #endif
-#ifndef BATCHLAS_DLA_BODY
-#define BATCHLAS_DLA_BODY __attribute__((always_inline))
+#ifndef BATCHLAS_DEVICE_BODY
+#define BATCHLAS_DEVICE_BODY __attribute__((always_inline))
 #endif
 
 namespace batchlas::device {
@@ -51,11 +51,11 @@ struct Range {
 
 template <int N> struct Ext {
     static constexpr int value = N;
-    BATCHLAS_DLA_INLINE constexpr operator int() const { return N; }
+    BATCHLAS_DEVICE_INLINE constexpr operator int() const { return N; }
 };
 struct Dyn {
     int value;
-    BATCHLAS_DLA_INLINE constexpr operator int() const { return value; }
+    BATCHLAS_DEVICE_INLINE constexpr operator int() const { return value; }
 };
 using Unit = Ext<1>;
 
@@ -84,7 +84,7 @@ template <> inline constexpr bool is_scalar_tag_v<NegOne> = true;
 template <class T> inline constexpr bool is_scalar_tag_v<Scalar<T>> = true;
 
 // A plain value becomes Scalar<T>; a tag passes through.
-template <class S> BATCHLAS_DLA_INLINE constexpr auto as_tag(S s) {
+template <class S> BATCHLAS_DEVICE_INLINE constexpr auto as_tag(S s) {
     if constexpr (is_scalar_tag_v<S>) return s;
     else return Scalar<S>{s};
 }
@@ -94,7 +94,7 @@ namespace alg {
 struct RowOwner {};             // gemv N: one work-item per output row, serial dot, no reduction
 struct SgPerCol {};             // gemv T/C: one team (sub-group) per output column, shuffles only
 struct Serial {};               // Thread executor
-struct GroupReducePerOutput {}; // v1's generic algorithm: one group reduction per output; opt-in only
+struct GroupReducePerOutput {}; // the legacy generic algorithm: one group reduction per output; opt-in only
 struct RowOwnerSplit {};        // symv/hemv lower: the latrd split loop (row part, then column part)
 struct RowOwnerSplitStoredDiag {};  // hemv RowOwnerSplit reading A(r,r) as stored (caller: Im == 0)
 struct Cyclic {};               // ger: column loop outside, owned rows inside; no % or /
@@ -104,7 +104,7 @@ struct Blue {};                 // nrm2: dnrm2.f90's three accumulators, one exc
 struct Fused {};                // sumsq: re^2 and im^2 contract into the running sum
 struct Unfused {};              // sumsq: the running sum adds abs2(x), its own rounding
 // for_each_owned_2d: how an item walks the column-major m x n grid e = lid + s * size.
-struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: v1 index math)
+struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: the legacy index math)
 struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
 struct Stepped {};              // one division per item, then r += size with a carry loop
 struct Walk {};
@@ -135,7 +135,7 @@ template <class T> inline constexpr bool is_scalar_tag_v<MaybeZero<T>> = true;
 // The absent operand / callback: an op compiles the step out (if constexpr (is_none_v<X>)).
 struct None {};
 struct NoOp {
-    template <class... A> BATCHLAS_DLA_INLINE constexpr void operator()(A&&...) const {}
+    template <class... A> BATCHLAS_DEVICE_INLINE constexpr void operator()(A&&...) const {}
 };
 template <class X> inline constexpr bool is_none_v = std::is_same_v<std::remove_cvref_t<X>, None>;
 
@@ -143,7 +143,7 @@ template <class X> inline constexpr bool is_none_v = std::is_same_v<std::remove_
 struct OnePerItem {};
 
 // f(std::integral_constant<int, I>{}) for I = 0 .. N-1: every I a constant expression in f.
-template <int N, class F> BATCHLAS_DLA_INLINE constexpr void static_for(F&& f) {
+template <int N, class F> BATCHLAS_DEVICE_INLINE constexpr void static_for(F&& f) {
     [&]<int... I>(std::integer_sequence<int, I...>) { (f(std::integral_constant<int, I>{}), ...); }(std::make_integer_sequence<int, N>{});
 }
 
@@ -154,10 +154,10 @@ template <int N> inline constexpr int static_extent_v<Ext<N>> = N;
 // NaN-losing max / min (sycl::fmax / fmin: a NaN operand yields the other), as reduction ops.
 namespace op {
 struct FMax {
-    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
+    template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
 };
 struct FMin {
-    template <class R> BATCHLAS_DLA_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
+    template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
 };
 }  // namespace op
 
@@ -165,7 +165,7 @@ struct FMin {
 // without it (StrictLower, StrictUpper).
 enum class Part { Full, Lower, Upper, StrictLower, StrictUpper };
 namespace detail {
-template <Part P> BATCHLAS_DLA_INLINE bool in_part(int i, int j) {
+template <Part P> BATCHLAS_DEVICE_INLINE bool in_part(int i, int j) {
     if constexpr (P == Part::Full) return true;
     else if constexpr (P == Part::Lower) return i >= j;
     else if constexpr (P == Part::Upper) return i <= j;

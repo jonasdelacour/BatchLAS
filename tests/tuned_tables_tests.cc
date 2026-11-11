@@ -796,11 +796,10 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
 TEST(TunedTables, PotriTablesCoverTheChoiceGridAndRankCtaOnlyWhereItFits) {
     namespace potri = batchlas::ops::potri;
     constexpr std::size_t kSlm = 99 * 1024 - 4096;  // sm_89 and sm_120 LOCAL_MEM_SIZE less the reserve
-    namespace sp = batchlas::sycl_potri;
-    const std::map<std::string, int> ceiling{{"float", sp::cta_max_n<float>(kSlm, 1024)},
-                                             {"double", sp::cta_max_n<double>(kSlm, 1024)},
-                                             {"cfloat", sp::cta_max_n<std::complex<float>>(kSlm, 1024)},
-                                             {"cdouble", sp::cta_max_n<std::complex<double>>(kSlm, 1024)}};
+    const std::map<std::string, int> ceiling{{"float", batchlas::sycl_potri::cta_max_n<float>(kSlm, 1024)},
+                                             {"double", batchlas::sycl_potri::cta_max_n<double>(kSlm, 1024)},
+                                             {"cfloat", batchlas::sycl_potri::cta_max_n<std::complex<float>>(kSlm, 1024)},
+                                             {"cdouble", batchlas::sycl_potri::cta_max_n<std::complex<double>>(kSlm, 1024)}};
     for (const char* dev : {"sm_89", "sm_120"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const sel::Table& t = embedded("potri", dt, dev);

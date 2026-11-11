@@ -34,8 +34,6 @@ namespace sycl_getrf {
 
 namespace {
 
-namespace gn = ::batchlas::getrf_native;
-namespace v2 = ::batchlas::device;
 
 // Convenience overloads only; every real decision re-reads the device, never
 // device_limits.hh. evidence: docs/perf/lu.md#one-spelling-per-ceiling
@@ -50,7 +48,7 @@ constexpr int getrf_tile_ld(int m) { return m | 1; }
 template <typename T>
 constexpr std::size_t getrf_scratch_bytes() {
     using DM = sycl_device::DevMap<T>;
-    return static_cast<std::size_t>(gn::kLuRedSlots) *
+    return static_cast<std::size_t>(getrf_native::kLuRedSlots) *
            (sizeof(typename DM::real) + sizeof(int));
 }
 
@@ -116,12 +114,12 @@ GetrfLeafLaunch getrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int m
     return p;
 }
 
-template <typename T, gn::LuScope SC> class GetrfPanelResidentKernel;
+template <typename T, getrf_native::LuScope SC> class GetrfPanelResidentKernel;
 template <typename T> class GetrfPanelGlobalKernel;
 
 // The RESIDENT leaf: stage, factor in local memory, store. Under SubGroup scope G matrices
 // share the work-group, one per sub-group; G == 1 keeps work-group scope and the wider group.
-template <typename T, gn::LuScope SC>
+template <typename T, getrf_native::LuScope SC>
 Event getrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
@@ -135,7 +133,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
     using R = typename DM::real;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
-    static_assert(SC == gn::LuScope::SubGroup || SC == gn::LuScope::WorkGroup);
+    static_assert(SC == getrf_native::LuScope::SubGroup || SC == getrf_native::LuScope::WorkGroup);
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     const int kmax = std::min(m, n);
@@ -156,19 +154,19 @@ Event getrf_panel_resident_launch(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_alloc_elems), h);
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
         batchlas::impl::parallel_for<GetrfPanelResidentKernel<T, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const v2::RtGroup<SC == gn::LuScope::SubGroup ? v2::Scope::Sub : v2::Scope::Group> ex{it};
+                const device::RtGroup<SC == getrf_native::LuScope::SubGroup ? device::Scope::Sub : device::Scope::Group> ex{it};
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
                 int b, slot;
-                if constexpr (SC == gn::LuScope::SubGroup) {
+                if constexpr (SC == getrf_native::LuScope::SubGroup) {
                     slot = static_cast<int>(it.get_sub_group().get_group_linear_id());
                     b = wg_id * G + slot;
                     // Sub-group-uniform, and this scope executes only sub-group
@@ -181,10 +179,10 @@ Event getrf_panel_resident_launch(Queue& ctx,
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before B0
                 }
 
-                const auto At = v2::mat_wide<v2::Mem::Local>(
+                const auto At = device::mat_wide<device::Mem::Local>(
                     &tile[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(ldt) * n, m, n, ldt);
-                const auto Ag = v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
-                v2::getrf_detail::cta_run(  // the public Cta body: stage, ?GETF2, store
+                const auto Ag = device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
+                device::getrf_detail::cta_run(  // the public Cta body: stage, ?GETF2, store
                     ex, Ag, At, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);
@@ -212,9 +210,9 @@ Event getrf_panel_global_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
         batchlas::impl::parallel_for<GetrfPanelGlobalKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
@@ -223,9 +221,9 @@ Event getrf_panel_global_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
                 // Always WorkGroup: a full column block is far too tall for one sub-group.
-                v2::getf2_panel_device(
-                    v2::RtGroup<v2::Scope::Group>{it},
-                    v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
+                device::getf2_panel_device(
+                    device::RtGroup<device::Scope::Group>{it},
+                    device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);
             });
@@ -334,11 +332,11 @@ Event getrf_panel_factorize(Queue& ctx,
     const auto p = getrf_leaf_launch<T>(
         m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
-        return getrf_panel_resident_launch<T, gn::LuScope::SubGroup>(
+        return getrf_panel_resident_launch<T, getrf_native::LuScope::SubGroup>(
             ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
             info_ptr, p.wg, p.G, mask);
     }
-    return getrf_panel_resident_launch<T, gn::LuScope::WorkGroup>(
+    return getrf_panel_resident_launch<T, getrf_native::LuScope::WorkGroup>(
         ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
         info_ptr, p.wg, 1, mask);
 }

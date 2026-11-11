@@ -27,7 +27,7 @@ namespace batchlas::device {
 
 namespace laed2_detail {
 // portable::joint_reduce over a contiguous x (core allreduce folds in another order); empty: T{}.
-template <class Ex, class X, class Op> BATCHLAS_DLA_INLINE auto fold(const Ex& ex, const X& x, Op op) {
+template <class Ex, class X, class Op> BATCHLAS_DEVICE_INLINE auto fold(const Ex& ex, const X& x, Op op) {
     static_assert(laed4_detail::is_group_v<Ex>, "laed2_detail::fold: a work-group executor");
     static_assert(std::is_same_v<std::remove_cvref_t<decltype(x.inc)>, Unit>, "laed2_detail::fold: x must be contiguous");
     const auto first = x.p + x.off;
@@ -40,7 +40,7 @@ template <class Ex, class X, class Op> BATCHLAS_DLA_INLINE auto fold(const Ex& e
 /// Q2 half carries sign(rho); without it the merged vectors mix Q1 and Q2 with inconsistent
 /// signs. COLLECTIVE over ex; no trailing barrier.
 template <class Ex, class Z, class R1, class R2, class T>
-BATCHLAS_DLA_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, const R1& row1, const R2& row2, T sign) {
+BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, const R1& row1, const R2& row2, T sign) {
     map(ex, z.head(m), [](T q) { return q / std::sqrt(T(2)); }, row1);
     map(ex, z.tail(m), [=](T q) { return sign * q / std::sqrt(T(2)); }, row2);
 }
@@ -58,7 +58,7 @@ BATCHLAS_DLA_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, con
 /// No trailing barrier: the caller syncs before it reads the outputs.
 template <class Ex, class D, class Z, class Q, class AbsX, class DAt, class RhoAt, class KeepAt, class KeepPtr, class PermAt, class MapAt,
           class PermLocal, class ScanInc, class ScanIncPtr, class ScanExc, class ScanExcPtr, class SetReduced>
-BATCHLAS_DLA_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, const Z& z, const Q& Qb, const AbsX& absx, const DAt& d_at,
+BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, const Z& z, const Q& Qb, const AbsX& absx, const DAt& d_at,
                                const RhoAt& rho_at, const KeepAt& keep, const KeepPtr& keep_ptr, const PermAt& permutation,
                                const MapAt& perm_map, const PermLocal& perm_local, const ScanInc& scan_inc, const ScanIncPtr& scan_inc_ptr,
                                const ScanExc& scan_exc, const ScanExcPtr& scan_exc_ptr, const SetReduced& set_reduced) {

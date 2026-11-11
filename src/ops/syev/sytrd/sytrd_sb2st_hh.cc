@@ -40,8 +40,6 @@ namespace detail {
 
 namespace {
 
-namespace v2 = batchlas::device;
-namespace sbd = batchlas::device::sb2st_detail;
 
 template <Backend B, typename T>
 class Sb2stHhChaseKernel;
@@ -143,49 +141,49 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 // rows: kRowsPar teams of kTpr lanes, one window row / column each (xor masks 1, 2, 4).
-                const v2::WorkGroup<kWg> ex{it};
-                const v2::Teams<kWg, kTpr, v2::bfly::Asc> rows{it};
+                const device::WorkGroup<kWg> ex{it};
+                const device::Teams<kWg, kTpr, device::bfly::Asc> rows{it};
 
                 T* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
                                       static_cast<size_t>(n);
                 auto ABs = ABsrc.batch_item(b);
                 auto ABt = ABtri.batch_item(b);
                 auto Vb = Vout.batch_item(b);
-                const sbd::HermBandLower<T> A{AB, ldw, kdw};
+                const device::sb2st_detail::HermBandLower<T> A{AB, ldw, kdw};
 
                 // --- Load the input band into the expanded working band (rows past kd read 0).
-                v2::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t col = idx / ldw;
                     const int32_t row = idx - col * ldw;
                     AB[idx] = (row <= kd_i) ? ABs(row, col) : T(0);
                 });
-                v2::sync(ex, v2::Mem::Global);
+                device::sync(ex, device::Mem::Global);
 
                 // Hermitian input: force a real diagonal before we start.
                 if constexpr (detail::is_complex<T>::value) {
-                    v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
-                        AB[j * ldw] = v2::force_real(AB[j * ldw]);
+                    device::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DEVICE_BODY {
+                        AB[j * ldw] = device::force_real(AB[j * ldw]);
                     });
-                    v2::sync(ex, v2::Mem::Global);
+                    device::sync(ex, device::Mem::Global);
                 }
 
                 // device::sb2st_hh_chase in an always_inline IIFE keeps the chase off the kernel's direct
                 // calls and its inlining as it was (a marked kernel lambda moves complex SASS).
-                const auto tau_slot = v2::vec(TAUv.data_ptr() + static_cast<int64_t>(b) * TAUv.stride(), nrefl, TAUv.inc());
-                [&]() BATCHLAS_DLA_BODY { v2::sb2st_hh_chase(ex, rows, A, n, kd_i, vloc, wloc, Vb, tau_slot); }();
+                const auto tau_slot = device::vec(TAUv.data_ptr() + static_cast<int64_t>(b) * TAUv.stride(), nrefl, TAUv.inc());
+                [&]() BATCHLAS_DEVICE_BODY { device::sb2st_hh_chase(ex, rows, A, n, kd_i, vloc, wloc, Vb, tau_slot); }();
                 (void)ldv;
 
                 // --- Extract the tridiagonal.
-                v2::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DEVICE_BODY {
                     const T diag = A.get(j, j);
-                    ABt(0, j) = v2::force_real(diag);
+                    ABt(0, j) = device::force_real(diag);
                     if constexpr (detail::is_complex<T>::value) {
                         Dv(j, b) = static_cast<Real>(diag.real());
                     } else {
                         Dv(j, b) = static_cast<Real>(diag);
                     }
                 });
-                v2::for_each_owned(ex, n - 1, [&](int32_t j) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n - 1, [&](int32_t j) BATCHLAS_DEVICE_BODY {
                     const T sub = A.get(j + 1, j);
                     ABt(1, j) = sub;  // signed: the phase pass consumes this
                     Ev(j, b) = detail::abs(sub);
@@ -264,20 +262,20 @@ Event unmqr_hb2st_wave(Queue& ctx,
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 // cols: tile column lane % C is owned by the G = 32 / C lanes lane / C.
-                const v2::WorkGroup<kWg> ex{it};
-                const sbd::StridedTeams<C, kWg> cols{it};
+                const device::WorkGroup<kWg> ex{it};
+                const device::sb2st_detail::StridedTeams<C, kWg> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
 
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
                 });
-                v2::sync(ex, v2::Mem::Global);
+                device::sync(ex, device::Mem::Global);
 
                 // Q = H_1 ... H_m, so Z := Q Z runs the waves in reverse
                 // generation order. Order *within* a wave is free.
@@ -292,14 +290,14 @@ Event unmqr_hb2st_wave(Queue& ctx,
                         if (tau == T(0)) continue;
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
-                        v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-                            cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
-                            sbd::win_of(v2::StridedMat<T, v2::Ext<C>, v2::Unit>{Zl, n, C}, s, 0, L, C));
+                        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                            cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
+                            device::sb2st_detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     }
-                    v2::sync(ex, v2::Mem::Global);
+                    device::sync(ex, device::Mem::Global);
                 }
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
@@ -354,8 +352,8 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 // One sub-group: ex for the tile load/store, cols for the column-per-team larf.
-                const v2::WorkGroup<kSg> ex{it};
-                const sbd::StridedTeams<C> cols{it};
+                const device::WorkGroup<kSg> ex{it};
+                const device::sb2st_detail::StridedTeams<C> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
@@ -363,12 +361,12 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                 T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 // Load the column tile once.
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
                 });
-                v2::sync(cols);
+                device::sync(cols);
 
                 // Q = H_1 ... H_m, so Z := Q Z applies them in reverse order.
                 for (int32_t k = nrefl - 1; k >= 0; --k) {
@@ -376,13 +374,13 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     if (tau == T(0)) continue;
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
-                    v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-                        cols, tau, v2::assume_published(v2::mat(V).col(k).head(L)),
-                        sbd::win_of(v2::StridedMat<T, v2::Ext<C>, v2::Unit>{Zl, n, C}, s, 0, L, C));
-                    v2::sync(cols);
+                    device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                        cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
+                        device::sb2st_detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
+                    device::sync(cols);
                 }
 
-                v2::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
                     if (c0 + c < ncols) Z(r, c0 + c) = Zl[idx];
@@ -580,7 +578,7 @@ streaming:
                 const int32_t chunk = wg_id - b * col_chunks;
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
-                const v2::WorkGroup<32> ex{it};  // one sub-group: larf walks the columns in turn
+                const device::WorkGroup<32> ex{it};  // one sub-group: larf walks the columns in turn
                 const int32_t c0 = chunk * kBackCols;
                 const int32_t c1 = sycl::min(c0 + kBackCols, ncols);
 
@@ -594,8 +592,8 @@ streaming:
                     const int32_t L = lens_p[k];
 
                     // L may exceed the 32 lanes (kd > 32): the lanes stride the reflector.
-                    v2::larf<Side::Left, v2::arith::Native, v2::larf_form::ScaleV, v2::loop::Lockstep>(
-                        ex, tau, v2::assume_published(v2::mat(V).col(k).head(L)), v2::mat(Z).sub(s, c0, L, c1 - c0));
+                    device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                        ex, tau, device::assume_published(device::mat(V).col(k).head(L)), device::mat(Z).sub(s, c0, L, c1 - c0));
                 }
             });
     });

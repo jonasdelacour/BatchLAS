@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Family-private device LA v2 ops of the syev CTA trio against host references:
+// Family-private device LA ops of the syev CTA trio against host references:
 //   src/ops/syev/kernels/syev_drivers_v2.hh  (herm_load, ElemAt, dgmm, similarities, repack,
 //                                             column-owner larf / org2l / orm2l)
 //   include/batchlas/device/lapack/sytrd.hh  (sytd2; sytrd_detail Fit ops, lacpy_herm) and core
@@ -36,16 +36,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace dv = batchlas::syev_v2;
-namespace tv = batchlas::device::sytrd_detail;
-namespace qv = batchlas::device::steqr_detail;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -144,7 +140,7 @@ template <class T> class DeviceBlasV2SyevTrioTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -179,22 +175,22 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, HermLoadAndElemAt) {
     R* qg = this->dev.up(hq);
     this->dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * per, n, n, ld);
-        const auto M1 = v2::mat(m1 + std::ptrdiff_t(b) * per, n, n, ld);
-        const auto M2 = v2::mat(m2 + std::ptrdiff_t(b) * per, n, n, ld);
-        const auto Q = v2::mat(qg + std::ptrdiff_t(b) * per, n, n, ld);
-        const auto Hu = v2::mat(o + std::ptrdiff_t(b) * 2 * pero, n, n, ldo);
-        const auto Hl = v2::mat(o + std::ptrdiff_t(b) * 2 * pero + pero, n, n, ldo);
+        const auto A = device::mat(a + std::ptrdiff_t(b) * per, n, n, ld);
+        const auto M1 = device::mat(m1 + std::ptrdiff_t(b) * per, n, n, ld);
+        const auto M2 = device::mat(m2 + std::ptrdiff_t(b) * per, n, n, ld);
+        const auto Q = device::mat(qg + std::ptrdiff_t(b) * per, n, n, ld);
+        const auto Hu = device::mat(o + std::ptrdiff_t(b) * 2 * pero, n, n, ldo);
+        const auto Hl = device::mat(o + std::ptrdiff_t(b) * 2 * pero + pero, n, n, ldo);
         for (int t = static_cast<int>(it.get_local_linear_id()); t < n * n; t += WG) {
             const int i = t % n, j = t / n;
             T hu, hl;
-            dv::herm_load(hu, A, true, i, j);
-            dv::herm_load<v2::arith::Explicit>(hl, A, false, i, j);
+            syev_v2::herm_load(hu, A, true, i, j);
+            syev_v2::herm_load<device::arith::Explicit>(hl, A, false, i, j);
             Hu(i, j) = hu;
             Hl(i, j) = hl;
-            if (i > j) v2::mirror<Uplo::Upper, true>(dv::ElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
-            v2::mirror<Uplo::Lower, true>(dv::ElemAt{i, j}, M2);
-            v2::laset(dv::ElemAt{i, j}, v2::Zero{}, i < nn ? R(1) : R(0), Q);
+            if (i > j) device::mirror<Uplo::Upper, true>(syev_v2::ElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
+            device::mirror<Uplo::Lower, true>(syev_v2::ElemAt{i, j}, M2);
+            device::laset(syev_v2::ElemAt{i, j}, device::Zero{}, i < nn ? R(1) : R(0), Q);
         }
     });
     const auto go = this->dev.down(o, hout.size());
@@ -244,14 +240,14 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, DgmmLeftAt) {
     T* c = this->dev.up(hc);
     this->dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto D = v2::vec(d + std::ptrdiff_t(b) * n, n);
-        const auto Z = v2::mat(z + std::ptrdiff_t(b) * n * ldz, n, n, ldz);
-        const auto C = v2::mat(c + std::ptrdiff_t(b) * n * ldc, n, n, ldc);
-        const auto Y = v2::mat(y + std::ptrdiff_t(b) * n * ldc, n, n, ldc);
+        const auto D = device::vec(d + std::ptrdiff_t(b) * n, n);
+        const auto Z = device::mat(z + std::ptrdiff_t(b) * n * ldz, n, n, ldz);
+        const auto C = device::mat(c + std::ptrdiff_t(b) * n * ldc, n, n, ldc);
+        const auto Y = device::mat(y + std::ptrdiff_t(b) * n * ldc, n, n, ldc);
         for (int t = static_cast<int>(it.get_local_linear_id()); t < n * n; t += WG) {
             const int i = t % n, j = t / n;
-            dv::dgmm_left_at(D, Z, C, i, j);
-            dv::dgmm_left_at<v2::arith::Explicit>(D, Y, Y, i, j);
+            syev_v2::dgmm_left_at(D, Z, C, i, j);
+            syev_v2::dgmm_left_at<device::arith::Explicit>(D, Y, Y, i, j);
         }
     });
     const auto gc = this->dev.down(c, hc.size());
@@ -295,17 +291,17 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, TridiagonalSimilarities) {
     T* s2 = this->dev.up(std::vector<T>(std::size_t(kBatch) * n, nan_v<T>()));
     this->dev.template run<WG>(kBatch / WG, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_global_linear_id());
-        const auto dvv = v2::vec(d + std::ptrdiff_t(b) * n, n);
-        const auto ev = v2::vec(e + std::ptrdiff_t(b) * (n - 1), n - 1);
+        const auto dvv = device::vec(d + std::ptrdiff_t(b) * n, n);
+        const auto ev = device::vec(e + std::ptrdiff_t(b) * (n - 1), n - 1);
         for (int k = 0; k < 3; ++k) {
             const Uplo u = k == 1 ? Uplo::Upper : Uplo::Lower;
-            const auto drv = v2::vec(dr + (std::ptrdiff_t(b) * 3 + k) * n, n);
-            const auto erv = v2::vec(er + (std::ptrdiff_t(b) * 3 + k) * (n - 1), n - 1);
-            const auto sv = v2::vec(s + (std::ptrdiff_t(b) * 3 + k) * n, n);
-            dv::phase_similarity(v2::Thread{}, n, dvv, ev, drv, erv, sv, u, /*want_s=*/k < 2);
+            const auto drv = device::vec(dr + (std::ptrdiff_t(b) * 3 + k) * n, n);
+            const auto erv = device::vec(er + (std::ptrdiff_t(b) * 3 + k) * (n - 1), n - 1);
+            const auto sv = device::vec(s + (std::ptrdiff_t(b) * 3 + k) * n, n);
+            syev_v2::phase_similarity(device::Thread{}, n, dvv, ev, drv, erv, sv, u, /*want_s=*/k < 2);
         }
         if constexpr (!is_cplx<T>) {
-            dv::sign_similarity(v2::Thread{}, n, v2::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1), v2::vec(s2 + std::ptrdiff_t(b) * n, n));
+            syev_v2::sign_similarity(device::Thread{}, n, device::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1), device::vec(s2 + std::ptrdiff_t(b) * n, n));
         }
     });
     const auto gdr = this->dev.down(dr, hdr.size());
@@ -368,18 +364,18 @@ template <class T, int P> void run_phase_replay(Dev& dev, int n) {
     T* e = dev.up(he);
     T* o = dev.up(ho);
     dev.template run<WG>(kBatch / chunks, [=](sycl::nd_item<1> it) {
-        const v2::SgpPartition<P> pex{it.get_sub_group()};
+        const device::SgpPartition<P> pex{it.get_sub_group()};
         const int lane = pex.lid();
         const int b = static_cast<int>(it.get_group_linear_id()) * chunks + static_cast<int>(it.get_local_linear_id()) / P;
         const T el = lane < n - 1 ? e[std::ptrdiff_t(b) * P + lane] : T(0);
-        const R al = lane < n - 1 ? sycl::hypot(v2::Arith<T>::re(el), v2::Arith<T>::im(el)) : R(0);
-        o[std::ptrdiff_t(b) * 2 * P + lane] = dv::phase_replay(pex, el, al, n);
+        const R al = lane < n - 1 ? sycl::hypot(device::Arith<T>::re(el), device::Arith<T>::im(el)) : R(0);
+        o[std::ptrdiff_t(b) * 2 * P + lane] = syev_v2::phase_replay(pex, el, al, n);
         if (lane == 0) {  // serial reference on lane 0 (Thread): S written to the second half
             T* sr = o + std::ptrdiff_t(b) * 2 * P + P;
-            const auto ev = v2::vec(e + std::ptrdiff_t(b) * P, n - 1);
+            const auto ev = device::vec(e + std::ptrdiff_t(b) * P, n - 1);
             R scratch[P];
-            const auto rv = v2::Vec<R, v2::Ext<P>>{scratch, {}};
-            dv::phase_similarity(v2::Thread{}, n, ev, ev, rv, rv, v2::vec(sr, n), Uplo::Upper, true);
+            const auto rv = device::Vec<R, device::Ext<P>>{scratch, {}};
+            syev_v2::phase_similarity(device::Thread{}, n, ev, ev, rv, rv, device::vec(sr, n), Uplo::Upper, true);
         }
     });
     const auto g = dev.down(o, ho.size());
@@ -411,17 +407,17 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, SytrdReflectorPack) {
     this->dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const int lid = static_cast<int>(it.get_local_linear_id());
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * n * lda, n, n, lda);
-        const auto tvv = v2::vec(tau + std::ptrdiff_t(b) * (n - 1), n - 1);
+        const auto A = device::mat(a + std::ptrdiff_t(b) * n * lda, n, n, lda);
+        const auto tvv = device::vec(tau + std::ptrdiff_t(b) * (n - 1), n - 1);
         for (int k = 0; k < 4; ++k) {
             const Uplo u = (k & 1) ? Uplo::Upper : Uplo::Lower;
-            const auto AQ = v2::mat(aq + (std::ptrdiff_t(b) * 4 + k) * n * ldq, n, n, ldq);
-            const auto tqv = v2::vec(tq + (std::ptrdiff_t(b) * 6 + k) * n, n);
+            const auto AQ = device::mat(aq + (std::ptrdiff_t(b) * 4 + k) * n * ldq, n, n, ldq);
+            const auto tqv = device::vec(tq + (std::ptrdiff_t(b) * 6 + k) * n, n);
             for (int t = lid; t < n * n; t += WG) {
-                if (k < 2) dv::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n, tvv, tqv);
-                else dv::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n);
+                if (k < 2) syev_v2::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n, tvv, tqv);
+                else syev_v2::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n);
             }
-            if (k >= 2 && lid < n) dv::sytrd_tau_pack_at(tvv, v2::vec(tq + (std::ptrdiff_t(b) * 6 + k + 2) * n, n), u, n, lid);
+            if (k >= 2 && lid < n) syev_v2::sytrd_tau_pack_at(tvv, device::vec(tq + (std::ptrdiff_t(b) * 6 + k + 2) * n, n), u, n, lid);
         }
     });
     const auto gq = this->dev.down(aq, hq.size());
@@ -515,25 +511,25 @@ template <class T, int P> void run_org2l_orm2l(Dev& dev, int n) {
     T* qg = dev.up(hq);
     T* og = dev.up(ho);
     dev.template run_acc<WG, T>(kBatch / chunks, std::size_t(chunks) * slm, [=](sycl::nd_item<1> it, const Local& lm) {
-        const auto pex = v2::wrap(make_partition<P>(it.get_sub_group()));
+        const auto pex = device::wrap(make_partition<P>(it.get_sub_group()));
         const int lane = pex.lid();
         const int chunk = static_cast<int>(it.get_local_linear_id()) / P;
         const int b = static_cast<int>(it.get_group_linear_id()) * chunks + chunk;
         const int base = chunk * slm;
-        const v2::Mat<T, v2::Ext<P>, v2::Ext<P>, v2::Ext<LDT>, v2::Mem::Local, v2::Cyclic, Local> tm{lm, {}, {}, {}, base};
-        const auto vs = v2::vec(lm, P, base + P * LDT);
+        const device::Mat<T, device::Ext<P>, device::Ext<P>, device::Ext<LDT>, device::Mem::Local, device::Cyclic, Local> tm{lm, {}, {}, {}, base};
+        const auto vs = device::vec(lm, P, base + P * LDT);
         for (int c = 0; c < P; ++c) tm(lane, c) = rg[std::ptrdiff_t(b) * P * LDR + lane + c * LDR];
         group_barrier(pex.part);
         const T tau_lane = tg[std::ptrdiff_t(b) * P + lane];
 
-        v2::Frag<T, P, v2::ColPerLane> q;
-        dv::org2l(pex, q, vs, tm, tau_lane, n);
-        v2::store(q, v2::vec(qg + std::ptrdiff_t(b) * P * P + lane * P, P));
+        device::Frag<T, P, device::ColPerLane> q;
+        syev_v2::org2l(pex, q, vs, tm, tau_lane, n);
+        device::store(q, device::vec(qg + std::ptrdiff_t(b) * P * P + lane * P, P));
 
-        v2::Frag<T, P, v2::ColPerLane> c;
-        v2::load(c, v2::vec(cg + std::ptrdiff_t(b) * P * P + lane * P, P));
-        dv::orm2l<v2::arith::Explicit>(pex, c, vs, tm, tau_lane, n);
-        v2::store(c, v2::vec(og + std::ptrdiff_t(b) * P * P + lane * P, P));
+        device::Frag<T, P, device::ColPerLane> c;
+        device::load(c, device::vec(cg + std::ptrdiff_t(b) * P * P + lane * P, P));
+        syev_v2::orm2l<device::arith::Explicit>(pex, c, vs, tm, tau_lane, n);
+        device::store(c, device::vec(og + std::ptrdiff_t(b) * P * P + lane * P, P));
     });
     const auto gq = dev.down(qg, hq.size());
     const auto go = dev.down(og, ho.size());
@@ -588,23 +584,23 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, RegisterColumnOps) {
     T* o = this->dev.up(ho);
     this->dev.template run<WG>(kBatch / WG, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_global_linear_id());
-        const auto vv = v2::assume_published(v2::Vec<T, v2::Ext<N>>{v + std::ptrdiff_t(b) * N, {}});
-        const auto out = [&](int s) { return v2::Vec<T, v2::Ext<N>>{o + (std::ptrdiff_t(b) * slots + s) * N, {}}; };
-        const auto cv = v2::Vec<T, v2::Ext<N>>{c + std::ptrdiff_t(b) * N, {}};
-        v2::Frag<T, N, v2::ColPerLane> f, g;
-        v2::load(f, cv);
-        v2::load(g, cv);
-        dv::larf_col(f, vv, tau);
-        v2::store(f, out(0));
-        dv::larf_col<v2::arith::Explicit>(g, vv, tau);
-        v2::store(g, out(1));
-        dv::larf_unit_col(f, vv, tau, k);
-        v2::store(f, out(2));
-        dv::laset_col(f, k, T(2), T(-3));
-        v2::store(f, out(3));
-        v2::fill(f, T(5));
-        dv::dgmm_lift(f, cv, v2::Vec<R, v2::Ext<N>>{z + std::ptrdiff_t(b) * N, {}}, n);
-        v2::store(f, out(4));
+        const auto vv = device::assume_published(device::Vec<T, device::Ext<N>>{v + std::ptrdiff_t(b) * N, {}});
+        const auto out = [&](int s) { return device::Vec<T, device::Ext<N>>{o + (std::ptrdiff_t(b) * slots + s) * N, {}}; };
+        const auto cv = device::Vec<T, device::Ext<N>>{c + std::ptrdiff_t(b) * N, {}};
+        device::Frag<T, N, device::ColPerLane> f, g;
+        device::load(f, cv);
+        device::load(g, cv);
+        syev_v2::larf_col(f, vv, tau);
+        device::store(f, out(0));
+        syev_v2::larf_col<device::arith::Explicit>(g, vv, tau);
+        device::store(g, out(1));
+        syev_v2::larf_unit_col(f, vv, tau, k);
+        device::store(f, out(2));
+        syev_v2::laset_col(f, k, T(2), T(-3));
+        device::store(f, out(3));
+        device::fill(f, T(5));
+        syev_v2::dgmm_lift(f, cv, device::Vec<R, device::Ext<N>>{z + std::ptrdiff_t(b) * N, {}}, n);
+        device::store(f, out(4));
     });
     const auto g = this->dev.down(o, ho.size());
     double worst = 0;
@@ -733,19 +729,19 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
         auto body = [&](const auto& ex, int s) {
             const int b = static_cast<int>(it.get_group_linear_id()) * per_wg + s;
             const int base = s * slot;
-            const v2::Mat<T, v2::Ext<P>, v2::Ext<P>, v2::Ext<LDA>, v2::Mem::Local, v2::Cyclic, Local> tile{lm, {}, {}, {}, base};
-            const auto v = v2::vec(lm, n, base + LDA * P), w = v2::vec(lm, n, base + LDA * P + P);
+            const device::Mat<T, device::Ext<P>, device::Ext<P>, device::Ext<LDA>, device::Mem::Local, device::Cyclic, Local> tile{lm, {}, {}, {}, base};
+            const auto v = device::vec(lm, n, base + LDA * P), w = device::vec(lm, n, base + LDA * P + P);
             T* eb = e + std::ptrdiff_t(b) * n;
             T* tb = tu + std::ptrdiff_t(b) * n;
-            tv::lacpy_herm<UL, v2::arith::Native>(v2::Fit{ex}, v2::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
-            v2::sync<v2::scope::Part>(ex);
-            const T tl = v2::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
+            device::sytrd_detail::lacpy_herm<UL, device::arith::Native>(device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
+            device::sync<device::scope::Part>(ex);
+            const T tl = device::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
                 if constexpr (UL == Uplo::Lower) {
                     eb[i] = beta;
                     tb[i] = t;
                 }
             });
-            v2::sync<v2::scope::Part>(ex);
+            device::sync<device::scope::Part>(ex);
             const int lane = ex.lid();
             if (lane < n) d[std::ptrdiff_t(b) * n + lane] = tile(lane, lane);
             if constexpr (UL == Uplo::Upper) {
@@ -754,11 +750,11 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
                     tb[lane] = tl;
                 }
             }
-            v2::lacpy(ex, tile.sub(0, 0, n, n), v2::mat(o + std::ptrdiff_t(b) * ldo * n, n, n, ldo));
+            device::lacpy(ex, tile.sub(0, 0, n, n), device::mat(o + std::ptrdiff_t(b) * ldo * n, n, n, ldo));
         };
         const int s = static_cast<int>(sg.get_group_linear_id()) * (32 / P) + static_cast<int>(sg.get_local_linear_id()) / P;
-        if constexpr (Lockstep) body(v2::Partition<P>{sg}, s);
-        else body(v2::wrap(make_partition<P>(sg)), s);
+        if constexpr (Lockstep) body(device::Partition<P>{sg}, s);
+        else body(device::wrap(make_partition<P>(sg)), s);
     });
     const auto go = dev.down(o, ho.size()), gd = dev.down(d, hd.size()), ge = dev.down(e, he.size()), gt = dev.down(tu, ht.size());
     EXPECT_EQ(bitdiff(go, ldo * n) + bitdiff(gd, n) + bitdiff(ge, n) + bitdiff(gt, n), 0) << "items differ from their representative";
@@ -801,14 +797,14 @@ template <class T> void larfg_case(Dev& dev, int n, int ai) {
     T* t = dev.up(ht);
     dev.template run<WG>(kBatch / (WG / P), [=](sycl::nd_item<1> it) {
         const auto sg = it.get_sub_group();
-        const auto ex = v2::wrap(make_partition<P>(sg));
+        const auto ex = device::wrap(make_partition<P>(sg));
         const int b = static_cast<int>(it.get_group_linear_id()) * (WG / P) + static_cast<int>(sg.get_local_linear_id()) / P;
         const int lane = ex.lid();
         const T* xb = x + std::ptrdiff_t(b) * P;
         const bool act = lane < n && lane != ai;
         T alpha = lane == ai ? xb[lane] : T(0);
         T xv = act ? xb[lane] : T(0);
-        const T tau = v2::larfg<v2::conv::Phase, v2::arith::Native>(ex, n, ai, alpha, xv, act);
+        const T tau = device::larfg<device::conv::Phase, device::arith::Native>(ex, n, ai, alpha, xv, act);
         if (lane == ai) y[std::ptrdiff_t(b) * P + lane] = alpha;
         else if (act) y[std::ptrdiff_t(b) * P + lane] = xv;
         if (lane == 0) t[b] = tau;
@@ -868,27 +864,27 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
     T* out = dev.up(ho);
     dev.template run_acc<WG, T>(kBatch, LDT * NT + 2 * m + 7, [=](sycl::nd_item<1> it, const Local& lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto ex = v2::wrap(make_partition<NT>(it.get_sub_group()));
-        const auto fx = v2::Fit{ex};
+        const auto ex = device::wrap(make_partition<NT>(it.get_sub_group()));
+        const auto fx = device::Fit{ex};
         const int base = 7;  // a non-zero accessor offset
-        const v2::Mat<T, v2::Ext<NT>, v2::Ext<NT>, v2::Ext<LDT>, v2::Mem::Local, v2::Cyclic, Local> t1{lm, {}, {}, {}, base};
-        const auto xl = v2::vec(lm, m, base + LDT * NT), yl = v2::vec(lm, m, base + LDT * NT + m);
+        const device::Mat<T, device::Ext<NT>, device::Ext<NT>, device::Ext<LDT>, device::Mem::Local, device::Cyclic, Local> t1{lm, {}, {}, {}, base};
+        const auto xl = device::vec(lm, m, base + LDT * NT), yl = device::vec(lm, m, base + LDT * NT + m);
         T* ob = out + std::ptrdiff_t(b) * per_out;
-        tv::lacpy_herm<UL, v2::arith::Native>(fx, v2::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
-        v2::copy(fx, v2::vec(x + std::ptrdiff_t(b) * m, m), xl);
-        v2::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
-        v2::sync<v2::scope::Part>(ex);
+        device::sytrd_detail::lacpy_herm<UL, device::arith::Native>(fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
+        device::copy(fx, device::vec(x + std::ptrdiff_t(b) * m, m), xl);
+        device::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
+        device::sync<device::scope::Part>(ex);
         const auto B1 = t1.sub(o, o, m, m);
-        tv::gemv_rows<v2::arith::Native>(fx, alpha, B1, v2::assume_published(xl), yl);  // reads t1 rows of others
-        const T s = tv::dotc<v2::arith::Native>(fx, xl, yl);
-        v2::axpy<v2::arith::Native>(fx, v2::Scalar<T>{v2::Arith<T>::neg(s)}, xl, yl);
-        v2::sync<v2::scope::Part>(ex);
+        device::sytrd_detail::gemv_rows<device::arith::Native>(fx, alpha, B1, device::assume_published(xl), yl);  // reads t1 rows of others
+        const T s = device::sytrd_detail::dotc<device::arith::Native>(fx, xl, yl);
+        device::axpy<device::arith::Native>(fx, device::Scalar<T>{device::Arith<T>::neg(s)}, xl, yl);
+        device::sync<device::scope::Part>(ex);
         if (ex.lid() == 0) ob[NT * NT + 2 * m] = s;
-        v2::copy(fx, yl, v2::vec(ob + NT * NT + m, m));
-        v2::copy(fx, xl, v2::vec(ob + NT * NT, m));
-        tv::her2_full_sub<v2::arith::Native>(fx, v2::assume_published(xl), v2::assume_published(yl), B1);
-        v2::sync<v2::scope::Part>(ex);
-        v2::lacpy(ex, t1, v2::mat(ob, NT, NT, NT));
+        device::copy(fx, yl, device::vec(ob + NT * NT + m, m));
+        device::copy(fx, xl, device::vec(ob + NT * NT, m));
+        device::sytrd_detail::her2_full_sub<device::arith::Native>(fx, device::assume_published(xl), device::assume_published(yl), B1);
+        device::sync<device::scope::Part>(ex);
+        device::lacpy(ex, t1, device::mat(ob, NT, NT, NT));
     });
     const auto g = dev.down(out, ho.size());
     EXPECT_EQ(bitdiff(g, per_out), 0) << "items differ from their representative";
@@ -942,7 +938,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, FitOpsOnBlock) {
 TYPED_TEST(DeviceBlasV2SyevTrioRealTest, LanstMaxAndSplitOnThread) {
     using T = TypeParam;
     constexpr int n = 9, inc = 2;
-    const qv::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
+    const device::steqr_detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
                               std::numeric_limits<T>::min()};
     std::vector<T> hd(std::size_t(kBatch) * n * inc, T(1e3)), he(std::size_t(kBatch) * n * inc, T(1e3));
     for (int b = 0; b < kBatch; ++b) {
@@ -965,11 +961,11 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, LanstMaxAndSplitOnThread) {
     this->dev.template run<32>(kBatch, [=](sycl::nd_item<1> it) {
         if (it.get_local_linear_id() != 0) return;
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::Thread th{};
-        const auto dvv = v2::vec(d + std::ptrdiff_t(b) * n * inc, n, inc);
-        const auto ev = v2::vec(e + std::ptrdiff_t(b) * n * inc, n - 1, inc);
-        out[2 * b] = qv::lanst_max(th, dvv, ev);
-        out[2 * b + 1] = qv::tridiag_split(th, dvv, ev, tol) ? T(1) : T(0);
+        const device::Thread th{};
+        const auto dvv = device::vec(d + std::ptrdiff_t(b) * n * inc, n, inc);
+        const auto ev = device::vec(e + std::ptrdiff_t(b) * n * inc, n - 1, inc);
+        out[2 * b] = device::steqr_detail::lanst_max(th, dvv, ev);
+        out[2 * b + 1] = device::steqr_detail::tridiag_split(th, dvv, ev, tol) ? T(1) : T(0);
     });
     const auto go = this->dev.down(out, 2 * kBatch), ge = this->dev.down(e, he.size());
     int bad = 0;
@@ -1002,7 +998,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
     using T = TypeParam;
     constexpr int n = 7, nprob = 2 * (n - 1) * 8;
     std::vector<T> hd(std::size_t(nprob) * n), he(std::size_t(nprob) * (n - 1)), hb(nprob);
-    std::vector<v2::Givens<T>> hg(nprob);
+    std::vector<device::Givens<T>> hg(nprob);
     for (int q = 0; q < nprob; ++q) {
         for (int i = 0; i < n; ++i) hd[std::size_t(q) * n + i] = val<T>(100000 + q * 31 + i);
         for (int i = 0; i < n - 1; ++i) he[std::size_t(q) * (n - 1) + i] = val<T>(200000 + q * 31 + i);
@@ -1013,13 +1009,13 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
     T* d = this->dev.up(hd);
     T* e = this->dev.up(he);
     T* bo = this->dev.up(hb);
-    const v2::Givens<T>* g = this->dev.up(hg);
+    const device::Givens<T>* g = this->dev.up(hg);
     this->dev.template run<32>(nprob, [=](sycl::nd_item<1> it) {
         if (it.get_local_linear_id() != 0) return;
         const int q = static_cast<int>(it.get_group_linear_id());
         const int i = q % (n - 1);
         const bool fwd = (q / (n - 1)) % 2 == 0;
-        bo[q] = qv::tridiag_rot(v2::Thread{}, v2::vec(d + std::ptrdiff_t(q) * n, n), v2::vec(e + std::ptrdiff_t(q) * (n - 1), n - 1),
+        bo[q] = device::steqr_detail::tridiag_rot(device::Thread{}, device::vec(d + std::ptrdiff_t(q) * n, n), device::vec(e + std::ptrdiff_t(q) * (n - 1), n - 1),
                                 bo[q], i, i + 1, g[q], fwd);
     });
     const auto gd = this->dev.down(d, hd.size()), ge = this->dev.down(e, he.size()), gb = this->dev.down(bo, hb.size());
@@ -1060,7 +1056,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
 // reverse of d[2, n-1) with e (e only on even problems).
 template <class T, int P, bool Masked> void lane_case(Dev& dev) {
     constexpr int WG = 32, chunks = WG / P, n = P - 1, nprob = kBatch;
-    const qv::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
+    const device::steqr_detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
                               std::numeric_limits<T>::min()};
     std::vector<T> hd(std::size_t(nprob) * n), he(std::size_t(nprob) * n, T(0));
     for (int q = 0; q < nprob; ++q) {
@@ -1081,17 +1077,17 @@ template <class T, int P, bool Masked> void lane_case(Dev& dev) {
     T* nrm = dev.up(std::vector<T>(nprob));
     int* idx = dev.up(std::vector<int>(nprob));
     dev.template run<WG>(nprob / chunks, [=](sycl::nd_item<1> it) {
-        const auto ex = v2::wrap(make_partition<P, Masked>(it.get_sub_group()));
+        const auto ex = device::wrap(make_partition<P, Masked>(it.get_sub_group()));
         const int q = static_cast<int>(it.get_group_linear_id()) * chunks + static_cast<int>(it.get_sub_group().get_local_linear_id()) / P;
         const int l = ex.lid();
         T dl = l < n ? d[std::ptrdiff_t(q) * n + l] : T(0);
         T el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : T(0);
-        const T an = v2::lanst<NormType::Max>(ex, v2::lane_vec(dl, 1, n - 1), v2::lane_vec(el, 1, n - 2));
-        qv::tridiag_split(ex, dl, v2::lane_vec(el, 0, n - 1), tol);
-        const int first = v2::find_first(ex, v2::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
-        qv::scal_lane(ex, T(2), v2::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
-        qv::reverse(ex, v2::lane_vec(dl, 1, n - 1), v2::lane_vec(el, 0, 0), true);
-        qv::reverse(ex, v2::lane_vec(dl, 2, n - 1), v2::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
+        const T an = device::lanst<NormType::Max>(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 1, n - 2));
+        device::steqr_detail::tridiag_split(ex, dl, device::lane_vec(el, 0, n - 1), tol);
+        const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
+        device::steqr_detail::scal_lane(ex, T(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
+        device::steqr_detail::reverse(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 0, 0), true);
+        device::steqr_detail::reverse(ex, device::lane_vec(dl, 2, n - 1), device::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
         if (l < n) d[std::ptrdiff_t(q) * n + l] = dl;
         if (l < n - 1) e[std::ptrdiff_t(q) * n + l] = el;
         if (l == 0) {

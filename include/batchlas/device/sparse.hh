@@ -38,7 +38,7 @@ namespace batchlas::device {
 
 // One scalar access, or a complex as one 2-wide vector access (needs 2 * sizeof(real) alignment).
 template <bool Pair> struct PairAccess {
-    template <class T> BATCHLAS_DLA_INLINE static std::remove_cv_t<T> load(T* p) {
+    template <class T> BATCHLAS_DEVICE_INLINE static std::remove_cv_t<T> load(T* p) {
         using U = std::remove_cv_t<T>;
         using A = Arith<U>;
         if constexpr (Pair && A::is_complex) {
@@ -49,7 +49,7 @@ template <bool Pair> struct PairAccess {
             return *p;
         }
     }
-    template <class T> BATCHLAS_DLA_INLINE static void store(T* p, T x) {
+    template <class T> BATCHLAS_DEVICE_INLINE static void store(T* p, T x) {
         using A = Arith<T>;
         if constexpr (Pair && A::is_complex) {
             using R = typename A::real_t;
@@ -62,7 +62,7 @@ template <bool Pair> struct PairAccess {
 
 // Relaxed device-scope atomic *p += v. A complex is two independent real atomics, NOT an atomic
 // complex add: correct only while nothing reads *p between the first and the last update.
-template <class T> BATCHLAS_DLA_INLINE void atomic_accumulate(T* p, T v) {
+template <class T> BATCHLAS_DEVICE_INLINE void atomic_accumulate(T* p, T v) {
     using A = Arith<T>;
     if constexpr (A::is_complex) {
         using R = typename A::real_t;
@@ -82,14 +82,14 @@ template <class T, class Off = int> struct BasedVec {
     using value_type = std::remove_cv_t<T>;
     T* p;
     Off base;
-    BATCHLAS_DLA_INLINE T& operator()(int i) const { return p[base + i]; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int i) const { return p[base + i]; }
 };
 
 // Read-only element i = PairAccess<Pair>::load(p + i).
 template <class T, bool Pair = false> struct LoadVec {
     using value_type = std::remove_cv_t<T>;
     T* p;
-    BATCHLAS_DLA_INLINE value_type operator()(int i) const { return PairAccess<Pair>::load(p + i); }
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return PairAccess<Pair>::load(p + i); }
 };
 
 // Batch-interleaved (slot-major) storage: slot s of item `off` at p[size_t(s) * stride + off].
@@ -99,7 +99,7 @@ template <class T> struct InterleavedVec {
     T* p;
     int stride;
     int off;
-    BATCHLAS_DLA_INLINE T& operator()(int s) const { return p[static_cast<std::size_t>(s) * stride + off]; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int s) const { return p[static_cast<std::size_t>(s) * stride + off]; }
 };
 
 // One CSR row segment: entries p in [begin, end) are (val(p), idx(p)), positions absolute.
@@ -109,10 +109,10 @@ template <class VV, class IV> struct SpRow {
     IV cols;
     int begin;
     int end;
-    BATCHLAS_DLA_INLINE value_type val(int p) const { return vals(p); }
-    BATCHLAS_DLA_INLINE int idx(int p) const { return cols(p); }
+    BATCHLAS_DEVICE_INLINE value_type val(int p) const { return vals(p); }
+    BATCHLAS_DEVICE_INLINE int idx(int p) const { return cols(p); }
 };
-template <class VV, class IV> BATCHLAS_DLA_INLINE SpRow<VV, IV> sp_row(VV vals, IV cols, int begin, int end) {
+template <class VV, class IV> BATCHLAS_DEVICE_INLINE SpRow<VV, IV> sp_row(VV vals, IV cols, int begin, int end) {
     return {vals, cols, begin, end};
 }
 
@@ -127,13 +127,13 @@ template <class T, class Off = std::int64_t> struct CsrItem {
     Off nz_base;
     Off ro_base;
     int m, n;
-    BATCHLAS_DLA_INLINE int rows() const { return m; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
-    template <bool Pair = false> BATCHLAS_DLA_INLINE auto row(int r) const {
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
+    template <bool Pair = false> BATCHLAS_DEVICE_INLINE auto row(int r) const {
         return sp_row(LoadVec<T, Pair>{val + nz_base}, BasedVec<const int, Off>{col, nz_base}, ro[ro_base + r], ro[ro_base + r + 1]);
     }
 };
-template <class T> BATCHLAS_DLA_INLINE CsrItem<const T> csr_item(const KernelMatrixView<T, MatrixFormat::CSR>& a, std::int64_t b) {
+template <class T> BATCHLAS_DEVICE_INLINE CsrItem<const T> csr_item(const KernelMatrixView<T, MatrixFormat::CSR>& a, std::int64_t b) {
     return {a.data_, a.col_indices_, a.row_offsets_, b * a.matrix_stride_, b * a.offset_stride_, a.rows_, a.cols_};
 }
 
@@ -145,7 +145,7 @@ template <class T, bool Pair = false> struct RtOpMat {
     std::int64_t ld;
     bool notrans;
     bool conj;
-    BATCHLAS_DLA_INLINE value_type operator()(int r, int c) const {
+    BATCHLAS_DEVICE_INLINE value_type operator()(int r, int c) const {
         value_type v = PairAccess<Pair>::load(notrans ? p + static_cast<std::int64_t>(c) * ld + r
                                                       : p + static_cast<std::int64_t>(r) * ld + c);
         if constexpr (Arith<value_type>::is_complex) {
@@ -161,20 +161,20 @@ template <class T, bool Pair = false> struct ColMat64 {
     using value_type = std::remove_cv_t<T>;
     struct Ref {
         T* q;
-        BATCHLAS_DLA_INLINE operator value_type() const { return PairAccess<Pair>::load(q); }
-        BATCHLAS_DLA_INLINE void operator=(value_type x) const { PairAccess<Pair>::store(q, x); }
+        BATCHLAS_DEVICE_INLINE operator value_type() const { return PairAccess<Pair>::load(q); }
+        BATCHLAS_DEVICE_INLINE void operator=(value_type x) const { PairAccess<Pair>::store(q, x); }
     };
     T* p;
     std::int64_t ld;
-    BATCHLAS_DLA_INLINE T* ptr(int r, int c) const { return p + (static_cast<std::int64_t>(c) * ld + r); }
-    BATCHLAS_DLA_INLINE Ref operator()(int r, int c) const { return {ptr(r, c)}; }
+    BATCHLAS_DEVICE_INLINE T* ptr(int r, int c) const { return p + (static_cast<std::int64_t>(c) * ld + r); }
+    BATCHLAS_DEVICE_INLINE Ref operator()(int r, int c) const { return {ptr(r, c)}; }
 };
 
 // ---- CSR row products ----------------------------------------------------------------------
 // acc - sum a.val(p) y(a.idx(p)) over the entries with idx < bound, left to right: the row is
 // sorted, so the first idx >= bound ends it; nothing at or past it is read.
 template <class Ar, class Row, class Y, class T>
-BATCHLAS_DLA_INLINE T usdot_sub_below(const Thread&, T acc, const Row& a, const Y& y, int bound) {
+BATCHLAS_DEVICE_INLINE T usdot_sub_below(const Thread&, T acc, const Row& a, const Y& y, int bound) {
     for (int p = a.begin; p < a.end; ++p) {
         const int j = a.idx(p);
         if (j >= bound) break;
@@ -185,7 +185,7 @@ BATCHLAS_DLA_INLINE T usdot_sub_below(const Thread&, T acc, const Row& a, const 
 
 // usmm, one output row: acc[t] += sum_p a.val(p) b(a.idx(p), c0 + t) for c0 + t < width.
 template <class Ar, class Row, class B, class T, int NC, class L>
-BATCHLAS_DLA_INLINE void usmm_row(const Thread&, const Row& a, const B& b, int c0, int width, Frag<T, NC, L>& acc) {
+BATCHLAS_DEVICE_INLINE void usmm_row(const Thread&, const Row& a, const B& b, int c0, int width, Frag<T, NC, L>& acc) {
     for (int p = a.begin; p < a.end; ++p) {
         const T av = a.val(p);
         const int j = a.idx(p);
@@ -200,7 +200,7 @@ BATCHLAS_DLA_INLINE void usmm_row(const Thread&, const Row& a, const B& b, int c
 // C(r, c0 + t) := store<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c0 + t)) for c0 + t < width;
 // a set beta flag never reads C.
 template <class Ops, class T, int NC, class L, class CM>
-BATCHLAS_DLA_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>& acc, MaybeZero<T> beta, const CM& C, int r,
+BATCHLAS_DEVICE_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>& acc, MaybeZero<T> beta, const CM& C, int r,
                                     int c0, int width) {
     BATCHLAS_UNROLL_FULL
     for (int t = 0; t < NC; ++t) {
@@ -211,7 +211,7 @@ BATCHLAS_DLA_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>
 
 // w[t] := alpha b(r, c0 + t) for c0 + t < width, else 0: a scaled row block of op(B).
 template <class Ar, class B, class T, int NC, class L>
-BATCHLAS_DLA_INLINE void load_cols_scaled(const Thread&, T alpha, const B& b, int r, int c0, int width, Frag<T, NC, L>& w) {
+BATCHLAS_DEVICE_INLINE void load_cols_scaled(const Thread&, T alpha, const B& b, int r, int c0, int width, Frag<T, NC, L>& w) {
     BATCHLAS_UNROLL_FULL
     for (int t = 0; t < NC; ++t) {
         const int c = c0 + t;
@@ -254,7 +254,7 @@ namespace spmm_detail {
 // One gather unit (A NoTrans): row r of A times op(B)'s column block c0 .. c0 + NC into C(r, :).
 // Arguments in the order the body reads them: a launcher's capture layout follows it.
 template <class Ar, int NC, class Ops = arith::Fma, class Row, class OB, class T, class CM>
-BATCHLAS_DLA_INLINE void gather_unit(bool alpha_zero, const Row& a, const OB& b, int c0, int width, T alpha, MaybeZero<T> beta,
+BATCHLAS_DEVICE_INLINE void gather_unit(bool alpha_zero, const Row& a, const OB& b, int c0, int width, T alpha, MaybeZero<T> beta,
                                      const CM& C, int r) {
     Frag<T, NC> acc;
     fill(acc, T{});
@@ -267,11 +267,11 @@ BATCHLAS_DLA_INLINE void gather_unit(bool alpha_zero, const Row& a, const OB& b,
 template <class T> struct ColPtr {
     T* p;
     std::int64_t ld;
-    BATCHLAS_DLA_INLINE T* at(int r, int c) const { return p + static_cast<std::int64_t>(c) * ld + r; }
+    BATCHLAS_DEVICE_INLINE T* at(int r, int c) const { return p + static_cast<std::int64_t>(c) * ld + r; }
 };
 template <class CM> struct RefPtr {
     CM m;
-    BATCHLAS_DLA_INLINE auto* at(int r, int c) const { return &m(r, c); }
+    BATCHLAS_DEVICE_INLINE auto* at(int r, int c) const { return &m(r, c); }
 };
 
 // One scatter row (A (Conj)Trans): stored row i of A, entries [rs, re), pushes
@@ -279,7 +279,7 @@ template <class CM> struct RefPtr {
 // The row is read in the body, not through a SpRow (sass_parity strict: an int64-based operand
 // loses GEP inbounds under LICM, +4..5% instructions).
 template <class Ar, int NCS, class T, class OB, class CP>
-BATCHLAS_DLA_INLINE void scatter_row(int width, T alpha, const OB& b, int i, int rs, int re, const T* a_val, std::int64_t vb, bool conj_a,
+BATCHLAS_DEVICE_INLINE void scatter_row(int width, T alpha, const OB& b, int i, int rs, int re, const T* a_val, std::int64_t vb, bool conj_a,
                                      const int* a_ci, int rows_out, const CP& C) {
     for (int c0 = 0; c0 < width; c0 += NCS) {
         Frag<T, NCS> ab;
@@ -309,7 +309,7 @@ BATCHLAS_DLA_INLINE void scatter_row(int width, T alpha, const OB& b, int i, int
 // C := beta C, a barrier, then the scatter by relaxed atomics, whose order is unspecified.
 // Collective: inputs visible on entry; returns 0 after a barrier (C visible to the executor).
 template <Transpose TA, Transpose TB, class Tier, class Ex, class AM, class BM, class CM, class T>
-BATCHLAS_DLA_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM& C, T alpha, T beta, const Workspace& = {}) {
+BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM& C, T alpha, T beta, const Workspace& = {}) {
     static_assert(std::is_same_v<typename AM::value_type, T>, "spmm: alpha, beta and A share one scalar type");
     using Ti = resolve_tier_t<routine::spmm<TA, TB>, T, Tier>;
     static_assert(requires { Ti::nb; }, "spmm: the tier is tier::Blocked<NC>");
@@ -320,14 +320,14 @@ BATCHLAS_DLA_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM& C
     const int width = C.cols();
     if constexpr (TA == Transpose::NoTrans) {
         const int m = A.rows();
-        for_each_owned(ex, m * ((width + NC - 1) / NC), [&](int u) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, m * ((width + NC - 1) / NC), [&](int u) BATCHLAS_DEVICE_BODY {
             const int cb = u / m;
             const int r = u - cb * m;
             spmm_detail::gather_unit<Ar, NC>(alpha_zero, A.row(r), opB, cb * NC, width, alpha, MaybeZero<T>{beta, beta_zero}, C, r);
         });
     } else {
         const int rows_out = A.cols();
-        for_each_owned(ex, rows_out * width, [&](int e) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, rows_out * width, [&](int e) BATCHLAS_DEVICE_BODY {
             const int c = e / rows_out;
             const int r = e - c * rows_out;
             C(r, c) = beta_zero ? T{} : Ar::mul(beta, static_cast<T>(C(r, c)));
@@ -335,7 +335,7 @@ BATCHLAS_DLA_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM& C
         sync(ex, Mem::Global);
         if (!alpha_zero) {
             const spmm_detail::RefPtr<CM> dst{C};
-            for_each_owned(ex, A.rows(), [&](int i) BATCHLAS_DLA_BODY {
+            for_each_owned(ex, A.rows(), [&](int i) BATCHLAS_DEVICE_BODY {
                 spmm_detail::scatter_row<Ar, 4>(width, alpha, opB, i, A.ro[A.ro_base + i], A.ro[A.ro_base + i + 1], A.val, A.nz_base,
                                                 TA == Transpose::ConjTrans, A.col, rows_out, dst);
             });
@@ -379,7 +379,7 @@ template <class T> struct IlukBatch {
     const int* u_rows;
     int matrix_stride, offset_stride, n, l_levels, u_levels;
     T diag_shift;
-    BATCHLAS_DLA_INLINE IlukFactor<T> item(int b) const {
+    BATCHLAS_DEVICE_INLINE IlukFactor<T> item(int b) const {
         return {{val, b * matrix_stride}, {col, b * matrix_stride}, l_levels, l_level_ptr, l_rows, ro, b * offset_stride,
                 u_levels, u_level_ptr, u_rows, diag, b * n, diag_shift};
     }
@@ -436,7 +436,7 @@ template <class T> inline T shifted_pivot(const T& pivot, const T& diagonal_shif
 // levels), on a work-group executor; rhs and out are vectors (v(i)), distinct. Collective; returns
 // 0 after the last barrier. Native arithmetic (Annex-G complex), as the host route.
 template <class Tier, class Ex, class T, class RV, class YV>
-BATCHLAS_DLA_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, const RV& rhs, const YV& y, const Workspace& = {}) {
+BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, const RV& rhs, const YV& y, const Workspace& = {}) {
     static_assert(std::is_same_v<resolve_tier_t<routine::iluk_apply, T, Tier>, tier::Blocked<1>>, "iluk_apply: the tier is tier::Blocked<1>");
     using Ar = arith_t<arith::Native, T>;
     for (int lv = 0; lv < M.l_levels; ++lv) {
@@ -510,7 +510,7 @@ struct IlukPlan {
     const int* u_level_ptr;
     const int* u_rows;
     // The factor iluk_factorize left at lu (one item's nnz slots) as iluk_apply's operand.
-    template <class T> BATCHLAS_DLA_INLINE IlukFactor<T> factor(const T* lu, const T& diag_shift) const {
+    template <class T> BATCHLAS_DEVICE_INLINE IlukFactor<T> factor(const T* lu, const T& diag_shift) const {
         return {{lu, 0}, {col, 0}, levels, level_ptr, level_rows, ro, 0, u_levels, u_level_ptr, u_rows, diag, 0, diag_shift};
     }
 };
@@ -559,7 +559,7 @@ inline T stabilize_pivot(const T& pivot, real_t<T> scale, const T& diagonal_shif
 // unroll remainder, LDG 38->66, and arith::Native msub as a call costs complex<float> +4 REG).
 // Arguments in the order the body reads them: a launcher's capture layout follows it.
 template <class T, class W>
-BATCHLAS_DLA_INLINE void eliminate_row(const W& at, int i, const int* step_ptr, const int* step_target, const int* step_pivot,
+BATCHLAS_DEVICE_INLINE void eliminate_row(const W& at, int i, const int* step_ptr, const int* step_target, const int* step_pivot,
                                        const int* step_upd_ptr, const int* upd_dst, const int* upd_src, const int* sym_ro,
                                        const int* diag_abs, real_t<T> drop_tolerance, bool modified_ilu, real_t<T> fill_factor,
                                        const int* orig_nnz, const T& diagonal_shift, real_t<T> diag_pivot_threshold, std::int32_t* st) {
@@ -635,7 +635,7 @@ BATCHLAS_DLA_INLINE void eliminate_row(const W& at, int i, const int* step_ptr, 
 // unusable (no shift and a zero pivot: the host route throws convergence_error), else 0,
 // uniform across the executor; elimination continues past it with pivot 1. Collective.
 template <class Tier, class Ex, class AV, class MV, class T>
-BATCHLAS_DLA_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukPlan& plan, const MV& M, const IlukOptions<T>& opts,
+BATCHLAS_DEVICE_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukPlan& plan, const MV& M, const IlukOptions<T>& opts,
                                        const Workspace& = {}) {
     static_assert(std::is_same_v<resolve_tier_t<routine::iluk_factorize, T, Tier>, tier::Blocked<1>>,
                   "iluk_factorize: the tier is tier::Blocked<1>");

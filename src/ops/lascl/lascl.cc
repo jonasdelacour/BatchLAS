@@ -21,12 +21,11 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
     if (m == 0 || n == 0 || batch == 0) return ctx.get_event();
     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     const auto av = mat.kernel_view();
-    namespace v2 = ::batchlas::device;
-    ctx->parallel_for<LasclKernel<T>>(v2::batched2d_range(batch, m, n, v2::batched2d_shape(m, n)), [=](sycl::nd_item<3> item) {
-        const v2::Grid2D<> ex{item};
+    ctx->parallel_for<LasclKernel<T>>(device::batched2d_range(batch, m, n, device::batched2d_shape(m, n)), [=](sycl::nd_item<3> item) {
+        const device::Grid2D<> ex{item};
         ex.for_each_batch(batch, [&](int b) {
             if (masked && !mk[b]) return;
-            v2::lascl(ex, cfrom, cto, v2::item(av, b, m, n));
+            device::lascl(ex, cfrom, cto, device::item(av, b, m, n));
         });
     });
     return ctx.get_event();

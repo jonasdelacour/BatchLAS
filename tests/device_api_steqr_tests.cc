@@ -45,7 +45,7 @@ constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
 constexpr int kNs[] = {1, 2, 4, 5, 8, 9, 16, 17, 31, 32};
 
-template <JobType J> using Rt = dv::routine::steqr<J>;
+template <JobType J> using Rt = batchlas::device::routine::steqr<J>;
 
 template <class T> T nan_v() { return std::numeric_limits<T>::quiet_NaN(); }
 
@@ -94,25 +94,25 @@ template <JobType J, class Tier, class T> class ApiSteqrKernel;
 // The user's kernel: one problem per unmasked partition of N lanes (every lane of the sub-group
 // calls), Q at this partition's slice of the work-group's local memory.
 template <JobType J, class Tier, class T>
-void launch_device(Dev& dev, int n, int ld, T* d, T* e, T* q, int* info, dv::steqr_opts opts) {
+void launch_device(Dev& dev, int n, int ld, T* d, T* e, T* q, int* info, batchlas::device::steqr_opts opts) {
     constexpr int N = Tier::n_max;
     constexpr int ppw = 32 / N;
-    constexpr std::size_t lbytes = dv::steqr_buffer_size<J, Tier, T>(N).local_bytes;
+    constexpr std::size_t lbytes = batchlas::device::steqr_buffer_size<J, Tier, T>(N).local_bytes;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<sycl::uint4, 1> slm(sycl::range<1>(std::max<std::size_t>((lbytes * ppw + 15) / 16, 1)), h);
            h.parallel_for<ApiSteqrKernel<J, Tier, T>>(
                sycl::nd_range<1>(std::size_t(kBatch / ppw) * 32, 32), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                    const auto part = make_partition<N, false>(it.get_sub_group());
-                   const auto ex = dv::wrap(part);
+                   const auto ex = batchlas::device::wrap(part);
                    const int slot = static_cast<int>(part.get_group_linear_id());
                    const int b = static_cast<int>(it.get_group_linear_id()) * ppw + slot;
                    std::byte* raw = reinterpret_cast<std::byte*>(slm.template get_multi_ptr<sycl::access::decorated::no>().get_raw());
-                   const dv::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
+                   const batchlas::device::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                                               raw + std::size_t(slot) * lbytes),
                                           nullptr};
                    const int nm1 = n > 1 ? n - 1 : 0;
-                   const int r = dv::steqr<J, Tier>(ex, dv::vec(d + std::size_t(b) * n, n), dv::vec(e + std::size_t(b) * nm1, nm1),
-                                                    dv::mat(q + std::size_t(b) * ld * n, n, n, ld), ws, opts);
+                   const int r = batchlas::device::steqr<J, Tier>(ex, batchlas::device::vec(d + std::size_t(b) * n, n), batchlas::device::vec(e + std::size_t(b) * nm1, nm1),
+                                                    batchlas::device::mat(q + std::size_t(b) * ld * n, n, n, ld), ws, opts);
                    if (ex.leader()) info[b] = r;
                });
        }).wait_and_throw();
@@ -156,14 +156,14 @@ template <class T> class DeviceApiSteqrTest : public DeviceCoreTest<T> {
     }
 
     template <JobType J>
-    Result device(int n, int ld, dv::steqr_opts o, const std::vector<T>& d0, const std::vector<T>& e0, const std::vector<T>& q0) {
+    Result device(int n, int ld, batchlas::device::steqr_opts o, const std::vector<T>& d0, const std::vector<T>& e0, const std::vector<T>& q0) {
         Dev& dev = this->dev;
         T* d = dev.up(d0);
         T* e = dev.up(e0);
         T* q = dev.up(q0);
         int* info = dev.alloc<int>(kBatch, 7);
         // Every listed tier is instantiated; n <= 32 must reach a Cta one (Blocked is tested below).
-        dv::with_tier<Rt<J>, T>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+        batchlas::device::with_tier<Rt<J>, T>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
             if constexpr (Tier::n_max > 0) launch_device<J, Tier, T>(dev, n, ld, d, e, q, info, o);
             else ADD_FAILURE() << "with_tier picked tier::Blocked for n = " << n;
         });
@@ -190,7 +190,7 @@ template <class T, JobType J, class TF> void bit_identity(TF& t) {
             std::vector<T> d0, e0, q0;
             fill<T>(n, d0, e0, q0, ld);
             const auto h = t.host(n, ld, J, c, d0, e0, q0);
-            const auto g = t.template device<J>(n, ld, dv::steqr_opts{c.max_sweeps, c.shift, c.update}, d0, e0, q0);
+            const auto g = t.template device<J>(n, ld, batchlas::device::steqr_opts{c.max_sweeps, c.shift, c.update}, d0, e0, q0);
             EXPECT_EQ(bitdiff(g.w, h.w), 0);
             EXPECT_EQ(bitdiff(g.info, h.info), 0);
             if constexpr (J == JobType::EigenVectors) EXPECT_EQ(bitdiff(g.q, h.q), 0);  // pads included
@@ -215,7 +215,7 @@ TYPED_TEST(DeviceApiSteqrTest, WrongShiftIsSeen) {
     const Case c = kCases[0];
     const auto h = this->host(n, ld, JobType::EigenVectors, c, d0, e0, q0);
     const auto g = this->template device<JobType::EigenVectors>(
-        n, ld, dv::steqr_opts{c.max_sweeps, SteqrShiftStrategy::Wilkinson, c.update}, d0, e0, q0);
+        n, ld, batchlas::device::steqr_opts{c.max_sweeps, SteqrShiftStrategy::Wilkinson, c.update}, d0, e0, q0);
     EXPECT_GT(bitdiff(g.q, h.q), 0);
 }
 
@@ -229,7 +229,7 @@ TYPED_TEST(DeviceApiSteqrTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
     T* e = dev.up(e0);
     T* q = dev.up(q0);
     int* info = dev.alloc<int>(kBatch, 7);
-    launch_device<JobType::EigenVectors, dv::tier::Cta<4>, T>(dev, n, ld, d, e, q, info, {});
+    launch_device<JobType::EigenVectors, batchlas::device::tier::Cta<4>, T>(dev, n, ld, d, e, q, info, {});
     const auto got = dev.down(info, kBatch);
     EXPECT_EQ(std::count(got.begin(), got.end(), -2), kBatch);
     EXPECT_EQ(bitdiff(dev.down(d, d0.size()), d0), 0);
@@ -237,35 +237,35 @@ TYPED_TEST(DeviceApiSteqrTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
 }
 
 TEST(DeviceApiSteqrTier, WithTierPicksTheSmallestCtaThenBlocked) {
-    const dv::DeviceLimits lim{48 * 1024, {32}, 1024, true};
+    const batchlas::device::DeviceLimits lim{48 * 1024, {32}, 1024, true};
     for (int n : {1, 4, 5, 8, 9, 16, 17, 31, 32, 33, 1000}) {
         int got = 0;
-        dv::with_tier<Rt<JobType::EigenVectors>, double>(lim, n, [&]<class Tier>(Tier) { got = Tier::n_max; });
+        batchlas::device::with_tier<Rt<JobType::EigenVectors>, double>(lim, n, [&]<class Tier>(Tier) { got = Tier::n_max; });
         EXPECT_EQ(got, n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : n <= 32 ? 32 : -1) << "n=" << n;  // -1: Blocked<1>
     }
     // A device without 32-wide sub-groups has no tier at all.
-    const dv::DeviceLimits sg16{48 * 1024, {16}, 1024, true};
+    const batchlas::device::DeviceLimits sg16{48 * 1024, {16}, 1024, true};
     try {
-        dv::with_tier<Rt<JobType::NoEigenVectors>, float>(sg16, 33, [&]<class Tier>(Tier) {});
+        batchlas::device::with_tier<Rt<JobType::NoEigenVectors>, float>(sg16, 33, [&]<class Tier>(Tier) {});
         ADD_FAILURE() << "with_tier admitted n = 33 without sub-group size 32";
     } catch (const batchlas::invalid_argument& e) {
         EXPECT_NE(std::string(e.what()).find("steqr: no device tier admits n=33"), std::string::npos) << e.what();
     }
     // Work-groups capped below 256: the Blocked tier is filtered out.
-    const dv::DeviceLimits wg128{48 * 1024, {32}, 128, true};
-    EXPECT_THROW((dv::with_tier<Rt<JobType::EigenVectors>, float>(wg128, 33, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
+    const batchlas::device::DeviceLimits wg128{48 * 1024, {32}, 128, true};
+    EXPECT_THROW((batchlas::device::with_tier<Rt<JobType::EigenVectors>, float>(wg128, 33, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
     // No fp64: a double problem has no tier.
-    const dv::DeviceLimits no64{48 * 1024, {32}, 1024, false};
-    EXPECT_THROW((dv::with_tier<Rt<JobType::EigenVectors>, double>(no64, 4, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
+    const batchlas::device::DeviceLimits no64{48 * 1024, {32}, 1024, false};
+    EXPECT_THROW((batchlas::device::with_tier<Rt<JobType::EigenVectors>, double>(no64, 4, [&]<class Tier>(Tier) {})), batchlas::invalid_argument);
 }
 
 TEST(DeviceApiSteqrTier, BufferSizeIsQOnlyWithVectors) {
-    EXPECT_EQ((dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<4>, float>(4).local_bytes), 4u * 4u * sizeof(float));
-    EXPECT_EQ((dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<32>, double>(32).local_bytes), 32u * 32u * sizeof(double));
-    EXPECT_EQ((dv::steqr_buffer_size<JobType::NoEigenVectors, dv::tier::Cta<16>, float>(16).local_bytes), 0u);
-    EXPECT_EQ((dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<8>, float>(8).global_bytes), 0u);
-    static_assert(dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::upto<9>, float>(9) ==
-                  dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Cta<16>, float>(9));
+    EXPECT_EQ((batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Cta<4>, float>(4).local_bytes), 4u * 4u * sizeof(float));
+    EXPECT_EQ((batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Cta<32>, double>(32).local_bytes), 32u * 32u * sizeof(double));
+    EXPECT_EQ((batchlas::device::steqr_buffer_size<JobType::NoEigenVectors, batchlas::device::tier::Cta<16>, float>(16).local_bytes), 0u);
+    EXPECT_EQ((batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Cta<8>, float>(8).global_bytes), 0u);
+    static_assert(batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::upto<9>, float>(9) ==
+                  batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Cta<16>, float>(9));
 }
 
 // ---- tier::Blocked<1>: the host steqr_wg algorithm inside one work-group, any n -----------------
@@ -284,21 +284,21 @@ constexpr int kBlockedBatch = 48;
 template <JobType J, class T> class ApiSteqrBlockedKernel;
 
 template <JobType J, class T>
-void launch_blocked(Dev& dev, int n, int ld, int batch, T* d, T* e, T* q, int* info, dv::steqr_opts opts) {
-    using Tier = dv::tier::Blocked<1>;
-    constexpr int WG = dv::tier_info<Rt<J>, Tier, T>::wg_size;
-    const dv::WorkspaceSize sz = dv::steqr_buffer_size<J, Tier, T>(n);
+void launch_blocked(Dev& dev, int n, int ld, int batch, T* d, T* e, T* q, int* info, batchlas::device::steqr_opts opts) {
+    using Tier = batchlas::device::tier::Blocked<1>;
+    constexpr int WG = batchlas::device::tier_info<Rt<J>, Tier, T>::wg_size;
+    const batchlas::device::WorkspaceSize sz = batchlas::device::steqr_buffer_size<J, Tier, T>(n);
     EXPECT_EQ(sz.local_bytes, 0u);
     std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
     dev.q().submit([&](sycl::handler& h) {
            h.parallel_for<ApiSteqrBlockedKernel<J, T>>(
                sycl::nd_range<1>(std::size_t(batch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                   const dv::WorkGroup<WG> ex{it};
+                   const batchlas::device::WorkGroup<WG> ex{it};
                    const int b = static_cast<int>(it.get_group_linear_id());
-                   const dv::Workspace ws{{}, dv::global_slice(g, sz, b)};
+                   const batchlas::device::Workspace ws{{}, batchlas::device::global_slice(g, sz, b)};
                    const int nm1 = n > 1 ? n - 1 : 0;
-                   const int r = dv::steqr<J, Tier>(ex, dv::vec(d + std::size_t(b) * n, n), dv::vec(e + std::size_t(b) * nm1, nm1),
-                                                    dv::mat(q + std::size_t(b) * ld * n, n, n, ld), ws, opts);
+                   const int r = batchlas::device::steqr<J, Tier>(ex, batchlas::device::vec(d + std::size_t(b) * n, n), batchlas::device::vec(e + std::size_t(b) * nm1, nm1),
+                                                    batchlas::device::mat(q + std::size_t(b) * ld * n, n, n, ld), ws, opts);
                    if (ex.leader()) info[b] = r;
                });
        }).wait_and_throw();
@@ -351,7 +351,7 @@ template <class T> class DeviceApiSteqrBlockedTest : public DeviceCoreTest<T> {
         T* e = dev.up(e0);
         T* q = dev.up(q0);
         int* info = dev.alloc<int>(kBlockedBatch, 7);
-        launch_blocked<J, T>(dev, n, ld, kBlockedBatch, d, e, q, info, dv::steqr_opts{max_sweeps});
+        launch_blocked<J, T>(dev, n, ld, kBlockedBatch, d, e, q, info, batchlas::device::steqr_opts{max_sweeps});
         return {dev.down(d, std::size_t(n) * kBlockedBatch), dev.down(q, q0.size()), dev.down(info, kBlockedBatch)};
     }
 
@@ -414,14 +414,14 @@ TEST(DeviceApiSteqrTier, BlockedBufferSizeIsRotationsAndBlockTable) {
     const auto round16 = [](std::size_t b) { return (b + 15) / 16 * 16; };
     for (int n : {1, 2, 33, 100}) {
         const std::size_t table = std::size_t(n / 2 + 1) * 5 * sizeof(std::int32_t);
-        const auto v = dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Blocked<1>, double>(n);
+        const auto v = batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Blocked<1>, double>(n);
         EXPECT_EQ(v.global_bytes, round16(round16(std::size_t(n - 1) * 2 * sizeof(double)) + table)) << "n=" << n;
         EXPECT_EQ(v.local_bytes, 0u);
-        const auto nv = dv::steqr_buffer_size<JobType::NoEigenVectors, dv::tier::Blocked<1>, float>(n);
+        const auto nv = batchlas::device::steqr_buffer_size<JobType::NoEigenVectors, batchlas::device::tier::Blocked<1>, float>(n);
         EXPECT_EQ(nv.global_bytes, round16(table)) << "n=" << n;
     }
-    static_assert(dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::upto<4096>, float>(4096) ==
-                  dv::steqr_buffer_size<JobType::EigenVectors, dv::tier::Blocked<1>, float>(4096));
+    static_assert(batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::upto<4096>, float>(4096) ==
+                  batchlas::device::steqr_buffer_size<JobType::EigenVectors, batchlas::device::tier::Blocked<1>, float>(4096));
 }
 
 }  // namespace

@@ -55,11 +55,11 @@ constexpr int kItems = 3;
 constexpr int kBig = 1024;
 constexpr int kPeriod = 3;
 constexpr int kTail = 7;  // poisoned elements past the last tau / workspace slice
-template <class T> constexpr int kNB = dv::larfb_default_nb<T>();
-template <class T> using Blk = dv::tier::Blocked<kNB<T>>;
-static_assert(dv::tier_info<dv::routine::geqrf, Blk<float>, float>::wg_size == kWG);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::geqrf, double, dv::tier::upto<4096>>, dv::tier::Blocked<16>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::orgqr, float, dv::tier::upto<1>>, dv::tier::Blocked<32>>);
+template <class T> constexpr int kNB = batchlas::device::larfb_default_nb<T>();
+template <class T> using Blk = batchlas::device::tier::Blocked<kNB<T>>;
+static_assert(batchlas::device::tier_info<batchlas::device::routine::geqrf, Blk<float>, float>::wg_size == kWG);
+static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::geqrf, double, batchlas::device::tier::upto<4096>>, batchlas::device::tier::Blocked<16>>);
+static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::orgqr, float, batchlas::device::tier::upto<1>>, batchlas::device::tier::Blocked<32>>);
 
 struct alignas(16) Chunk16 {
     unsigned char b[16];
@@ -195,28 +195,28 @@ template <class T> int pads_changed(const Batch<T>& before, const std::vector<T>
 // workspace of items * global_bytes (+ a poisoned tail) NaN-filled; f(ex, b, ws) returns info[b].
 template <class T> struct Launch {
     Dev& d;
-    dv::WorkspaceSize sz;
+    batchlas::device::WorkspaceSize sz;
     std::byte* gws = nullptr;
     int* info = nullptr;
     int items;
-    Launch(Dev& dev, dv::WorkspaceSize s, int n_items) : d(dev), sz(s), items(n_items) {
+    Launch(Dev& dev, batchlas::device::WorkspaceSize s, int n_items) : d(dev), sz(s), items(n_items) {
         const std::size_t elems = (sz.global_bytes * items) / sizeof(T) + kTail;
-        gws = reinterpret_cast<std::byte*>(d.alloc<T>(elems, dv::qnan<T>()));
+        gws = reinterpret_cast<std::byte*>(d.alloc<T>(elems, batchlas::device::qnan<T>()));
         info = d.alloc<int>(items, 12345);
     }
     template <class F> std::vector<int> run(F f) {
         const std::size_t l16 = std::max<std::size_t>((sz.local_bytes + 15) / 16, 1);
-        const dv::WorkspaceSize s = sz;
+        const batchlas::device::WorkspaceSize s = sz;
         std::byte* const g = gws;
         int* const inf = info;
         d.q().submit([&](sycl::handler& h) {
              sycl::local_accessor<Chunk16, 1> slm(sycl::range<1>(l16), h);
              h.parallel_for(sycl::nd_range<1>(std::size_t(items) * kWG, kWG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                 const dv::WorkGroup<kWG, 32> ex{it};
+                 const batchlas::device::WorkGroup<kWG, 32> ex{it};
                  const int b = static_cast<int>(it.get_group_linear_id());
                  auto* raw = reinterpret_cast<std::byte*>(batchlas::util::get_raw_ptr(slm));
-                 const dv::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw),
-                                        dv::global_slice(g, s, b)};
+                 const batchlas::device::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw),
+                                        batchlas::device::global_slice(g, s, b)};
                  const int r = f(ex, b, ws);
                  if (ex.leader()) inf[b] = r;
              });
@@ -253,9 +253,9 @@ template <class T> QrOut<T> device_geqrf(Dev& d, const Batch<T>& A) {
     T* a = d.up(A.h);
     T* tau = d.alloc<T>(std::size_t(k) * A.items + kTail, pad_value<T>());
     const auto kv = kview(a, A);
-    Launch<T> L(d, dv::geqrf_buffer_size<Blk<T>, T>(A.rows, A.cols), A.items);
-    auto info = L.run([=](const auto& ex, int b, const dv::Workspace& ws) {
-        return dv::geqrf<Blk<T>>(ex, dv::item(kv, b), dv::vec(tau + std::ptrdiff_t(b) * k, k), ws);
+    Launch<T> L(d, batchlas::device::geqrf_buffer_size<Blk<T>, T>(A.rows, A.cols), A.items);
+    auto info = L.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
+        return batchlas::device::geqrf<Blk<T>>(ex, batchlas::device::item(kv, b), batchlas::device::vec(tau + std::ptrdiff_t(b) * k, k), ws);
     });
     return {d.down(a, A.h.size()), d.down(tau, std::size_t(k) * A.items + kTail), info};
 }
@@ -347,9 +347,9 @@ TYPED_TEST(DeviceApiQrTest, OrgqrBlockedMatchesReferenceAndHostRoute) {
         T* tp = d.up(tau);
         const auto kv = kview(a, F);
         const int n = s.n;
-        Launch<T> L(d, dv::orgqr_buffer_size<Blk<T>, T>(s.m, s.n), kItems);
-        const auto info = L.run([=](const auto& ex, int b, const dv::Workspace& ws) {
-            return dv::orgqr<Blk<T>>(ex, dv::item(kv, b), tp + std::ptrdiff_t(b) * n, ws);
+        Launch<T> L(d, batchlas::device::orgqr_buffer_size<Blk<T>, T>(s.m, s.n), kItems);
+        const auto info = L.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
+            return batchlas::device::orgqr<Blk<T>>(ex, batchlas::device::item(kv, b), tp + std::ptrdiff_t(b) * n, ws);
         });
         const auto got = d.down(a, F.h.size());
         for (int q = 0; q < kItems; ++q) EXPECT_EQ(info[q], 0);
@@ -393,9 +393,9 @@ template <class T, Side SD, Transpose TR> void check_ormqr(Dev& d, const Shape s
     T* c = d.up(C.h);
     const auto av = kview(a, F);
     const auto cv = kview(c, C);
-    Launch<T> L(d, dv::ormqr_buffer_size<SD, TR, Blk<T>, T>(C.rows, C.cols), kItems);
-    const auto info = L.run([=](const auto& ex, int b, const dv::Workspace& ws) {
-        return dv::ormqr<SD, TR, Blk<T>>(ex, dv::item(av, b), dv::item(cv, b), dv::vec(tp + std::ptrdiff_t(b) * k, k), ws);
+    Launch<T> L(d, batchlas::device::ormqr_buffer_size<SD, TR, Blk<T>, T>(C.rows, C.cols), kItems);
+    const auto info = L.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
+        return batchlas::device::ormqr<SD, TR, Blk<T>>(ex, batchlas::device::item(av, b), batchlas::device::item(cv, b), batchlas::device::vec(tp + std::ptrdiff_t(b) * k, k), ws);
     });
     const auto got = d.down(c, C.h.size());
     EXPECT_EQ(pads_changed(C, got), 0) << "ormqr wrote outside C";
@@ -470,14 +470,14 @@ TYPED_TEST(DeviceApiQrTest, BatchOf1024IsBitIdenticalPerRepresentative) {
     T* c = d.up(C.h);
     const auto av = kview(a, A);
     const auto cv = kview(c, C);
-    Launch<T> Lm(d, dv::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, Blk<T>, T>(C.rows, C.cols), kBig);
-    Lm.run([=](const auto& ex, int b, const dv::Workspace& ws) {
-        return dv::ormqr<Side::Left, Transpose::ConjTrans, Blk<T>>(ex, dv::item(av, b), dv::item(cv, b), tp + std::ptrdiff_t(b) * k, ws);
+    Launch<T> Lm(d, batchlas::device::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, Blk<T>, T>(C.rows, C.cols), kBig);
+    Lm.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
+        return batchlas::device::ormqr<Side::Left, Transpose::ConjTrans, Blk<T>>(ex, batchlas::device::item(av, b), batchlas::device::item(cv, b), tp + std::ptrdiff_t(b) * k, ws);
     });
     EXPECT_EQ(items_differing(C, d.down(c, C.h.size())), 0) << "ormqr";
 
-    Launch<T> Lo(d, dv::orgqr_buffer_size<Blk<T>, T>(m, n), kBig);
-    Lo.run([=](const auto& ex, int b, const dv::Workspace& ws) { return dv::orgqr<Blk<T>>(ex, dv::item(av, b), tp + std::ptrdiff_t(b) * k, ws); });
+    Launch<T> Lo(d, batchlas::device::orgqr_buffer_size<Blk<T>, T>(m, n), kBig);
+    Lo.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) { return batchlas::device::orgqr<Blk<T>>(ex, batchlas::device::item(av, b), tp + std::ptrdiff_t(b) * k, ws); });
     EXPECT_EQ(items_differing(A, d.down(a, A.h.size())), 0) << "orgqr";
 }
 
@@ -494,36 +494,36 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
     T* a = d.up(A.h);
     T* tp = d.alloc<T>(n, 0.f);
     const auto av = kview(a, A);
-    const dv::WorkspaceSize sz = dv::orgqr_buffer_size<Blk<T>, T>(m, n);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::orgqr_buffer_size<Blk<T>, T>(m, n);
     Launch<T> L(d, sz, 1);
     // One call per kernel: the six calls inlined into one kernel crash the spir64_x86_64 AOT
     // compiler (opencl-aot, pass sycl-kernel-reduce-cross-barrier-values, clang 22 e79d489d).
-    const auto flat = dv::mat(a, n, m, n);  // n x m: orgqr's m < n
+    const auto flat = batchlas::device::mat(a, n, m, n);  // n x m: orgqr's m < n
     auto first = [](const std::vector<int>& v) { return v.at(0); };
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-                  return dv::geqrf<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
+                  return batchlas::device::geqrf<Blk<T>>(ex, batchlas::device::item(av, 0), batchlas::device::vec(tp, n - 1), ws);
               })),
               -2)
         << "geqrf: tau shorter than k";
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-                  return dv::geqrf<Blk<T>>(ex, dv::item(av, 0), tp, dv::Workspace{ws.local, nullptr});
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
+                  return batchlas::device::geqrf<Blk<T>>(ex, batchlas::device::item(av, 0), tp, batchlas::device::Workspace{ws.local, nullptr});
               })),
               -3)
         << "geqrf: no global workspace";
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) { return dv::orgqr<Blk<T>>(ex, flat, tp, ws); })), -1)
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) { return batchlas::device::orgqr<Blk<T>>(ex, flat, tp, ws); })), -1)
         << "orgqr: m < n";
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-                  return dv::orgqr<Blk<T>>(ex, dv::item(av, 0), dv::vec(tp, n - 1), ws);
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
+                  return batchlas::device::orgqr<Blk<T>>(ex, batchlas::device::item(av, 0), batchlas::device::vec(tp, n - 1), ws);
               })),
               -2)
         << "orgqr: tau shorter than n";
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-                  return dv::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), flat, tp, ws);
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
+                  return batchlas::device::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), flat, tp, ws);
               })),
               -1)
         << "ormqr: A.rows() is not C.rows()";
-    EXPECT_EQ(first(L.run([=](const auto& ex, int, const dv::Workspace& ws) {
-                  return dv::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, dv::item(av, 0), dv::item(av, 0), dv::vec(tp, n - 1), ws);
+    EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
+                  return batchlas::device::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), batchlas::device::item(av, 0), batchlas::device::vec(tp, n - 1), ws);
               })),
               -1)
         << "ormqr Right: A.rows() is not C.cols()";
@@ -535,10 +535,10 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
 
 // ---- with_tier and buffer_size (host only) ------------------------------------------------------
 
-template <class Routine, class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class Routine, class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "Blocked<" + std::to_string(Tier::nb) + ">"; });
+        batchlas::device::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "Blocked<" + std::to_string(Tier::nb) + ">"; });
     } catch (const batchlas::invalid_argument& e) {
         got = e.what();
     }
@@ -546,32 +546,32 @@ template <class Routine, class T> std::string pick(const dv::DeviceLimits& lim, 
 }
 
 TEST(DeviceApiQrTier, WithTierPicksBlockedAndFilters) {
-    const dv::DeviceLimits ok{48 * 1024, {16, 32}, 1024, true};
+    const batchlas::device::DeviceLimits ok{48 * 1024, {16, 32}, 1024, true};
     for (int n : {0, 1, 31, 33, 4096}) {
-        EXPECT_EQ((pick<dv::routine::geqrf, float>(ok, n)), "Blocked<32>") << n;
-        EXPECT_EQ((pick<dv::routine::geqrf, double>(ok, n)), "Blocked<16>") << n;
-        EXPECT_EQ((pick<dv::routine::orgqr, std::complex<double>>(ok, n)), "Blocked<32>") << n;
-        EXPECT_EQ((pick<dv::routine::ormqr<Side::Right, Transpose::ConjTrans>, std::complex<float>>(ok, n)), "Blocked<32>") << n;
+        EXPECT_EQ((pick<batchlas::device::routine::geqrf, float>(ok, n)), "Blocked<32>") << n;
+        EXPECT_EQ((pick<batchlas::device::routine::geqrf, double>(ok, n)), "Blocked<16>") << n;
+        EXPECT_EQ((pick<batchlas::device::routine::orgqr, std::complex<double>>(ok, n)), "Blocked<32>") << n;
+        EXPECT_EQ((pick<batchlas::device::routine::ormqr<Side::Right, Transpose::ConjTrans>, std::complex<float>>(ok, n)), "Blocked<32>") << n;
     }
     auto starts = [](const std::string& s, const char* p) { return s.rfind(p, 0) == 0; };
-    dv::DeviceLimits no_sg32 = ok;
+    batchlas::device::DeviceLimits no_sg32 = ok;
     no_sg32.sub_group_sizes = {8, 16};
-    EXPECT_TRUE(starts(pick<dv::routine::geqrf, float>(no_sg32, 40), "geqrf: no device tier admits n=40"));
-    dv::DeviceLimits no_fp64 = ok;
+    EXPECT_TRUE(starts(pick<batchlas::device::routine::geqrf, float>(no_sg32, 40), "geqrf: no device tier admits n=40"));
+    batchlas::device::DeviceLimits no_fp64 = ok;
     no_fp64.fp64 = false;
-    EXPECT_TRUE(starts(pick<dv::routine::orgqr, double>(no_fp64, 40), "orgqr: no device tier admits n=40"));
-    EXPECT_EQ((pick<dv::routine::orgqr, float>(no_fp64, 40)), "Blocked<32>");
-    using Cfg = dv::larfb_cfg_t<dv::alg::Default, std::complex<double>>;
-    dv::DeviceLimits small_slm = ok;
-    small_slm.local_mem_bytes = dv::l3::smem_bytes<Cfg>() - 1;
-    EXPECT_TRUE(starts(pick<dv::routine::ormqr<Side::Left, Transpose::NoTrans>, std::complex<double>>(small_slm, 40),
+    EXPECT_TRUE(starts(pick<batchlas::device::routine::orgqr, double>(no_fp64, 40), "orgqr: no device tier admits n=40"));
+    EXPECT_EQ((pick<batchlas::device::routine::orgqr, float>(no_fp64, 40)), "Blocked<32>");
+    using Cfg = batchlas::device::larfb_cfg_t<batchlas::device::alg::Default, std::complex<double>>;
+    batchlas::device::DeviceLimits small_slm = ok;
+    small_slm.local_mem_bytes = batchlas::device::l3::smem_bytes<Cfg>() - 1;
+    EXPECT_TRUE(starts(pick<batchlas::device::routine::ormqr<Side::Left, Transpose::NoTrans>, std::complex<double>>(small_slm, 40),
                        "ormqr: no device tier admits n=40"));
-    small_slm.local_mem_bytes = dv::l3::smem_bytes<Cfg>();
-    EXPECT_EQ((pick<dv::routine::ormqr<Side::Left, Transpose::NoTrans>, std::complex<double>>(small_slm, 40)), "Blocked<32>")
+    small_slm.local_mem_bytes = batchlas::device::l3::smem_bytes<Cfg>();
+    EXPECT_EQ((pick<batchlas::device::routine::ormqr<Side::Left, Transpose::NoTrans>, std::complex<double>>(small_slm, 40)), "Blocked<32>")
         << "a launch at the local-memory ceiling is admitted";
-    dv::DeviceLimits small_wg = ok;
+    batchlas::device::DeviceLimits small_wg = ok;
     small_wg.max_work_group_size = 128;
-    EXPECT_TRUE(starts(pick<dv::routine::geqrf, float>(small_wg, 40), "geqrf: no device tier admits n=40"));
+    EXPECT_TRUE(starts(pick<batchlas::device::routine::geqrf, float>(small_wg, 40), "geqrf: no device tier admits n=40"));
 }
 
 // buffer_size against the host blocked routes' layout, written out by hand (16-byte slots).
@@ -579,21 +579,21 @@ TEST(DeviceApiQrTier, BufferSizeIsTheLayout) {
     auto r16 = [](std::size_t b) { return (b + 15) / 16 * 16; };
     using T = std::complex<float>;
     constexpr std::size_t e = sizeof(T);
-    const std::size_t smem = r16(dv::l3::smem_bytes<dv::larfb_cfg_t<dv::alg::Default, T>>());
+    const std::size_t smem = r16(batchlas::device::l3::smem_bytes<batchlas::device::larfb_cfg_t<batchlas::device::alg::Default, T>>());
     const int m = 70, n = 41, nb = 32;
-    const auto g = dv::geqrf_buffer_size<Blk<T>, T>(m, n);
+    const auto g = batchlas::device::geqrf_buffer_size<Blk<T>, T>(m, n);
     EXPECT_EQ(g.local_bytes, smem);
     EXPECT_EQ(g.global_bytes, r16(m * nb * e) + r16(nb * nb * e) + r16(2 * nb * (n - nb) * e));
-    const auto gw = dv::geqrf_buffer_size<Blk<T>, T>(5, 9);  // k = 5 < NB: nb = 5, W spans n - 5
+    const auto gw = batchlas::device::geqrf_buffer_size<Blk<T>, T>(5, 9);  // k = 5 < NB: nb = 5, W spans n - 5
     EXPECT_EQ(gw.global_bytes, r16(5 * nb * e) + r16(nb * nb * e) + r16(2 * nb * (9 - 5) * e));
-    const auto l = dv::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, Blk<T>, T>(m, 45);
+    const auto l = batchlas::device::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, Blk<T>, T>(m, 45);
     EXPECT_EQ(l.global_bytes, r16(m * nb * e) + r16(nb * nb * e) + r16(2 * nb * 45 * e));
-    const auto rr = dv::ormqr_buffer_size<Side::Right, Transpose::NoTrans, Blk<T>, T>(45, m);
+    const auto rr = batchlas::device::ormqr_buffer_size<Side::Right, Transpose::NoTrans, Blk<T>, T>(45, m);
     EXPECT_EQ(rr.global_bytes, r16(m * nb * e) + r16(nb * nb * e) + r16(2 * 45 * nb * e));
-    const auto o = dv::orgqr_buffer_size<Blk<T>, T>(m, n);
+    const auto o = batchlas::device::orgqr_buffer_size<Blk<T>, T>(m, n);
     EXPECT_EQ(o.local_bytes, smem);
     EXPECT_EQ(o.global_bytes, r16(m * n * e) + r16(m * nb * e) + r16(nb * nb * e) + r16(2 * nb * n * e));
-    EXPECT_EQ((dv::tier_info<dv::routine::geqrf, Blk<T>, T>::buffer_size(50)), (dv::geqrf_buffer_size<Blk<T>, T>(50, 50)));
+    EXPECT_EQ((batchlas::device::tier_info<batchlas::device::routine::geqrf, Blk<T>, T>::buffer_size(50)), (batchlas::device::geqrf_buffer_size<Blk<T>, T>(50, 50)));
 }
 
 }  // namespace

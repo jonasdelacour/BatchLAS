@@ -24,14 +24,14 @@ namespace sytrd_detail {
 
 // x1 conj(y1) + x2 conj(y2): one term of a rank-2 Hermitian update. Real: one expression, so
 // it contracts to fma(x1, y1, x2 * y2) as the hand kernel's did.
-template <class Ops, class T> BATCHLAS_DLA_INLINE T her2_term(const T& x1, const T& y1, const T& x2, const T& y2) {
+template <class Ops, class T> BATCHLAS_DEVICE_INLINE T her2_term(const T& x1, const T& y1, const T& x2, const T& y2) {
     using Ar = arith_t<Ops, T>;
     if constexpr (Ar::is_complex) return Ar::add(Ar::mul(x1, Ar::conj(y1)), Ar::mul(x2, Ar::conj(y2)));
     else return x1 * y1 + x2 * y2;
 }
 
 // x^H y, one product per item (no accumulator), then the chunk reduction.
-template <class Ops, class Ex, class X, class Y> BATCHLAS_DLA_INLINE auto dotc(const Fit<Ex>& ex, const X& x, const Y& y) {
+template <class Ops, class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE auto dotc(const Fit<Ex>& ex, const X& x, const Y& y) {
     using T = elem_t<X>;
     using Ar = arith_t<Ops, T>;
     const int i = ex.lid();
@@ -42,7 +42,7 @@ template <class Ops, class Ex, class X, class Y> BATCHLAS_DLA_INLINE auto dotc(c
 // y(r) := (A x)(r) * alpha with item r computing output row r (core gemv's RowOwner without
 // the loop); x is read across owners. alpha multiplies on the right, as `y *= tau` did.
 template <class Ops, class Ex, class T, class MA, class X, class Y>
-BATCHLAS_DLA_INLINE void gemv_rows(const Fit<Ex>& ex, const T& alpha, const MA& a, const Published<X>& xp, const Y& y) {
+BATCHLAS_DEVICE_INLINE void gemv_rows(const Fit<Ex>& ex, const T& alpha, const MA& a, const Published<X>& xp, const Y& y) {
     using Ar = arith_t<Ops, T>;
     const auto& x = xp.v;
     const int m = a.rows(), n = a.cols(), r = ex.lid();
@@ -55,7 +55,7 @@ BATCHLAS_DLA_INLINE void gemv_rows(const Fit<Ex>& ex, const T& alpha, const MA& 
 
 // A := A - (x y^H + y x^H) on the FULL square A (both triangles), one row per item.
 template <class Ops, class Ex, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void her2_full_sub(const Fit<Ex>& ex, const Published<X>& xp, const Published<Y>& yp, const MA& a) {
+BATCHLAS_DEVICE_INLINE void her2_full_sub(const Fit<Ex>& ex, const Published<X>& xp, const Published<Y>& yp, const MA& a) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     const auto& x = xp.v;
@@ -75,7 +75,7 @@ BATCHLAS_DLA_INLINE void her2_full_sub(const Fit<Ex>& ex, const Published<X>& xp
 // it and its conjugate mirror, so a barrier must precede reads of other rows. active == false
 // (a masked-off batch item) zero-fills the tile's row and reads nothing.
 template <Uplo UL, class Ops, class Ex, class MA, class MT>
-BATCHLAS_DLA_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& tile, bool active) {
+BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& tile, bool active) {
     using T = typename MT::value_type;
     using Ar = arith_t<Ops, T>;
     const int n = a.rows(), r = ex.lid();
@@ -99,7 +99,7 @@ BATCHLAS_DLA_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& ti
 
 // B := A (m x n), item r copying row r (core lacpy owns elements 2-D; this is the row-owner
 // form the hand kernels wrote, one guarded row per item).
-template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void lacpy_rows(const Fit<Ex>& ex, const MA& a, const MB& b) {
+template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void lacpy_rows(const Fit<Ex>& ex, const MA& a, const MB& b) {
     const int n = a.cols();
     for_each_owned(ex, a.rows(), [&](int r) {
         for (int c = 0; c < n; ++c) b(r, c) = a(r, c);
@@ -110,7 +110,7 @@ template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void lacpy_rows(cons
 // ar), row is col's conjugate mirror. Reflector; mirrored write-back; then, unless tau == 0,
 // v := reflector, w := A v tau, w += (-tau/2)(v^H w) v, A -= v w^H + w v^H.
 template <Uplo UL, class Ops, class Ex, class Blk, class Col, class Row, class V, class W, class T, class F>
-BATCHLAS_DLA_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const Blk& blk, const Col& col, const Row& row,
+BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const Blk& blk, const Col& col, const Row& row,
                                     const V& v, const W& w, bool x_active, T& tau_lane, F& on_step) {
     using Ar = arith_t<Ops, T>;
     const Fit<Ex> fx{ex};
@@ -171,7 +171,7 @@ BATCHLAS_DLA_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const Bl
 // Upper returns tau(lid) on item lid (0 past n-2); Lower returns 0 (tau goes through on_step).
 // Step k touches only its active block, so column k is final once step k has run. COLLECTIVE.
 template <Uplo UL, class Ops = arith::Native, class Ex, class MA, class V, class W, class F = NoOp>
-BATCHLAS_DLA_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, const V& v, const W& w, int n, F&& on_step = {}) {
+BATCHLAS_DEVICE_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, const V& v, const W& w, int n, F&& on_step = {}) {
     using T = typename MA::value_type;
     const int lane = ex.lid();
     T tau_lane = arith_t<Ops, T>::zero();
@@ -194,10 +194,10 @@ BATCHLAS_DLA_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, con
 namespace sytrd_detail {
 
 // Local memory as the decorated pointer the Upper tile views take (never &acc[off]: generic).
-template <class T> BATCHLAS_DLA_INLINE typename local_mptr<T>::pointer decorated_ptr(const sycl::local_accessor<T, 1>& a) {
+template <class T> BATCHLAS_DEVICE_INLINE typename local_mptr<T>::pointer decorated_ptr(const sycl::local_accessor<T, 1>& a) {
     return a.template get_multi_ptr<sycl::access::decorated::yes>().get();
 }
-template <class T> BATCHLAS_DLA_INLINE T* decorated_ptr(T* p) { return p; }
+template <class T> BATCHLAS_DEVICE_INLINE T* decorated_ptr(T* p) { return p; }
 
 // sytd2<Upper> on the full Hermitian tile (ld LDA, zero past n) at A_local[base_a]; returns
 // tau(lane), 0 for lane >= n-1. The inliner declines this body for complex T, so the call
@@ -220,7 +220,7 @@ inline T sytd2_upper_tile(const SubGroupPartition<P, M>& part, typename local_mp
 // problem's tile, v and w. live == false (a masked-off item) reduces a zero tile and stores
 // nothing. The host sytrd_cta kernel and device::sytrd<UL, tier::Cta<P>> both run it.
 template <Uplo UL, class T, size_t P, bool M, class Buf, class MA, class DV, class EV, class TV>
-BATCHLAS_DLA_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, const Buf& A_local, int32_t base_a,
+BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, const Buf& A_local, int32_t base_a,
                                        const Buf& V_local, int32_t base_v, const Buf& W_local, int32_t base_w,
                                        const MA& A, DV D_prob, EV E_prob, TV TAU_prob, int32_t n, bool live) {
     constexpr int kP = static_cast<int>(P);
@@ -286,7 +286,7 @@ template <int N, class T> struct cta_plan {
 // work-group; vip / wip: ib elements of local memory. The hand kernel's expressions (std::complex
 // operators, Native and ExplicitInline policies). Ends on a global barrier. COLLECTIVE.
 template <int WG, Mem VM = Mem::Local, class T, class AB, class WB, class Loc, class F>
-BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, T* v_ptr, T* wcol_ptr,
+BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, T* v_ptr, T* wcol_ptr,
                                          const Loc& vip_local, const Loc& wip_local, F&& on_reflector) {
     using Real = real_t<T>;
     using arith::Native;
@@ -421,9 +421,9 @@ BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, 
 template <class T> struct ColView {
     T* p;
     int ld_;
-    BATCHLAS_DLA_INLINE T& operator()(int r, int c) const { return p[r + c * ld_]; }
-    BATCHLAS_DLA_INLINE T* data() const { return p; }
-    BATCHLAS_DLA_INLINE int ld() const { return ld_; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int r, int c) const { return p[r + c * ld_]; }
+    BATCHLAS_DEVICE_INLINE T* data() const { return p; }
+    BATCHLAS_DEVICE_INLINE int ld() const { return ld_; }
 };
 
 // The trailing update's tile: the in-group L3 preset the device_api_l3 tests cover (256 items).
@@ -449,7 +449,7 @@ template <int NB, class T> struct blocked_plan {
 // into A(i+1, i) and A(i, i+1) = conj(e(i)) (the host restore_tridiag_lower). Im(diag) of the
 // input is dropped first. The strictly upper triangle past the superdiagonal is not referenced.
 template <int NB, int WG, class T, class DV, class EV, class TV>
-BATCHLAS_DLA_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const DV& d, const EV& e, const TV& tau,
+BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const DV& d, const EV& e, const TV& tau,
                                            const Workspace& ws) {
     using Cfg = blocked_cfg<T>;
     using Ar = Arith<T>;
@@ -463,7 +463,7 @@ BATCHLAS_DLA_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Gl
     const l3::Smem<Cfg> sm{carve_local(ws, plan.smem).get_raw()};
 
     if constexpr (Ar::is_complex) {
-        for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<T>(0)); });
+        for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<T>(0)); });
         ex.barrier(Mem::Global);
     }
     const int k = n - 1;
@@ -473,7 +473,7 @@ BATCHLAS_DLA_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Gl
         const ColView<T> ap{a.p + j0 + j0 * lda, lda};
         const ColView<T> wv{wp + j0, n};
         latrd_lower_run<WG, Mem::Global>(ex, ap, wv, n - j0, ib, vp, wcp, vip, wip,
-                                         [&, j0](int i, const T& beta, const T& t) BATCHLAS_DLA_BODY {  // j0 by value: see the latrd i
+                                         [&, j0](int i, const T& beta, const T& t) BATCHLAS_DEVICE_BODY {  // j0 by value: see the latrd i
                                              e(j0 + i) = beta;
                                              tau(j0 + i) = t;
                                          });
@@ -481,7 +481,7 @@ BATCHLAS_DLA_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Gl
             her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, l3::Global<T>{a.p + j2 + j0 * lda, lda, n2, ib}, l3::Global<T>{wp + j2, n, n2, ib},
                                                          l3::Global<T>{a.p + j2 + j2 * lda, lda, n2, n2}, NegOne{}, One{}, sm);
     }
-    for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
         d(i) = a(i, i);
         if (i < n - 1) {
             const T ei = e(i);
@@ -538,7 +538,7 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrd_buffer_siz
 // ws: sytrd_buffer_size bytes for this problem. COLLECTIVE over the executor. Returns 0, or -2
 // when A is not square with 1 <= n (<= N for Cta).
 template <Uplo UL, class Tier, class Ex, class MA, class DV, class EV, class TV>
-BATCHLAS_DLA_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws) {
     using T = std::remove_cv_t<typename MA::value_type>;
     using R = routine::sytrd<UL>;
     using Tr = resolve_tier_t<R, T, Tier>;

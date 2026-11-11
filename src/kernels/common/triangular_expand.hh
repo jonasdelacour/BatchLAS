@@ -68,12 +68,11 @@ Event expand_triangular(Queue& ctx,
                                static_cast<std::size_t>(shape.rows));
 
     ctx->parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-        namespace v2 = ::batchlas::device;
-        const v2::Grid2D<0, 0, 1> ex{item};
+        const device::Grid2D<0, 0, 1> ex{item};
         const int b = ex.batch();
-        v2::glue::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
-                             v2::mat_wide(src + static_cast<std::size_t>(b) * stride_a, n, n, lda),
-                             v2::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo));
+        device::glue::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
+                             device::mat_wide(src + static_cast<std::size_t>(b) * stride_a, n, n, lda),
+                             device::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo));
     });
 
     return ctx.get_event();
@@ -118,8 +117,7 @@ Event expand_mirrored(Queue& ctx,
             sycl::range<1>(kMirrorTile * (kMirrorTile + 1)), cgh);
 
         batchlas::impl::parallel_for(cgh, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-            namespace v2 = ::batchlas::device;
-            const v2::Grid2D<kMirrorTile, kMirrorGroupCols, 1> ex{item};
+            const device::Grid2D<kMirrorTile, kMirrorGroupCols, 1> ex{item};
             const int ti = static_cast<int>(item.get_group(1));
             const int tj = static_cast<int>(item.get_group(2));
             if (ti < tj) {
@@ -129,18 +127,18 @@ Event expand_mirrored(Queue& ctx,
             // Row/column origin of the tile inside the referenced triangle.
             const int src_row0 = (lower ? ti : tj) * kMirrorTile;
             const int src_col0 = (lower ? tj : ti) * kMirrorTile;
-            const auto a_b = v2::mat_wide(src + static_cast<std::size_t>(b) * stride_a, n, n, lda);
-            const auto o_b = v2::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo);
-            const auto t = v2::mat<v2::Mem::Local>(::batchlas::util::get_raw_ptr(tile), kMirrorTile, kMirrorTile, kMirrorTile + 1);
+            const auto a_b = device::mat_wide(src + static_cast<std::size_t>(b) * stride_a, n, n, lda);
+            const auto o_b = device::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo);
+            const auto t = device::mat<device::Mem::Local>(::batchlas::util::get_raw_ptr(tile), kMirrorTile, kMirrorTile, kMirrorTile + 1);
 
-            v2::glue::tile_load<kMirrorTile>(ex, a_b, src_row0, src_col0, t);
+            device::glue::tile_load<kMirrorTile>(ex, a_b, src_row0, src_col0, t);
             sycl::group_barrier(item.get_group());
             // A diagonal tile writes the referenced member of each pair (the two writes would collide).
             if (ti == tj) {
-                v2::glue::tile_store_diag<Conjugate, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
+                device::glue::tile_store_diag<Conjugate, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
                 return;
             }
-            v2::glue::tile_store_pair<Conjugate, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
+            device::glue::tile_store_pair<Conjugate, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
         });
     });
 

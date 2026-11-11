@@ -42,7 +42,7 @@ constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the ti
 }
 
 // COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
-// lane guard belongs INSIDE it. Device LA v2 Partition::bcast: complex shuffles as two
+// lane guard belongs INSIDE it. Device LA Partition::bcast: complex shuffles as two
 // reals (permute/select reject an aggregate, gesvdj_cta.cc:95).
 template <typename D, std::size_t P>
 inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
@@ -54,7 +54,7 @@ inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
 // the register file. Core select is that rule; this name stays until posv_tiny.cc calls it.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 template <typename D>
-BATCHLAS_DLA_INLINE D tiny_select(bool cond, D a, D b) {
+BATCHLAS_DEVICE_INLINE D tiny_select(bool cond, D a, D b) {
     return ::batchlas::device::select(cond, a, b);
 }
 

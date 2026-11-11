@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// SASS lab: hand-written vs device LA v2 kernels of the same computation and shape.
+// SASS lab: hand-written vs device LA kernels of the same computation and shape.
 // Built by run_lab.sh outside CMake with the library's device flags; not part of the build.
 #pragma once
 
@@ -30,8 +30,8 @@ template <class T> using KMV = batchlas::KernelMatrixView<T, MatrixFormat::Dense
 // Variants. Keep in sync with VARIANTS in sass_stats.py.
 enum Variant : int {
     kHand = 0,      // hand-written, BatchLAS idiom (raw pointers, constexpr WG, accessors)
-    kDblas = 1,     // retired: v1 group BLAS (deleted); the number stays for sass_stats.py
-    kDblasWs = 2,   // retired: v1 group BLAS with its workspace
+    kDblas = 1,     // retired: old group BLAS (deleted); the number stays for sass_stats.py
+    kDblasWs = 2,   // retired: old group BLAS with its workspace
     kLean = 3,      // lean API: int32 views, constexpr WG executor, always_inline, ct path, no inner barriers
     kLeanRtWg = 4,  // lean API, executor size read at run time (as batchlas::device does)
     kLeanBv = 5,    // lean algorithms over batchlas VectorView / KernelMatrixView

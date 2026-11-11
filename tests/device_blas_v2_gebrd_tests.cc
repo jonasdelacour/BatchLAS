@@ -21,13 +21,12 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -118,23 +117,23 @@ TYPED_TEST(DeviceBlasV2GebrdTest, ConjAndHermViewsInGemvAcc) {
     T* z = this->dev.up(hz);
     this->dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
+        const device::WorkGroup<WG> ex{it};
         T* p = d + std::ptrdiff_t(b) * sz;
-        const auto A = v2::mat(p + oA, m, k2, ld);
-        const auto B = v2::mat(p + oB, k1, m, ldb);
-        const auto x1 = v2::assume_published(v2::conj_view(v2::vec(p + oX1, k1, inc)));
-        const auto x2 = v2::assume_published(v2::vec(p + oX2, k2));
-        const auto yv = v2::vec(y + std::ptrdiff_t(b) * m, m), zv = v2::vec(z + std::ptrdiff_t(b) * m, m);
-        v2::gemv_acc(ex, alpha, v2::conj_view(yv), yv, v2::term(v2::op_view<Transpose::ConjTrans>(B), x1), v2::term(A, x2));
-        const auto neg_zero = v2::fn_vec(m, [](int) { return v2::Arith<T>::make(-R(0), -R(0)); });
-        v2::gemv_acc(ex, beta, neg_zero, zv, v2::term(A, x2));
+        const auto A = device::mat(p + oA, m, k2, ld);
+        const auto B = device::mat(p + oB, k1, m, ldb);
+        const auto x1 = device::assume_published(device::conj_view(device::vec(p + oX1, k1, inc)));
+        const auto x2 = device::assume_published(device::vec(p + oX2, k2));
+        const auto yv = device::vec(y + std::ptrdiff_t(b) * m, m), zv = device::vec(z + std::ptrdiff_t(b) * m, m);
+        device::gemv_acc(ex, alpha, device::conj_view(yv), yv, device::term(device::op_view<Transpose::ConjTrans>(B), x1), device::term(A, x2));
+        const auto neg_zero = device::fn_vec(m, [](int) { return device::Arith<T>::make(-R(0), -R(0)); });
+        device::gemv_acc(ex, beta, neg_zero, zv, device::term(A, x2));
     });
     const auto gy = this->dev.down(y, hy.size()), gz = this->dev.down(z, hz.size());
     int bitdiff = 0, zero_sign_bad = 0;
     for (std::size_t i = 0; i < gy.size(); ++i)
         bitdiff += !same_bits(gy[i], gy[i % (std::size_t(kPeriod) * m)]) + !same_bits(gz[i], gz[i % (std::size_t(kPeriod) * m)]);
     for (int b = 0; b < kBatch; ++b) {
-        const R z0 = v2::Arith<T>::re(gz[std::size_t(b) * m]);
+        const R z0 = device::Arith<T>::re(gz[std::size_t(b) * m]);
         zero_sign_bad += !(z0 == R(0) && std::signbit(z0));
     }
     EXPECT_EQ(bitdiff, 0) << "items differ from their representative";
@@ -172,10 +171,10 @@ TYPED_TEST(DeviceBlasV2GebrdTest, LacgvStridedOnWorkGroupAndThread) {
     T* x = this->dev.up(hx);
     this->dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
+        const device::WorkGroup<WG> ex{it};
         T* p = x + std::ptrdiff_t(b) * per;
-        v2::lacgv(ex, v2::vec(p, n, inc));
-        if (ex.leader()) v2::lacgv(v2::Thread{}, v2::vec(p + n * inc, n, inc));
+        device::lacgv(ex, device::vec(p, n, inc));
+        if (ex.leader()) device::lacgv(device::Thread{}, device::vec(p + n * inc, n, inc));
     });
     const auto gx = this->dev.down(x, hx.size());
     int conj_bad = 0, gap_bad = 0;

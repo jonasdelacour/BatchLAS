@@ -49,7 +49,6 @@ using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
 
-namespace v2 = batchlas::device;
 
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).
@@ -168,7 +167,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 // value (the reflector support `offset + r`, or a bound of `n`) forces
                 // the whole array into local memory, and the reflector loop then pays a
                 // dependent L1/global round trip for each of its ~n^2 accesses.
-                v2::Frag<T, static_cast<int>(P), v2::ColPerLane> C_col;
+                device::Frag<T, static_cast<int>(P), device::ColPerLane> C_col;
 BATCHLAS_UNROLL_FULL
                 for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                     C_col[r] = T(0);
@@ -216,8 +215,8 @@ BATCHLAS_UNROLL_FULL
                 const int32_t i1 = descending ? -1 : k;
                 const int32_t step = descending ? -1 : 1;
 
-                using Ar = v2::arith_t<v2::arith::Native, T>;  // strict port: the hand loop's arithmetic
-                using VLocal = v2::Vec<T, v2::Ext<static_cast<int>(P)>, v2::Unit, v2::Mem::Local, v2::Cyclic,
+                using Ar = device::arith_t<device::arith::Native, T>;  // strict port: the hand loop's arithmetic
+                using VLocal = device::Vec<T, device::Ext<static_cast<int>(P)>, device::Unit, device::Mem::Local, device::Cyclic,
                                        sycl::local_accessor<T, 1>>;
 
                 for (int32_t ii = i0; ii != i1; ii += step) {
@@ -247,8 +246,8 @@ BATCHLAS_UNROLL_FULL
                     group_barrier(part);
                     // vh(r) == V_local[base_v + r], formed here as the hand loop's address was (hoisted
                     // above the loop it holds one more register: complex P = 32 spilled 8 B more).
-                    const auto vh = v2::assume_published(VLocal{V_local, {}, {}, base_v});
-                    if (active_col && tau_eff != T(0)) v2::larf<Side::Left, v2::arith::Native>(C_col, vh, tau_eff);  // C(:, j) := H C(:, j)
+                    const auto vh = device::assume_published(VLocal{V_local, {}, {}, base_v});
+                    if (active_col && tau_eff != T(0)) device::larf<Side::Left, device::arith::Native>(C_col, vh, tau_eff);  // C(:, j) := H C(:, j)
                     // Ensure all lanes have finished consuming v before overwrite.
                     group_barrier(part);
                 }
@@ -371,10 +370,10 @@ BATCHLAS_UNROLL_FULL
                         group_barrier(part);
 
                         // C(lane, offset:) H on the lane's own row (algo port); a predicate, never a return.
-                        const T tau_eff = TransposeOrConj ? v2::Arith<T>::conj(tau_i) : tau_i;
+                        const T tau_eff = TransposeOrConj ? device::Arith<T>::conj(tau_i) : tau_i;
                         if (lane < n && !(tau_eff == T(0) || len <= 0))
-                            v2::larf<Side::Right>(v2::Thread{}, tau_eff, v2::assume_published(v2::vec(V_local, len, base_v)),
-                                                  v2::mat(C_local, 1, len, P_i, base_c + lane + offset * P_i));
+                            device::larf<Side::Right>(device::Thread{}, tau_eff, device::assume_published(device::vec(V_local, len, base_v)),
+                                                  device::mat(C_local, 1, len, P_i, base_c + lane + offset * P_i));
 
                         group_barrier(part);
                     }

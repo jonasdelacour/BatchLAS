@@ -2,7 +2,7 @@
 #pragma once
 // Device LA tiers (v22 design C.4): how a LAPACK-level op runs inside a kernel, chosen at COMPILE
 // time so one kernel never pays the registers of two paths (a run-time `if (n <= 32)` between
-// two tiers compiles both and the kernel carries the max REG: v1's failure).
+// two tiers compiles both and the kernel carries the max REG: the old design's failure).
 //   tier::Reg<N, Exact>      the matrix in registers of a Partition / SubGroup; n <= N <= 32
 //   tier::Cta<N, Alg>        the matrix in local memory of one WorkGroup; n <= N
 //   tier::Blocked<NB, Alg>   any n: A in global, a diagonal block / panel in local memory, the

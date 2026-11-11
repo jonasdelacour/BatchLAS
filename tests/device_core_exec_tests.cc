@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_exec_tests: exec.hh v2.2 additions (design A.2) against host references.
+// device_core_exec_tests: exec.hh additions (design A.2) against host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts through every lane
 // move (bit-identical: a move is exact); executors whose team is a strict slice of a sub-group
 // (Teams P = 8, Partition P = 8) so a move that crosses its block is visible; per-lane (not
@@ -52,18 +52,18 @@ template <class T, class MakeEx> void check_moves(Dev& d, int team, int scope, M
 TYPED_TEST(DeviceCoreExecTest, LaneMovesStayInsideTheirTeam) {
     using T = TypeParam;
     auto& d = this->dev;
-    check_moves<T>(d, 32, 64, [](sycl::nd_item<1> it) { return dv::WorkGroup<64, 32>{it}; });
-    check_moves<T>(d, 8, 8, [](sycl::nd_item<1> it) { return dv::Teams<64, 8>{it}; });
-    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return dv::SubGroup<32>{it.get_sub_group()}; });
-    check_moves<T>(d, 8, 8, [](sycl::nd_item<1> it) { return dv::Partition<8>{it.get_sub_group()}; });
-    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return dv::RtGroup<dv::Scope::Sub>{it}; });
-    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return dv::Fit{dv::SubGroup<32>{it.get_sub_group()}}; });
+    check_moves<T>(d, 32, 64, [](sycl::nd_item<1> it) { return batchlas::device::WorkGroup<64, 32>{it}; });
+    check_moves<T>(d, 8, 8, [](sycl::nd_item<1> it) { return batchlas::device::Teams<64, 8>{it}; });
+    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return batchlas::device::SubGroup<32>{it.get_sub_group()}; });
+    check_moves<T>(d, 8, 8, [](sycl::nd_item<1> it) { return batchlas::device::Partition<8>{it.get_sub_group()}; });
+    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return batchlas::device::RtGroup<batchlas::device::Scope::Sub>{it}; });
+    check_moves<T>(d, 32, 32, [](sycl::nd_item<1> it) { return batchlas::device::Fit{batchlas::device::SubGroup<32>{it.get_sub_group()}}; });
 }
 
 TYPED_TEST(DeviceCoreExecTest, ThreadMovesAreTheIdentity) {
     using T = TypeParam;
     const T v = val<T>(3);
-    const dv::Thread th;
+    const batchlas::device::Thread th;
     EXPECT_TRUE(same_bits(th.bcast(v, 7), v));
     EXPECT_TRUE(same_bits(th.uniform(v), v));
     EXPECT_TRUE(same_bits(th.shuffle(v, 3), v));
@@ -83,18 +83,18 @@ TYPED_TEST(DeviceCoreExecTest, SyncScopesOrderTheirExchange) {
     T* p_out = d.template alloc<T>(WG, T(0));
     d.template run<WG>(1, 3 * WG * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         T* slm = reinterpret_cast<T*>(lm);
-        const dv::WorkGroup<WG, 32> wg{it};
-        const dv::Partition<8> part{it.get_sub_group()};
+        const batchlas::device::WorkGroup<WG, 32> wg{it};
+        const batchlas::device::Partition<8> part{it.get_sub_group()};
         const int g = wg.lid();
         slm[g] = x[g];
         slm[WG + g] = x[g];
         slm[2 * WG + g] = x[g];
-        dv::sync<dv::scope::Group>(wg);
+        batchlas::device::sync<batchlas::device::scope::Group>(wg);
         g_out[g] = slm[(g + 517) % WG];
-        dv::sync<dv::scope::Sub>(wg);
+        batchlas::device::sync<batchlas::device::scope::Sub>(wg);
         const int sb = g - g % 32;
         s_out[g] = slm[WG + sb + (g % 32 + 13) % 32];
-        dv::sync<dv::scope::Part>(part);
+        batchlas::device::sync<batchlas::device::scope::Part>(part);
         const int pb = g - g % 8;
         p_out[g] = slm[2 * WG + pb + (g % 8 + 3) % 8];
     });
@@ -110,31 +110,31 @@ TYPED_TEST(DeviceCoreExecTest, SyncScopesOrderTheirExchange) {
 TEST(DeviceCoreExecIndex, SlotFitGridAndElemVisitTheirIndices) {
     auto visits = [](const auto& ex, int n) {
         std::vector<int> v;
-        dv::for_each_owned(ex, n, [&](int i) { v.push_back(i); });
+        batchlas::device::for_each_owned(ex, n, [&](int i) { v.push_back(i); });
         return v;
     };
-    EXPECT_EQ(visits(dv::Slot<8>{3}, 30), (std::vector<int>{3, 11, 19, 27}));
-    EXPECT_EQ(visits(dv::Slot<>{2, 5}, 13), (std::vector<int>{2, 7, 12}));
-    EXPECT_EQ(visits(dv::Fit{dv::Slot<8>{5}}, 6), (std::vector<int>{5}));
-    EXPECT_EQ(visits(dv::Fit{dv::Slot<8>{6}}, 6), (std::vector<int>{}));
-    EXPECT_EQ(visits(dv::Grid1D{9}, 9), (std::vector<int>{}));
-    EXPECT_EQ(visits(dv::Grid1D<true>{9}, 9), (std::vector<int>{9}));  // Exact: no test
+    EXPECT_EQ(visits(batchlas::device::Slot<8>{3}, 30), (std::vector<int>{3, 11, 19, 27}));
+    EXPECT_EQ(visits(batchlas::device::Slot<>{2, 5}, 13), (std::vector<int>{2, 7, 12}));
+    EXPECT_EQ(visits(batchlas::device::Fit{batchlas::device::Slot<8>{5}}, 6), (std::vector<int>{5}));
+    EXPECT_EQ(visits(batchlas::device::Fit{batchlas::device::Slot<8>{6}}, 6), (std::vector<int>{}));
+    EXPECT_EQ(visits(batchlas::device::Grid1D{9}, 9), (std::vector<int>{}));
+    EXPECT_EQ(visits(batchlas::device::Grid1D<true>{9}, 9), (std::vector<int>{9}));  // Exact: no test
     std::vector<int> r;
-    dv::for_each_owned(dv::Fit{dv::Slot<8>{2}}, dv::Range{4, 7}, [&](int i) { r.push_back(i); });
+    batchlas::device::for_each_owned(batchlas::device::Fit{batchlas::device::Slot<8>{2}}, batchlas::device::Range{4, 7}, [&](int i) { r.push_back(i); });
     EXPECT_EQ(r, (std::vector<int>{6}));
     auto visits2 = [](const auto& ex, int m, int n) {
         std::vector<std::pair<int, int>> v;
-        dv::for_each_owned_2d(ex, m, n, [&](int i, int j) { v.emplace_back(i, j); });
+        batchlas::device::for_each_owned_2d(ex, m, n, [&](int i, int j) { v.emplace_back(i, j); });
         return v;
     };
     using P = std::vector<std::pair<int, int>>;
-    EXPECT_EQ(visits2(dv::ElemAt{3, 4}, 4, 5), (P{{3, 4}}));
-    EXPECT_EQ(visits2(dv::ElemAt{3, 5}, 4, 5), (P{}));
-    EXPECT_EQ(visits2(dv::ElemAt<true>{3, 5}, 4, 5), (P{{3, 5}}));
-    EXPECT_EQ(visits2(dv::ElemAt{5, 6}.sub(2, 4), 4, 3), (P{{3, 2}}));
-    EXPECT_EQ(visits2(dv::ElemAt{5, 3}.sub(2, 4), 4, 3), (P{}));  // left of the block
-    EXPECT_EQ(visits2(dv::ElemAt{6, 6}.sub(2, 4), 4, 3), (P{}));  // below the block
-    const dv::bcast_policy::Slm<4, int*> slm{nullptr, 2};
+    EXPECT_EQ(visits2(batchlas::device::ElemAt{3, 4}, 4, 5), (P{{3, 4}}));
+    EXPECT_EQ(visits2(batchlas::device::ElemAt{3, 5}, 4, 5), (P{}));
+    EXPECT_EQ(visits2(batchlas::device::ElemAt<true>{3, 5}, 4, 5), (P{{3, 5}}));
+    EXPECT_EQ(visits2(batchlas::device::ElemAt{5, 6}.sub(2, 4), 4, 3), (P{{3, 2}}));
+    EXPECT_EQ(visits2(batchlas::device::ElemAt{5, 3}.sub(2, 4), 4, 3), (P{}));  // left of the block
+    EXPECT_EQ(visits2(batchlas::device::ElemAt{6, 6}.sub(2, 4), 4, 3), (P{}));  // below the block
+    const batchlas::device::bcast_policy::Slm<4, int*> slm{nullptr, 2};
     EXPECT_EQ(slm.buffer(0, 3), 6);
     EXPECT_EQ(slm.buffer(5, 3), 18);  // odd column: the second buffer half
 }

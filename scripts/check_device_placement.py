@@ -448,7 +448,7 @@ SELF_TREE = {
     # rule src-device: a definition in batchlas::device under src/ (BREAK 1), host code passes
     "src/ops/foo/foo_v2.hh": """
         namespace batchlas::device::v2::lu {
-        template <class T> BATCHLAS_DLA_INLINE T pivot(T a, int n = 0) { return a; }   // BREAK 1
+        template <class T> BATCHLAS_DEVICE_INLINE T pivot(T a, int n = 0) { return a; }   // BREAK 1
         void declared_only(int);
         }
         namespace batchlas { namespace device { inline namespace v2 { struct Packed { int x; }; } } }  // BREAK 1b

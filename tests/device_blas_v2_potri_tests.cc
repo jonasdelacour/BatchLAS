@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// potri-private device LA v2 ops (src/ops/potri/potri_v2.hh) against host references; the shared
+// potri-private device LA ops (src/ops/potri/potri_v2.hh) against host references; the shared
 // ops they sit on (RtGroup, for_each_owned, find_first, Tile, Frag, load, fill, arith::Fma) are
 // covered by device_blas_v2_tests. Guards (docs/developer/agent-guide.md section 8): non-natural
 // ld / inc, rectangular tiles and grids (R != C, a work-group stride that is no multiple of rows),
@@ -28,16 +28,14 @@
 #include <src/sycl/device_scalar.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace pv = batchlas::sycl_potri;
 using batchlas::verify::Check;
 
 namespace {
 
 template <class T>
-using real_of = typename v2::Arith<T>::real_t;
+using real_of = typename device::Arith<T>::real_t;
 template <class T>
-constexpr bool is_cplx = v2::Arith<T>::is_complex;
+constexpr bool is_cplx = device::Arith<T>::is_complex;
 template <class T>
 using Dv = typename sycl_device::DevMap<T>::type;
 
@@ -161,7 +159,7 @@ template <class T>
 class DeviceBlasV2PotriTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -171,7 +169,7 @@ using Types = ::testing::Types<float, double, std::complex<float>, std::complex<
 TYPED_TEST_SUITE(DeviceBlasV2PotriTest, Types);
 
 bool tri_ok(int t) {
-    const pv::RowCol rc = pv::tri_index(t);
+    const sycl_potri::RowCol rc = sycl_potri::tri_index(t);
     return rc.c >= 0 && rc.c <= rc.r && static_cast<long long>(rc.r) * (rc.r + 1) / 2 + rc.c == t;
 }
 
@@ -213,7 +211,7 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
     this->dev.run(kBatch / 64, 64, [=](sycl::nd_item<1> it) {
         using namespace sycl_device;
         const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_global_linear_id());
-        const v2::Thread th{};
+        const device::Thread th{};
         const D* a = reinterpret_cast<const D*>(dA) + b * szA;
         const D* bm = reinterpret_cast<const D*>(dB) + b * szB;
         const D* g = reinterpret_cast<const D*>(dG) + b * szG;
@@ -221,7 +219,7 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
         const D* xs = reinterpret_cast<const D*>(dX) + b * szX;
         const D* ys = reinterpret_cast<const D*>(dY) + b * szY;
         D* o = reinterpret_cast<D*>(dO) + b * nout;
-        v2::Tile<D, R, C> t;
+        device::Tile<D, R, C> t;
         D u[R][C];
         auto load_b = [&] {
             BATCHLAS_UNROLL_FULL
@@ -240,11 +238,11 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
             }
         };
         auto hb = [&](int k, int y) { return y <= k ? hh[y + k * ldh] : D{}; };
-        v2::laset(t, v2::Zero{}, v2::One{}, -1);  // the tile at (1, 0): 1 where x + 1 == y
+        device::laset(t, device::Zero{}, device::One{}, -1);  // the tile at (1, 0): 1 where x + 1 == y
         store(0, false);
 
         load_b();
-        pv::reg::trsm_llnu(th, [&](int i, int j) { return a[i + j * lda]; }, t);
+        sycl_potri::reg::trsm_llnu(th, [&](int i, int j) { return a[i + j * lda]; }, t);
         BATCHLAS_UNROLL_FULL
         for (int x = 1; x < R; ++x)
             BATCHLAS_UNROLL_FULL
@@ -257,7 +255,7 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
         store(4, true);
 
         load_b();
-        pv::reg::gemm_sub<K>(th, [&](int x, int k) { return g[x + k * ldg]; }, hb, t);
+        sycl_potri::reg::gemm_sub<K>(th, [&](int x, int k) { return g[x + k * ldg]; }, hb, t);
         BATCHLAS_UNROLL_FULL
         for (int k = 0; k < K; ++k)
             BATCHLAS_UNROLL_FULL
@@ -269,11 +267,11 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
 
         load_b();
         for (int k = 0; k < K2; ++k) {
-            v2::Frag<D, R> xi;
-            v2::Frag<D, C> yj;
-            v2::load(xi, [&](int x) { return dev_conj(xs[x + k * ldx]); });
-            v2::load(yj, [&](int y) { return ys[y + k * ldy]; });
-            pv::reg::ger(th, xi, yj, t);
+            device::Frag<D, R> xi;
+            device::Frag<D, C> yj;
+            device::load(xi, [&](int x) { return dev_conj(xs[x + k * ldx]); });
+            device::load(yj, [&](int y) { return ys[y + k * ldy]; });
+            sycl_potri::reg::ger(th, xi, yj, t);
             BATCHLAS_UNROLL_FULL
             for (int x = 0; x < R; ++x)
                 BATCHLAS_UNROLL_FULL
@@ -281,7 +279,7 @@ TYPED_TEST(DeviceBlasV2PotriTest, RegisterTileOps) {
         }
         store(3, false);
         store(6, true);
-        pv::reg::for_each(th, t, I0, J0, [&](int i, int j, const D& v) { o[7 * RC + i + j * OR] = v; });
+        sycl_potri::reg::for_each(th, t, I0, J0, [&](int i, int j, const D& v) { o[7 * RC + i + j * OR] = v; });
     });
     const auto got = this->dev.down(dO, std::size_t(kBatch) * nout);
     EXPECT_EQ(twin_diffs(got, nout), 0) << "items differ from their representative";
@@ -366,9 +364,9 @@ TYPED_TEST(DeviceBlasV2PotriTest, LaunchSizedGroupAuxOps) {
         d.put(dU, msent), d.put(dPl, pnan), d.put(dPu, pnan), d.put(dWl, msent), d.put(dWu, msent);
         d.put(dBad, ipoison);
         this->dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
-            using Ar = v2::Arith<D>;
+            using Ar = device::Arith<D>;
             const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group_linear_id());
-            const v2::RtGroup<> ex(it);
+            const device::RtGroup<> ex(it);
             auto dm = [&](T* p, std::ptrdiff_t sz) { return reinterpret_cast<D*>(p) + b * sz; };
             D* Ab = dm(dA, szM);
             struct Slot {
@@ -377,20 +375,20 @@ TYPED_TEST(DeviceBlasV2PotriTest, LaunchSizedGroupAuxOps) {
                 D v;
             };
             D* ub = dm(dU, szM);
-            pv::for_each_owned_2d_batched<4>(
+            sycl_potri::for_each_owned_2d_batched<4>(
                 ex, n, cols, [&](bool live, int r, int c) { return Slot{live, r, c, live ? Ab[r + c * lda] : D{}}; },
                 [&](const Slot& e) {
                     if (e.live) ub[e.r + e.c * lda] = Ar::add(e.v, e.v);
                 });
 
             auto m_of = [&](D* p) { return [p](int r, int c) -> D& { return p[r + std::ptrdiff_t(c) * lda]; }; };
-            pv::tpcopy(ex, true, true, n, m_of(Ab), dm(dPl, np), c0, c1);
-            pv::tpcopy(ex, false, true, n, m_of(Ab), dm(dPu, np), c0, c1);
-            pv::tpcopy(ex, true, false, n, m_of(dm(dWl, szM)), dm(dQl, np), c0, c1);
-            pv::tpcopy(ex, false, false, n, m_of(dm(dWu, szM)), dm(dQu, np), c0, c1);
+            sycl_potri::tpcopy(ex, true, true, n, m_of(Ab), dm(dPl, np), c0, c1);
+            sycl_potri::tpcopy(ex, false, true, n, m_of(Ab), dm(dPu, np), c0, c1);
+            sycl_potri::tpcopy(ex, true, false, n, m_of(dm(dWl, szM)), dm(dQl, np), c0, c1);
+            sycl_potri::tpcopy(ex, false, false, n, m_of(dm(dWu, szM)), dm(dQu, np), c0, c1);
 
             int bad = 0;
-            v2::for_each_owned(ex, kTri, [&](int k) { bad += !tri_ok(static_cast<int>(b) * kTri + k); });
+            device::for_each_owned(ex, kTri, [&](int k) { bad += !tri_ok(static_cast<int>(b) * kTri + k); });
             if (ex.leader())
                 for (int k = 0; k < 4; ++k)
                     bad += !tri_ok((1 << 29) - 1 - 4 * static_cast<int>(b) - k);

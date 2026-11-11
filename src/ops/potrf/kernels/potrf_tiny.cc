@@ -40,7 +40,6 @@ namespace sycl_potrf {
 
 namespace {
 
-namespace v2 = ::batchlas::device;
 
 using tiny_native::kTinySubGroupSize;
 using tiny_native::kTinySubGroups;
@@ -125,23 +124,23 @@ Event potrf_tiny_launch(Queue& ctx,
                 const D* __restrict Ag =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
 
-                v2::Frag<D, N> rA;
+                device::Frag<D, N> rA;
                 if (upper) {
-                    v2::potrf_detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                    device::potrf_detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 } else {
-                    v2::potrf_detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                    device::potrf_detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 }
 
                 // `linfo` is partition-uniform because the pivot is a broadcast.
                 const int32_t linfo =
-                    v2::potrf_detail::potf2_reg<D, N, N>(v2::wrap(part), rA, n, live, v2::bcast_policy::Shuffle{});
+                    device::potrf_detail::potf2_reg<D, N, N>(device::wrap(part), rA, n, live, device::bcast_policy::Shuffle{});
 
                 D* __restrict Aout =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
                 if (upper) {
-                    v2::potrf_detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
+                    device::potrf_detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
                 } else {
-                    v2::potrf_detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
+                    device::potrf_detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
                 }
 
                 if (live && part.leader()) info_ptr[prob_id] = linfo;

@@ -22,7 +22,6 @@
 
 namespace batchlas::lu_native {
 
-namespace v2 = ::batchlas::device;
 
 template <typename Tag, typename T> class LuLaswpKernel;
 
@@ -55,13 +54,13 @@ Event lu_laswp_launch(Queue& ctx,
                 const int c = static_cast<int>(it.get_id(1));
 
                 // ?LASWP on one (matrix, column); laswp never reads the extent (targets lie below).
-                const auto col = v2::mat(bp + static_cast<std::ptrdiff_t>(b) * stride +
+                const auto col = device::mat(bp + static_cast<std::ptrdiff_t>(b) * stride +
                                              static_cast<std::ptrdiff_t>(c) * ld, k1, 1, ld);
-                const auto ipiv = v2::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, k1);  // 1-BASED
+                const auto ipiv = device::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, k1);  // 1-BASED
                 // Backward is REVERSE ORDER: the same list applied forwards computes P,
                 // not P^T -- a silently wrong answer in a transposed getrs.
-                if (forward) v2::laswp<v2::dir::Forward>(v2::Thread{}, col, ipiv, k0, k1);
-                else v2::laswp<v2::dir::Backward>(v2::Thread{}, col, ipiv, k0, k1);
+                if (forward) device::laswp<device::dir::Forward>(device::Thread{}, col, ipiv, k0, k1);
+                else device::laswp<device::dir::Backward>(device::Thread{}, col, ipiv, k0, k1);
             });
     });
     return ctx.get_event();
@@ -154,7 +153,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const v2::RtGroup<v2::Scope::Group> ex{it};
+                const device::RtGroup<device::Scope::Group> ex{it};
                 const int gid = static_cast<int>(it.get_group(0));
                 const int r = gid / batch;
                 const int b = gid - r * batch;
@@ -174,7 +173,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
 
                 // ips = relative pivots, idxs = identity. p in [i, R) is the contract; clamped
                 // anyway: a bad value corrupts the index array for the WHOLE block.
-                v2::for_each_owned(ex, R, [&](int i) {
+                device::for_each_owned(ex, R, [&](int i) {
                     int p = ip[k0 + i] - 1 - k0;
                     if (p < 0 || p >= R) p = i;
                     ips[i] = p;
@@ -184,19 +183,19 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                 // idxs := P idxs, ?LASWP on the INT array: the only serial phase.
                 if (ex.leader()) {
                     const auto ipiv1 = [ips](int i) { return ips[i] + 1; };   // laswp takes 1-based
-                    v2::laswp(v2::Thread{}, v2::mat<v2::Mem::Local>(idxs, R, 1, R), ipiv1, 0, R);
+                    device::laswp(device::Thread{}, device::mat<device::Mem::Local>(idxs, R, 1, R), ipiv1, 0, R);
                 }
                 ex.barrier();
 
                 // Per chunk: ?LACPY to the tile, then A(row) = T(idxs(row)); ROW fastest (contiguous).
                 for (int cb = 0; cb < ib; cb += Cs) {
                     const int cw = ((ib - cb) < Cs) ? (ib - cb) : Cs;
-                    v2::for_each_owned_2d<v2::alg::Stepped>(ex, R, cw, [&](int row, int col) {
+                    device::for_each_owned_2d<device::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         tile[static_cast<std::size_t>(col) * ldt + row] =
                             Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row];
                     });
                     ex.barrier();
-                    v2::for_each_owned_2d<v2::alg::Stepped>(ex, R, cw, [&](int row, int col) {
+                    device::for_each_owned_2d<device::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row] =
                             tile[static_cast<std::size_t>(col) * ldt + idxs[row]];
                     });
@@ -255,7 +254,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const v2::RtGroup<v2::Scope::Group> ex{it};
+                const device::RtGroup<device::Scope::Group> ex{it};
                 const int gid = static_cast<int>(it.get_group(0));
                 const int t = gid / batch;
                 const int b = gid - t * batch;
@@ -267,7 +266,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
                 int* const ix = &idxs[0];
-                v2::for_each_owned(ex, R, [&](int i) { ix[i] = i; });
+                device::for_each_owned(ex, R, [&](int i) { ix[i] = i; });
                 ex.barrier();
                 // idxs := P idxs over the panel's L pivots, ?LASWP on the INT array (serial);
                 // clamped as the deferred gather is.
@@ -277,17 +276,17 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                         if (p < 0 || p >= R) p = i;
                         return p + 1;
                     };
-                    v2::laswp(v2::Thread{}, v2::mat<v2::Mem::Local>(ix, R, 1, R), ipiv1, 0, L);
+                    device::laswp(device::Thread{}, device::mat<device::Mem::Local>(ix, R, 1, R), ipiv1, 0, L);
                 }
 
                 // ?LACPY into the tile, row fastest; overlaps the serial phase.
-                v2::for_each_owned_2d<v2::alg::Flat>(ex, R, cw, [&](int row, int col) {
+                device::for_each_owned_2d<device::alg::Flat>(ex, R, cw, [&](int row, int col) {
                     tile[static_cast<std::size_t>(col) * ldt + row] =
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row];
                 });
                 ex.barrier();
                 // The row gather; only rows the permutation MOVES are written back.
-                v2::for_each_owned_2d<v2::alg::Flat>(ex, R, cw, [&](int row, int col) {
+                device::for_each_owned_2d<device::alg::Flat>(ex, R, cw, [&](int row, int col) {
                     const int src = ix[row];
                     if (src != row) {
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row] =

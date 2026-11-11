@@ -20,8 +20,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device;
-namespace sv = batchlas::device::steqr_detail;
 
 // Distinct from steqr_wg.cc's tags: both TUs link into one device image.
 template <typename T> struct SteqrLegacyFrancisKernel {};
@@ -159,51 +157,51 @@ Event steqr_impl(Queue& ctx,
             // from (virtual index n - 1), so orient that end at the SMALLER |d|, as dsteqr does.
             bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
-            const v2::Thread th{};
-            const sv::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
+            const device::Thread th{};
+            const device::steqr_detail::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
             for (size_t k = 0; k < max_sweeps; ++k) {
-                const T anorm = sv::lanst_max(th, d_, e_);
+                const T anorm = device::steqr_detail::lanst_max(th, d_, e_);
                 if (anorm > detail::ssfmax<T>()) {
                     const T s = detail::ssfmax<T>() / anorm;
-                    v2::scal(th, s, d_);
-                    v2::scal(th, s, e_);
+                    device::scal(th, s, d_);
+                    device::scal(th, s, e_);
                 } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
                     const T s = detail::ssfmin<T>() / anorm;
-                    v2::scal(th, s, d_);
-                    v2::scal(th, s, e_);
+                    device::scal(th, s, d_);
+                    device::scal(th, s, e_);
                 }
 
                 // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = detail::wilkinson_shift(sv::virt_get<T, 1>(d_, QR, n, n - 2),
-                                                   sv::virt_get<T, 2>(e_, QR, n, n - 2),
-                                                   sv::virt_get<T, 1>(d_, QR, n, n - 1));
+                const auto shift = detail::wilkinson_shift(device::steqr_detail::virt_get<T, 1>(d_, QR, n, n - 2),
+                                                   device::steqr_detail::virt_get<T, 2>(e_, QR, n, n - 2),
+                                                   device::steqr_detail::virt_get<T, 1>(d_, QR, n, n - 1));
 
                 // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = detail::givens_rotation(sv::virt_get<T, 1>(d_, QR, n, 0) - shift, sv::virt_get<T, 2>(e_, QR, n, 0));
+                auto [c0, s0] = detail::givens_rotation(device::steqr_detail::virt_get<T, 1>(d_, QR, n, 0) - shift, device::steqr_detail::virt_get<T, 2>(e_, QR, n, 0));
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
-                auto bulge = sv::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, v2::Givens<T>{c0, s0}, QR);
+                auto bulge = device::steqr_detail::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, device::Givens<T>{c0, s0}, QR);
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = detail::givens_rotation(sv::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
+                    auto [cj, sj] = detail::givens_rotation(device::steqr_detail::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
-                    bulge = sv::tridiag_rot(th, d_, e_, bulge, j, j + 1, v2::Givens<T>{cj, sj}, QR);
+                    bulge = device::steqr_detail::tridiag_rot(th, d_, e_, bulge, j, j + 1, device::Givens<T>{cj, sj}, QR);
                 }
 
-                const bool deflatable = sv::tridiag_split(th, d_, e_, tol);
+                const bool deflatable = device::steqr_detail::tridiag_split(th, d_, e_, tol);
 
                 if (anorm > detail::ssfmax<T>()) {
                     const T s = anorm / detail::ssfmax<T>();
-                    v2::scal(th, s, d_);
-                    v2::scal(th, s, e_);
+                    device::scal(th, s, d_);
+                    device::scal(th, s, e_);
                 } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
                     const T s = anorm / detail::ssfmin<T>();
-                    v2::scal(th, s, d_);
-                    v2::scal(th, s, e_);
+                    device::scal(th, s, d_);
+                    device::scal(th, s, e_);
                 }
 
                 if (store_givens) sweep_counts[gid] = static_cast<int32_t>(k + 1);
@@ -225,7 +223,7 @@ Event steqr_impl(Queue& ctx,
             auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
             const int ncols = static_cast<int>(Q_.cols());
             bool forward = order_view[gid] == ApplyOrder::Forward;
-            auto col_index = [&](int v) BATCHLAS_DLA_BODY -> int {
+            auto col_index = [&](int v) BATCHLAS_DEVICE_BODY -> int {
                 return (forward)
                         ? v
                         : (ncols - 1 - v);
@@ -235,7 +233,7 @@ Event steqr_impl(Queue& ctx,
             // Slots beyond that are stale/uninitialised and must not be applied.
             // sweep_counts is empty when eigenvectors were not requested; nothing to replay then.
             const int n_sweeps = sweep_counts.size() == 0 ? 0 : static_cast<int>(sweep_counts[gid]);
-            // Not on v2::lasr: this replay skips padded identity rotations, and an op form whose IR
+            // Not on device::lasr: this replay skips padded identity rotations, and an op form whose IR
             // differed only in the order of the two column-index computations kept the loop rolled
             // in the SASS gate (4x fewer LDG/STG/FFMA in the unrolled body; LegacyRotation).
             for (int i = 0; i < n_sweeps; ++i) {

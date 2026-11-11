@@ -34,17 +34,13 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace lu = batchlas::device::getrs_detail;
-namespace lug = batchlas::device::gesv_detail;
-namespace sd = batchlas::sycl_device;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
-template <class T> using DevT = typename sd::DevMap<T>::type;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class T> using DevT = typename sycl_device::DevMap<T>::type;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -113,7 +109,7 @@ struct Dev {
 template <class T> class DeviceBlasV2LuTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -178,16 +174,16 @@ TYPED_TEST(DeviceBlasV2LuTest, SafeRecipIsGetf2ScalingBitForBit) {
         D* ref = got + n * kSlots;
         for (int i = static_cast<int>(it.get_local_linear_id()); i < n; i += 32) {
             const D x = ad[i], y = bd[i];
-            const auto sr = v2::SafeRecip<D>::make(y);
+            const auto sr = device::SafeRecip<D>::make(y);
             got[i * kSlots + 0] = sr.apply(x, x);                    // gesv step 4: keep x if singular
-            got[i * kSlots + 1] = sr.apply(x, v2::Arith<D>::zero()); // gesv step 6: zero if singular
+            got[i * kSlots + 1] = sr.apply(x, device::Arith<D>::zero()); // gesv step 6: zero if singular
             f[2 * i] = sr.zero;
-            const bool zero = sd::dev_is_zero(y);
-            const D rc = sd::dev_recip(y);
-            const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const bool zero = sycl_device::dev_is_zero(y);
+            const D rc = sycl_device::dev_recip(y);
+            const bool use_mul = !zero && sycl_device::dev_isfinite(rc) && !sycl_device::dev_is_zero(rc);
             D s1 = x, s2 = D{};
-            if (use_mul) s1 = sd::dev_mul(x, rc), s2 = sd::dev_mul(x, rc);
-            else if (!zero) s1 = sd::dev_div(x, y), s2 = sd::dev_div(x, y);
+            if (use_mul) s1 = sycl_device::dev_mul(x, rc), s2 = sycl_device::dev_mul(x, rc);
+            else if (!zero) s1 = sycl_device::dev_div(x, y), s2 = sycl_device::dev_div(x, y);
             ref[i * kSlots + 0] = s1, ref[i * kSlots + 1] = s2;
             f[2 * i + 1] = zero;
         }
@@ -217,12 +213,12 @@ template <class T, int WG> void gather_case(Dev& dev) {
     T* o = dev.up(ho);
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex(it);  // the width is the launch's, a run-time value
-        const auto src = v2::mat_wide(reinterpret_cast<const D*>(s) + std::size_t(b) * kSrc, m + i0, NA, ldA).sub(i0, j0, m, n);
+        const device::RtGroup<> ex(it);  // the width is the launch's, a run-time value
+        const auto src = device::mat_wide(reinterpret_cast<const D*>(s) + std::size_t(b) * kSrc, m + i0, NA, ldA).sub(i0, j0, m, n);
         D* ob = reinterpret_cast<D*>(o) + std::size_t(b) * kOut;
-        lu::lapmr_copy(ex, src, perm, v2::mat_wide(ob, m, n, ldB));
-        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::DivMod>(ex, v2::conj_if(v2::op_view<Transpose::Trans>(src), true),
-                                                                     v2::mat_wide(ob + ldB * n, n, m, ldT));
+        device::getrs_detail::lapmr_copy(ex, src, perm, device::mat_wide(ob, m, n, ldB));
+        device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, device::conj_if(device::op_view<Transpose::Trans>(src), true),
+                                                                     device::mat_wide(ob + ldB * n, n, m, ldT));
     });
     const auto h = dev.down(o, ho.size());
     EXPECT_EQ(twin_diffs(h, kOut), 0) << "WG " << WG << ": items differ from their representative";
@@ -276,7 +272,7 @@ void host_laswp(std::vector<int>& x, const std::vector<int>& p, int k0, int k1, 
 // laswp applied to the identity on the host (another walk: it moves values, not one index).
 TEST(DeviceBlasV2LuPerm, LaswpIndexIsLaswpOfTheIdentity) {
     Dev dev;
-    if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+    if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
     constexpr int WG = 64, n = 45, k0 = 3, k1 = n - 4, kOut = 3 * n;
     std::vector<int> hp(std::size_t(kBatch) * n);
     for (int b = 0; b < kBatch; ++b) {
@@ -288,13 +284,13 @@ TEST(DeviceBlasV2LuPerm, LaswpIndexIsLaswpOfTheIdentity) {
     int* o = dev.up(ho);
     dev.run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex(it);
-        const auto ipiv = v2::vec(pv + std::size_t(b) * n, n);
+        const device::RtGroup<> ex(it);
+        const auto ipiv = device::vec(pv + std::size_t(b) * n, n);
         int* ob = o + std::size_t(b) * kOut;
-        v2::for_each_owned(ex, n, [&](int i) {
-            ob[i] = v2::laswp_index<v2::dir::Forward>(ipiv, 0, n, i);
-            ob[n + i] = v2::laswp_index<v2::dir::Backward>(ipiv, 0, n, i);
-            ob[2 * n + i] = v2::laswp_index<v2::dir::Forward>(ipiv, k0, k1, i);
+        device::for_each_owned(ex, n, [&](int i) {
+            ob[i] = device::laswp_index<device::dir::Forward>(ipiv, 0, n, i);
+            ob[n + i] = device::laswp_index<device::dir::Backward>(ipiv, 0, n, i);
+            ob[2 * n + i] = device::laswp_index<device::dir::Forward>(ipiv, k0, k1, i);
         });
     });
     const auto h = dev.down(o, ho.size());
@@ -339,16 +335,16 @@ TYPED_TEST(DeviceBlasV2LuTest, AtomicMinSlotFirstExactZero) {
     int* info = this->dev.up(hi);
     this->dev.template run<WG>(kBatch, sizeof(int), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex(it);
-        const auto slot = v2::atomic_min_slot(reinterpret_cast<int*>(lm));
+        const device::RtGroup<> ex(it);
+        const auto slot = device::atomic_min_slot(reinterpret_cast<int*>(lm));
         // ld 0 makes element (i, i) dg[i]: the diagonal alone is stored.
-        const auto a = v2::mat_wide(reinterpret_cast<const D*>(dg) + std::size_t(b) * n, n, n, 0);
+        const auto a = device::mat_wide(reinterpret_cast<const D*>(dg) + std::size_t(b) * n, n, n, 0);
         slot.reset(ex);
-        ex.barrier(v2::Mem::Global);
-        v2::for_each_owned(ex, n, [&](int i) {
-            if (sd::dev_is_zero(a(i, i))) slot.offer(i + 1);
+        ex.barrier(device::Mem::Global);
+        device::for_each_owned(ex, n, [&](int i) {
+            if (sycl_device::dev_is_zero(a(i, i))) slot.offer(i + 1);
         });
-        ex.barrier(v2::Mem::Global);
+        ex.barrier(device::Mem::Global);
         if (ex.leader()) info[b] = slot.or_zero();
     });
     const auto h = this->dev.down(info, hi.size());
@@ -374,8 +370,8 @@ TYPED_TEST(DeviceBlasV2LuTest, ShiftReduceIsTheShiftDownOrderBitForBit) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto sg = it.get_sub_group();
         const int lane = static_cast<int>(sg.get_local_linear_id());
-        const auto add = [](D u, D v) { return v2::Arith<D>::add(u, v); };
-        const D s = v2::shift_reduce<32>(sg, reinterpret_cast<const D*>(x)[std::size_t(b) * 32 + lane], add);
+        const auto add = [](D u, D v) { return device::Arith<D>::add(u, v); };
+        const D s = device::shift_reduce<32>(sg, reinterpret_cast<const D*>(x)[std::size_t(b) * 32 + lane], add);
         if (lane == 0) reinterpret_cast<D*>(o)[b] = s;
     });
     const auto h = this->dev.down(o, ho.size());
@@ -439,12 +435,12 @@ template <class T, Uplo UL, Diag DG, bool Tr> void trsm_lane_case(Dev& dev, int 
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto sg = it.get_sub_group();
-        const v2::SubGroup<32> sx{sg};
-        const auto am = v2::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * ld * jb, jb, jb, ld);
-        const auto ym = v2::mat_wide(reinterpret_cast<D*>(y) + std::size_t(b) * ldy * nrhs, jb, nrhs, ldy);
+        const device::SubGroup<32> sx{sg};
+        const auto am = device::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * ld * jb, jb, jb, ld);
+        const auto ym = device::mat_wide(reinterpret_cast<D*>(y) + std::size_t(b) * ldy * nrhs, jb, nrhs, ldy);
         const int c0 = static_cast<int>(sg.get_group_linear_id());
-        if constexpr (Tr) lu::trsm_lane<UL, DG>(sx, v2::conj_if(v2::op_view<Transpose::Trans>(am), true), ym, c0, 2);
-        else lu::trsm_lane<UL, DG>(sx, am, ym, c0, 2);
+        if constexpr (Tr) device::getrs_detail::trsm_lane<UL, DG>(sx, device::conj_if(device::op_view<Transpose::Trans>(am), true), ym, c0, 2);
+        else device::getrs_detail::trsm_lane<UL, DG>(sx, am, ym, c0, 2);
     });
     const auto h = dev.down(y, hy.size());
     EXPECT_EQ(twin_diffs(h, ldy * nrhs), 0) << "jb " << jb;
@@ -488,15 +484,15 @@ template <class T, int WG> void gemm_nr_case(Dev& dev) {
     T* c = dev.up(hc);
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex(it);
-        const auto am = v2::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * kA, ldA, k + 3, ldA);
-        const auto xm = v2::mat_wide(reinterpret_cast<const D*>(x) + std::size_t(b) * kX, m, nrhs, ldX);
+        const device::RtGroup<> ex(it);
+        const auto am = device::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * kA, ldA, k + 3, ldA);
+        const auto xm = device::mat_wide(reinterpret_cast<const D*>(x) + std::size_t(b) * kX, m, nrhs, ldX);
         D* cb = reinterpret_cast<D*>(c) + std::size_t(b) * 2 * kC;
         // A view (1, 2) of m x k; X rows (3, k) for NoTrans; the full m rows for Trans.
-        lu::gemm_nr<Transpose::NoTrans, NR>(ex, v2::NegOne{}, am.sub(1, 2, m, k), xm.sub(3, 0, k, nrhs), v2::One{},
-                                            v2::mat_wide(cb, m, nrhs, ldC));
-        lu::gemm_nr<Transpose::Trans, NR>(ex, v2::NegOne{}, v2::conj_if(am.sub(1, 2, m, k), true), xm, v2::One{},
-                                          v2::mat_wide(cb + kC, k, nrhs, ldC));
+        device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, am.sub(1, 2, m, k), xm.sub(3, 0, k, nrhs), device::One{},
+                                            device::mat_wide(cb, m, nrhs, ldC));
+        device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(am.sub(1, 2, m, k), true), xm, device::One{},
+                                          device::mat_wide(cb + kC, k, nrhs, ldC));
     });
     const auto h = dev.down(c, hc.size());
     EXPECT_EQ(twin_diffs(h, 2 * kC), 0) << "WG " << WG;
@@ -555,13 +551,13 @@ TYPED_TEST(DeviceBlasV2LuTest, GerFragBcastRowUpdate) {
     this->dev.template run<32>(kItems / 2, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto sg = it.get_sub_group();
         const auto part = make_partition<P>(sg);
-        const auto px = v2::wrap(part);
+        const auto px = device::wrap(part);
         const int item = static_cast<int>(it.get_group_linear_id()) * 2 + static_cast<int>(part.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
         const D* L = reinterpret_cast<const D*>(in) + (std::size_t(item) * P + lane) * NC;
         D g[NC];
         for (int k = 0; k < NC; ++k) g[k] = L[k];
-        lug::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
+        device::gesv_detail::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
         D* O = reinterpret_cast<D*>(out) + (std::size_t(item) * P + lane) * NC;
         for (int k = 0; k < NC; ++k) O[k] = g[k];
     });

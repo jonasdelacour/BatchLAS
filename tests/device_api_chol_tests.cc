@@ -53,13 +53,13 @@ using batchlas::verify::Check;
 
 namespace {
 
-constexpr int kWg = dv::potrf_detail::kBlockedWg;
+constexpr int kWg = batchlas::device::potrf_detail::kBlockedWg;
 constexpr int kPeriod = 3;
 constexpr int kBatch = 6;
 constexpr int kNrhs = 3;
-template <class T> constexpr int kNb = dv::potrf_detail::reg_max_n<T> >= 32 ? 32 : 16;
-template <class T> using Big = dv::tier::Blocked<kNb<T>>;  // the tier potrf's and posv's lists end with
-using Small = dv::tier::Blocked<8>;
+template <class T> constexpr int kNb = batchlas::device::potrf_detail::reg_max_n<T> >= 32 ? 32 : 16;
+template <class T> using Big = batchlas::device::tier::Blocked<kNb<T>>;  // the tier potrf's and posv's lists end with
+using Small = batchlas::device::tier::Blocked<8>;
 
 struct alignas(16) Slab {
     unsigned char b[16];
@@ -178,17 +178,17 @@ template <class T> KernelMatrixView<T, MatrixFormat::Dense> kview(T* p, const Sh
 // The user kernel: one matrix per WorkGroup<256, 32>, the tier's local bytes from a 16-byte
 // aligned local_accessor, its global bytes per item from one buffer (gbuf, else allocated here);
 // f(ex, b, ws) -> info.
-template <class F> void run_blocked(Dev& d, int batch, const dv::WorkspaceSize& sz, std::int32_t* info, F f, std::byte* gbuf = nullptr) {
+template <class F> void run_blocked(Dev& d, int batch, const batchlas::device::WorkspaceSize& sz, std::int32_t* info, F f, std::byte* gbuf = nullptr) {
     std::byte* const g =
         gbuf != nullptr || sz.global_bytes == 0 ? gbuf : d.alloc<std::byte>(sz.global_bytes * std::size_t(batch), std::byte{0});
     d.q().submit([&](sycl::handler& h) {
          sycl::local_accessor<Slab, 1> slm(sycl::range<1>(std::max<std::size_t>((sz.local_bytes + 15) / 16, 1)), h);
          h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-             const dv::WorkGroup<kWg, 32> ex{it};
+             const batchlas::device::WorkGroup<kWg, 32> ex{it};
              const int b = static_cast<int>(it.get_group_linear_id());
              auto* raw = reinterpret_cast<std::byte*>(batchlas::util::get_raw_ptr(slm));
-             const dv::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw),
-                                   g != nullptr ? dv::global_slice(g, sz, b) : nullptr};
+             const batchlas::device::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw),
+                                   g != nullptr ? batchlas::device::global_slice(g, sz, b) : nullptr};
              const int r = f(ex, b, w);
              if (ex.leader()) info[b] = r;
          });
@@ -322,8 +322,8 @@ template <class T, Uplo UL, class Tier> void potrf_case(Dev& d, int n) {
     T* dh = d.up(p.h);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto kv = kview(dd, p.s);
-    run_blocked(d, kBatch, dv::potrf_buffer_size<UL, Tier, T>(n), info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potrf<UL, Tier>(ex, dv::item(kv, b), w); });
+    run_blocked(d, kBatch, batchlas::device::potrf_buffer_size<UL, Tier, T>(n), info,
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(kv, b), w); });
     const auto hinfo = host_potrf(d, dh, p.s, UL);
     const auto got = d.down(dd, p.h.size()), host = d.down(dh, p.h.size());
     const auto gi = d.down(info, kBatch);
@@ -377,8 +377,8 @@ template <class T, Uplo UL, class Tier> void potrs_case(Dev& d, int n) {
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
     const auto kb = kview(db, sb);
-    run_blocked(d, kBatch, dv::potrs_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::potrs<UL, Tier>(ex, dv::item(ka, b), dv::item(kb, b), w);
+    run_blocked(d, kBatch, batchlas::device::potrs_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::potrs<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b), w);
     });
     host_potrs(d, df, p.s, dbh, sb, UL);
     const auto x = d.down(db, b0.size()), xh = d.down(dbh, b0.size());
@@ -403,8 +403,8 @@ template <class T, Uplo UL, class Tier> void posv_case(Dev& d, int n) {
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
     const auto kb = kview(db, sb);
-    run_blocked(d, kBatch, dv::posv_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::posv<UL, Tier>(ex, dv::item(ka, b), dv::item(kb, b), w);
+    run_blocked(d, kBatch, batchlas::device::posv_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::posv<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b), w);
     });
     const auto hinfo = host_posv(d, dah, p.s, dbh, sb, UL);
     const auto a = d.down(da, p.h.size()), ah = d.down(dah, p.h.size());
@@ -447,8 +447,8 @@ template <class T, Uplo UL, class Tier> void potri_case(Dev& d, int n) {
     T* dah = d.up(factor);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
-    run_blocked(d, kBatch, dv::potri_buffer_size<UL, Tier, T>(n), info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potri<UL, Tier>(ex, dv::item(ka, b), w); });
+    run_blocked(d, kBatch, batchlas::device::potri_buffer_size<UL, Tier, T>(n), info,
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Tier>(ex, batchlas::device::item(ka, b), w); });
     const auto hinfo = host_potri(d, dah, p.s, UL);
     const auto got = d.down(da, factor.size()), host = d.down(dah, factor.size());
     const auto gi = d.down(info, kBatch);
@@ -496,8 +496,8 @@ template <class T, Uplo UL, class Tier> void trtri_unit_case(Dev& d, int n) {
     T* da = d.up(h);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, s);
-    run_blocked(d, kBatch, dv::trtri_buffer_size<UL, Diag::Unit, Tier, T>(n), info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::trtri<UL, Diag::Unit, Tier>(ex, dv::item(ka, b), w);
+    run_blocked(d, kBatch, batchlas::device::trtri_buffer_size<UL, Diag::Unit, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::trtri<UL, Diag::Unit, Tier>(ex, batchlas::device::item(ka, b), w);
     });
     const auto got = d.down(da, h.size());
     const auto gi = d.down(info, kBatch);
@@ -558,8 +558,8 @@ TYPED_TEST(DeviceApiCholTest, PotrfMatchesHostBlocked) {
 TYPED_TEST(DeviceApiCholTest, PotrsMatchesHostTrsm) {
     using T = TypeParam;
     for (int n : {1, 31, 33, 97}) {
-        potrs_case<T, Uplo::Lower, dv::tier::Blocked<32>>(this->dev, n);
-        potrs_case<T, Uplo::Upper, dv::tier::Blocked<32>>(this->dev, n);
+        potrs_case<T, Uplo::Lower, batchlas::device::tier::Blocked<32>>(this->dev, n);
+        potrs_case<T, Uplo::Upper, batchlas::device::tier::Blocked<32>>(this->dev, n);
     }
 }
 
@@ -574,8 +574,8 @@ TYPED_TEST(DeviceApiCholTest, PosvMatchesHostBlocked) {
 TYPED_TEST(DeviceApiCholTest, PotriMatchesHostBlocked) {
     using T = TypeParam;
     for (int n : {1, 31, 32, 33, 65, 129}) {
-        potri_case<T, Uplo::Lower, dv::tier::Blocked<32>>(this->dev, n);
-        potri_case<T, Uplo::Upper, dv::tier::Blocked<32>>(this->dev, n);
+        potri_case<T, Uplo::Lower, batchlas::device::tier::Blocked<32>>(this->dev, n);
+        potri_case<T, Uplo::Upper, batchlas::device::tier::Blocked<32>>(this->dev, n);
     }
     for (int n : {9, 37}) {
         potri_case<T, Uplo::Lower, Small>(this->dev, n);
@@ -621,17 +621,17 @@ TYPED_TEST(DeviceApiCholTest, SaturatingBatchIsBitIdentical) {
         const auto gi = this->dev.down(info, kSat);
         return int(std::count(gi.begin(), gi.end(), 0));
     };
-    run_blocked(this->dev, kSat, dv::potrf_buffer_size<UL, Big<T>, T>(n), info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potrf<UL, Big<T>>(ex, dv::item(ka, b), w); });
+    run_blocked(this->dev, kSat, batchlas::device::potrf_buffer_size<UL, Big<T>, T>(n), info,
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
     EXPECT_EQ(all_zero(), kSat) << "potrf info";
     EXPECT_EQ(same_as_item0(this->dev.down(da, p.h.size()), p.s), 0) << "potrf: an item differs from item 0";
-    run_blocked(this->dev, kSat, dv::posv_buffer_size<UL, Big<T>, T>(n), info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::posv<UL, Big<T>>(ex, dv::item(kp, b), dv::item(kb, b), w);
+    run_blocked(this->dev, kSat, batchlas::device::posv_buffer_size<UL, Big<T>, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::posv<UL, Big<T>>(ex, batchlas::device::item(kp, b), batchlas::device::item(kb, b), w);
     });
     EXPECT_EQ(all_zero(), kSat) << "posv info";
     EXPECT_EQ(same_as_item0(this->dev.down(db, b0.size()), sb), 0) << "posv: an X differs from item 0's";
-    run_blocked(this->dev, kSat, dv::potri_buffer_size<UL, Big<T>, T>(n), info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potri<UL, Big<T>>(ex, dv::item(ka, b), w); });
+    run_blocked(this->dev, kSat, batchlas::device::potri_buffer_size<UL, Big<T>, T>(n), info,
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
     EXPECT_EQ(all_zero(), kSat) << "potri info";
     EXPECT_EQ(same_as_item0(this->dev.down(da, p.h.size()), p.s), 0) << "potri: an item differs from item 0";
 }
@@ -651,8 +651,8 @@ TYPED_TEST(DeviceApiCholTest, ArgumentsAreMinusI) {
     std::int32_t* info = this->dev.template alloc<std::int32_t>(2, -7);
     const auto ka = kview(da, p.s);
     const auto kb = kview(db, sb);
-    auto off4 = [](const dv::Workspace& w) {
-        return dv::Workspace{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(w.local.get_raw() + 4),
+    auto off4 = [](const batchlas::device::Workspace& w) {
+        return batchlas::device::Workspace{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(w.local.get_raw() + 4),
                              w.global};
     };
     auto expect = [&](int want, const char* what) {
@@ -660,36 +660,36 @@ TYPED_TEST(DeviceApiCholTest, ArgumentsAreMinusI) {
         EXPECT_EQ(gi[0], want) << what;
         EXPECT_EQ(gi[1], want) << what;
     };
-    const auto potrf_ws = dv::potrf_buffer_size<UL, Tier, T>(n);
+    const auto potrf_ws = batchlas::device::potrf_buffer_size<UL, Tier, T>(n);
     run_blocked(this->dev, 2, potrf_ws, info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potrf<UL, Tier>(ex, dv::item(ka, b, n, n - 1), w); });
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(ka, b, n, n - 1), w); });
     expect(-2, "potrf, A not square");
     run_blocked(this->dev, 2, potrf_ws, info,
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potrf<UL, Tier>(ex, dv::item(ka, b), off4(w)); });
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(ka, b), off4(w)); });
     expect(-3, "potrf, misaligned ws.local");
-    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::potrs<UL, Tier>(ex, dv::item(ka, b), dv::item(kb, b, n - 1, kNrhs), w);
+    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::potrs<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b, n - 1, kNrhs), w);
     });
     expect(-3, "potrs, B rows != n");
-    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::potrs<UL, Tier>(ex, dv::item(ka, b), dv::item(kb, b), off4(w));
+    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::potrs<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b), off4(w));
     });
     expect(-4, "potrs, misaligned ws.local");
-    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const dv::Workspace& w) {
-        return dv::posv<UL, Tier>(ex, dv::item(ka, b), dv::item(kb, b, n, 0), off4(w));
+    run_blocked(this->dev, 2, potrf_ws, info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+        return batchlas::device::posv<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b, n, 0), off4(w));
     });
     expect(-4, "posv nrhs = 0, misaligned ws.local");
     run_blocked(this->dev, 2, potrf_ws, info,  // no global bytes in potrf's plan: w.global is null
-                [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potri<UL, Tier>(ex, dv::item(ka, b), w); });
+                [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Tier>(ex, batchlas::device::item(ka, b), w); });
     expect(-3, "potri, no ws.global");
     EXPECT_EQ(items_changed(this->dev.down(da, p.h.size()), p.h, p.s, {0, 1}), 0) << "A changed";
     EXPECT_EQ(items_changed(this->dev.down(db, b0.size()), b0, sb, {0, 1}), 0) << "B changed";
 }
 
-template <class Routine, class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class Routine, class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
+        batchlas::device::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string(e.what()).find(std::string(Routine::name) + ": no device tier admits n=" + std::to_string(n)) != std::string::npos
                   ? "throw"
@@ -700,36 +700,36 @@ template <class Routine, class T> std::string pick(const dv::DeviceLimits& lim, 
 
 TYPED_TEST(DeviceApiCholTest, WithTierFilters) {
     using T = TypeParam;
-    using Potrs = dv::routine::potrs<Uplo::Upper>;
-    using Posv = dv::routine::posv<Uplo::Lower>;
-    using Potri = dv::routine::potri<Uplo::Lower>;
+    using Potrs = batchlas::device::routine::potrs<Uplo::Upper>;
+    using Posv = batchlas::device::routine::posv<Uplo::Lower>;
+    using Potri = batchlas::device::routine::potri<Uplo::Lower>;
     const std::string nb = "blocked" + std::to_string(kNb<T>);
-    const dv::DeviceLimits big{std::size_t(1) << 20, {16, 32}, 1024, true};
+    const batchlas::device::DeviceLimits big{std::size_t(1) << 20, {16, 32}, 1024, true};
     for (int n : {0, 1, 4000}) {
         EXPECT_EQ((pick<Potrs, T>(big, n)), "blocked32") << n;
         EXPECT_EQ((pick<Posv, T>(big, n)), nb) << n;
         EXPECT_EQ((pick<Potri, T>(big, n)), "blocked32") << n;
     }
-    const std::size_t potrs_local = dv::potrs_buffer_size<Uplo::Upper, dv::tier::Blocked<32>, T>(1).local_bytes;
-    const dv::DeviceLimits starved{potrs_local - 1, {32}, 1024, true};
+    const std::size_t potrs_local = batchlas::device::potrs_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<32>, T>(1).local_bytes;
+    const batchlas::device::DeviceLimits starved{potrs_local - 1, {32}, 1024, true};
     EXPECT_EQ((pick<Potrs, T>(starved, 64)), "throw");
-    const dv::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
+    const batchlas::device::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
     EXPECT_EQ((pick<Posv, T>(sg16, 64)), "throw");
-    const dv::DeviceLimits narrow{std::size_t(1) << 20, {32}, 128, true};
+    const batchlas::device::DeviceLimits narrow{std::size_t(1) << 20, {32}, 128, true};
     EXPECT_EQ((pick<Potri, T>(narrow, 64)), "throw");
-    const dv::DeviceLimits no_fp64{std::size_t(1) << 20, {32}, 1024, false};
+    const batchlas::device::DeviceLimits no_fp64{std::size_t(1) << 20, {32}, 1024, false};
     EXPECT_EQ((pick<Potri, T>(no_fp64, 64)), (std::is_same_v<real_of<T>, double> ? "throw" : "blocked32"));
-    static_assert(dv::tier_info<Posv, dv::tier::Blocked<32>, T>::admits(64) == (kNb<T> == 32));
+    static_assert(batchlas::device::tier_info<Posv, batchlas::device::tier::Blocked<32>, T>::admits(64) == (kNb<T> == 32));
 }
 
 // The plan the ops carve is the size the host allocates: slots inside it, aligned, disjoint;
 // posv's potrs carves potrf's first slot; potri's global panel is n x NB.
 TYPED_TEST(DeviceApiCholTest, BufferSizeIsTheCarvedPlan) {
     using T = TypeParam;
-    using D = dv::potrf_detail::dev_scalar_t<T>;
-    using Cfg = dv::potrf_detail::BlockedCfg<T>;
-    constexpr auto pl = dv::potrf_detail::BlockedPlan<T, 16>::make();
-    const auto sz = dv::potrf_buffer_size<Uplo::Lower, dv::tier::Blocked<16>, T>(1000);
+    using D = batchlas::device::potrf_detail::dev_scalar_t<T>;
+    using Cfg = batchlas::device::potrf_detail::BlockedCfg<T>;
+    constexpr auto pl = batchlas::device::potrf_detail::BlockedPlan<T, 16>::make();
+    const auto sz = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Blocked<16>, T>(1000);
     EXPECT_EQ(sz, pl.size);
     EXPECT_EQ(pl.smem.offset, 0u);
     EXPECT_EQ(pl.smem.count, std::size_t(Cfg::smem_elems));
@@ -740,16 +740,16 @@ TYPED_TEST(DeviceApiCholTest, BufferSizeIsTheCarvedPlan) {
     EXPECT_LE(pl.fail.offset + sizeof(int), sz.local_bytes);
     EXPECT_EQ(pl.blk.offset % 16 + pl.diag.offset % 16 + pl.fail.offset % 16, 0u);
     EXPECT_EQ(sz.global_bytes, 0u);
-    EXPECT_EQ((dv::posv_buffer_size<Uplo::Upper, dv::tier::Blocked<16>, T>(7)), sz);
-    const auto rs = dv::potrs_buffer_size<Uplo::Upper, dv::tier::Blocked<16>, T>(7);
-    EXPECT_EQ(rs.local_bytes, (dv::l3::smem_bytes<Cfg>() + 15) / 16 * 16);
+    EXPECT_EQ((batchlas::device::posv_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<16>, T>(7)), sz);
+    const auto rs = batchlas::device::potrs_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<16>, T>(7);
+    EXPECT_EQ(rs.local_bytes, (batchlas::device::l3::smem_bytes<Cfg>() + 15) / 16 * 16);
     EXPECT_EQ(rs.global_bytes, 0u);
     for (int n : {1, 33, 1000}) {
-        const auto ps = dv::potri_buffer_size<Uplo::Lower, dv::tier::Blocked<32>, T>(n);
+        const auto ps = batchlas::device::potri_buffer_size<Uplo::Lower, batchlas::device::tier::Blocked<32>, T>(n);
         EXPECT_EQ(ps.local_bytes, rs.local_bytes) << n;
         EXPECT_EQ(ps.global_bytes, (std::size_t(n) * 32 * sizeof(T) + 15) / 16 * 16) << n;
-        EXPECT_EQ((dv::trtri_buffer_size<Uplo::Upper, Diag::Unit, dv::tier::Blocked<32>, T>(n)), ps) << n;
-        EXPECT_EQ((dv::lauum_buffer_size<Uplo::Upper, dv::tier::Blocked<32>, T>(n)), ps) << n;
+        EXPECT_EQ((batchlas::device::trtri_buffer_size<Uplo::Upper, Diag::Unit, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
+        EXPECT_EQ((batchlas::device::lauum_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
     }
 }
 
@@ -784,14 +784,14 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         const auto V = view(da, p.s);
         const std::size_t bytes = p.h.size() * sizeof(T);
         auto reset = [&](const T* from) { d.q().memcpy(da, from, bytes).wait(); };
-        const auto potrf_ws = dv::potrf_buffer_size<UL, Big<T>, T>(n);
-        const auto potri_ws = dv::potri_buffer_size<UL, Big<T>, T>(n);
+        const auto potrf_ws = batchlas::device::potrf_buffer_size<UL, Big<T>, T>(n);
+        const auto potri_ws = batchlas::device::potri_buffer_size<UL, Big<T>, T>(n);
         std::byte* gbuf = d.alloc<std::byte>(std::max<std::size_t>(potri_ws.global_bytes * kTimeBatch, 1), std::byte{0});
         T* const h0 = d.up(p.h);
         const double dev_potrf = median_ms(ctx, [&]() {
             reset(h0);
             run_blocked(d, kTimeBatch, potrf_ws, info,
-                        [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potrf<UL, Big<T>>(ex, dv::item(ka, b), w); });
+                        [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
         });
         d.q().memcpy(dfac, da, bytes).wait();
         double host_potrf_ms = 0, host_potri_ms = 0;
@@ -807,7 +807,7 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         const double dev_potri = median_ms(ctx, [&]() {
             reset(dfac);
             run_blocked(
-                d, kTimeBatch, potri_ws, info, [=](const auto& ex, int b, const dv::Workspace& w) { return dv::potri<UL, Big<T>>(ex, dv::item(ka, b), w); },
+                d, kTimeBatch, potri_ws, info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); },
                 gbuf);
         });
         {

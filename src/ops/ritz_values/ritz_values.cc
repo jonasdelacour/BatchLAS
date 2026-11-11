@@ -17,7 +17,6 @@
 #include <batchlas/device/lapack/ritz_values.hh>
 
 namespace batchlas {
-    namespace dla = device;
 
     template <Backend B, typename T, MatrixFormat MFormat>
     struct RitzValuesKernel {};
@@ -73,7 +72,7 @@ namespace batchlas {
             batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(global_size, local_size),
                 [=](sycl::nd_item<1> item) {
-                    const dla::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{item};
                     // Grid-stride loop over (item, column) pairs.
                     for (size_t group_id = item.get_group(0); group_id < batch_size * k; group_id += item.get_group_range(0)) {
                         const int b = group_id / k;
@@ -81,10 +80,10 @@ namespace batchlas {
                         // Uniform per work-group (one (b, j) pair each), so the reductions stay matched.
                         if (masked && !mk[b]) continue;
                         // Column j of item b (no local lambda: SemaSYCL would take it as the kernel body).
-                        const auto v = dla::vec(V_view.data() + static_cast<int64_t>(b) * V_view.stride() + j * V_view.ld(), n);
-                        const auto av = dla::vec(AV_view.data() + static_cast<int64_t>(b) * AV_view.stride() + j * AV_view.ld(), n);
+                        const auto v = device::vec(V_view.data() + static_cast<int64_t>(b) * V_view.stride() + j * V_view.ld(), n);
+                        const auto av = device::vec(AV_view.data() + static_cast<int64_t>(b) * AV_view.stride() + j * AV_view.ld(), n);
                         // The public device op's per-column step (a thin launcher over it).
-                        const real_t q = dla::ritz_values_quotient(ex, v, av);
+                        const real_t q = device::ritz_values_quotient(ex, v, av);
                         if (ex.leader()) ritz_vals(j, b) = q;
                     }
                 }

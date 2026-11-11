@@ -77,7 +77,7 @@ template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr Layout<
 }
 
 // v := v / sqrt(sum abs2(v_i)), a true division. Collective.
-template <class Ex, class V> BATCHLAS_DLA_INLINE void normalize(const Ex& ex, const V& v) {
+template <class Ex, class V> BATCHLAS_DEVICE_INLINE void normalize(const Ex& ex, const V& v) {
     using T = elem_t<V>;
     using R = real_t<T>;
     const R nrm = std::sqrt(sumsq<alg::Unfused>(ex, v));
@@ -86,7 +86,7 @@ template <class Ex, class V> BATCHLAS_DLA_INLINE void normalize(const Ex& ex, co
 
 // Per column i: twice h := A(:, :i)^H a_i, a_i -= A(:, :i) h; then normalize. The RowOwner
 // gemv and normalize own a_i cyclically by the same item, so only cross-owner reads publish.
-template <class Ex, class MA, class H> BATCHLAS_DLA_INLINE void cgs2(const Ex& ex, const MA& a, const H& h) {
+template <class Ex, class MA, class H> BATCHLAS_DEVICE_INLINE void cgs2(const Ex& ex, const MA& a, const H& h) {
     const int m = a.rows(), k = a.cols();
     for (int i = 0; i < k; ++i) {
         const auto ai = a.col(i);
@@ -107,7 +107,7 @@ template <class Ex, class MA, class H> BATCHLAS_DLA_INLINE void cgs2(const Ex& e
 // A_j -= Q H; cgs2(A_j) } with Q the columns left of the block; the first block runs cgs2 once.
 // The two projections are in-group gemms (H: c0 x nb at ld k); every step ends on a global barrier.
 template <int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DLA_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Smem<Cfg> sm) {
     const int m = a.rows(), k = a.cols();
     const auto g = l3::global_of(a);
     for (int c0 = 0; c0 < k; c0 += NB) {
@@ -130,7 +130,7 @@ BATCHLAS_DLA_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Smem<
 // One CholeskyQR pass: G := A^H A (its lower triangle), for ShiftChol3's first pass G += s I with
 // the host's s, then G = L L^H and A := A L^-H. Returns potrf's info (k > 0: A not changed).
 template <int N, bool Shift, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DLA_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const Workspace& pws, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const Workspace& pws, l3::Smem<Cfg> sm) {
     using R = real_t<T>;
     const int m = a.rows(), k = a.cols();
     const auto gram = mat(gp, k, k, k);
@@ -175,7 +175,7 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class T, class Cfg = vo
 ///         potrf's info k > 0 when a pass's Gram matrix is not positive definite (that pass leaves
 ///         A as the previous pass left it); uniform
 template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg = void, class Ex, class MA>
-BATCHLAS_DLA_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
     ortho_detail::check<TR, Algo, Tier, Cfg, T>();
     const int k = a.cols();

@@ -21,7 +21,7 @@ namespace batchlas::device {
 
 namespace posv_detail {
 template <Uplo UL, int NB, class Alg, int WG, int SG, class MA, class MB>
-BATCHLAS_DLA_INLINE int posv_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int posv_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
     static_assert(std::is_same_v<Alg, alg::Default>, "posv: tier::Blocked has one algorithm");
     static_assert(std::is_same_v<typename MA::value_type, typename MB::value_type>, "posv: A and B hold the same scalar type");
     const int n = a.rows();
@@ -62,7 +62,7 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize posv_buffer_size
 // A := its Cholesky factor (UL triangle read and overwritten, the other neither read nor written),
 // then B := A^-1 B for the n x nrhs B; returns info (see the file head).
 template <Uplo UL, class Tier, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE int posv(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int posv(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::posv<UL>, T, Tier>;
     static_assert(potrf_detail::is_blocked_v<Tr>, "posv: tier::Blocked<NB> (the small tiers land with WP7)");

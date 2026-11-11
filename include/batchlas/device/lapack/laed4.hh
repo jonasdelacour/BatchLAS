@@ -39,7 +39,7 @@ template <int SG> inline constexpr bool is_group_v<RtGroup<Scope::Group, SG>> = 
 
 // The leader's v in every item (a loop exit on a reduced value, else a partition may diverge and
 // deadlock); work-group: the legacy broadcast of a bool (core's group bcast moves 4/8-byte words).
-template <class Ex, class T> BATCHLAS_DLA_INLINE T uniform(const Ex& ex, T v) {
+template <class Ex, class T> BATCHLAS_DEVICE_INLINE T uniform(const Ex& ex, T v) {
     if constexpr (is_thread_v<Ex>) return v;
     else if constexpr (is_group_v<Ex>) return batchlas::portable::group_broadcast(ex.it.get_group(), v, 0);
     else return ex.uniform(v);
@@ -55,12 +55,12 @@ template <typename T, typename Ex> struct Eval {
     T error_estimate;
 };
 
-template <typename T> BATCHLAS_DLA_HELPER void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
+template <typename T> BATCHLAS_DEVICE_HELPER void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
     if (secular_value <= T(0)) lower_bound = sycl::fmax(lower_bound, tau);
     if (secular_value > T(0)) upper_bound = sycl::fmin(upper_bound, tau);
 }
 
-template <typename T> BATCHLAS_DLA_HELPER T bounded_step(T step, T tau, T lower_bound, T upper_bound, T secular_value) {
+template <typename T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T lower_bound, T upper_bound, T secular_value) {
     if (tau + step > upper_bound || tau + step < lower_bound) {
         step = (secular_value < T(0)) ? (upper_bound - tau) / T(2) : (lower_bound - tau) / T(2);
     }
@@ -71,7 +71,7 @@ template <typename T> BATCHLAS_DLA_HELPER T bounded_step(T step, T tau, T lower_
 // per item the sums of z_i^2 / (d_i - x), of (z_i / (d_i - x))^2 and of the running sums (the
 // laed4 error term) below and above that window, then six reductions over the executor.
 template <typename T, typename Ex, typename DV>
-BATCHLAS_DLA_HELPER Eval<T, Ex> evaluate(const Ex& ex, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t pole_index,
+BATCHLAS_DEVICE_HELPER Eval<T, Ex> evaluate(const Ex& ex, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t pole_index,
                                          std::int32_t skip, T origin, T tau, T rho_inv) {
     const std::int32_t lower_end = pole_index + (skip < 0 ? 1 : 0);
     const std::int32_t upper_start = pole_index + 1 + (skip < 0 ? 0 : skip);
@@ -103,7 +103,7 @@ template <typename T, typename Ex> struct EvalState {
 };
 
 template <typename T, typename Ex>
-BATCHLAS_DLA_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12, T pole_k, T pole_k1, bool origin_lower, bool use_fixed,
+BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12, T pole_k, T pole_k1, bool origin_lower, bool use_fixed,
                                T wi_ratio_sq) {
     T qc;
     if (use_fixed) {
@@ -153,7 +153,7 @@ BATCHLAS_DLA_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12, T 
 // Root k < dd - 1, in (d_k, d_{k+1}): the origin is the nearer pole (the sign of f at the
 // midpoint), then ROC steps with the fixed-weight / middle-way switch.
 template <typename T, typename Ex, typename DV>
-BATCHLAS_DLA_HELPER laed4_root<T> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, T rho,
+BATCHLAS_DEVICE_HELPER laed4_root<T> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, T rho,
                                               std::int32_t max_iter) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
@@ -269,7 +269,7 @@ BATCHLAS_DLA_HELPER laed4_root<T> solve_inner(const Ex& ex_in, const DV& d_prob,
 
 // Root dd - 1, in (d_{dd-1}, d_{dd-1} + rho), origin the last pole; dd == 1 is exact.
 template <typename T, typename Ex, typename DV>
-BATCHLAS_DLA_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, T rho,
+BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, T rho,
                                              std::int32_t max_iter) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
@@ -396,7 +396,7 @@ BATCHLAS_DLA_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_prob, 
 /// ex: every item calls with the same k; d and z must be visible to every item. The result is
 /// uniform. max_iter >= 1 caps the iteration (StedcParams::max_sec_iter).
 template <class Ex, class DV, class T>
-BATCHLAS_DLA_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho, std::int32_t max_iter) {
+BATCHLAS_DEVICE_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho, std::int32_t max_iter) {
     if (k == dd - 1) return laed4_detail::solve_last<T>(ex, d, z, dd, rho, max_iter);
     return laed4_detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
 }

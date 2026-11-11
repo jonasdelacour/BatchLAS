@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Device LA v2 ops private to the krylov-ortho-ritz family (src/ops/ortho/krylov-ortho-ritz_v2.hh:
+// Device LA ops private to the krylov-ortho-ritz family (src/ops/ortho/krylov-ortho-ritz_v2.hh:
 // laqge) against exact host references; the core ops those kernels also call (fn_vec for the
 // generated c included) are covered by device_blas_v2_tests. Guards (agent-guide section 8): a WG that
 // is not a power of two and a launch at the device ceiling (laqge's contract: WG == rows);
@@ -26,12 +26,11 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kPeriod = 3;
 constexpr double kPoison = 1.0e6;  // in range, finite: an op that writes padding changes it
@@ -137,13 +136,13 @@ TYPED_TEST(DeviceBlasV2KrylovTest, LaqgeGeneratedAndPublished) {
         R* dg = this->dev.up(hd);
         this->dev.run(batch, k, sizeof(R) * k, [=](sycl::nd_item<1> it, unsigned char* lm) {
             const int b = static_cast<int>(it.get_group_linear_id());
-            const v2::RtGroup<> ex{it};
-            const auto r = v2::vec(dg + std::ptrdiff_t(b) * k * rinc, k, rinc);
-            krylov_v2::laqge(ex, r, v2::fn_vec(k, cgen), v2::mat(E + std::ptrdiff_t(b) * per, k, k, ld));
-            const auto d_slm = v2::vec<v2::Mem::Local>(reinterpret_cast<R*>(lm), k);
-            v2::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = r(i); });
+            const device::RtGroup<> ex{it};
+            const auto r = device::vec(dg + std::ptrdiff_t(b) * k * rinc, k, rinc);
+            krylov_v2::laqge(ex, r, device::fn_vec(k, cgen), device::mat(E + std::ptrdiff_t(b) * per, k, k, ld));
+            const auto d_slm = device::vec<device::Mem::Local>(reinterpret_cast<R*>(lm), k);
+            device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = r(i); });
             const auto D = ex.publish(d_slm);
-            krylov_v2::laqge(ex, D, D, v2::mat(F + std::ptrdiff_t(b) * per, k, k, ld));
+            krylov_v2::laqge(ex, D, D, device::mat(F + std::ptrdiff_t(b) * per, k, k, ld));
         });
         const auto gE = this->dev.down(E, hE.size()), gF = this->dev.down(F, hF.size());
         EXPECT_EQ(bit_twins(gE, batch, per) + bit_twins(gF, batch, per), 0) << "k " << k << ": items differ from their representative";

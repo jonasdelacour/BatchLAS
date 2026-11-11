@@ -82,7 +82,7 @@ template <class C> struct Smem {
 template <class C> inline constexpr int smem_elems() { return C::smem_elems; }
 template <class C> inline constexpr std::size_t smem_bytes() { return sizeof(typename C::value_type) * std::size_t(C::smem_elems); }
 /// Smem over a local_accessor of Cfg::value_type (at least smem_elems<Cfg>() long).
-template <class C, class Acc> BATCHLAS_DLA_INLINE Smem<C> smem_of(const Acc& acc) {
+template <class C, class Acc> BATCHLAS_DEVICE_INLINE Smem<C> smem_of(const Acc& acc) {
     return {acc.template get_multi_ptr<sycl::access::decorated::no>().get()};
 }
 

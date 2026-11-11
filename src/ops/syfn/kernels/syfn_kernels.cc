@@ -19,7 +19,6 @@
 namespace batchlas {
 namespace ops::syfn {
 
-namespace v2 = batchlas::device;
 
 template <Backend B, class T>
 struct WeightsKernel {};
@@ -82,8 +81,8 @@ Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* 
     q->parallel_for<ZeroKernel<B, T>>(sycl::range<1>(size_t(n * n * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * n), e = l % (n * n);
         if (mask && !mask[b]) return;  // I3
-        v2::laset(v2::ElemAt<true>{int(e % n), int(e / n)}, v2::Zero{}, v2::Zero{},
-                  v2::mat_wide(fp + b * sf, int(n), int(n), int(ldf)));
+        device::laset(device::ElemAt<true>{int(e % n), int(e / n)}, device::Zero{}, device::Zero{},
+                  device::mat_wide(fp + b * sf, int(n), int(n), int(ldf)));
     });
     return q.get_event();
 }
@@ -108,9 +107,9 @@ void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<flo
     q->parallel_for<ScaleKernel<B, T>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * m), e = l % (n * m), i = e % n, j = e / n;
         if (mask && !mask[b]) return;  // I3
-        v2::dgmm<Side::Right>(v2::ElemAt<true>{int(i), int(j)}, v2::vec(gp + b * m, int(m)),
-                              v2::mat_wide(vp + b * sv, int(n), int(m), int(ldv)),
-                              v2::mat_wide(yp + b * n * m, int(n), int(m), int(n)));
+        device::dgmm<Side::Right>(device::ElemAt<true>{int(i), int(j)}, device::vec(gp + b * m, int(m)),
+                              device::mat_wide(vp + b * sv, int(n), int(m), int(ldv)),
+                              device::mat_wide(yp + b * n * m, int(n), int(m), int(n)));
     });
 }
 

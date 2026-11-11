@@ -16,7 +16,6 @@
 namespace batchlas {
 
 
-namespace v2 = batchlas::device;
 
 // psi_1(x) = sum_{k <= i} z_k / (d_k - x), psi_2(x) = the same over k > i, and their derivatives
 // (terms z_k / (d_k - x)^2), for z = v .* v. Each sum stages its terms in local memory, then
@@ -24,12 +23,12 @@ namespace v2 = batchlas::device;
 template <typename T, typename Ex, typename V, typename P>
 auto sec_eval(const Ex& ex, const V& v, const V& d, const T& x, const int32_t i, const int32_t n, const P& psi) {
     const auto terms = psi.head(n);
-    v2::map(ex, terms, [=](T vk, T dk) { return vk / (dk - x); }, v, d);
-    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+    device::map(ex, terms, [=](T vk, T dk) { return vk / (dk - x); }, v, d);
+    device::sync<device::scope::Group>(ex, device::Mem::Global);
     auto psi1 = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
     auto psi2 = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
-    v2::map(ex, terms, [=](T vk, T dk) { return vk / ( (dk - x) * (dk - x)); }, v, d);
-    v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+    device::map(ex, terms, [=](T vk, T dk) { return vk / ( (dk - x) * (dk - x)); }, v, d);
+    device::sync<device::scope::Group>(ex, device::Mem::Global);
     auto psi1_prime = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
     auto psi2_prime = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
@@ -56,27 +55,27 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
         auto log_denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(d.batch_size()*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
-            const v2::RtGroup<> ex{item};
+            const device::RtGroup<> ex{item};
             auto n = n_reduced[bid];
-            const auto vb = v2::vec(v.batch_item(bid)).head(n);
-            const auto db = v2::vec(d.batch_item(bid)).head(n);
-            const auto lam_out = v2::vec(lambdas.batch_item(bid)).head(n);
-            const auto Q = v2::mat(Qview.batch_item(bid)).sub(0, 0, n, n);
-            const auto lnum = v2::vec<v2::Mem::Local>(util::get_raw_ptr(log_numerators), n);
-            const auto lden = v2::vec<v2::Mem::Local>(util::get_raw_ptr(log_denominators), n);
-            const auto sgn = v2::vec<v2::Mem::Local>(util::get_raw_ptr(vsign), n);
-            const auto zhat = v2::vec<v2::Mem::Local>(util::get_raw_ptr(vhat), n);
-            const auto scratch = v2::vec<v2::Mem::Local>(util::get_raw_ptr(shared_mem), n);
+            const auto vb = device::vec(v.batch_item(bid)).head(n);
+            const auto db = device::vec(d.batch_item(bid)).head(n);
+            const auto lam_out = device::vec(lambdas.batch_item(bid)).head(n);
+            const auto Q = device::mat(Qview.batch_item(bid)).sub(0, 0, n, n);
+            const auto lnum = device::vec<device::Mem::Local>(util::get_raw_ptr(log_numerators), n);
+            const auto lden = device::vec<device::Mem::Local>(util::get_raw_ptr(log_denominators), n);
+            const auto sgn = device::vec<device::Mem::Local>(util::get_raw_ptr(vsign), n);
+            const auto zhat = device::vec<device::Mem::Local>(util::get_raw_ptr(vhat), n);
+            const auto scratch = device::vec<device::Mem::Local>(util::get_raw_ptr(shared_mem), n);
 
-            v2::for_each_owned(ex, n, [&](int k) {
+            device::for_each_owned(ex, n, [&](int k) {
                 lnum(k) = T(0);
                 lden(k) = T(0);
             });
-            v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-            v2::map(ex, sgn, [](T vk) { return (vk >= T(0)) ? T(1) : T(-1); }, vb);
-            v2::map(ex, vb, [](T vk) { return vk * vk; }, vb);  // z = v .* v, in place
+            device::sync<device::scope::Group>(ex, device::Mem::Global);
+            device::map(ex, sgn, [](T vk) { return (vk >= T(0)) ? T(1) : T(-1); }, vb);
+            device::map(ex, vb, [](T vk) { return vk * vk; }, vb);  // z = v .* v, in place
 
-            auto v_norm2 = stedc_v2::fold(ex, v2::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
+            auto v_norm2 = stedc_v2::fold(ex, device::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
 
             for (int i = 0; i < n; i++) {
                 auto di = d(i, bid);
@@ -125,18 +124,18 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     iter++;
                 }
 
-                if (ex.leader()) { [&]() BATCHLAS_DLA_BODY { lam_out(i) = lam; }(); }
+                if (ex.leader()) { [&]() BATCHLAS_DEVICE_BODY { lam_out(i) = lam; }(); }
 
                 // Q(:, i) = d - lambda_i, its magnitude clamped away from zero.
                 const T root = lam + shift;
-                v2::map(ex, Q.col(i), [=](T dk) {
+                device::map(ex, Q.col(i), [=](T dk) {
                     auto sign = dk - root >= T(0) ? T(1) : T(-1);
                     auto clamped_diff = std::max(sycl::fabs(dk - root), std::numeric_limits<T>::epsilon()*T(1e-5));
                     return sign * clamped_diff;
                 }, db);
 
                 // Lowner numerators: sum over roots of log |d_k - lambda_i|.
-                v2::for_each_owned(ex, n, [&](int k) {
+                device::for_each_owned(ex, n, [&](int k) {
                     auto diff = sycl::fabs(Q(k, i));
                     diff = sycl::fmax(diff, safe_denorm);
                     auto log_term = sycl::log(diff);
@@ -148,28 +147,28 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                 });
 
                 // Lowner denominator i: sum over k != i of log |d_i - d_k|, below then above i.
-                v2::map(ex, scratch.head(i), [&](T dk) {
+                device::map(ex, scratch.head(i), [&](T dk) {
                     auto diff = sycl::fabs(db(i) - dk);
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db);
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
                 auto log_den2 = i > 0 ? stedc_v2::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
 
-                v2::map(ex, scratch.head(n - i - 1), [&](T dk) {
+                device::map(ex, scratch.head(n - i - 1), [&](T dk) {
                     auto diff = sycl::fabs(dk - db(i));
                     diff = sycl::fmax(diff, safe_denorm);
                     return sycl::log(diff);
                 }, db.tail(i + 1));
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
                 auto log_den1 = (i + 1) < n ? stedc_v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
 
-                if (ex.leader()) { [&]() BATCHLAS_DLA_BODY { lden(i) = log_den1 + log_den2; }(); }
+                if (ex.leader()) { [&]() BATCHLAS_DEVICE_BODY { lden(i) = log_den1 + log_den2; }(); }
             }
 
-            v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+            device::sync<device::scope::Group>(ex, device::Mem::Global);
             // zhat_k = sign(v_k) sqrt(numerator_k / denominator_k), from the logs, range-clamped.
-            v2::map(ex, zhat, [=](T ln, T ld, T s) {
+            device::map(ex, zhat, [=](T ln, T ld, T s) {
                 auto exponent = T(0.5) * (ln - ld);
                 exponent = sycl::fmax(log_lower_bound, sycl::fmin(log_upper_bound, exponent));
                 auto magnitude = sycl::exp(exponent);
@@ -178,15 +177,15 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
 
             // Eigenvector i of the merge: Q(:, i) = zhat ./ (d - lambda_i), normalised.
             for (int i = 0; i < n; i++) {
-                v2::map(ex, Q.col(i), [](T zk, T qk) { return zk / qk; }, zhat, Q.col(i));
+                device::map(ex, Q.col(i), [](T zk, T qk) { return zk / qk; }, zhat, Q.col(i));
             }
             for (int i = 0; i < n; i++) {
-                const T nrm = v2::nrm2<v2::alg::Blue>(ex, Q.col(i));
-                v2::map(ex, Q.col(i), [=](T qk) { return qk / nrm; }, Q.col(i));
+                const T nrm = device::nrm2<device::alg::Blue>(ex, Q.col(i));
+                device::map(ex, Q.col(i), [=](T qk) { return qk / nrm; }, Q.col(i));
             }
 
             // Roots were solved relative to their nearer pole: add it back.
-            v2::for_each_owned(ex, n, [&](int k) {
+            device::for_each_owned(ex, n, [&](int k) {
                 auto d_term = lam_out(k) > 0 ? db(k) : (k + 1 < n ? db(k + 1) : db(k) + v_norm2);
                 lam_out(k) += d_term;
             });

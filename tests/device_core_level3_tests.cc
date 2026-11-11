@@ -43,20 +43,20 @@ template <class T, Transpose TA, Transpose TB> void check_gemm(Dev& d) {
     T* a = d.up(a_h);
     T* b = d.up(b_h);
     T* c = d.up(c_h);
-    T* c0 = d.template alloc<T>(std::size_t(kItems) * M * N, dv::qnan<T>());  // beta == Zero: poisoned, never read
+    T* c0 = d.template alloc<T>(std::size_t(kItems) * M * N, batchlas::device::qnan<T>());  // beta == Zero: poisoned, never read
     d.template run<1>(kItems, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int q = static_cast<int>(it.get_group_linear_id());
-        dv::Tile<T, AR, AC> A;
-        dv::Tile<T, BR, BC> B;
-        dv::Tile<T, M, N> C, C0;
-        dv::load(A, dv::Mat<T, dv::Ext<AR>, dv::Ext<AC>, dv::Ext<AR>>{a + q * AR * AC, {}, {}, {}});
-        dv::load(B, dv::Mat<T, dv::Ext<BR>, dv::Ext<BC>, dv::Ext<BR>>{b + q * BR * BC, {}, {}, {}});
-        dv::load(C, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c + q * M * N, {}, {}, {}});
-        dv::load(C0, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c0 + q * M * N, {}, {}, {}});
-        dv::gemm<TA, TB>(dv::Thread{}, alpha, A, B, beta, C);
-        dv::gemm<TA, TB, dv::epi::MacChain, dv::arith::Fma>(dv::Thread{}, alpha, A, B, dv::Zero{}, C0);
-        dv::store(C, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c + q * M * N, {}, {}, {}});
-        dv::store(C0, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c0 + q * M * N, {}, {}, {}});
+        batchlas::device::Tile<T, AR, AC> A;
+        batchlas::device::Tile<T, BR, BC> B;
+        batchlas::device::Tile<T, M, N> C, C0;
+        batchlas::device::load(A, batchlas::device::Mat<T, batchlas::device::Ext<AR>, batchlas::device::Ext<AC>, batchlas::device::Ext<AR>>{a + q * AR * AC, {}, {}, {}});
+        batchlas::device::load(B, batchlas::device::Mat<T, batchlas::device::Ext<BR>, batchlas::device::Ext<BC>, batchlas::device::Ext<BR>>{b + q * BR * BC, {}, {}, {}});
+        batchlas::device::load(C, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c + q * M * N, {}, {}, {}});
+        batchlas::device::load(C0, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c0 + q * M * N, {}, {}, {}});
+        batchlas::device::gemm<TA, TB>(batchlas::device::Thread{}, alpha, A, B, beta, C);
+        batchlas::device::gemm<TA, TB, batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(batchlas::device::Thread{}, alpha, A, B, batchlas::device::Zero{}, C0);
+        batchlas::device::store(C, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c + q * M * N, {}, {}, {}});
+        batchlas::device::store(C0, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c0 + q * M * N, {}, {}, {}});
     });
     const auto got = d.down(c, c_h.size()), got0 = d.down(c0, c_h.size());
     for (int q = 0; q < kItems; q += 37)
@@ -87,14 +87,14 @@ TYPED_TEST(DeviceCoreLevel3Test, RegisterGemmSubSubtracts) {
     T* b = d.up(b_h);
     T* c = d.up(c_h);
     d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
-        dv::Tile<T, M, K> A;
-        dv::Tile<T, K, N> B;
-        dv::Tile<T, M, N> C;
-        dv::load(A, dv::Mat<T, dv::Ext<M>, dv::Ext<K>, dv::Ext<M>>{a, {}, {}, {}});
-        dv::load(B, dv::Mat<T, dv::Ext<K>, dv::Ext<N>, dv::Ext<K>>{b, {}, {}, {}});
-        dv::load(C, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c, {}, {}, {}});
-        dv::gemm_sub<dv::arith::FmaSplit>(dv::Thread{}, A, B, C);
-        dv::store(C, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{c, {}, {}, {}});
+        batchlas::device::Tile<T, M, K> A;
+        batchlas::device::Tile<T, K, N> B;
+        batchlas::device::Tile<T, M, N> C;
+        batchlas::device::load(A, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<K>, batchlas::device::Ext<M>>{a, {}, {}, {}});
+        batchlas::device::load(B, batchlas::device::Mat<T, batchlas::device::Ext<K>, batchlas::device::Ext<N>, batchlas::device::Ext<K>>{b, {}, {}, {}});
+        batchlas::device::load(C, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c, {}, {}, {}});
+        batchlas::device::gemm_sub<batchlas::device::arith::FmaSplit>(batchlas::device::Thread{}, A, B, C);
+        batchlas::device::store(C, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{c, {}, {}, {}});
     });
     const auto got = d.down(c, M * N);
     for (int j = 0; j < N; ++j)
@@ -110,7 +110,7 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG> void check_trsm(Dev&
     using R = real_of<T>;
     // A: the stored triangle graded (diag 2 .. 3, off-diagonal in [-0.5, 0.5)), the rest NaN;
     // a Unit diagonal is NaN too (never read).
-    std::vector<T> a_h(std::size_t(kItems) * NA * NA, dv::qnan<T>());
+    std::vector<T> a_h(std::size_t(kItems) * NA * NA, batchlas::device::qnan<T>());
     for (int q = 0; q < kItems; ++q)
         for (int j = 0; j < NA; ++j)
             for (int i = 0; i < NA; ++i) {
@@ -125,12 +125,12 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG> void check_trsm(Dev&
     T* b = d.up(b_h);
     d.template run<1>(kItems, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int q = static_cast<int>(it.get_group_linear_id());
-        dv::Tile<T, NA, NA> A;
-        dv::Tile<T, M, N> B;
-        dv::load(A, dv::Mat<T, dv::Ext<NA>, dv::Ext<NA>, dv::Ext<NA>>{a + q * NA * NA, {}, {}, {}});
-        dv::load(B, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{b + q * M * N, {}, {}, {}});
-        dv::trsm<SD, UL, TR, DG>(dv::Thread{}, alpha, A, B);
-        dv::store(B, dv::Mat<T, dv::Ext<M>, dv::Ext<N>, dv::Ext<M>>{b + q * M * N, {}, {}, {}});
+        batchlas::device::Tile<T, NA, NA> A;
+        batchlas::device::Tile<T, M, N> B;
+        batchlas::device::load(A, batchlas::device::Mat<T, batchlas::device::Ext<NA>, batchlas::device::Ext<NA>, batchlas::device::Ext<NA>>{a + q * NA * NA, {}, {}, {}});
+        batchlas::device::load(B, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{b + q * M * N, {}, {}, {}});
+        batchlas::device::trsm<SD, UL, TR, DG>(batchlas::device::Thread{}, alpha, A, B);
+        batchlas::device::store(B, batchlas::device::Mat<T, batchlas::device::Ext<M>, batchlas::device::Ext<N>, batchlas::device::Ext<M>>{b + q * M * N, {}, {}, {}});
     });
     const auto X = d.down(b, b_h.size());
     // Residual: op(A) X - alpha B (Left) or X op(A) - alpha B (Right), A with its implied diagonal.

@@ -32,7 +32,6 @@ namespace batchlas::detail {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 template <typename T, int32_t P>
 class BtrdLowerSubgroupKernel;
@@ -120,7 +119,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
-                const v2::SgpPartition<P> pex{sg};  // lane = pex.lid(); the same SubGroupPartition<P>
+                const device::SgpPartition<P> pex{sg};  // lane = pex.lid(); the same SubGroupPartition<P>
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 if (prob_id >= batch) return;
                 // I2: an inactive item chases its scratch copy like any other and stores nothing.
@@ -140,24 +139,24 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
                 // C/WORK live in local memory when the per-work-group footprint fits, otherwise in the
                 // caller-provided global scratch (built with inc=1, so the batch base is contiguous).
-                auto local_cw = [&]() BATCHLAS_DLA_BODY {
+                auto local_cw = [&]() BATCHLAS_DEVICE_BODY {
                     return std::pair<Real*, T*>{
                         c_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * cw_len,
                         work_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * cw_len};
                 };
-                auto global_cw = [&]() BATCHLAS_DLA_BODY {
+                auto global_cw = [&]() BATCHLAS_DEVICE_BODY {
                     return std::pair<Real*, T*>{c.batch_item(prob_id).data().data(),
                                                 work.batch_item(prob_id).data().data()};
                 };
-                auto local_ab = [&]() BATCHLAS_DLA_BODY -> T* {
+                auto local_ab = [&]() BATCHLAS_DEVICE_BODY -> T* {
                     return ab_local.template get_multi_ptr<sycl::access::decorated::no>().get() + part_id * (ldab_l * n);
                 };
 
                 // The body of device::sb2st's tiers (lapack/sb2st.hh) with this route's run-time storage:
                 // AB staged when the band fits, C/WORK local when they fit. On Metal each C/WORK storage
                 // is its own body (no pointer merged across address spaces; givens_on does the same for AB).
-                auto body = [&](std::pair<Real*, T*> cw) BATCHLAS_DLA_BODY {
-                    v2::sb2st_detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
+                auto body = [&](std::pair<Real*, T*> cw) BATCHLAS_DEVICE_BODY {
+                    device::sb2st_detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
                 };
                 if (sycl_impl::on_metal()) {
                     if (use_local_cw) body(local_cw());
@@ -167,7 +166,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 }
 
                 invoke_one(partition, [&]() {
-                    if (live) v2::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
+                    if (live) device::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
                 });
             });
     });

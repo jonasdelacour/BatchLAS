@@ -32,7 +32,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 enum class LatrdImpl { Legacy, Grid };
 
@@ -202,13 +201,13 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
-                const v2::WorkGroup<WG> ex{it};
+                const device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
                 // Thin launcher: the panel body of device::sytrd<Lower, tier::Blocked<NB>> (latrd_lower_run).
-                v2::sytrd_detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
-                                                      vip_local, wip_local, [&](int i, const T& beta, const T& tau_i) BATCHLAS_DLA_BODY {
+                device::sytrd_detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
+                                                      vip_local, wip_local, [&](int i, const T& beta, const T& tau_i) BATCHLAS_DEVICE_BODY {
                                                           E_view(i, b) = beta;
                                                           TAU_view(i, b) = tau_i;
                                                       });
@@ -467,7 +466,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     // ExplicitInline: the plain-inline explicit complex mac of the symv ONLY
                     // (every other complex multiply here converted cost 1.16x, register pressure).
                     // evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-                    using SymvAr = v2::arith_t<v2::arith::ExplicitInline, T>;
+                    using SymvAr = device::arith_t<device::arith::ExplicitInline, T>;
                     for (int r = rlo + lid; r < rhi; r += wg) {
                         const int c_split = sycl::min(r, n - 1);
                         T acc = T(0);

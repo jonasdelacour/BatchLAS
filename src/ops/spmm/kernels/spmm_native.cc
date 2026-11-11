@@ -29,7 +29,6 @@ using sycl_device::dev_is_complex_v;
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 // The work-group ladder is gemv's (src/ops/gemv/gemv_native.hh); every caller here passes
 // units_per_wg_shift 0 (one work-item per unit).
@@ -43,11 +42,11 @@ inline constexpr int kNCmax = 64 / static_cast<int>(sizeof(D));
 static_assert(kNCmax<float> == 16 && kNCmax<double> == 8, "64-byte register block");
 static_assert(kNCmax<Cx<float>> == 8 && kNCmax<Cx<double>> == 4, "64-byte register block");
 
-// The scatter's complex atomic (v2::atomic_accumulate) is two independent scalar
+// The scatter's complex atomic (device::atomic_accumulate) is two independent scalar
 // atomics, NOT an atomic complex add: safe only because nothing reads C between
 // the scatter's first atomic and its last.
 
-// Pair = one two-component load per complex element (v2::PairAccess). As two scalar
+// Pair = one two-component load per complex element (device::PairAccess). As two scalar
 // loads, both halves of a missing sector go to L2 separately, and the gather is
 // L2-bound: 24% more L2 sectors and 18% slower for cfloat under -ffp-model=precise,
 // whose schedule issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
@@ -78,7 +77,7 @@ Event spmm_gather(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& C,
                   T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    using Ar = v2::arith_t<v2::arith::Fma, D>;  // sycl_device::fma_acc's chain, bit for bit
+    using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::fma_acc's chain, bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     const int m = A.rows();
@@ -154,14 +153,14 @@ Event spmm_gather(Queue& ctx,
                 // Row i of A; its bound is the row offsets, never A.nnz() (the per-item
                 // capacity: slots above each item's own count are garbage). A column of A
                 // is a row of op(B) = B, B^T or B^H (transB is a kernel argument).
-                const auto arow = v2::sp_row(v2::LoadVec<const D, Pair>{a_val + vb},
-                                             v2::BasedVec<const int, int64_t>{a_ci, vb},
+                const auto arow = device::sp_row(device::LoadVec<const D, Pair>{a_val + vb},
+                                             device::BasedVec<const int, int64_t>{a_ci, vb},
                                              a_ro[ro + i], a_ro[ro + i + 1]);
-                const v2::RtOpMat<const D, Pair> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
-                const v2::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
+                const device::RtOpMat<const D, Pair> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
+                const device::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
 
                 // C(i, c0:c0+NC) = alpha A(i, :) op(B)(:, c0:c0+NC) + beta C: the device spmm's unit.
-                v2::spmm_detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, v2::MaybeZero{beta_d, beta_zero}, Cb, i);
+                device::spmm_detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, device::MaybeZero{beta_d, beta_zero}, Cb, i);
             });
     });
 
@@ -231,7 +230,7 @@ Event spmm_scale(Queue& ctx,
                 const int j = static_cast<int>(r - static_cast<int64_t>(c) * rows_out);
 
                 D* p = c_ptr + b * sc + static_cast<int64_t>(c) * ldc + j;
-                *p = beta_zero ? D{} : v2::arith_t<v2::arith::Fma, D>::mul(beta_d, *p);  // C := beta C
+                *p = beta_zero ? D{} : device::arith_t<device::arith::Fma, D>::mul(beta_d, *p);  // C := beta C
             });
     });
 
@@ -251,7 +250,7 @@ Event spmm_scatter(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& C,
                    T alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
-    using Ar = v2::arith_t<v2::arith::Fma, D>;  // sycl_device::dev_mul, bit for bit
+    using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::dev_mul, bit for bit
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     // Rows of the STORED A, which under Trans/ConjTrans is the REDUCTION extent.
@@ -314,15 +313,15 @@ Event spmm_scatter(Queue& ctx,
 
                 const int64_t ro = b * a_os;
                 const int64_t vb = b * a_ms;
-                const v2::RtOpMat<const D> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
+                const device::RtOpMat<const D> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
                 D* Cb = c_ptr + b * sc;
                 const int rs = a_ro[ro + i];
                 const int re = a_ro[ro + i + 1];
 
                 // C(A_ci, :) += conj?(A(i, :))^T (alpha op(B)(i, :)), the device spmm's scatter row;
                 // ConjTrans conjugates the SPARSE operand.
-                v2::spmm_detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
-                                                      v2::spmm_detail::ColPtr<D>{Cb, ldc});
+                device::spmm_detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
+                                                      device::spmm_detail::ColPtr<D>{Cb, ldc});
             });
     });
 

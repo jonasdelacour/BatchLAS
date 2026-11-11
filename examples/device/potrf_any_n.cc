@@ -13,38 +13,37 @@
 #include <cstdio>
 #include <vector>
 
-namespace dv = batchlas::device;
 using batchlas::Uplo;
 using T = float;
-using Routine = dv::routine::potrf<Uplo::Lower>;
+using Routine = batchlas::device::routine::potrf<Uplo::Lower>;
 
 struct alignas(16) Slab {
     unsigned char b[16];
 };
 
 template <class Tier> void factor(sycl::queue& q, T* a, int n, int ld, int batch, int* info) {
-    constexpr int wg = dv::tier_info<Routine, Tier, T>::wg_size;
+    constexpr int wg = batchlas::device::tier_info<Routine, Tier, T>::wg_size;
     const long stride = long(ld) * n;
-    if constexpr (dv::potrf_detail::is_reg_v<Tier>) {
+    if constexpr (batchlas::device::potrf_detail::is_reg_v<Tier>) {
         constexpr int N = Tier::n_max, per = wg / N;  // matrices per work-group
         const int groups = batch / per;  // batch is a multiple of 32: no partition idles
         q.parallel_for(sycl::nd_range<1>(std::size_t(groups) * wg, wg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-             const dv::Partition<N> ex{it.get_sub_group()};
+             const batchlas::device::Partition<N> ex{it.get_sub_group()};
              const int b = int(it.get_group_linear_id()) * per + int(it.get_local_linear_id()) / N;
-             const int r = dv::potrf<Uplo::Lower, Tier>(ex, dv::mat(a + b * stride, n, n, ld));
+             const int r = batchlas::device::potrf<Uplo::Lower, Tier>(ex, batchlas::device::mat(a + b * stride, n, n, ld));
              if (ex.leader()) info[b] = r;
          }).wait_and_throw();
     } else {
-        const dv::WorkspaceSize ws = dv::potrf_buffer_size<Uplo::Lower, Tier, T>(n);
+        const batchlas::device::WorkspaceSize ws = batchlas::device::potrf_buffer_size<Uplo::Lower, Tier, T>(n);
         q.submit([&](sycl::handler& h) {
              sycl::local_accessor<Slab, 1> slm(sycl::range<1>((ws.local_bytes + 15) / 16 + 1), h);
              h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * wg, wg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                 const dv::WorkGroup<wg, 32> ex{it};
+                 const batchlas::device::WorkGroup<wg, 32> ex{it};
                  const int b = int(it.get_group_linear_id());
                  auto* raw = reinterpret_cast<std::byte*>(slm.template get_multi_ptr<sycl::access::decorated::no>().get());
-                 const dv::Workspace w{
+                 const batchlas::device::Workspace w{
                      sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw), nullptr};
-                 const int r = dv::potrf<Uplo::Lower, Tier>(ex, dv::mat(a + b * stride, n, n, ld), w);
+                 const int r = batchlas::device::potrf<Uplo::Lower, Tier>(ex, batchlas::device::mat(a + b * stride, n, n, ld), w);
                  if (ex.leader()) info[b] = r;
              });
          }).wait_and_throw();
@@ -64,8 +63,8 @@ int run(sycl::queue& q, int n, int batch) {
     q.copy(host.data(), a, host.size()).wait();
 
     const char* tier = "";
-    dv::with_tier<Routine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
-        tier = dv::potrf_detail::is_reg_v<Tier> ? "Reg" : dv::potrf_detail::is_cta_v<Tier> ? "Cta" : "Blocked";
+    batchlas::device::with_tier<Routine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+        tier = batchlas::device::potrf_detail::is_reg_v<Tier> ? "Reg" : batchlas::device::potrf_detail::is_cta_v<Tier> ? "Cta" : "Blocked";
         factor<Tier>(q, a, n, ld, batch, info);
     });
 

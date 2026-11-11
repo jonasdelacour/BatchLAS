@@ -37,8 +37,6 @@ class SyevJacobiCTAKernel;
 
 namespace {
 
-namespace v2 = ::batchlas::device;
-namespace jac = ::batchlas::device::jacobi_detail;
 
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,
@@ -133,8 +131,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
         // RELATIVE off-diagonal threshold (an absolute test forfeits the relative accuracy);
-        // tiny and tau_big as documented on jac::JacobiThreshold.
-        const auto thr = jac::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
+        // tiny and tau_big as documented on device::jacobi_detail::JacobiThreshold.
+        const auto thr = device::jacobi_detail::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
 
         Real* W = w_ptr;
         // A local of the submit lambda for the same reason as W, so the kernel's
@@ -156,12 +154,12 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
-                    Pair_local[idx] = jac::pack_pair(jac::round_robin_pair(mm, t, idx - t * pairs_per_round));
+                    Pair_local[idx] = device::jacobi_detail::pack_pair(device::jacobi_detail::round_robin_pair(mm, t, idx - t * pairs_per_round));
                 }
                 sycl::group_barrier(wg);
 
                 const auto sg = it.get_sub_group();
-                const v2::SgpPartition<kP> ex{sg};
+                const device::SgpPartition<kP> ex{sg};
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
@@ -175,24 +173,24 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
-                using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LD>, v2::Mem::Local, v2::Cyclic,
+                using Tile = device::Mat<T, device::Ext<kP>, device::Ext<kP>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
                                      sycl::local_accessor<T, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without vectors Z_local is never named, so the kernel does not capture it.
-                std::conditional_t<ComputeVectors, Tile, v2::None> Z{};
+                std::conditional_t<ComputeVectors, Tile, device::None> Z{};
                 if constexpr (ComputeVectors) Z = Tile{Z_local, {}, {}, {}, tile_off};
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
                 // Real T never names Rd_local, so the kernel does not capture it.
-                std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
-                if constexpr (kNeedPhase) rd = v2::vec(Rd_local, kRotSlots, base_r);
+                std::conditional_t<kNeedPhase, decltype(device::vec(Rd_local, 0)), device::None> rd{};
+                if constexpr (kNeedPhase) rd = device::vec(Rd_local, kRotSlots, base_r);
 
                 // ---- Load: A = the Hermitian matrix of the stored triangle, Z = I, zero pad. ----
                 for (int32_t c = 0; c < kP; ++c) {
                     T v = T(0);
                     if (live && lane < nn && c < nn) {
-                        if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : v2::conj(A_prob(c, lane));
-                        else v = (lane >= c) ? A_prob(lane, c) : v2::conj(A_prob(c, lane));
+                        if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : device::conj(A_prob(c, lane));
+                        else v = (lane >= c) ? A_prob(lane, c) : device::conj(A_prob(c, lane));
                         // The diagonal of a Hermitian matrix is real: drop imaginary noise.
                         if (lane == c) {
                             if constexpr (kNeedPhase) v = T(v.real(), Real(0));
@@ -201,7 +199,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     A(lane, c) = v;
                     if constexpr (ComputeVectors) Z(lane, c) = (lane == c && row_lane) ? T(1) : T(0);
                 }
-                // The partition's own barrier (chunk mask), not v2::sync: partitions of one
+                // The partition's own barrier (chunk mask), not device::sync: partitions of one
                 // sub-group leave the sweep loop after different barrier counts.
                 group_barrier(ex.part);
 
@@ -213,18 +211,18 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const auto rnd = jac::rot_round<T>(v2::vec(Rcs_local, kRotSlots, base_r), rd,
-                                                          v2::vec(Pair_local, pairs_per_round, t * pairs_per_round));
+                        const auto rnd = device::jacobi_detail::rot_round<T>(device::vec(Rcs_local, kRotSlots, base_r), rd,
+                                                          device::vec(Pair_local, pairs_per_round, t * pairs_per_round));
 
-                        jac::PivotPair pq{0, 0};
+                        device::jacobi_detail::PivotPair pq{0, 0};
                         bool active = false;
                         if (pair_lane) {
                             pq = rnd.pair(lane);
                             active = (pq.q < nn);
                         }
-                        jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
+                        device::jacobi_detail::JacobiRotation<T> jr = device::jacobi_detail::identity_rotation<T>();
                         if (active) {
-                            jr = v2::sym_schur2<T>(v2::Arith<T>::re(A(pq.p, pq.p)), v2::Arith<T>::re(A(pq.q, pq.q)),
+                            jr = device::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)),
                                                    static_cast<T>(A(pq.p, pq.q)), thr);
                         }
                         active = jr.active;
@@ -233,20 +231,20 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                         // One count serves as the sweep's rotation counter and as an early-out
                         // for rounds that skipped every pair (late sweeps are almost all such).
-                        const int32_t round_active = v2::allreduce(ex, active ? 1 : 0);
+                        const int32_t round_active = device::allreduce(ex, active ? 1 : 0);
                         rot_count += round_active;
                         if (round_active == 0) continue;
 
                         // Lane owns row `lane`; the pairs touch disjoint columns.
                         if (row_lane) {
-                            if constexpr (ComputeVectors) jac::rot_round_right(rnd, pairs_per_round, lane, A, Z);
-                            else jac::rot_round_right(rnd, pairs_per_round, lane, A);
+                            if constexpr (ComputeVectors) device::jacobi_detail::rot_round_right(rnd, pairs_per_round, lane, A, Z);
+                            else device::jacobi_detail::rot_round_right(rnd, pairs_per_round, lane, A);
                         }
                         group_barrier(ex.part);
 
                         // Lane now owns column `lane`; the pivots are stored exactly (zeros,
                         // real diagonal) so the convergence test does not chase rounding noise.
-                        if (row_lane) jac::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
+                        if (row_lane) device::jacobi_detail::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
                         group_barrier(ex.part);
                     }
 
@@ -263,12 +261,12 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // than by a serial sort on the leader; ties break on index so the
                 // permutation is a bijection.
                 if (live && row_lane) {
-                    const Real wj = v2::Arith<T>::re(A(lane, lane));
+                    const Real wj = device::Arith<T>::re(A(lane, lane));
                     int32_t dst = lane;
                     if (do_sort) {
                         int32_t rank = 0;
                         for (int32_t k = 0; k < nn; ++k) {
-                            const Real wk = v2::Arith<T>::re(A(k, k));
+                            const Real wk = device::Arith<T>::re(A(k, k));
                             // A strict total order (NaN after every number, ties and NaNs on index):
                             // the ranks are a bijection even for NaN input, so no slot is left stale.
                             const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
@@ -283,7 +281,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     W[static_cast<int64_t>(prob_id) * nn + dst] = wj;
 
                     if constexpr (ComputeVectors) {
-                        // A hand loop through the v1 view: v2::copy over v2::mat(A_prob).col(dst)
+                        // A hand loop through the host view: device::copy over device::mat(A_prob).col(dst)
                         // changed the unrolling (STG 19 -> 42).
                         for (int32_t r = 0; r < nn; ++r) A_prob(r, dst) = Z(r, lane);
                     }

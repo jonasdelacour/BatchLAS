@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The trsm-private device LA v2 ops (src/ops/trsm/trsm_v2.hh) against host residuals, driven
+// The trsm-private device LA ops (src/ops/trsm/trsm_v2.hh) against host residuals, driven
 // through both kernels' op sequences. Shared ops (arith::Fma, RtGroup, Partition::bcast, Frag
 // load_row / store_row) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): every (side, uplo, trans, diag) fold; lda and
@@ -32,15 +32,13 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace dla = batchlas::sycl_trsm::dla;
 using batchlas::sycl_trsm::Canonical;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -138,7 +136,7 @@ template <class T> Problem<T> make_problem(const Case& c, int n, int q, std::uin
                 const bool tri = i < n && (c.uplo == Uplo::Lower ? i >= j : i <= j);
                 T v = val<T>(seed + std::uint64_t(it) * 1000003u + std::uint64_t(j) * P.lda + i);
                 if (!tri || (i == j && c.diag == Diag::Unit)) v = nan_of<T>();
-                else if (i == j) v = v + T(v2::Arith<T>::re(v) >= 0 ? 1.5 : -1.5);
+                else if (i == j) v = v + T(device::Arith<T>::re(v) >= 0 ? 1.5 : -1.5);
                 else v = v * T(0.5);
                 if (i == tiny && j < tiny) v = T(0);
                 if (i == tiny && j == tiny) v = T(static_cast<real_of<T>>(1e-309));
@@ -229,9 +227,9 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
     const std::size_t bytes = sizeof(D) * (kTri + N + (Staged ? (TR + 1) * WG : 0)) + sizeof(int);
     auto body = [=](sycl::nd_item<1> it, unsigned char* lm, auto left) {
         constexpr bool kLeft = decltype(left)::value;
-        using Ar = v2::arith_t<v2::arith::Fma, D>;
+        using Ar = device::arith_t<device::arith::Fma, D>;
         const int item = static_cast<int>(it.get_group_linear_id());
-        const v2::RtGroup<> ex{it};
+        const device::RtGroup<> ex{it};
         const int lane = ex.lid();
         const bool live = lane < q;
         D* sLc = reinterpret_cast<D*>(lm);
@@ -239,24 +237,24 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
         D* sTile = sRd + N;
         int* sDiv = reinterpret_cast<int*>(sTile + (Staged ? (TR + 1) * ex.width() : 0));
         D* Bb = b + std::ptrdiff_t(item) * sb;
-        const dla::CanonTri<const D, kLeft> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
+        const sycl_trsm::dla::CanonTri<const D, kLeft> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
         if (lane == 0) sDiv[0] = 0;
-        dla::tp_pack_lower<N>(ex, L, n, sLc);
-        ex.barrier(v2::Mem::Global);
-        dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
-        ex.barrier(v2::Mem::Global);
-        const dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
+        sycl_trsm::dla::tp_pack_lower<N>(ex, L, n, sLc);
+        ex.barrier(device::Mem::Global);
+        sycl_trsm::dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
+        ex.barrier(device::Mem::Global);
+        const sycl_trsm::dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
         if (lane == 0) fl[item] = sDiv[0];
-        v2::Frag<D, N> x;
+        device::Frag<D, N> x;
         if constexpr (Staged) {
-            const dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
+            const sycl_trsm::dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
             D* my = sTile + lane * (TR + 1);
             BATCHLAS_UNROLL_FULL
             for (int k = 0; k < (N + TR - 1) / TR; ++k) {
-                ex.barrier(v2::Mem::Global);
-                dla::lacpy_tile_in<TR, TR + 1>(ex, Bc, k * TR, 0, sTile);
-                ex.barrier(v2::Mem::Global);
-                dla::trsv_lower_rows<N, TR, Ar>(x, k * TR, sLc, dg, [&](int s) {
+                ex.barrier(device::Mem::Global);
+                sycl_trsm::dla::lacpy_tile_in<TR, TR + 1>(ex, Bc, k * TR, 0, sTile);
+                ex.barrier(device::Mem::Global);
+                sycl_trsm::dla::trsv_lower_rows<N, TR, Ar>(x, k * TR, sLc, dg, [&](int s) {
                     D r = Ar::zero();
                     if (live && s < n) r = Ar::mul(alpha, my[s - k * TR]);
                     return r;
@@ -264,19 +262,19 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
             }
             BATCHLAS_UNROLL_FULL
             for (int k = 0; k < (N + TR - 1) / TR; ++k) {
-                ex.barrier(v2::Mem::Global);
-                dla::frag_copy_out<TR>(x, k * TR, my);
-                ex.barrier(v2::Mem::Global);
-                dla::lacpy_tile_out<TR, TR + 1>(ex, sTile, Bc, k * TR, 0);
+                ex.barrier(device::Mem::Global);
+                sycl_trsm::dla::frag_copy_out<TR>(x, k * TR, my);
+                ex.barrier(device::Mem::Global);
+                sycl_trsm::dla::lacpy_tile_out<TR, TR + 1>(ex, sTile, Bc, k * TR, 0);
             }
         } else {
-            const auto bu = dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(lane);
-            dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+            const auto bu = sycl_trsm::dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(lane);
+            sycl_trsm::dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
                 D r = Ar::zero();
                 if (live && s < n) r = Ar::mul(alpha, bu(s));
                 return r;
             });
-            v2::store(x, bu, live ? n : 0);
+            device::store(x, bu, live ? n : 0);
         }
     };
     if (P.c.side == Side::Left) {
@@ -308,30 +306,30 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
     const int chunks = (q + QC - 1) / QC;
     const int groups = kBatch / kMpw * chunks / (kWg / 32);
     dev.template run<kWg>(groups, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        using Ar = v2::arith_t<v2::arith::Fma, D>;
+        using Ar = device::arith_t<device::arith::Fma, D>;
         const auto sg = it.get_sub_group();
         const int gsg = static_cast<int>(it.get_group_linear_id()) * (kWg / 32) + static_cast<int>(sg.get_group_linear_id());
-        const v2::Partition<P> ex{sg};
+        const device::Partition<P> ex{sg};
         const int r = ex.lid();
         const int chunk = gsg % chunks;
         const int item = (gsg / chunks) * kMpw + static_cast<int>(sg.get_local_linear_id()) / P;
         const bool okr = r < n;
-        const dla::CanonTri<const D, true, std::int64_t> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
-        const dla::FlipRows<D, std::int64_t> Bc{b + std::ptrdiff_t(item) * sb, ldb, n, q, fwd};
-        const auto neg = [](const D& v) { return v2::Arith<D>::neg(v); };
-        v2::Frag<D, P> nL;
-        v2::load_row(nL, dla::MapCols{L, 0, neg}, r, okr ? r : 0);
+        const sycl_trsm::dla::CanonTri<const D, true, std::int64_t> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
+        const sycl_trsm::dla::FlipRows<D, std::int64_t> Bc{b + std::ptrdiff_t(item) * sb, ldb, n, q, fwd};
+        const auto neg = [](const D& v) { return device::Arith<D>::neg(v); };
+        device::Frag<D, P> nL;
+        device::load_row(nL, sycl_trsm::dla::MapCols{L, 0, neg}, r, okr ? r : 0);
         D dd = Ar::one();
         if (okr && !unit) dd = L.diag(r);
-        const auto dg = dla::guarded_recip<Ar>(ex, dd);
+        const auto dg = sycl_trsm::dla::guarded_recip<Ar>(ex, dd);
         if (r == 0 && chunk == 0) fl[item] = dg.divide ? 1 : 0;
         const int c0 = chunk * QC;
         const int live_c = okr ? q - c0 : 0;
         const auto scale = [=](const D& v) { return Ar::mul(alpha, v); };
-        v2::Frag<D, QC> x;
-        v2::load_row(x, dla::MapCols{Bc, c0, scale}, r, live_c);
-        dla::trsm_lower_rowfrag<Unroll, Ar>(ex, nL, dg, n, unit, x);
-        v2::store_row(x, dla::ColsFrom{Bc, c0}, r, live_c);
+        device::Frag<D, QC> x;
+        device::load_row(x, sycl_trsm::dla::MapCols{Bc, c0, scale}, r, live_c);
+        sycl_trsm::dla::trsm_lower_rowfrag<Unroll, Ar>(ex, nL, dg, n, unit, x);
+        device::store_row(x, sycl_trsm::dla::ColsFrom{Bc, c0}, r, live_c);
     });
     if (flags) *flags = dev.down(fl, kBatch);
     return dev.down(bt, Pb.b.size());
@@ -340,7 +338,7 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
 template <class T> class DeviceBlasV2TrsmTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 trsm tests launch sub-group size 32";
+        if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "trsm kernel tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;

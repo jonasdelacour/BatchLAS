@@ -25,7 +25,7 @@ namespace batchlas::device::gesvd_detail {
 // The symmetric tridiagonal Gram matrix of the real upper bidiagonal B = (d, e), k = d.size():
 // Side::Right is B^T B (order k), Side::Left is B B^T padded with zero rows to order td.size().
 template <Side SD, class Ex, class D, class E, class TD, class TE>
-BATCHLAS_DLA_INLINE void bdgram(const Ex& ex, const D& d, const E& e, const TD& td, const TE& te) {
+BATCHLAS_DEVICE_INLINE void bdgram(const Ex& ex, const D& d, const E& e, const TD& td, const TE& te) {
     using T = elem_t<TD>;
     static_assert(!Arith<T>::is_complex, "gesvd_detail::bdgram: the bidiagonal of gebrd is real");
     const int k = d.size();
@@ -65,7 +65,7 @@ BATCHLAS_DLA_INLINE void bdgram(const Ex& ex, const D& d, const E& e, const TD& 
 // y := B x / sigma for the real upper bidiagonal B = (d, e), k = d.size(), with y(i) = 0 for
 // k <= i < y.size(); y := 0 when sigma <= tol (a zero singular value has no vector B x / sigma).
 template <class Ex, class D, class E, class X, class R, class Y>
-BATCHLAS_DLA_INLINE void bdmv_div(const Ex& ex, const D& d, const E& e, const X& x, R sigma, R tol, const Y& y) {
+BATCHLAS_DEVICE_INLINE void bdmv_div(const Ex& ex, const D& d, const E& e, const X& x, R sigma, R tol, const Y& y) {
     using T = elem_t<Y>;
     const int k = d.size();
     for_each_owned(ex, y.size(), [&](int i) {
@@ -81,7 +81,7 @@ BATCHLAS_DLA_INLINE void bdmv_div(const Ex& ex, const D& d, const E& e, const X&
 
 // e := |e| and s := the signs with s(0) = 1 for which diag(s) T diag(s) has off-diagonal |e|
 // (T real symmetric tridiagonal of order s.size()). A prefix product: Thread only.
-template <class Ex, class E, class S> BATCHLAS_DLA_INLINE void tridiag_abs_offdiag(const Ex&, const E& e, const S& s) {
+template <class Ex, class E, class S> BATCHLAS_DEVICE_INLINE void tridiag_abs_offdiag(const Ex&, const E& e, const S& s) {
     static_assert(is_thread_v<Ex>, "gesvd_detail::tridiag_abs_offdiag: a sequential scan, Thread only");
     using T = elem_t<S>;
     const int n = s.size();
@@ -143,11 +143,11 @@ template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr BlockedPlan<
     return b;
 }
 // The workspace a nested op carves from: its local and global slices of this matrix's.
-BATCHLAS_DLA_INLINE Workspace nested_workspace(const Workspace& w, const ws::Slot<std::byte>& l, const ws::Slot<std::byte>& g) {
+BATCHLAS_DEVICE_INLINE Workspace nested_workspace(const Workspace& w, const ws::Slot<std::byte>& l, const ws::Slot<std::byte>& g) {
     return {w.local + static_cast<std::ptrdiff_t>(l.offset), w.global + g.offset};
 }
 // A Mat over T* (int32 index, Dyn ld) of a global matrix operand (Mat, ItemMat or l3::Global).
-template <class M> BATCHLAS_DLA_INLINE auto flat_mat(const M& a) {
+template <class M> BATCHLAS_DEVICE_INLINE auto flat_mat(const M& a) {
     const auto g = l3::global_of(a);
     return device::mat(g.p, g.m, g.n, g.ld);
 }
@@ -155,7 +155,7 @@ template <class M> BATCHLAS_DLA_INLINE auto flat_mat(const M& a) {
 // The m >= n problem: A (m x k) -> d, e, tauq, taup; bdsqr into the identity-seeded leading k x k
 // of U (m x U.cols()) and V^H (k x k); then U := Q U and V^H := V^H P^H.
 template <int NB, class T, class Ex, class MA, class SV>
-BATCHLAS_DLA_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, const MA& U, const MA& Vh, bool want_u, bool want_vh,
+BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, const MA& U, const MA& Vh, bool want_u, bool want_vh,
                                    const Workspace& ws, const BlockedPlan<T>& P) {
     const int k = A.cols();
     const auto d = device::vec(carve_global(ws, P.d), k);
@@ -215,7 +215,7 @@ template <SvdVectors JU, SvdVectors JVT, class Tier, class T> constexpr Workspac
 // Tier, T>(m, n). Returns the host blocked route's info: 0, 1 when bdsqr did not converge (or a
 // singular value is NaN); -2 / -3 / -4 for an S / U / Vh of the wrong size (nothing written).
 template <SvdVectors JU, SvdVectors JVT, class Tier, class Ex, class MA, class SV, class MU, class MV>
-BATCHLAS_DLA_INLINE int gesvd(const Ex& ex, const MA& A_, const SV& S, const MU& U_, const MV& Vh_, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int gesvd(const Ex& ex, const MA& A_, const SV& S, const MU& U_, const MV& Vh_, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::gesvd<JU, JVT>, T, Tier>;
     static_assert(gebrd_detail::is_blocked_v<Tr>, "gesvd: tier::Blocked<NB>");

@@ -57,22 +57,22 @@ template <class T> struct tier_info<mockdev::mock, tier::Blocked<32>, T> {
 
 namespace {
 
-using dv::tier::Blocked;
-using dv::tier::Cta;
-using dv::tier::Reg;
+using device::tier::Blocked;
+using device::tier::Cta;
+using device::tier::Reg;
 
-static_assert(std::is_same_v<dv::resolve_tier_t<mockdev::mock, float, dv::tier::upto<16>>, Reg<16>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<mockdev::mock, float, dv::tier::upto<17>>, Cta<64>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<mockdev::mock, float, dv::tier::upto<64>>, Cta<64>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<mockdev::mock, float, dv::tier::upto<65>>, Blocked<32>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<mockdev::mock, float, Cta<64>>, Cta<64>>);
+static_assert(std::is_same_v<device::resolve_tier_t<mockdev::mock, float, device::tier::upto<16>>, Reg<16>>);
+static_assert(std::is_same_v<device::resolve_tier_t<mockdev::mock, float, device::tier::upto<17>>, Cta<64>>);
+static_assert(std::is_same_v<device::resolve_tier_t<mockdev::mock, float, device::tier::upto<64>>, Cta<64>>);
+static_assert(std::is_same_v<device::resolve_tier_t<mockdev::mock, float, device::tier::upto<65>>, Blocked<32>>);
+static_assert(std::is_same_v<device::resolve_tier_t<mockdev::mock, float, Cta<64>>, Cta<64>>);
 
-dv::DeviceLimits big() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
+device::DeviceLimits big() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
 
-template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class T> std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<mockdev::mock, T>(lim, n, [&]<class Tier>(Tier) {
+        device::with_tier<mockdev::mock, T>(lim, n, [&]<class Tier>(Tier) {
             if constexpr (std::is_same_v<Tier, Reg<16>>) got = "reg";
             else if constexpr (std::is_same_v<Tier, Cta<64>>) got = "cta";
             else got = "blocked";
@@ -94,39 +94,39 @@ TEST(DeviceCoreTierHost, WithTierVisitsTheFirstAdmittingTierAtEveryBoundary) {
 
 TEST(DeviceCoreTierHost, EachDeviceFilterRemovesItsTier) {
     // Cta<64> double at n = 64 needs 32 KB of local memory: fits 32 KB exactly, not 32 KB - 1.
-    dv::DeviceLimits metal = big();
+    device::DeviceLimits metal = big();
     metal.local_mem_bytes = 32 << 10;
     EXPECT_EQ(pick<double>(metal, 64), "cta");
     metal.local_mem_bytes = (32 << 10) - 1;
     EXPECT_EQ(pick<double>(metal, 64), "blocked");
     // No fp64: no double tier at all, float unaffected.
-    dv::DeviceLimits nofp64 = big();
+    device::DeviceLimits nofp64 = big();
     nofp64.fp64 = false;
     EXPECT_EQ(pick<float>(nofp64, 10), "reg");
     EXPECT_EQ(pick<double>(nofp64, 10).rfind("throw:", 0), 0u);
     // Sub-group size 16 missing: Blocked (sg 16) is filtered.
-    dv::DeviceLimits sg32 = big();
+    device::DeviceLimits sg32 = big();
     sg32.sub_group_sizes = {32};
     EXPECT_EQ(pick<float>(sg32, 100).rfind("throw:", 0), 0u);
     // A 64-item work-group ceiling leaves only Reg (wg 32).
-    dv::DeviceLimits small = big();
+    device::DeviceLimits small = big();
     small.max_work_group_size = 64;
     EXPECT_EQ(pick<float>(small, 16), "reg");
     EXPECT_EQ(pick<float>(small, 17).rfind("throw:", 0), 0u);
 }
 
 TEST(DeviceCoreTierHost, NoTierThrowsNamingTheRoutineAndN) {
-    dv::DeviceLimits none = big();
+    device::DeviceLimits none = big();
     none.sub_group_sizes = {8};
     EXPECT_EQ(pick<float>(none, 77), "throw:mockroutine: no device tier admits n=77");
 }
 
 TEST(DeviceCoreTierHost, PlanOffsetsAreAlignedAndSumToItsSize) {
-    dv::Plan p(16);
-    const auto a = p.take<char>(dv::ws::Space::Local, 3);
-    const auto b = p.take<double>(dv::ws::Space::Local, 5);
-    const auto c = p.take<std::complex<double>>(dv::ws::Space::Global, 7);
-    const auto e = p.take<float>(dv::ws::Space::Global, 1);
+    device::Plan p(16);
+    const auto a = p.take<char>(device::ws::Space::Local, 3);
+    const auto b = p.take<double>(device::ws::Space::Local, 5);
+    const auto c = p.take<std::complex<double>>(device::ws::Space::Global, 7);
+    const auto e = p.take<float>(device::ws::Space::Global, 1);
     EXPECT_EQ(a.offset, 0u);
     EXPECT_EQ(b.offset, 16u);
     EXPECT_EQ(c.offset, 0u);
@@ -135,7 +135,7 @@ TEST(DeviceCoreTierHost, PlanOffsetsAreAlignedAndSumToItsSize) {
     EXPECT_EQ(sz.local_bytes, 16u + 5u * 8u + 8u);  // 56 rounded to 16
     EXPECT_EQ(sz.global_bytes, 7u * 16u + 16u);
     EXPECT_EQ(sz.align, 16u);
-    constexpr auto cta = dv::tier_info<mockdev::mock, Cta<64>, float>::buffer_size(64);
+    constexpr auto cta = device::tier_info<mockdev::mock, Cta<64>, float>::buffer_size(64);
     static_assert(cta.local_bytes == 64 * 64 * 4 && cta.global_bytes == 0);
 }
 
@@ -146,10 +146,10 @@ TYPED_TEST(DeviceCoreTest, CarveRoundTripsThroughLocalAndGlobalSlices) {
     using T = TypeParam;
     auto& d = this->dev;
     constexpr int items = 1024, n = 37;
-    dv::Plan plan;
-    const auto ls = plan.take<T>(dv::ws::Space::Local, n);
-    plan.take<T>(dv::ws::Space::Global, 3 * n);  // a global extra ahead: global_bytes != local_bytes
-    const auto gs = plan.take<T>(dv::ws::Space::Global, n);
+    device::Plan plan;
+    const auto ls = plan.take<T>(device::ws::Space::Local, n);
+    plan.take<T>(device::ws::Space::Global, 3 * n);  // a global extra ahead: global_bytes != local_bytes
+    const auto gs = plan.take<T>(device::ws::Space::Global, n);
     const auto sz = plan.size();
     ASSERT_NE(sz.global_bytes, sz.local_bytes);
     const auto x_h = vals<T>(std::size_t(items) * n, 81);
@@ -159,11 +159,11 @@ TYPED_TEST(DeviceCoreTest, CarveRoundTripsThroughLocalAndGlobalSlices) {
     d.template run<32>(items, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const int l = static_cast<int>(it.get_local_linear_id());
-        const dv::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
+        const device::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                                   reinterpret_cast<std::byte*>(lm)),
-                              dv::global_slice(gbuf, sz, b)};
-        auto L = dv::carve_local(w, ls);
-        T* G = dv::carve_global(w, gs);
+                              device::global_slice(gbuf, sz, b)};
+        auto L = device::carve_local(w, ls);
+        T* G = device::carve_global(w, gs);
         for (int i = l; i < n; i += 32) L[i] = x[b * n + i];
         it.barrier(sycl::access::fence_space::local_space);
         for (int i = l; i < n; i += 32) G[i] = L[n - 1 - i];

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// v2 parity: symv lower (x staged in local memory), ger (in place), latrd column step.
+// device LA parity: symv lower (x staged in local memory), ger (in place), latrd column step.
 #include <benchmarks/sass_lab/v2lab.hh>
 
 namespace lab {
@@ -31,10 +31,10 @@ template <class T, int N, int V, int WG> sycl::event w_symv(sycl::queue& q, Data
                 lean::symv_lower(WgExec<WG>{it}, LMat<T>{a, n, n, ld}, LVec<T>{raw(xs), n}, LVec<T>{y, n});
             }
         } else {
-            const dv2::WorkGroup<WG> ex{it};
-            const auto xl = dv2::vec<dv2::Mem::Local>(raw(xs), n);
-            dv2::copy(ex, dv2::vec(x, n), xl);
-            dv2::symv<Uplo::Lower>(ex, dv2::One{}, dv2::mat(a, n, n, ld), ex.publish(xl), dv2::Zero{}, dv2::vec(y, n));
+            const batchlas::device::WorkGroup<WG> ex{it};
+            const auto xl = batchlas::device::vec<batchlas::device::Mem::Local>(raw(xs), n);
+            batchlas::device::copy(ex, batchlas::device::vec(x, n), xl);
+            batchlas::device::symv<Uplo::Lower>(ex, batchlas::device::One{}, batchlas::device::mat(a, n, n, ld), ex.publish(xl), batchlas::device::Zero{}, batchlas::device::vec(y, n));
         }
     });
 }
@@ -59,8 +59,8 @@ template <class T, int N, int V, int WG> sycl::event w_ger(sycl::queue& q, Data<
         } else if constexpr (V == kLean) {
             lean::ger(WgExec<WG>{it}, LVec<T>{x, n}, LVec<T>{y, n}, LMat<T>{a, n, n, ld}, alpha);
         } else {
-            dv2::ger(dv2::WorkGroup<WG>{it}, alpha, dv2::vec(x, n), dv2::assume_published(dv2::vec(y, n)),
-                     dv2::mat(a, n, n, ld));
+            batchlas::device::ger(batchlas::device::WorkGroup<WG>{it}, alpha, batchlas::device::vec(x, n), batchlas::device::assume_published(batchlas::device::vec(y, n)),
+                     batchlas::device::mat(a, n, n, ld));
         }
     });
 }
@@ -131,22 +131,22 @@ template <class T, int N, int V, int WG> sycl::event w_latrd(sycl::queue& q, Dat
             lean::axpy(ex, v, w, T(-0.5) * tau * dot);
             lean::copy(ex, w, LVec<T>{y, n});
         } else {
-            const dv2::WorkGroup<WG> ex{it};
-            const auto v = dv2::vec<dv2::Mem::Local>(raw(v_local), n);
-            const auto w = dv2::vec<dv2::Mem::Local>(raw(w_local), n);
-            const auto av = dv2::mat(a, n, n, ld), vv = dv2::mat(vp, n, kPanelK, ld), wv = dv2::mat(wp, n, kPanelK, ld);
-            dv2::copy(ex, dv2::vec(x, n), v);
-            dv2::symv<Uplo::Lower>(ex, dv2::One{}, av, ex.publish(v), dv2::Zero{}, w);  // w in v's layout
+            const batchlas::device::WorkGroup<WG> ex{it};
+            const auto v = batchlas::device::vec<batchlas::device::Mem::Local>(raw(v_local), n);
+            const auto w = batchlas::device::vec<batchlas::device::Mem::Local>(raw(w_local), n);
+            const auto av = batchlas::device::mat(a, n, n, ld), vv = batchlas::device::mat(vp, n, kPanelK, ld), wv = batchlas::device::mat(wp, n, kPanelK, ld);
+            batchlas::device::copy(ex, batchlas::device::vec(x, n), v);
+            batchlas::device::symv<Uplo::Lower>(ex, batchlas::device::One{}, av, ex.publish(v), batchlas::device::Zero{}, w);  // w in v's layout
             for (int p = 0; p < kPanelK; ++p) {
-                const T gamma = dv2::dot(ex, wv.col(p), v);
-                const T delta = dv2::dot(ex, vv.col(p), v);
-                dv2::axpy(ex, -gamma, vv.col(p), w);
-                dv2::axpy(ex, -delta, wv.col(p), w);
+                const T gamma = batchlas::device::dot(ex, wv.col(p), v);
+                const T delta = batchlas::device::dot(ex, vv.col(p), v);
+                batchlas::device::axpy(ex, -gamma, vv.col(p), w);
+                batchlas::device::axpy(ex, -delta, wv.col(p), w);
             }
-            dv2::scal(ex, tau, w);
-            const T dot = dv2::dot(ex, v, w);
-            dv2::axpy(ex, T(-0.5) * tau * dot, v, w);
-            dv2::copy(ex, w, dv2::vec(y, n));
+            batchlas::device::scal(ex, tau, w);
+            const T dot = batchlas::device::dot(ex, v, w);
+            batchlas::device::axpy(ex, T(-0.5) * tau * dot, v, w);
+            batchlas::device::copy(ex, w, batchlas::device::vec(y, n));
         }
     });
 }

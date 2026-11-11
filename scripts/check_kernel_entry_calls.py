@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Source scan for the DPC++ SemaSYCL kernel-body quirk in device LA v2 users.
+"""Source scan for the DPC++ SemaSYCL kernel-body quirk in device LA users.
 
     scripts/check_kernel_entry_calls.py [--root DIR] [--self-test]
 
@@ -11,10 +11,10 @@ force-inlined instead, and the real body stays a separate function until device 
 port that removes or adds such a call changes the kernel's inlining, so SASS parity breaks
 for a reason that is not the port (potri, trsm, l3tt, gemm; wf3_synthesis.txt 3.5).
 
-Rule for v2 users: the kernel lambda (or a kernel functor's operator()(sycl::nd_item...))
+Rule for device LA users: the kernel lambda (or a kernel functor's operator()(sycl::nd_item...))
 calls named methods or free functions, never a local lambda, an immediately invoked lambda,
-or a v2 view's operator() (`A(i, j)` on `auto A = v2::mat(...)`) directly. Calls inside a
-nested lambda body are not direct and pass. BATCHLAS_DLA_BODY (always_inline) is the sanctioned
+or a device view's operator() (`A(i, j)` on `auto A = device::mat(...)`) directly. Calls inside a
+nested lambda body are not direct and pass. BATCHLAS_DEVICE_BODY (always_inline) is the sanctioned
 invoker: a call of a local lambda declared with it, an immediately invoked lambda carrying it,
 and every call in a kernel lambda / operator() that itself carries it pass (the attribute
 inlines the callee whatever SemaSYCL picks as the body).
@@ -27,7 +27,7 @@ design A.0: the lapack/<routine>.hh bodies are public, so they are scanned like 
 that only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
 Tests are not scanned: their codegen is not gated.
 What is not caught (needs semantics a scan does not have): a callable passed in as a
-parameter, a captured functor member, views not declared from a v2:: factory or type.
+parameter, a captured functor member, views not declared from a device:: factory or type.
 Exit codes: 0 clean, 1 violations (or a failed self-test).
 """
 import argparse
@@ -39,14 +39,14 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/(?!detail/)|batchlas/device\.hh[>\"]|"
                         r"src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
-BODY_ATTR = "BATCHLAS_DLA_BODY"
+BODY_ATTR = "BATCHLAS_DEVICE_BODY"
 PUBLIC_TREE = os.path.join("include", "batchlas", "device") + os.sep
 STRIP = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
 LAUNCH = re.compile(r"\b(?:parallel_for|single_task)\b(?:\s*<)?")
 FUNCTOR = re.compile(r"\boperator\(\)\s*\(\s*(?:const\s+)?sycl::(?:nd_item|item|id)\b")
 LAMBDA_DECL = re.compile(r"\b(?:const\s+)?auto\s*&{0,2}\s*(\w+)\s*=\s*\[")
-VIEW_DECL = re.compile(r"\b(?:const\s+)?(?:auto\s*&{0,2}\s*(\w+)\s*=\s*(?:batchlas::)?v2::\w+"
-                       r"|(?:batchlas::)?v2::(?:Vec|Mat|Frag|Tile)\b[^;{=()]*?\s(\w+)\s*[{(=])")
+VIEW_DECL = re.compile(r"\b(?:const\s+)?(?:auto\s*&{0,2}\s*(\w+)\s*=\s*(?:(?:::)?batchlas::)?device::\w+"
+                       r"|(?:(?:::)?batchlas::)?device::(?:Vec|Mat|Frag|Tile)\b[^;{=()]*?\s(\w+)\s*[{(=])")
 OPEN = {"(": ")", "[": "]", "{": "}"}
 
 
@@ -76,7 +76,7 @@ def is_lambda_intro(text, i):
 
 
 def marked(text, i, body_start):
-    """True when the lambda introducer at text[i] carries BATCHLAS_DLA_BODY before its body."""
+    """True when the lambda introducer at text[i] carries BATCHLAS_DEVICE_BODY before its body."""
     return BODY_ATTR in text[i:body_start]
 
 
@@ -161,7 +161,7 @@ def violations(text):
             if name in plain_decl:
                 found.append((off + m.start(), f"direct call of local lambda '{name}'"))
             elif name in views:
-                found.append((off + m.start(), f"direct call of v2 view operator() '{name}(...)'"))
+                found.append((off + m.start(), f"direct call of device view operator() '{name}(...)'"))
     return found
 
 
@@ -183,8 +183,8 @@ SELF_TEST = """
 void good(sycl::handler& h) {
     auto helper = [&](int x) { return x; };
     impl::parallel_for<K1>(h, r, [=](sycl::nd_item<1> it) {
-        const auto A = v2::mat(p, n, n, ld);
-        v2::scal(ex, A.col(0), helper);        // passed, not called
+        const auto A = device::mat(p, n, n, ld);
+        device::scal(ex, A.col(0), helper);        // passed, not called
         for_each_owned(ex, n, [&](int i) { A(i, i) = 0; });   // nested: not direct
         body(it);                              // a free function
     });
@@ -192,7 +192,7 @@ void good(sycl::handler& h) {
 void bad(sycl::handler& h) {
     auto step = [&](int i) { return i; };
     h.parallel_for<K2>(r, [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-        const auto W = v2::vec(p, n);
+        const auto W = device::vec(p, n);
         step(0);                               // BREAK 1
         W(3) = 1;                              // BREAK 2
         [&] { W(0) = 0; }();                   // BREAK 3
@@ -205,20 +205,20 @@ struct Body {
     }
 };
 void sanctioned(sycl::handler& h) {
-    auto stage = [&](int t) BATCHLAS_DLA_BODY { return t; };
+    auto stage = [&](int t) BATCHLAS_DEVICE_BODY { return t; };
     h.parallel_for<K3>(r, [=](sycl::nd_item<1> it) {
         stage(0);                              // marked local lambda: the sanctioned invoker
-        [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DLA_BODY { stage(J...); }(seq);
+        [&]<int... J>(std::integer_sequence<int, J...>) BATCHLAS_DEVICE_BODY { stage(J...); }(seq);
     });
-    h.parallel_for<K4>(r, [=](sycl::nd_item<1> it) BATCHLAS_DLA_BODY BATCHLAS_REQD_SG_SIZE(32) {
-        const auto V = v2::vec(p, n);
+    h.parallel_for<K4>(r, [=](sycl::nd_item<1> it) BATCHLAS_DEVICE_BODY BATCHLAS_REQD_SG_SIZE(32) {
+        const auto V = device::vec(p, n);
         V(0) = 1;                              // marked kernel lambda: every direct call passes
         stage(1);
     });
 }
 struct MarkedBody {
-    void operator()(sycl::nd_item<1> it) const BATCHLAS_DLA_BODY {
-        const auto V = v2::vec(p, n);
+    void operator()(sycl::nd_item<1> it) const BATCHLAS_DEVICE_BODY {
+        const auto V = device::vec(p, n);
         V(1) = 0;
     }
 };
@@ -244,7 +244,7 @@ SCOPE_TEST = {
 
 def self_test():
     got = sorted(m for _, m in violations(strip(SELF_TEST)))
-    want = sorted(["direct call of local lambda 'step'", "direct call of v2 view operator() 'W(...)'",
+    want = sorted(["direct call of local lambda 'step'", "direct call of device view operator() 'W(...)'",
                    "immediately invoked lambda in the kernel body", "direct call of local lambda 'tmp'"])
     with tempfile.TemporaryDirectory() as root:
         for rel, text in SCOPE_TEST.items():

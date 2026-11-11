@@ -37,7 +37,7 @@ template <class R> struct MaxLoc {
     int i;
 };
 // Take (ov, oi) when larger, or equal with a lower index; a NaN never wins.
-template <class R> BATCHLAS_DLA_INLINE void maxloc_merge(MaxLoc<R>& a, R ov, int oi) {
+template <class R> BATCHLAS_DEVICE_INLINE void maxloc_merge(MaxLoc<R>& a, R ov, int oi) {
     if (ov > a.v || (ov == a.v && oi < a.i)) {
         a.v = ov;
         a.i = oi;
@@ -45,7 +45,7 @@ template <class R> BATCHLAS_DLA_INLINE void maxloc_merge(MaxLoc<R>& a, R ov, int
 }
 
 // xor butterfly over `lanes` (a launch value) lanes of sg, masks lanes/2 .. 1.
-template <class R> BATCHLAS_DLA_INLINE void maxloc_bfly(const sycl::sub_group& sg, MaxLoc<R>& a, int lanes) {
+template <class R> BATCHLAS_DEVICE_INLINE void maxloc_bfly(const sycl::sub_group& sg, MaxLoc<R>& a, int lanes) {
     for (std::uint32_t off = static_cast<std::uint32_t>(lanes) / 2u; off > 0u; off >>= 1) {
         const R ov = batchlas::portable::permute_group_by_xor(sg, a.v, off);
         const int oi = batchlas::portable::permute_group_by_xor(sg, a.i, off);
@@ -55,7 +55,7 @@ template <class R> BATCHLAS_DLA_INLINE void maxloc_bfly(const sycl::sub_group& s
 
 // xor butterfly over a P-lane Partition, masks 1 .. P/2 (the tiny tiers' order). THE CALLER
 // OWES A NaN-FREE SEED: a NaN loses every comparison and the lanes disagree on the winner.
-template <class Px, class R> BATCHLAS_DLA_INLINE void maxloc_bfly_up(const Px& px, MaxLoc<R>& a) {
+template <class Px, class R> BATCHLAS_DEVICE_INLINE void maxloc_bfly_up(const Px& px, MaxLoc<R>& a) {
     constexpr int P = Px::team_size;
 BATCHLAS_UNROLL_FULL
     for (std::uint32_t mk = 1u; mk < static_cast<std::uint32_t>(P); mk <<= 1) {
@@ -68,7 +68,7 @@ BATCHLAS_UNROLL_FULL
 // Lane 0 of team t writes slots[t], ONE barrier (B1), every item scans the slots in team order;
 // no trailing barrier (the caller's B2 precedes the next write). Scope::Sub returns `a`.
 template <class Ex, class R, class VS, class IS>
-BATCHLAS_DLA_INLINE MaxLoc<R> maxloc_group(const Ex& ex, MaxLoc<R> a, const VS& vs, const IS& is, int none) {
+BATCHLAS_DEVICE_INLINE MaxLoc<R> maxloc_group(const Ex& ex, MaxLoc<R> a, const VS& vs, const IS& is, int none) {
     if constexpr (Ex::natural_scope == Scope::Sub) {
         return a;
     } else {
@@ -95,12 +95,12 @@ BATCHLAS_DLA_INLINE MaxLoc<R> maxloc_group(const Ex& ex, MaxLoc<R> a, const VS& 
 // ?IAMAX (cabs1) of A(r0:m-1, c): the absolute row of the first maximum, NaN rows skipped; m
 // when none qualifies. vs/is: nteams slots of local memory (unread at Scope::Sub).
 template <class Ex, class MA, class VS, class IS>
-BATCHLAS_DLA_INLINE int iamax_col(const Ex& ex, const MA& a, int r0, int c, int lanes, const VS& vs, const IS& is) {
+BATCHLAS_DEVICE_INLINE int iamax_col(const Ex& ex, const MA& a, int r0, int c, int lanes, const VS& vs, const IS& is) {
     using D = typename MA::value_type;
     using R = real_t<D>;
     const int m = a.rows();
     MaxLoc<R> best{R(-1), m};  // m: "no candidate", never wins a tie
-    for_each_owned(ex, Range{r0, m}, [&](int i) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, Range{r0, m}, [&](int i) BATCHLAS_DEVICE_BODY {
         const R v = abs1<D>(a(i, c));
         if (v > best.v) {
             best.v = v;
@@ -125,19 +125,19 @@ inline constexpr std::uint32_t pivot_key_lane(int key) {
 // nonzero, else a division per element (the sfmin arm), the arm chosen OUTSIDE the loop (core
 // rscl selects per element). d != 0 is the caller's test.
 template <class Ex, class MA>
-BATCHLAS_DLA_INLINE void rscl_col(const Ex& ex, typename MA::value_type d, const MA& a, int r0, int c) {
+BATCHLAS_DEVICE_INLINE void rscl_col(const Ex& ex, typename MA::value_type d, const MA& a, int r0, int c) {
     using Ar = arith_t<arith::Fma, typename MA::value_type>;
     const auto r = Ar::recip(d);
     const bool use_mul = Ar::isfinite(r) && !Ar::is_zero(r);
     const Range rows{r0, a.rows()};
-    if (use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DLA_BODY { a(i, c) = Ar::mul(a(i, c), r); });
-    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DLA_BODY { a(i, c) = Ar::div(a(i, c), d); });
+    if (use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::mul(a(i, c), r); });
+    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::div(a(i, c), d); });
 }
 
 // A(k+1:, k+1:) -= A(k+1:, k) A(k, k+1:), flattened (docs/perf/lu.md#lu-negative-results), two
 // roundings (sub of mul); written out, not a for_each_owned_2d lambda: through the lambda the
 // panels drift a VOTE, +4 REG (sm_89).
-template <class Ex, class MA> BATCHLAS_DLA_INLINE void ger_trailing(const Ex& ex, const MA& a, int k) {
+template <class Ex, class MA> BATCHLAS_DEVICE_INLINE void ger_trailing(const Ex& ex, const MA& a, int k) {
     using Ar = arith_t<arith::Fma, typename MA::value_type>;
     const int mm = a.rows() - k - 1;
     const int nn = a.cols() - k - 1;
@@ -170,22 +170,22 @@ template <class Ex, class VS, class IS> struct PivotRowsGroup {
     int lanes;
     IpivSink ipiv;
     std::int32_t& info;
-    template <class R> BATCHLAS_DLA_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j);
         MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), cand ? rowid : m};
         maxloc_bfly(ex.sub(), a, lanes);
         a = maxloc_group(ex, a, vs, is, m);
         return {a.i >= m ? j : a.i, 0};  // >= m: unreachable, logical row j exists
     }
-    BATCHLAS_DLA_INLINE void record(int j, PivotWinner w) const {
+    BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
         if (ex.leader()) ipiv.set(j, w.row);
     }
-    BATCHLAS_DLA_INLINE void on_zero(bool zero, int j) const {
+    BATCHLAS_DEVICE_INLINE void on_zero(bool zero, int j) const {
         if (zero && ex.leader() && info == 0) info = static_cast<std::int32_t>(ipiv.base + j + 1);
     }
 };
 template <class Ex, class VS, class IS>
-BATCHLAS_DLA_INLINE PivotRowsGroup<Ex, VS, IS> pivot_rows_group(const Ex& ex, VS vs, IS is, int m, IpivSink ipiv,
+BATCHLAS_DEVICE_INLINE PivotRowsGroup<Ex, VS, IS> pivot_rows_group(const Ex& ex, VS vs, IS is, int m, IpivSink ipiv,
                                                                 std::int32_t& info) {
     return {ex, vs, is, m, detail::team_size_of(ex), ipiv, info};
 }
@@ -201,16 +201,16 @@ template <int N, class Px> struct PivotPartition {
     int lane;
     int& my_piv;
     std::int32_t& linfo;
-    template <class R> BATCHLAS_DLA_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j) && (rowid < n);
         MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), pivot_key(cand ? rowid : (rowid + N), lane)};
         maxloc_bfly_up(px, a);
         return {pivot_key_order(a.i), static_cast<int>(pivot_key_lane(a.i))};
     }
-    BATCHLAS_DLA_INLINE void record(int j, PivotWinner w) const {
+    BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
         if (lane == j) my_piv = w.row;
     }
-    BATCHLAS_DLA_INLINE void on_zero(bool zero, int j) const {
+    BATCHLAS_DEVICE_INLINE void on_zero(bool zero, int j) const {
         if (zero && linfo == 0) linfo = static_cast<std::int32_t>(j + 1);
     }
 };
@@ -220,18 +220,18 @@ template <int N, class Px> struct PivotPartition {
 template <class Ex, class SX> struct BcastRowLocal {
     const Ex& ex;
     SX sx;
-    template <int NC, class T> BATCHLAS_DLA_INLINE void publish(int j, const Frag<T, NC>& rA, int rowid, PivotWinner) const {
+    template <int NC, class T> BATCHLAS_DEVICE_INLINE void publish(int j, const Frag<T, NC>& rA, int rowid, PivotWinner) const {
         if (rowid == j) {
 BATCHLAS_UNROLL_FULL
             for (int k = j; k < NC; ++k) sx[static_cast<std::size_t>(k)] = rA[k];
         }
         ex.barrier(Mem::Local);  // B2
     }
-    template <int NC, class T> BATCHLAS_DLA_INLINE T pivot(int j, const Frag<T, NC>&, PivotWinner) const {
+    template <int NC, class T> BATCHLAS_DEVICE_INLINE T pivot(int j, const Frag<T, NC>&, PivotWinner) const {
         return sx[static_cast<std::size_t>(j)];
     }
     template <int NC, class T, class F>
-    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const Frag<T, NC>&, PivotWinner, F&& f) const {
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<T, NC>&, PivotWinner, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int k = j + 1; k < NC; ++k) {
             if (k >= ncols) continue;
@@ -239,7 +239,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 };
-template <class Ex, class SX> BATCHLAS_DLA_INLINE BcastRowLocal<Ex, SX> bcast_row_local(const Ex& ex, SX sx) {
+template <class Ex, class SX> BATCHLAS_DEVICE_INLINE BcastRowLocal<Ex, SX> bcast_row_local(const Ex& ex, SX sx) {
     return {ex, sx};
 }
 
@@ -247,12 +247,12 @@ template <class Ex, class SX> BATCHLAS_DLA_INLINE BcastRowLocal<Ex, SX> bcast_ro
 // select per element (two per complex).
 template <class Px> struct BcastShuffle {
     const Px& px;
-    template <int NC, class T> BATCHLAS_DLA_INLINE void publish(int, const Frag<T, NC>&, int, PivotWinner) const {}
-    template <int NC, class T> BATCHLAS_DLA_INLINE T pivot(int j, const Frag<T, NC>& rA, PivotWinner w) const {
+    template <int NC, class T> BATCHLAS_DEVICE_INLINE void publish(int, const Frag<T, NC>&, int, PivotWinner) const {}
+    template <int NC, class T> BATCHLAS_DEVICE_INLINE T pivot(int j, const Frag<T, NC>& rA, PivotWinner w) const {
         return px.bcast(rA[j], static_cast<std::uint32_t>(w.src));
     }
     template <int NC, class T, class F>
-    BATCHLAS_DLA_INLINE void for_right(int j, int ncols, const Frag<T, NC>& rA, PivotWinner w, F&& f) const {
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<T, NC>& rA, PivotWinner w, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int k = j + 1; k < NC; ++k) {
             if (k >= ncols) continue;
@@ -260,7 +260,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 };
-template <class Px> BATCHLAS_DLA_INLINE BcastShuffle<Px> bcast_shuffle(const Px& px) { return {px}; }
+template <class Px> BATCHLAS_DEVICE_INLINE BcastShuffle<Px> bcast_shuffle(const Px& px) { return {px}; }
 
 }  // namespace getf2_detail
 
@@ -271,7 +271,7 @@ template <class Px> BATCHLAS_DLA_INLINE BcastShuffle<Px> bcast_shuffle(const Px&
 // leader's running first failure (global, 1-based); the first EXACT zero pivot, no epsilon,
 // leaves its column unscaled. vs / is: nteams slots of local memory for the pivot exchange.
 template <class Ex, class MA, class VS, class IS>
-BATCHLAS_DLA_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, IpivSink ipiv, std::int32_t info, const VS& vs,
+BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, IpivSink ipiv, std::int32_t info, const VS& vs,
                                        const IS& is) {
     using D = typename MA::value_type;
     constexpr Mem fence = MA::mem == Mem::Local ? Mem::Local : Mem::Global;
@@ -319,7 +319,7 @@ inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_ite
 // row AFTER the relabel, and selecting a complex scalar by if/else, never `?:`.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 template <int NC, class T, class Piv, class Bc>
-BATCHLAS_DLA_INLINE void getf2_relabel(Frag<T, NC>& rA, int& rowid, int kmax, int ncols, Piv& piv, Bc& bc) {
+BATCHLAS_DEVICE_INLINE void getf2_relabel(Frag<T, NC>& rA, int& rowid, int kmax, int ncols, Piv& piv, Bc& bc) {
     using Ar = arith_t<arith::Fma, T>;
 BATCHLAS_UNROLL_FULL
     for (int j = 0; j < NC; ++j) {
@@ -437,11 +437,11 @@ template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_plan() {
 // Where the Reg tier's info goes besides the return value: nowhere (the public op), or the
 // launcher's slot (host routes, inside the same `live` branch as the factor store).
 struct NoInfo {
-    template <class Px> BATCHLAS_DLA_INLINE void operator()(const Px&, std::int32_t) const {}
+    template <class Px> BATCHLAS_DEVICE_INLINE void operator()(const Px&, std::int32_t) const {}
 };
 struct PivPtr {
     std::int32_t* p;
-    BATCHLAS_DLA_INLINE std::int32_t& operator()(int i) const { return p[i]; }
+    BATCHLAS_DEVICE_INLINE std::int32_t& operator()(int i) const { return p[i]; }
 };
 
 // ONE ELEMENT of the padded tile, per element DELIBERATELY: the one spelling that cannot take
@@ -460,7 +460,7 @@ template <class D, class MA> inline D load_pad_identity(const MA& a, int r, int 
 // `lane` is px.lid(), read by the caller before it builds the operands (the host route's order).
 // evidence: docs/perf/lu.md#lu-the-tiny-tier
 template <int NC, class Px, class MA, class PV, class Bc, class Sink>
-BATCHLAS_DLA_INLINE std::int32_t reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
+BATCHLAS_DEVICE_INLINE std::int32_t reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
                                          const Bc& bc, const Sink& sink) {
     using D = typename MA::value_type;
     Frag<D, NC> rA;
@@ -486,7 +486,7 @@ BATCHLAS_UNROLL_FULL
 // The Cta tier: stage A into the padded local tile, ?GETF2, store back; info at the leader
 // (getf2_panel_device's contract: *info_item is read, first failure wins).
 template <class Ex, class MG, class MT, class VS, class IS>
-BATCHLAS_DLA_INLINE void cta_run(const Ex& ex, const MG& ag, const MT& at, int kmax, int* piv_item, int piv_base,
+BATCHLAS_DEVICE_INLINE void cta_run(const Ex& ex, const MG& ag, const MT& at, int kmax, int* piv_item, int piv_base,
                                  std::int32_t* info_item, const VS& vs, const IS& is) {
     lacpy<Part::Full, Transpose::NoTrans, alg::DivMod>(ex, ag, at);  // stage into the padded ld
     ex.barrier();                                                    // B0
@@ -502,7 +502,7 @@ BATCHLAS_DLA_INLINE void cta_run(const Ex& ex, const MG& ag, const MT& at, int k
 // visible), one global barrier follows the interchanges, trsm and gemm end on their own. info:
 // the leader's first exact zero pivot (global, 1-based, sticky), made uniform at the end.
 template <int NB, class Cfg, class Ex, class MA>
-BATCHLAS_DLA_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in, std::int32_t* ipiv, const Workspace& w) {
+BATCHLAS_DEVICE_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in, std::int32_t* ipiv, const Workspace& w) {
     using D = typename Cfg::value_type;
     const auto g = l3::global_of(a_in);
     const int m = g.m, n = g.n, mn = m < n ? m : n;
@@ -590,7 +590,7 @@ template <class Tier, class T> constexpr WorkspaceSize getrf_buffer_size(int n) 
 /// @param[in]     live  false: a dead matrix of the launch (see the tiers)
 /// @return LAPACK's info, uniform across `ex`: 0, or the first k with \f$U_{kk} = 0\f$ exactly
 template <class Tier, class Ex, class MA>
-BATCHLAS_DLA_INLINE std::int32_t getrf(const Ex& ex, const MA& a, std::int32_t* ipiv, const Workspace& ws = {},
+BATCHLAS_DEVICE_INLINE std::int32_t getrf(const Ex& ex, const MA& a, std::int32_t* ipiv, const Workspace& ws = {},
                                        bool live = true) {
     using D = getrf_detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getrf, D, Tier>;

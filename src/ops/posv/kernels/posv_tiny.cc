@@ -41,11 +41,8 @@ namespace sycl_posv {
 
 namespace {
 
-namespace tn = ::batchlas::tiny_native;
-namespace sd = ::batchlas::sycl_device;
-namespace v2 = ::batchlas::device;
 
-constexpr int kTinyWg = tn::kTinyWgSize;
+constexpr int kTinyWg = tiny_native::kTinyWgSize;
 static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
@@ -86,9 +83,9 @@ struct PosvTinyBody {
     using D = typename DM::type;
     using R = typename DM::real;
     static constexpr bool real_diag = DM::is_complex;
-    using R4 = tn::tiny_r4<R>;
+    using R4 = tiny_native::tiny_r4<R>;
     static constexpr int kCpx = static_cast<int>(sizeof(D) / sizeof(R));
-    static constexpr int kW = tn::tiny_r4_width<D>();
+    static constexpr int kW = tiny_native::tiny_r4_width<D>();
     static constexpr int kNV = (N + kW - 1) / kW;   // vectors per buffer: one per lane
     D* ap;
     D* bp;
@@ -103,7 +100,7 @@ struct PosvTinyBody {
     // b into rB (zero past nrhs), rX zeroed. A function, not a loop in operator(): an
     // always_inline call (potf2_lower) right after a loop is spliced into the loop's exit
     // block, which clang places AHEAD of the loop body, and every block of the kernel moves.
-    BATCHLAS_DLA_INLINE void load_rhs(D (&rB)[NR], D (&rX)[NR], const D* Bg, int lane, bool row_live) const {
+    BATCHLAS_DEVICE_INLINE void load_rhs(D (&rB)[NR], D (&rX)[NR], const D* Bg, int lane, bool row_live) const {
 BATCHLAS_UNROLL_FULL
         for (int k = 0; k < NR; ++k) {
             // A BRANCH, not a `?:` over a 16-byte aggregate; see tiny_device.hh.
@@ -124,7 +121,7 @@ BATCHLAS_UNROLL_FULL
         const auto part = make_partition<N>(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
-        const int pidx = tn::tiny_partition_id(sg, part);
+        const int pidx = tiny_native::tiny_partition_id(sg, part);
         const int prob_id = wg_id * kMpw + pidx;
 
         // NO EARLY RETURN: tiny_device.hh's third invariant.
@@ -141,11 +138,11 @@ BATCHLAS_UNROLL_FULL
         // Upper is a LOAD TRANSFORM, not a second algorithm: A = U^H U is the
         // same recurrence on S(i,c) = conj(A(c,i)), so everything below reads
         // "lane r holds row r of L" whichever triangle the caller owns.
-        v2::Frag<D, NC> rA;
+        device::Frag<D, NC> rA;
         if (upper) {
-            v2::potrf_detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            device::potrf_detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         } else {
-            v2::potrf_detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            device::potrf_detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         }
 
         D rB[NR];   // b, then y
@@ -157,11 +154,11 @@ BATCHLAS_UNROLL_FULL
         // batch). Slm: column j of L through local memory, double-buffered by parity.
         int32_t linfo;
         if constexpr (Slm) {
-            linfo = v2::potrf_detail::potf2_reg<D, N, NC, v2::potrf_detail::OrderGuard::Skip>(
-                v2::wrap(part), rA, n, live, v2::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
+            linfo = device::potrf_detail::potf2_reg<D, N, NC, device::potrf_detail::OrderGuard::Skip>(
+                device::wrap(part), rA, n, live, device::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
         } else {
-            linfo = v2::potrf_detail::potf2_reg<D, N, NC, v2::potrf_detail::OrderGuard::Skip>(v2::wrap(part), rA, n, live,
-                                                                                              v2::bcast_policy::Shuffle{});
+            linfo = device::potrf_detail::potf2_reg<D, N, NC, device::potrf_detail::OrderGuard::Skip>(device::wrap(part), rA, n, live,
+                                                                                              device::bcast_policy::Shuffle{});
         }
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,
@@ -169,14 +166,14 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
         for (int i = 0; i < NC; ++i) {
             if (i >= n) continue;
-            const D lii = tn::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
-            const bool zero = sd::dev_is_zero(lii);
-            const D rc = sd::dev_recip(lii);
-            const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const D lii = tiny_native::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
+            const bool zero = sycl_device::dev_is_zero(lii);
+            const D rc = sycl_device::dev_recip(lii);
+            const bool use_mul = !zero && sycl_device::dev_isfinite(rc) && !sycl_device::dev_is_zero(rc);
 BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
-                const D bi = tn::tiny_bcast<D>(part, rB[k], static_cast<uint32_t>(i));
+                const D bi = tiny_native::tiny_bcast<D>(part, rB[k], static_cast<uint32_t>(i));
                 // A non-positive-definite leading minor is reported through
                 // `info` and LAPACK leaves X undefined; zero is chosen over the
                 // inf a bare divide would write, so a residual check reports the
@@ -184,14 +181,14 @@ BATCHLAS_UNROLL_FULL
                 // BRANCH on partition-uniform flags: a select pays the divide always.
                 D yi = D{};
                 if (use_mul) {
-                    yi = sd::dev_mul(bi, rc);
+                    yi = sycl_device::dev_mul(bi, rc);
                 } else if (!zero) {
-                    yi = sd::dev_div(bi, lii);
+                    yi = sycl_device::dev_div(bi, lii);
                 }
                 // Lane i writes rX, never rB: it is this step's shuffle source.
-                rX[k] = tn::tiny_select(lane == i, yi, rX[k]);
-                const D upd = sd::dev_sub(rB[k], sd::dev_mul(rA[i], yi));
-                rB[k] = tn::tiny_select(lane > i, upd, rB[k]);
+                rX[k] = tiny_native::tiny_select(lane == i, yi, rX[k]);
+                const D upd = sycl_device::dev_sub(rB[k], sycl_device::dev_mul(rA[i], yi));
+                rB[k] = tiny_native::tiny_select(lane > i, upd, rB[k]);
             }
         }
 
@@ -226,40 +223,40 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                 for (int c = 0; c < NC; ++c) {
                     if (c >= i) continue;   // compile-time once both loops are unrolled
-                    const D v = tn::tiny_bcast<D>(part, rA[c], static_cast<uint32_t>(i));
-                    lir = tn::tiny_select(c == lane, v, lir);
+                    const D v = tiny_native::tiny_bcast<D>(part, rA[c], static_cast<uint32_t>(i));
+                    lir = tiny_native::tiny_select(c == lane, v, lir);
                 }
             }
 
-            const D lii = tn::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
-            const D dii = sd::dev_conj(lii);   // real in exact arithmetic; not assumed
-            const bool zero = sd::dev_is_zero(dii);
-            const D rc = sd::dev_recip(dii);
-            const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const D lii = tiny_native::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
+            const D dii = sycl_device::dev_conj(lii);   // real in exact arithmetic; not assumed
+            const bool zero = sycl_device::dev_is_zero(dii);
+            const D rc = sycl_device::dev_recip(dii);
+            const bool use_mul = !zero && sycl_device::dev_isfinite(rc) && !sycl_device::dev_is_zero(rc);
 
 BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
-                const D yi = tn::tiny_bcast<D>(part, rX[k], static_cast<uint32_t>(i));
+                const D yi = tiny_native::tiny_bcast<D>(part, rX[k], static_cast<uint32_t>(i));
                 D xi = D{};
                 if (use_mul) {
-                    xi = sd::dev_mul(yi, rc);
+                    xi = sycl_device::dev_mul(yi, rc);
                 } else if (!zero) {
-                    xi = sd::dev_div(yi, dii);
+                    xi = sycl_device::dev_div(yi, dii);
                 }
                 // Lane i is the source of rX[k] and of every rA read above, and
                 // writes only rB; lanes below i update rX in place.
-                rB[k] = tn::tiny_select(lane == i, xi, rB[k]);
-                const D upd = sd::dev_sub(rX[k], sd::dev_mul(sd::dev_conj(lir), xi));
-                rX[k] = tn::tiny_select(lane < i, upd, rX[k]);
+                rB[k] = tiny_native::tiny_select(lane == i, xi, rB[k]);
+                const D upd = sycl_device::dev_sub(rX[k], sycl_device::dev_mul(sycl_device::dev_conj(lir), xi));
+                rX[k] = tiny_native::tiny_select(lane < i, upd, rX[k]);
             }
         }
 
         D* __restrict Aout = ap + static_cast<std::ptrdiff_t>(b) * stride_a;
         if (upper) {
-            v2::potrf_detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
+            device::potrf_detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
         } else {
-            v2::potrf_detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
+            device::potrf_detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
         }
 
         if (row_live) {
@@ -291,7 +288,7 @@ Event posv_tiny_launch_b(Queue& ctx,
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    static_assert(tn::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
+    static_assert(tiny_native::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
     static_assert(NR == 1 || NR == 2 || NR == kPosvTinyMaxRhs, "the RHS ladder is {1, 2, 4}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
 
@@ -328,7 +325,7 @@ constexpr bool posv_nc_legal(int nc) {
 }
 inline int posv_nc_of(int n, int N) {
     if (N == 16) return n <= 12 ? 12 : 16;
-    if (N == 32) return n <= 20 ? 20 : tn::tiny_col_bucket(n, 4);
+    if (N == 32) return n <= 20 ? 20 : tiny_native::tiny_col_bucket(n, 4);
     return N;
 }
 
@@ -448,7 +445,7 @@ Event posv_tiny_dispatch(Queue& ctx,
             "posv_tiny: the device's maximum work-group size is below the tier's " +
             std::to_string(kTinyWg));
     }
-    const int bucket = tn::tiny_bucket_ge(n);
+    const int bucket = tiny_native::tiny_bucket_ge(n);
     if (bucket < 1 || bucket > tiny_cap<T>()) {
         throw batchlas::unsupported(
             "posv_tiny: order " + std::to_string(n) +

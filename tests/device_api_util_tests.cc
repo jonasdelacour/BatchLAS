@@ -93,9 +93,9 @@ template <NormType NT, int WG, class T> std::vector<real_of<T>> device_norm(Dev&
     auto* out = dev.alloc<real_of<T>>(kBatch, real_of<T>(-1));
     const int m = s.m, n = s.n, ld = s.ld, stride = s.stride;
     dev.q().parallel_for(one_wg_per_item(WG), [=](sycl::nd_item<1> it) {
-        const dv::WorkGroup<WG> ex{it};
+        const batchlas::device::WorkGroup<WG> ex{it};
         const int b = int(it.get_group_linear_id());
-        const auto r = dv::norm<NT>(ex, dv::mat(a + std::size_t(b) * stride, m, n, ld));
+        const auto r = batchlas::device::norm<NT>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, n, ld));
         if (ex.leader()) out[b] = r;
     }).wait_and_throw();
     return dev.down(out, kBatch);
@@ -158,8 +158,8 @@ template <class T> void check_lascl(Dev& dev, const Host<T>& a, T cfrom, T cto) 
     T* d = dev.up(a.h);
     const int m = a.m, n = a.n, ld = a.ld, stride = a.stride;
     dev.q().parallel_for(one_wg_per_item(64), [=](sycl::nd_item<1> it) {
-        const dv::WorkGroup<64> ex{it};
-        dv::lascl(ex, cfrom, cto, dv::mat(d + std::size_t(it.get_group_linear_id()) * stride, m, n, ld));
+        const batchlas::device::WorkGroup<64> ex{it};
+        batchlas::device::lascl(ex, cfrom, cto, batchlas::device::mat(d + std::size_t(it.get_group_linear_id()) * stride, m, n, ld));
     }).wait_and_throw();
     const auto got = dev.down(d, a.h.size());
     const auto host = from_matrix(dev, H, a.h.size());
@@ -180,7 +180,7 @@ TYPED_TEST(DeviceApiUtil, LasclIsTheHostRoute) {
         GTEST_SKIP() << "the host lascl is real only";
     } else {
         const auto a = make<T>(19, 7, 3);
-        const T bignum = T(1) / dv::safmin<T>();
+        const T bignum = T(1) / batchlas::device::safmin<T>();
         check_lascl(this->dev, a, T(3), T(-0.5));       // one step
         check_lascl(this->dev, a, T(1), bignum / T(2));  // cto / cfrom just under bignum: one step
         check_lascl(this->dev, a, T(1), bignum * T(2));  // just over: bignum, then 2
@@ -189,7 +189,7 @@ TYPED_TEST(DeviceApiUtil, LasclIsTheHostRoute) {
 
 // ---- ritz_values ----------------------------------------------------------------------------
 // The in-group Level 3 preset of the 128-item work-groups below: 32 x 32 tiles, 4 x 2 per item.
-template <class T> using L3Cfg = dv::l3::cfg::RegTiled<T, 32, 32, 8, 4, 2>;
+template <class T> using L3Cfg = batchlas::device::l3::cfg::RegTiled<T, 32, 32, 8, 4, 2>;
 static_assert(L3Cfg<float>::threads == 128 && L3Cfg<std::complex<double>>::threads == 128);
 inline std::size_t r16(std::size_t bytes) { return (bytes + 15) / 16 * 16; }
 // A global workspace of batch * bytes, every byte 0xFF (a NaN in every T).
@@ -235,10 +235,10 @@ TYPED_TEST(DeviceApiUtil, RitzValuesMatchesReference) {
     R* w = this->dev.template alloc<R>(std::size_t(kBatch) * k, R(-1));
     const int lda = A.ld, sa = A.stride, ldv = V.ld, sv = V.stride;
     this->dev.q().parallel_for(one_wg_per_item(128), [=](sycl::nd_item<1> it) {
-        const dv::WorkGroup<128> ex{it};
+        const batchlas::device::WorkGroup<128> ex{it};
         const int b = int(it.get_group_linear_id());
-        const int info = dv::ritz_values(ex, dv::mat(ad + std::size_t(b) * sa, n, n, lda), dv::mat(vd + std::size_t(b) * sv, n, k, ldv),
-                                         dv::vec(w + std::size_t(b) * k, k));
+        const int info = batchlas::device::ritz_values(ex, batchlas::device::mat(ad + std::size_t(b) * sa, n, n, lda), batchlas::device::mat(vd + std::size_t(b) * sv, n, k, ldv),
+                                         batchlas::device::vec(w + std::size_t(b) * k, k));
         if (ex.leader() && info != 0) w[std::size_t(b) * k] = R(-7);
     }).wait_and_throw();
     const auto got = this->dev.down(w, std::size_t(kBatch) * k);
@@ -250,18 +250,18 @@ TYPED_TEST(DeviceApiUtil, RitzValuesMatchesReference) {
 template <class Tier, class T> std::vector<real_of<T>> device_ritz_blocked(Dev& dev, const T* ad, const Host<T>& A, const T* vd, const Host<T>& V) {
     using R = real_of<T>;
     const int n = A.m, k = V.n;
-    const auto sz = dv::ritz_values_buffer_size<Tier, T, L3Cfg<T>>(n, k);
+    const auto sz = batchlas::device::ritz_values_buffer_size<Tier, T, L3Cfg<T>>(n, k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     R* w = dev.alloc<R>(std::size_t(kBatch) * k, R(-1));
     const int lda = A.ld, sa = A.stride, ldv = V.ld, sv = V.stride;
     dev.q().submit([&](sycl::handler& h) {
         sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(std::max<std::size_t>(sz.local_bytes, 16)), h);
         h.parallel_for(one_wg_per_item(128), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-            const dv::WorkGroup<128, 32> ex{it};
+            const batchlas::device::WorkGroup<128, 32> ex{it};
             const int b = int(it.get_group_linear_id());
-            const dv::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), dv::global_slice(gws, sz, b)};
-            const int info = dv::ritz_values<Tier, L3Cfg<T>>(ex, dv::mat(ad + std::size_t(b) * sa, n, n, lda),
-                                                             dv::mat(vd + std::size_t(b) * sv, n, k, ldv), dv::vec(w + std::size_t(b) * k, k), ws);
+            const batchlas::device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), batchlas::device::global_slice(gws, sz, b)};
+            const int info = batchlas::device::ritz_values<Tier, L3Cfg<T>>(ex, batchlas::device::mat(ad + std::size_t(b) * sa, n, n, lda),
+                                                             batchlas::device::mat(vd + std::size_t(b) * sv, n, k, ldv), batchlas::device::vec(w + std::size_t(b) * k, k), ws);
             if (ex.leader() && info != 0) w[std::size_t(b) * k] = R(-7);
         });
     }).wait_and_throw();
@@ -278,13 +278,13 @@ TYPED_TEST(DeviceApiUtil, RitzValuesBlocked) {
     const T* vd = this->dev.up(V.h);
     {
         SCOPED_TRACE("Blocked<3>");
-        const auto got = device_ritz_blocked<dv::tier::Blocked<3>>(this->dev, ad, A, vd, V);
+        const auto got = device_ritz_blocked<batchlas::device::tier::Blocked<3>>(this->dev, ad, A, vd, V);
         EXPECT_EQ(bit_twins(got, k), 0);
         EXPECT_VERIFY(T, Check::blas, n, ritz_worst(got, A, V));
     }
     {
         SCOPED_TRACE("Blocked<8>");
-        const auto got = device_ritz_blocked<dv::tier::Blocked<8>>(this->dev, ad, A, vd, V);
+        const auto got = device_ritz_blocked<batchlas::device::tier::Blocked<8>>(this->dev, ad, A, vd, V);
         EXPECT_EQ(bit_twins(got, k), 0);
         EXPECT_VERIFY(T, Check::blas, n, ritz_worst(got, A, V));
     }
@@ -324,17 +324,17 @@ template <class T> std::vector<LD<T>> ref_cgs2(const Host<T>& a, int b) {
 // sub-group), the global workspace NaN.
 template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> std::vector<int> device_ortho(Dev& dev, T* a, const Host<T>& s, int k) {
     constexpr auto TR = Transpose::NoTrans;
-    const auto sz = dv::ortho_buffer_size<TR, AL, Tier, T, Cfg>(k);
+    const auto sz = batchlas::device::ortho_buffer_size<TR, AL, Tier, T, Cfg>(k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     auto* info = dev.alloc<int>(kBatch, -99);
     const int m = s.m, ld = s.ld, stride = s.stride;
     dev.q().submit([&](sycl::handler& h) {
         sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(std::max<std::size_t>(sz.local_bytes, 16)), h);
         h.parallel_for(one_wg_per_item(128), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-            const dv::WorkGroup<128, 32> ex{it};
+            const batchlas::device::WorkGroup<128, 32> ex{it};
             const int b = int(it.get_group_linear_id());
-            const dv::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), dv::global_slice(gws, sz, b)};
-            const int r = dv::ortho<TR, AL, Tier, Cfg>(ex, dv::mat(a + std::size_t(b) * stride, m, k, ld), ws);
+            const batchlas::device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), batchlas::device::global_slice(gws, sz, b)};
+            const int r = batchlas::device::ortho<TR, AL, Tier, Cfg>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, k, ld), ws);
             if (ex.leader()) info[b] = r;
         });
     }).wait_and_throw();
@@ -408,11 +408,11 @@ TYPED_TEST(DeviceApiUtil, OrthoCgs2Tiers) {
     using T = TypeParam;
     constexpr auto AL = OrthoAlgorithm::CGS2;
     const auto a = make<T>(40, 12, 6);
-    check_ortho<AL, dv::tier::Cta<16>>(this->dev, a);
-    check_ortho<AL, dv::tier::Blocked<32>, L3Cfg<T>>(this->dev, a);  // k < NB: one block, cgs2 only
-    check_ortho<AL, dv::tier::Blocked<4>, L3Cfg<T>>(this->dev, a);   // k = 3 NB: two projected blocks
-    check_ortho<AL, dv::tier::Blocked<11>, L3Cfg<T>>(this->dev, a);  // k = NB + 1: a one-column block
-    check_ortho<AL, dv::tier::Cta<16>>(this->dev, make<T>(40, 16, 7));  // k = N: the Cta ceiling
+    check_ortho<AL, batchlas::device::tier::Cta<16>>(this->dev, a);
+    check_ortho<AL, batchlas::device::tier::Blocked<32>, L3Cfg<T>>(this->dev, a);  // k < NB: one block, cgs2 only
+    check_ortho<AL, batchlas::device::tier::Blocked<4>, L3Cfg<T>>(this->dev, a);   // k = 3 NB: two projected blocks
+    check_ortho<AL, batchlas::device::tier::Blocked<11>, L3Cfg<T>>(this->dev, a);  // k = NB + 1: a one-column block
+    check_ortho<AL, batchlas::device::tier::Cta<16>>(this->dev, make<T>(40, 16, 7));  // k = N: the Cta ceiling
 }
 
 // m = 40 and 70 (one and two partial 32-row tiles); k = 36 on Cta<40>: herk over 2 x 2 tiles and
@@ -420,11 +420,11 @@ TYPED_TEST(DeviceApiUtil, OrthoCgs2Tiers) {
 TYPED_TEST(DeviceApiUtil, OrthoCholeskyTiers) {
     using T = TypeParam;
     const auto a = make<T>(40, 12, 12);
-    check_ortho<OrthoAlgorithm::Cholesky, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
-    check_ortho<OrthoAlgorithm::Chol2, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
-    check_ortho<OrthoAlgorithm::ShiftChol3, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
-    check_ortho<OrthoAlgorithm::Chol2, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, make<T>(70, 16, 13));  // k = N
-    check_ortho<OrthoAlgorithm::Chol2, dv::tier::Cta<40>, L3Cfg<T>>(this->dev, make<T>(70, 36, 14));
+    check_ortho<OrthoAlgorithm::Cholesky, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
+    check_ortho<OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
+    check_ortho<OrthoAlgorithm::ShiftChol3, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
+    check_ortho<OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, make<T>(70, 16, 13));  // k = N
+    check_ortho<OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<40>, L3Cfg<T>>(this->dev, make<T>(70, 36, 14));
 }
 
 // Columns c0 + dep r_j: one Gram-Schmidt pass loses orthogonality as eps * cond^2, and one
@@ -452,12 +452,12 @@ TYPED_TEST(DeviceApiUtil, OrthoNearDependent) {
     using T = TypeParam;
     constexpr auto AL = OrthoAlgorithm::CGS2;
     const auto a = near_dependent<T>(48, 10, 8, 1e-2);
-    check_orthogonal<AL, dv::tier::Blocked<32>, L3Cfg<T>>(this->dev, a);
-    check_orthogonal<AL, dv::tier::Blocked<4>, L3Cfg<T>>(this->dev, a);
-    check_orthogonal<OrthoAlgorithm::Chol2, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
-    check_orthogonal<OrthoAlgorithm::ShiftChol3, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
+    check_orthogonal<AL, batchlas::device::tier::Blocked<32>, L3Cfg<T>>(this->dev, a);
+    check_orthogonal<AL, batchlas::device::tier::Blocked<4>, L3Cfg<T>>(this->dev, a);
+    check_orthogonal<OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
+    check_orthogonal<OrthoAlgorithm::ShiftChol3, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, a);
     // cond ~ 1e5: one inter-block projection leaves eps * ||a|| / ||a_perp|| ~ 1e4 eps (block CGS2: eps).
-    check_orthogonal<AL, dv::tier::Blocked<4>, L3Cfg<T>>(this->dev, near_dependent<T>(48, 10, 9, 1e-4));
+    check_orthogonal<AL, batchlas::device::tier::Blocked<4>, L3Cfg<T>>(this->dev, near_dependent<T>(48, 10, 9, 1e-4));
 }
 
 TYPED_TEST(DeviceApiUtil, OrthoPastCeilingAndWorkspace) {
@@ -466,7 +466,7 @@ TYPED_TEST(DeviceApiUtil, OrthoPastCeilingAndWorkspace) {
     constexpr auto AL = OrthoAlgorithm::CGS2;
     const auto a = make<T>(40, 17, 9);  // k = N + 1 for tier::Cta<16>
     T* d = this->dev.up(a.h);
-    const auto info = device_ortho<AL, dv::tier::Cta<16>>(this->dev, d, a, a.n);
+    const auto info = device_ortho<AL, batchlas::device::tier::Cta<16>>(this->dev, d, a, a.n);
     int not_refused = 0;
     for (int b = 0; b < kBatch; ++b) not_refused += info[b] != -2;
     EXPECT_EQ(not_refused, 0);
@@ -475,16 +475,16 @@ TYPED_TEST(DeviceApiUtil, OrthoPastCeilingAndWorkspace) {
     // Each slot rounded up to the 16-byte alignment, in its space. The Level 3 stages of a
     // 32 x 32 x 8 tile: (TileM + 1) TileK + (TileK + 1) TileN = 264 + 288 values.
     const std::size_t stages = r16(552 * sizeof(T));
-    const auto cta = dv::ortho_buffer_size<TR, AL, dv::tier::Cta<16>, T>(12);
+    const auto cta = batchlas::device::ortho_buffer_size<TR, AL, batchlas::device::tier::Cta<16>, T>(12);
     EXPECT_EQ(cta.local_bytes, r16(12 * sizeof(T)));
     EXPECT_EQ(cta.global_bytes, 0u);
-    const auto blk = dv::ortho_buffer_size<TR, AL, dv::tier::Blocked<32>, T, L3Cfg<T>>(12);
+    const auto blk = batchlas::device::ortho_buffer_size<TR, AL, batchlas::device::tier::Blocked<32>, T, L3Cfg<T>>(12);
     EXPECT_EQ(blk.local_bytes, stages);
     EXPECT_EQ(blk.global_bytes, r16(r16(12 * 32 * sizeof(T)) + 32 * sizeof(T)));  // H (k x NB), h (NB)
-    const auto chol = dv::ortho_buffer_size<TR, OrthoAlgorithm::Chol2, dv::tier::Cta<16>, T, L3Cfg<T>>(12);
-    EXPECT_EQ(chol.local_bytes, (stages + dv::potrf_buffer_size<Uplo::Lower, dv::tier::Cta<16>, T>(12).local_bytes));
+    const auto chol = batchlas::device::ortho_buffer_size<TR, OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, T, L3Cfg<T>>(12);
+    EXPECT_EQ(chol.local_bytes, (stages + batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<16>, T>(12).local_bytes));
     EXPECT_EQ(chol.global_bytes, r16(12 * 12 * sizeof(T)));  // the Gram matrix
-    const auto rz = dv::ritz_values_buffer_size<dv::tier::Blocked<3>, T, L3Cfg<T>>(45, 7);
+    const auto rz = batchlas::device::ritz_values_buffer_size<batchlas::device::tier::Blocked<3>, T, L3Cfg<T>>(45, 7);
     EXPECT_EQ(rz.local_bytes, stages);
     EXPECT_EQ(rz.global_bytes, r16(45 * 3 * sizeof(T)));  // A V(:, blk), n x NB
 }
@@ -497,7 +497,7 @@ TYPED_TEST(DeviceApiUtil, OrthoCholeskyInfoAndCeiling) {
     for (int b = 0; b < kBatch; ++b)
         for (int i = 0; i < a.m; ++i) a.at(b, i, 5) = T(0);
     T* d = this->dev.up(a.h);
-    const auto info = device_ortho<OrthoAlgorithm::Cholesky, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, d, a, a.n);
+    const auto info = device_ortho<OrthoAlgorithm::Cholesky, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, d, a, a.n);
     int wrong = 0;
     for (int b = 0; b < kBatch; ++b) wrong += info[b] != 6;
     EXPECT_EQ(wrong, 0) << "info[0] = " << info[0];
@@ -505,7 +505,7 @@ TYPED_TEST(DeviceApiUtil, OrthoCholeskyInfoAndCeiling) {
     EXPECT_EQ(std::memcmp(got.data(), a.h.data(), got.size() * sizeof(T)), 0) << "a failed CholeskyQR pass wrote A";
     const auto past = make<T>(40, 17, 16);
     T* p = this->dev.up(past.h);
-    const auto refused = device_ortho<OrthoAlgorithm::Chol2, dv::tier::Cta<16>, L3Cfg<T>>(this->dev, p, past, past.n);
+    const auto refused = device_ortho<OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, L3Cfg<T>>(this->dev, p, past, past.n);
     int not_refused = 0;
     for (int b = 0; b < kBatch; ++b) not_refused += refused[b] != -2;
     EXPECT_EQ(not_refused, 0);

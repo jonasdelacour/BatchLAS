@@ -23,13 +23,13 @@ namespace geqrf_detail {
 
 // A complex copied as two scalars, not as a struct: larfg_scalars takes alpha by const&, and
 // a struct-copied Cx<float> alpha is re-read from A after the reductions (+2 loads a column).
-template <class T> BATCHLAS_DLA_INLINE T copy_by_parts(const T& a) {
+template <class T> BATCHLAS_DEVICE_INLINE T copy_by_parts(const T& a) {
     using A = Arith<T>;
     if constexpr (A::is_complex) return A::make(A::re(a), A::im(a));
     else return a;
 }
 // |a / s|^2, dividing first; s > 0.
-template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2_scaled(T a, real_t<T> s) {
+template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs2_scaled(T a, real_t<T> s) {
     using A = Arith<T>;
     using R = real_t<T>;
     if constexpr (A::is_complex) {
@@ -47,7 +47,7 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> abs2_scaled(T a, real_t<T> s) {
 // stride rows j+1.. by `lanes` (the sub-group's run-time range, also the butterfly's width).
 // Sub-group shuffles only: no work-group barrier inside.
 template <class Ex, class T, class MA>
-BATCHLAS_DLA_INLINE void larf_left_head(const Ex& ex, int lanes, T tau, const MA& a, int j, int m, int n) {
+BATCHLAS_DEVICE_INLINE void larf_left_head(const Ex& ex, int lanes, T tau, const MA& a, int j, int m, int n) {
     using A = Arith<T>;
     using F = FmaArith<T>;
     const int lane = ex.lane();
@@ -64,15 +64,15 @@ BATCHLAS_DLA_INLINE void larf_left_head(const Ex& ex, int lanes, T tau, const MA
 
 // ---- slots: s[off + ...] from one base, never a moved pointer (the index form decides how
 // ptxas unrolls the run-time folds: +112 LD, +4 REG otherwise) --------------------------------
-template <class Ex, class T> BATCHLAS_DLA_INLINE void team_slot_put(const Ex& ex, T* slots, int off, T v) {
+template <class Ex, class T> BATCHLAS_DEVICE_INLINE void team_slot_put(const Ex& ex, T* slots, int off, T v) {
     if (ex.lane() == 0) slots[off + ex.team()] = v;
 }
-template <class T> BATCHLAS_DLA_INLINE T slot_fold_max(const T* s, int off, int k) {
+template <class T> BATCHLAS_DEVICE_INLINE T slot_fold_max(const T* s, int off, int k) {
     T v = s[off];
     for (int i = 1; i < k; ++i) v = sycl::fmax(v, s[off + i]);
     return v;
 }
-template <class T> BATCHLAS_DLA_INLINE T slot_fold_sum(const T* s, int off, int k) {
+template <class T> BATCHLAS_DEVICE_INLINE T slot_fold_sum(const T* s, int off, int k) {
     T v = Arith<T>::zero();
     for (int i = 0; i < k; ++i) v = Arith<T>::add(v, s[off + i]);
     return v;
@@ -83,7 +83,7 @@ template <class T> BATCHLAS_DLA_INLINE T slot_fold_sum(const T* s, int off, int 
 // sub-group range), stored by lane 0 at slots[off + team * ld + k]. N, lo and hi fold after the
 // caller's unroll.
 template <int N, class Ex, class T>
-BATCHLAS_DLA_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, int lo, int hi, T* slots, int off, int ld) {
+BATCHLAS_DEVICE_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, int lo, int hi, T* slots, int off, int ld) {
 #pragma clang loop unroll(full)
     for (int k = 0; k < N; ++k) {
         if (k < lo || k >= hi) continue;  // uniform, or lanes drop out of the butterfly
@@ -94,7 +94,7 @@ BATCHLAS_DLA_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, i
 }
 // F[k] -= (tau * sum_t slots[off + t * ld + k]) * v for lo <= k < hi.
 template <int N, class T>
-BATCHLAS_DLA_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, const T* slots, int off, int nslots, int ld) {
+BATCHLAS_DEVICE_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, const T* slots, int off, int nslots, int ld) {
     using A = Arith<T>;
     using Fm = FmaArith<T>;
 #pragma clang loop unroll(full)
@@ -109,7 +109,7 @@ BATCHLAS_DLA_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, con
 // Three steps through a local tile, the caller's barrier between each: (1) tile[off + kk] =
 // cv * F[k0 + kk] for k in [lo, hi), else 0; (2) lane < C: y[lane] = tau * sum_{r >= r0}
 // tile(r, lane) in row order; (3) F[k0 + kk] -= v * y[kk].
-template <int C, class T> BATCHLAS_DLA_INLINE void frag_scale_to_row(T cv, const T* F, int k0, int lo, int hi, T* tile, int off) {
+template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_scale_to_row(T cv, const T* F, int k0, int lo, int hi, T* tile, int off) {
 #pragma clang loop unroll(full)
     for (int kk = 0; kk < C; ++kk) {
         const int k = k0 + kk;
@@ -117,7 +117,7 @@ template <int C, class T> BATCHLAS_DLA_INLINE void frag_scale_to_row(T cv, const
         tile[off + kk] = act ? FmaArith<T>::mul(cv, F[k]) : T{};
     }
 }
-template <int C, int NR, class T> BATCHLAS_DLA_INLINE void colsum_colperlane(int lane, T tau, const T* tile, int ldt, int r0, T* y) {
+template <int C, int NR, class T> BATCHLAS_DEVICE_INLINE void colsum_colperlane(int lane, T tau, const T* tile, int ldt, int r0, T* y) {
     if (lane < C) {
         T acc = T{};
         BATCHLAS_UNROLL_FULL
@@ -127,7 +127,7 @@ template <int C, int NR, class T> BATCHLAS_DLA_INLINE void colsum_colperlane(int
         y[lane] = FmaArith<T>::mul(tau, acc);
     }
 }
-template <int C, class T> BATCHLAS_DLA_INLINE void frag_rank1(T v, const T* y, T* F, int k0, int lo, int hi) {
+template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y, T* F, int k0, int lo, int hi) {
 #pragma clang loop unroll(full)
     for (int kk = 0; kk < C; ++kk) {
         const int k = k0 + kk;
@@ -155,13 +155,13 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
         ex.barrier(Mem::Global);  // B1 -- the previous reflector's column writes are visible.
         const D alpha = geqrf_detail::copy_by_parts(a(j, j));
         R smax = abs_inf(alpha);
-        for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DLA_BODY { smax = sycl::fmax(smax, abs_inf(a(r, j))); });
+        for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { smax = sycl::fmax(smax, abs_inf(a(r, j))); });
         // Scope::Sub: the run-time xor butterfly; Scope::Group: portable::reduce_over_group.
         if constexpr (sub) smax = butterfly(ex.sub(), smax, op::FMax{}, 1, lanes);
         else smax = ex.group_reduce(smax, sycl::maximum<R>());
         R ssq = R(0);  // the collective sits outside the `smax > 0` test: all items reach it
         if (smax > R(0)) {
-            for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DLA_BODY { ssq += geqrf_detail::abs2_scaled(a(r, j), smax); });
+            for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { ssq += geqrf_detail::abs2_scaled(a(r, j), smax); });
         }
         if constexpr (sub) ssq = butterfly(ex.sub(), ssq, sycl::plus<R>(), 1, lanes);
         else ssq = ex.group_reduce(ssq, sycl::plus<R>());
@@ -172,9 +172,9 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
             if (ex.leader()) a(j, j) = h.beta;
             // No barrier needed here: each item writes exactly the rows it read.
             if (h.use_mul) {
-                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DLA_BODY { a(r, j) = F::mul(a(r, j), h.scale); });
+                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { a(r, j) = F::mul(a(r, j), h.scale); });
             } else {
-                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DLA_BODY { a(r, j) = F::div(a(r, j), h.scale); });
+                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { a(r, j) = F::div(a(r, j), h.scale); });
             }
         }
         if (ex.leader()) tau[j] = h.tau;
@@ -266,7 +266,7 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 // (no early return). sred: 2 reals, sw: N scalars per sub-group, plus 1 (butterflies, never
 // reduce_over_group: the 48 KB hole).
 template <int N, class D, class Real, class Ex>
-BATCHLAS_DLA_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
+BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
     static_assert(Ex::runtime && !Ex::sub_whole, "geqr2_reg: ex is an RtGroup<Scope::Group>");
     geqrf_detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
 }
@@ -306,7 +306,7 @@ template <int NB, class Cfg, class T> constexpr WorkspaceSize geqrf_size(int m, 
 // larfb_from_panel<Left, ConjTrans> on A(j0 :, j0 + ib :). m < n: k = m panels, each update
 // spanning every column to the right (no separate ormqr pass).
 template <int NB, class Cfg, class Ex, class T>
-BATCHLAS_DLA_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>& a, T* tau, const GeqrfSlots<T>& s, const Workspace& w) {
+BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>& a, T* tau, const GeqrfSlots<T>& s, const Workspace& w) {
     const l3::Smem<Cfg> sm{carve_local(w, s.smem).get_raw()};
     T* const vb = carve_global(w, s.v);
     T* const tb = carve_global(w, s.t);
@@ -358,7 +358,7 @@ template <class Tier, class T> constexpr WorkspaceSize geqrf_buffer_size(int m, 
 /// @return 0, or -i for a bad i-th argument after the executor (2: tau shorter than k, 3: no
 ///         global workspace), uniform
 template <class Tier, class Ex, class MA, class Tau>
-BATCHLAS_DLA_INLINE int geqrf(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::geqrf, T, Tier>;
     static_assert(HasTier<routine::geqrf, Tr, T>, "geqrf: this tier is not offered for this scalar type");

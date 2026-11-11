@@ -30,7 +30,6 @@ namespace sycl_getri {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 template <typename T> class GetriZeroKernel;
 template <typename T> class GetriPermKernel;
@@ -89,27 +88,27 @@ Event getri_perm_launch(Queue& ctx,
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
-                const v2::RtGroup<> ex(it);
-                const auto info = v2::atomic_min_slot(&slot[0]);
+                const device::RtGroup<> ex(it);
+                const auto info = device::atomic_min_slot(&slot[0]);
 
                 info.reset(ex);
-                ex.barrier(v2::Mem::Global);
+                ex.barrier(device::Mem::Global);
 
-                const auto ipiv = v2::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, n);
-                const auto a = v2::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride_a, n, n, lda);
-                const auto c = v2::mat_wide(cp + static_cast<std::ptrdiff_t>(b) * stride_c, n, n, ldc);
+                const auto ipiv = device::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, n);
+                const auto a = device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride_a, n, n, lda);
+                const auto c = device::mat_wide(cp + static_cast<std::ptrdiff_t>(b) * stride_c, n, n, ldc);
 
-                v2::for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY {
+                device::for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
                     // F[i, perm[i]] = 1: i walked back through the interchanges from the LAST to
                     // the first; each is its own inverse, so only the ORDER reverses.
-                    c(i, v2::laswp_index<v2::dir::Backward>(ipiv, 0, n, i)) = v2::Arith<D>::one();
+                    c(i, device::laswp_index<device::dir::Backward>(ipiv, 0, n, i)) = device::Arith<D>::one();
                     // EXACT zero, no epsilon: ?GETRI reports the first U(i,i) that is a true
                     // binary zero, not |u| < eps. 1-BASED, LAPACK info.
-                    if (want_info && v2::Arith<D>::is_zero(a(i, i))) info.offer(i + 1);
+                    if (want_info && device::Arith<D>::is_zero(a(i, i))) info.offer(i + 1);
                 });
 
                 if (want_info) {
-                    ex.barrier(v2::Mem::Global);
+                    ex.barrier(device::Mem::Global);
                     if (ex.leader()) info_ptr[b] = static_cast<int32_t>(info.or_zero());
                 }
             });

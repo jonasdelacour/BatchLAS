@@ -39,7 +39,7 @@ static_assert(BlockedSolvePlan<float>::make().smem.offset == potrf_detail::Block
 // B := A^-1 B from the factor: Lower L (L^H X = Y after L Y = B), Upper U^H then U. Arguments
 // already checked; n, nrhs >= 1.
 template <Uplo UL, int NB, int WG, int SG, class MA, class MB>
-BATCHLAS_DLA_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
     using T = typename MA::value_type;
     using Cfg = potrf_detail::BlockedCfg<T>;
     constexpr BlockedSolvePlan<T> pl = BlockedSolvePlan<T>::make();
@@ -57,7 +57,7 @@ BATCHLAS_DLA_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, const 
 }
 
 // The argument checks potrs and posv share (posv's ws is also argument 4).
-template <class MA, class MB> BATCHLAS_DLA_INLINE int potrs_blocked_args(const MA& a, const MB& b, const Workspace& ws) {
+template <class MA, class MB> BATCHLAS_DEVICE_INLINE int potrs_blocked_args(const MA& a, const MB& b, const Workspace& ws) {
     static_assert(std::is_same_v<typename MA::value_type, typename MB::value_type>, "potrs: A and B hold the same scalar type");
     const int n = a.rows();
     if (n < 0 || a.cols() != n) return -2;
@@ -67,7 +67,7 @@ template <class MA, class MB> BATCHLAS_DLA_INLINE int potrs_blocked_args(const M
 }
 
 template <Uplo UL, int NB, class Alg, int WG, int SG, class MA, class MB>
-BATCHLAS_DLA_INLINE int potrs_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int potrs_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
     using T = typename MA::value_type;
     static_assert(std::is_same_v<Alg, alg::Default>, "potrs: tier::Blocked has one algorithm");
     static_assert(NB >= 1, "potrs: tier::Blocked<NB> needs NB >= 1");
@@ -106,7 +106,7 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrs_buffer_siz
 // B := A^-1 B for the n x nrhs B, A's UL triangle holding potrf's factor (the other triangle not
 // read); returns 0 or -i (see the file head).
 template <Uplo UL, class Tier, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE int potrs(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int potrs(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potrs<UL>, T, Tier>;
     static_assert(potrf_detail::is_blocked_v<Tr>, "potrs: tier::Blocked<NB> (the small tiers land with WP7)");

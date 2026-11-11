@@ -68,7 +68,7 @@ template <class Tier, class T> constexpr WorkspaceSize orgqr_buffer_size(int m, 
 /// @return 0, or -i for a bad i-th argument after the executor (1: m < n, 2: tau shorter than n,
 ///         3: no global workspace), uniform
 template <class Tier, class Ex, class MA, class Tau>
-BATCHLAS_DLA_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::orgqr, T, Tier>;
     static_assert(HasTier<routine::orgqr, Tr, T>, "orgqr: this tier is not offered for this scalar type");

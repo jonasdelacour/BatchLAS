@@ -43,7 +43,7 @@ template <class T> struct BlockedPlan {
 /// @param[in] v   the trial vector
 /// @param[in] av  \f$A v\f$, same length as @p v
 /// @return the quotient (\f$v^H v\f$ as sumsq<alg::Fused>), the same on every item
-template <class Ex, class V, class AV> BATCHLAS_DLA_INLINE auto ritz_values_quotient(const Ex& ex, const V& v, const AV& av) {
+template <class Ex, class V, class AV> BATCHLAS_DEVICE_INLINE auto ritz_values_quotient(const Ex& ex, const V& v, const AV& av) {
     using T = elem_t<V>;
     const T num = dotc(ex, v, av);
     const real_t<T> den = sumsq<alg::Fused>(ex, v);
@@ -57,12 +57,12 @@ template <class Ex, class V, class AV> BATCHLAS_DLA_INLINE auto ritz_values_quot
 /// @param[in]  v   V, n x k, a Mat (col())
 /// @param[out] w   k reals, written by the leader (other items read them after a barrier)
 /// @return 0 (the host op has no info)
-template <class Ex, class MA, class MV, class W> BATCHLAS_DLA_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w) {
+template <class Ex, class MA, class MV, class W> BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w) {
     const int n = a.rows(), k = v.cols();
     for (int j = 0; j < k; ++j) {
         const auto vj = v.col(j);
-        const auto av = fn_vec(n, [a, vj, n](int r) BATCHLAS_DLA_BODY {
-            return dot(Thread{}, fn_vec(n, [a, r](int c) BATCHLAS_DLA_BODY { return a(r, c); }), vj);
+        const auto av = fn_vec(n, [a, vj, n](int r) BATCHLAS_DEVICE_BODY {
+            return dot(Thread{}, fn_vec(n, [a, r](int c) BATCHLAS_DEVICE_BODY { return a(r, c); }), vj);
         });
         const auto q = ritz_values_quotient(ex, vj, av);
         if (ex.leader()) w(j) = q;
@@ -91,7 +91,7 @@ template <class Tier, class T, class Cfg> constexpr WorkspaceSize ritz_values_bu
 /// @param[in]  ws  this matrix's slice of ritz_values_buffer_size<Tier, T, Cfg>(n, k)
 /// @return 0 (the host op has no info)
 template <class Tier, class Cfg, class Ex, class MA, class MV, class W>
-BATCHLAS_DLA_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w, const Workspace& ws) {
     using T = typename MA::value_type;
     constexpr int NB = Tier::nb;
     const int n = a.rows(), k = v.cols();

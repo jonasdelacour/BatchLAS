@@ -41,21 +41,21 @@ namespace l3 {
 template <class T> struct Global {
     T* p;
     int ld, m, n;
-    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return p[i + j * ld]; }
-    BATCHLAS_DLA_INLINE int rows() const { return m; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int i, int j) const { return p[i + j * ld]; }
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <class T> BATCHLAS_DLA_INLINE Global<T> global_of(const Global<T>& a) { return a; }
+template <class T> BATCHLAS_DEVICE_INLINE Global<T> global_of(const Global<T>& a) { return a; }
 template <class T, class R, class C, class Ld, class L, class Idx>
-BATCHLAS_DLA_INLINE Global<T> global_of(const Mat<T, R, C, Ld, Mem::Global, L, T*, Idx>& a) {
+BATCHLAS_DEVICE_INLINE Global<T> global_of(const Mat<T, R, C, Ld, Mem::Global, L, T*, Idx>& a) {
     return {a.p + a.off, int(a.ld), a.rows(), a.cols()};
 }
-template <class T> BATCHLAS_DLA_INLINE Global<T> global_of(const ItemMat<T>& a) {
+template <class T> BATCHLAS_DEVICE_INLINE Global<T> global_of(const ItemMat<T>& a) {
     return {a.p + static_cast<std::int64_t>(a.b) * a.stride, a.ld, a.m, a.n};
 }
 
 // The value of a scalar argument (a MaybeZero with its flag set is 0).
-template <class T, class S> BATCHLAS_DLA_INLINE T scalar_of(const S& s_) {
+template <class T, class S> BATCHLAS_DEVICE_INLINE T scalar_of(const S& s_) {
     const auto s = as_tag(s_);
     if constexpr (::batchlas::device::detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) return s.zero ? Arith<T>::zero() : static_cast<T>(s.v);
     else return ::batchlas::device::detail::tag_value<T>(s);
@@ -68,7 +68,7 @@ template <bool AR, bool BR, class RA, class RB> struct Pass {
     RA a;
     RB b;
 };
-template <bool AR, bool BR, class RA, class RB> BATCHLAS_DLA_INLINE Pass<AR, BR, RA, RB> make_pass(int k, RA a, RB b) {
+template <bool AR, bool BR, class RA, class RB> BATCHLAS_DEVICE_INLINE Pass<AR, BR, RA, RB> make_pass(int k, RA a, RB b) {
     return {k, a, b};
 }
 
@@ -79,7 +79,7 @@ template <bool AR, bool BR, class RA, class RB> inline constexpr bool pass_b_row
 
 // C(m0 :, n0 :) := alpha (sum of the passes) + beta C over one Cfg tile; c is m x n (ldc).
 template <class C, class Ex, class T, class Mask, class... P>
-BATCHLAS_DLA_INLINE void run_tile(const Ex& ex, const Smem<C>& sm, T* c, int ldc, int m0, int n0, const int& m, const int& n, T alpha,
+BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const Smem<C>& sm, T* c, int ldc, int m0, int n0, const int& m, const int& n, T alpha,
                                   T beta, Mask mask, const P&... passes) {
     using G = typename C::geom;
     using Ops = typename C::ops;
@@ -90,9 +90,9 @@ BATCHLAS_DLA_INLINE void run_tile(const Ex& ex, const Smem<C>& sm, T* c, int ldc
     T* const tile_b = sm.p + G::Stages * G::StageASize;
     Tile<T, G::ThreadTileRows, G::ThreadTileCols> accum;
     fill(accum, Arith<T>::zero());
-    auto one_pass = [&](const auto& ps) BATCHLAS_DLA_BODY {
+    auto one_pass = [&](const auto& ps) BATCHLAS_DEVICE_BODY {
         using PS = std::remove_cvref_t<decltype(ps)>;
-        auto stage = [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DLA_BODY {
+        auto stage = [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DEVICE_BODY {
             stage_block_read<pass_a_rows<PS>, G::TileM, G::TileK, Thr, T>(lid, m0, kk0, m, ps.k, ps.a, dst_a);
             stage_block_read<pass_b_rows<PS>, G::TileK, G::TileN, Thr, T>(lid, kk0, n0, ps.k, n, ps.b, dst_b);
         };
@@ -104,7 +104,7 @@ BATCHLAS_DLA_INLINE void run_tile(const Ex& ex, const Smem<C>& sm, T* c, int ldc
 }
 
 // A(i, j) of a symmetric (Herm: Hermitian, real diagonal) A from its UL triangle.
-template <Uplo UL, bool Herm, class T> BATCHLAS_DLA_INLINE std::remove_cv_t<T> sym_at(const Global<T>& a, int i, int j) {
+template <Uplo UL, bool Herm, class T> BATCHLAS_DEVICE_INLINE std::remove_cv_t<T> sym_at(const Global<T>& a, int i, int j) {
     using V = std::remove_cv_t<T>;
     using A = Arith<V>;
     if constexpr (Herm && A::is_complex) {
@@ -117,7 +117,7 @@ template <Uplo UL, bool Herm, class T> BATCHLAS_DLA_INLINE std::remove_cv_t<T> s
 }
 
 // op(A)(i, j) of a triangular A (UL stored triangle, DG = Unit: an implied unit diagonal).
-template <Uplo UL, Transpose TR, Diag DG, class T> BATCHLAS_DLA_INLINE std::remove_cv_t<T> tri_at(const Global<T>& a, int i, int j) {
+template <Uplo UL, Transpose TR, Diag DG, class T> BATCHLAS_DEVICE_INLINE std::remove_cv_t<T> tri_at(const Global<T>& a, int i, int j) {
     using V = std::remove_cv_t<T>;
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
     if (i == j) {
@@ -128,22 +128,22 @@ template <Uplo UL, Transpose TR, Diag DG, class T> BATCHLAS_DLA_INLINE std::remo
     return inside ? OperandAccessor<V, TR>::load(a.p, a.ld, 0, i, j) : Arith<V>::zero();
 }
 
-template <class C, class Ex> BATCHLAS_DLA_INLINE void check_group_cfg() {
+template <class C, class Ex> BATCHLAS_DEVICE_INLINE void check_group_cfg() {
     static_assert(Config<C>, "device L3: Cfg is an l3::cfg preset");
     static_assert(Ex::size == C::threads, "device L3: the executor has Cfg::threads items (TileM / TR x TileN / TC)");
 }
 
 // Tiles of an m x n C, column-major over tiles: f(m0, n0).
-template <class C, class Ex, class F> BATCHLAS_DLA_INLINE void for_each_c_tile(const Ex& ex, int m, int n, F&& f) {
+template <class C, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_c_tile(const Ex& ex, int m, int n, F&& f) {
     const int tm = (m + C::TileM - 1) / C::TileM, tn = (n + C::TileN - 1) / C::TileN;
-    for_each_tile(ex, tm * tn, [&](int t) BATCHLAS_DLA_BODY { f((t % tm) * C::TileM, (t / tm) * C::TileN); });
+    for_each_tile(ex, tm * tn, [&](int t) BATCHLAS_DEVICE_BODY { f((t % tm) * C::TileM, (t / tm) * C::TileN); });
 }
 
 // The rank-k family (syrk, herk, syr2k, her2k) over the tiles that meet C's UL triangle.
 template <class C, Uplo UL, bool Herm, class Ex, class T, class... P>
-BATCHLAS_DLA_INLINE void rank_update(const Ex& ex, const Smem<C>& sm, const Global<T>& c, T alpha, T beta, const P&... passes) {
+BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Smem<C>& sm, const Global<T>& c, T alpha, T beta, const P&... passes) {
     const int n = c.m;
-    for_each_c_tile<C>(ex, n, n, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+    for_each_c_tile<C>(ex, n, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
         const bool meets = UL == Uplo::Lower ? m0 + C::TileM - 1 >= n0 : m0 <= n0 + C::TileN - 1;
         if (meets) run_tile<C>(ex, sm, c.p, c.ld, m0, n0, n, n, alpha, beta, TriMask<UL, Herm>{}, passes...);
     });
@@ -155,7 +155,7 @@ BATCHLAS_DLA_INLINE void rank_update(const Ex& ex, const Smem<C>& sm, const Glob
 
 template <Transpose TA, Transpose TB, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     const auto a = l3::global_of(A);
@@ -164,9 +164,9 @@ BATCHLAS_DLA_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const MC& 
     const int m = c.m, n = c.n, k = TA == Transpose::NoTrans ? a.n : a.m;
     const T al = l3::scalar_of<T>(alpha), be = l3::scalar_of<T>(beta);
     const auto pass = l3::make_pass<TA == Transpose::NoTrans, TB == Transpose::NoTrans>(
-        k, [=](int r, int kk) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TA>::load(a.p, a.ld, 0, r, kk); },
-        [=](int kk, int col) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TB>::load(b.p, b.ld, 0, kk, col); });
-    l3::for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+        k, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TA>::load(a.p, a.ld, 0, r, kk); },
+        [=](int kk, int col) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TB>::load(b.p, b.ld, 0, kk, col); });
+    l3::for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
         l3::run_tile<Cfg>(ex, smem, c.p, c.ld, m0, n0, m, n, al, be, l3::NoMask{}, pass);
     });
     ex.barrier(Mem::Global);
@@ -174,7 +174,7 @@ BATCHLAS_DLA_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const MC& 
 
 namespace l3 {
 template <Side SD, Uplo UL, bool Herm, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
-BATCHLAS_DLA_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, Smem<Cfg> smem) {
     check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     const auto a = global_of(A);
@@ -182,9 +182,9 @@ BATCHLAS_DLA_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, con
     const auto c = global_of(C);
     const int m = c.m, n = c.n;
     const T al = scalar_of<T>(alpha), be = scalar_of<T>(beta);
-    auto plain = [=](int i, int j) BATCHLAS_DLA_BODY { return b(i, j); };
-    auto sym = [=](int i, int j) BATCHLAS_DLA_BODY { return sym_at<UL, Herm>(a, i, j); };
-    for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+    auto plain = [=](int i, int j) BATCHLAS_DEVICE_BODY { return b(i, j); };
+    auto sym = [=](int i, int j) BATCHLAS_DEVICE_BODY { return sym_at<UL, Herm>(a, i, j); };
+    for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
         if constexpr (SD == Side::Left) run_tile<Cfg>(ex, smem, c.p, c.ld, m0, n0, m, n, al, be, NoMask{}, make_pass<true, true>(m, sym, plain));
         else run_tile<Cfg>(ex, smem, c.p, c.ld, m0, n0, m, n, al, be, NoMask{}, make_pass<true, true>(n, plain, sym));
     });
@@ -194,12 +194,12 @@ BATCHLAS_DLA_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, con
 
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void symm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void symm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     l3::sym_product<SD, UL, false>(ex, A, B, C, alpha, beta, smem);
 }
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     l3::sym_product<SD, UL, true>(ex, A, B, C, alpha, beta, smem);
 }
 
@@ -207,7 +207,7 @@ BATCHLAS_DLA_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const MC& 
 
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     static_assert(TR != Transpose::ConjTrans, "syrk: op(A) is A or A^T (herk takes A^H)");
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
@@ -216,8 +216,8 @@ BATCHLAS_DLA_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alpha, 
     const int k = TR == Transpose::NoTrans ? a.n : a.m;
     constexpr bool rows = TR == Transpose::NoTrans;
     const auto pass = l3::make_pass<rows, !rows>(
-        k, [=](int r, int kk) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, r, kk); },
-        [=](int kk, int col) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, col, kk); });
+        k, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, r, kk); },
+        [=](int kk, int col) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, col, kk); });
     l3::rank_update<Cfg, UL, false>(ex, smem, c, l3::scalar_of<T>(alpha), l3::scalar_of<T>(beta), pass);
     ex.barrier(Mem::Global);
 }
@@ -226,7 +226,7 @@ BATCHLAS_DLA_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alpha, 
 // for a real T. alpha, beta real; Im C(i, i) := 0.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     using Ar = Arith<T>;
@@ -237,8 +237,8 @@ BATCHLAS_DLA_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, 
     const int k = OP == Transpose::NoTrans ? a.n : a.m;
     constexpr bool rows = OP == Transpose::NoTrans;
     const auto pass = l3::make_pass<rows, !rows>(
-        k, [=](int r, int kk) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, r, kk); },
-        [=](int kk, int col) BATCHLAS_DLA_BODY { return Ar::conj(l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, col, kk)); });
+        k, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, r, kk); },
+        [=](int kk, int col) BATCHLAS_DEVICE_BODY { return Ar::conj(l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, col, kk)); });
     l3::rank_update<Cfg, UL, true>(ex, smem, c, l3::scalar_of<T>(alpha), l3::scalar_of<T>(beta), pass);
     ex.barrier(Mem::Global);
 }
@@ -247,7 +247,7 @@ BATCHLAS_DLA_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, 
 // (interleaving them is 1.53x slower, docs/perf/level3.md).
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     static_assert(TR != Transpose::ConjTrans, "syr2k: op is NoTrans or Trans (her2k takes ConjTrans)");
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
@@ -256,10 +256,10 @@ BATCHLAS_DLA_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const MC&
     const auto c = l3::global_of(C);
     const int k = TR == Transpose::NoTrans ? a.n : a.m;
     constexpr bool rows = TR == Transpose::NoTrans;
-    auto op_a = [=](int i, int j) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, i, j); };
-    auto op_b = [=](int i, int j) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(b.p, b.ld, 0, i, j); };
-    const auto ab = l3::make_pass<rows, !rows>(k, op_a, [=](int kk, int col) BATCHLAS_DLA_BODY { return op_b(col, kk); });
-    const auto ba = l3::make_pass<rows, !rows>(k, op_b, [=](int kk, int col) BATCHLAS_DLA_BODY { return op_a(col, kk); });
+    auto op_a = [=](int i, int j) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, i, j); };
+    auto op_b = [=](int i, int j) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(b.p, b.ld, 0, i, j); };
+    const auto ab = l3::make_pass<rows, !rows>(k, op_a, [=](int kk, int col) BATCHLAS_DEVICE_BODY { return op_b(col, kk); });
+    const auto ba = l3::make_pass<rows, !rows>(k, op_b, [=](int kk, int col) BATCHLAS_DEVICE_BODY { return op_a(col, kk); });
     l3::rank_update<Cfg, UL, false>(ex, smem, c, l3::scalar_of<T>(alpha), l3::scalar_of<T>(beta), ab, ba);
     ex.barrier(Mem::Global);
 }
@@ -267,7 +267,7 @@ BATCHLAS_DLA_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const MC&
 // alpha scales op(B)^H as it is staged and conj(alpha) op(A)^H (the epilogue's alpha is 1); beta real.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     using Ar = arith_t<typename Cfg::ops, T>;
@@ -279,10 +279,10 @@ BATCHLAS_DLA_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC&
     const int k = OP == Transpose::NoTrans ? a.n : a.m;
     constexpr bool rows = OP == Transpose::NoTrans;
     const T al = l3::scalar_of<T>(alpha), al_c = Arith<T>::conj(al);
-    auto op_a = [=](int i, int j) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, i, j); };
-    auto op_b = [=](int i, int j) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, OP>::load(b.p, b.ld, 0, i, j); };
-    const auto ab = l3::make_pass<rows, !rows>(k, op_a, [=](int kk, int col) BATCHLAS_DLA_BODY { return Ar::mul(al, Arith<T>::conj(op_b(col, kk))); });
-    const auto ba = l3::make_pass<rows, !rows>(k, op_b, [=](int kk, int col) BATCHLAS_DLA_BODY { return Ar::mul(al_c, Arith<T>::conj(op_a(col, kk))); });
+    auto op_a = [=](int i, int j) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, OP>::load(a.p, a.ld, 0, i, j); };
+    auto op_b = [=](int i, int j) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, OP>::load(b.p, b.ld, 0, i, j); };
+    const auto ab = l3::make_pass<rows, !rows>(k, op_a, [=](int kk, int col) BATCHLAS_DEVICE_BODY { return Ar::mul(al, Arith<T>::conj(op_b(col, kk))); });
+    const auto ba = l3::make_pass<rows, !rows>(k, op_b, [=](int kk, int col) BATCHLAS_DEVICE_BODY { return Ar::mul(al_c, Arith<T>::conj(op_a(col, kk))); });
     l3::rank_update<Cfg, UL, true>(ex, smem, c, Arith<T>::one(), l3::scalar_of<T>(beta), ab, ba);
     ex.barrier(Mem::Global);
 }
@@ -293,7 +293,7 @@ BATCHLAS_DLA_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC&
 // rows m0 .. read columns [0, min(m, m0 + TileM)); upper: [m0, m). Right likewise over columns.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, class Ex, class MA, class MB, class MC, class AS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
@@ -302,20 +302,20 @@ BATCHLAS_DLA_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const MC& 
     const auto c = l3::global_of(C);
     const int m = c.m, n = c.n;
     const T al = l3::scalar_of<T>(alpha), zero = Arith<T>::zero();
-    l3::for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+    l3::for_each_c_tile<Cfg>(ex, m, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
         if constexpr (SD == Side::Left) {
             const int k_lo = op_lower ? 0 : m0;
             const int k_hi = op_lower ? (m0 + Cfg::TileM < m ? m0 + Cfg::TileM : m) : m;
             const auto pass = l3::make_pass<TR == Transpose::NoTrans, true>(
-                k_hi - k_lo, [=](int r, int kk) BATCHLAS_DLA_BODY { return l3::tri_at<UL, TR, DG>(a, r, k_lo + kk); },
-                [=](int kk, int col) BATCHLAS_DLA_BODY { return b(k_lo + kk, col); });
+                k_hi - k_lo, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return l3::tri_at<UL, TR, DG>(a, r, k_lo + kk); },
+                [=](int kk, int col) BATCHLAS_DEVICE_BODY { return b(k_lo + kk, col); });
             l3::run_tile<Cfg>(ex, smem, c.p, c.ld, m0, n0, m, n, al, zero, l3::NoMask{}, pass);
         } else {
             const int k_lo = op_lower ? n0 : 0;
             const int k_hi = op_lower ? n : (n0 + Cfg::TileN < n ? n0 + Cfg::TileN : n);
             const auto pass = l3::make_pass<true, TR == Transpose::NoTrans>(
-                k_hi - k_lo, [=](int r, int kk) BATCHLAS_DLA_BODY { return b(r, k_lo + kk); },
-                [=](int kk, int col) BATCHLAS_DLA_BODY { return l3::tri_at<UL, TR, DG>(a, k_lo + kk, col); });
+                k_hi - k_lo, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return b(r, k_lo + kk); },
+                [=](int kk, int col) BATCHLAS_DEVICE_BODY { return l3::tri_at<UL, TR, DG>(a, k_lo + kk, col); });
             l3::run_tile<Cfg>(ex, smem, c.p, c.ld, m0, n0, m, n, al, zero, l3::NoMask{}, pass);
         }
     });
@@ -328,7 +328,7 @@ BATCHLAS_DLA_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const MC& 
 // A zero diagonal element of a NonUnit A gives Inf / NaN, as BLAS does.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, int NB = 32, class Ex, class MA, class MB, class AS>
     requires l3::Config<Cfg>
-BATCHLAS_DLA_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, l3::Smem<Cfg> smem) {
     static_assert(NB >= 1, "trsm: NB >= 1");
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
@@ -339,7 +339,7 @@ BATCHLAS_DLA_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, 
     const auto b = l3::global_of(B);
     const int m = b.m, n = b.n;
     const int lid = ex.lid();
-    auto op_at = [&](int i, int j) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, i, j); };
+    auto op_at = [&](int i, int j) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, i, j); };
     if constexpr (!std::is_same_v<tag_t<AS>, One>) {
         const T al = l3::scalar_of<T>(alpha);
         for (int e = lid; e < m * n; e += Ex::size) b(e % m, e / m) = Ar::mul(al, b(e % m, e / m));
@@ -386,16 +386,16 @@ BATCHLAS_DLA_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, 
         if (cnt <= 0) continue;
         if constexpr (SD == Side::Left) {
             const auto pass = l3::make_pass<TR == Transpose::NoTrans, true>(
-                nb, [=](int r, int kk) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, lo + r, kb + kk); },
-                [=](int kk, int col) BATCHLAS_DLA_BODY { return b(kb + kk, col); });
-            l3::for_each_c_tile<Cfg>(ex, cnt, n, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+                nb, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, lo + r, kb + kk); },
+                [=](int kk, int col) BATCHLAS_DEVICE_BODY { return b(kb + kk, col); });
+            l3::for_each_c_tile<Cfg>(ex, cnt, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
                 l3::run_tile<Cfg>(ex, smem, b.p + lo, b.ld, m0, n0, cnt, n, neg_one, one, l3::NoMask{}, pass);
             });
         } else {
             const auto pass = l3::make_pass<true, TR == Transpose::NoTrans>(
-                nb, [=](int r, int kk) BATCHLAS_DLA_BODY { return b(r, kb + kk); },
-                [=](int kk, int col) BATCHLAS_DLA_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, kb + kk, lo + col); });
-            l3::for_each_c_tile<Cfg>(ex, m, cnt, [&](int m0, int n0) BATCHLAS_DLA_BODY {
+                nb, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return b(r, kb + kk); },
+                [=](int kk, int col) BATCHLAS_DEVICE_BODY { return l3::OperandAccessor<T, TR>::load(a.p, a.ld, 0, kb + kk, lo + col); });
+            l3::for_each_c_tile<Cfg>(ex, m, cnt, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {
                 l3::run_tile<Cfg>(ex, smem, b.p + static_cast<std::int64_t>(lo) * b.ld, b.ld, m0, n0, m, cnt, neg_one, one, l3::NoMask{}, pass);
             });
         }

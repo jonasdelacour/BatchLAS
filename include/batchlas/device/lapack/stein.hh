@@ -30,7 +30,7 @@ namespace batchlas::device {
 namespace stein_detail {
 /// The start vector's generator (dstein uses dlarnv): a 32-bit LCG, so a fixed per-(item,
 /// vector) seed reproduces a run bit for bit. Advances state and returns it.
-BATCHLAS_DLA_HELPER std::uint32_t lcg(std::uint32_t& state) {
+BATCHLAS_DEVICE_HELPER std::uint32_t lcg(std::uint32_t& state) {
     state = state * 1664525u + 1013904223u;
     return state;
 }
@@ -78,7 +78,7 @@ template <class R> struct Scratch {
     unsigned char* piv;
     std::int64_t first;  // this matrix's first vector slot in the arrays
 };
-template <class R> BATCHLAS_DLA_INLINE Scratch<R> scratch(const Workspace& ws, const Layout<R>& L) {
+template <class R> BATCHLAS_DEVICE_INLINE Scratch<R> scratch(const Workspace& ws, const Layout<R>& L) {
     return {carve_local(ws, L.norm), carve_global(ws, L.dl), carve_global(ws, L.dd), carve_global(ws, L.du),
             carve_global(ws, L.du2), carve_global(ws, L.x), carve_global(ws, L.piv), 0};
 }
@@ -88,7 +88,7 @@ template <class R> BATCHLAS_DLA_INLINE Scratch<R> scratch(const Workspace& ws, c
 // [kb, k) of z are written as zero (callers back-transform all k). No barrier inside the
 // vector loop: items diverge freely. Needs only z(i, j) and z.cols() of z.
 template <class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Scratch<R>& s,
+BATCHLAS_DEVICE_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Scratch<R>& s,
                                  const Params<R>& p) {
     using T = R;
     const std::int64_t n = d.size();
@@ -178,7 +178,7 @@ BATCHLAS_DLA_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& 
 // new cluster, and each vector is made orthogonal to its cluster's earlier ones (modified
 // Gram-Schmidt) and renormalised. Stopping at kb, not k, is a cost bound. Needs z.col(j).
 template <class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DLA_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z,
+BATCHLAS_DEVICE_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z,
                                          const Scratch<R>& s, const Params<R>& p) {
     using T = R;
     const auto scratch = s.norm;
@@ -236,7 +236,7 @@ template <class Tier, class T> constexpr WorkspaceSize stein_buffer_size(int n, 
 // return. Returns 0 (inverse iteration runs a fixed number of steps, xSTEIN's info is not
 // computed). Workspace: stein_buffer_size<Tier, T>(n, k); ws.global is this matrix's slice.
 template <class Tier, class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DLA_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Workspace& ws,
+BATCHLAS_DEVICE_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Workspace& ws,
                               const stein_detail::Params<R>& p) {
     static_assert(std::is_same_v<elem_t<D>, R>, "stein: params of the matrix's real type");
     static_assert(std::is_same_v<resolve_tier_t<routine::stein, R, Tier>, tier::Blocked<1>>, "stein: tier::Blocked<1>");

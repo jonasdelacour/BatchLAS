@@ -17,7 +17,7 @@ namespace batchlas::device {
 // are exactly zero. q, v are touched only when want_v. Returns the true count.
 // evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
 template <class Ex, class L, class R, class Blk, class W, class Q, class V>
-BATCHLAS_DLA_INLINE std::int64_t syevx_select(const Ex& ex, const L& lam, bool value_range, R vl, R vu,
+BATCHLAS_DEVICE_INLINE std::int64_t syevx_select(const Ex& ex, const L& lam, bool value_range, R vl, R vu,
                                               std::int64_t first, std::int64_t count, std::int64_t capacity,
                                               bool reverse, const Blk& block, const W& w, bool want_v, const Q& q,
                                               const V& v) {

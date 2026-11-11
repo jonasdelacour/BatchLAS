@@ -30,15 +30,14 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
 using batchlas::verify::Check;
 
 struct V2LarftTestTag;  // kernel-name tag for the larft instantiations made here
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -128,7 +127,7 @@ template <class T> class DeviceBlasV2LarftTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -169,9 +168,9 @@ void trmv_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per_item, c
         const int b = static_cast<int>(it.get_group_linear_id()) * items_per_wg +
                       static_cast<int>(it.get_local_linear_id()) / lanes_per_item;
         const auto ex = make_ex(it);
-        const auto av = v2::mat(a + std::ptrdiff_t(b) * ld * n, n, n, ld);
-        const auto xv = v2::assume_published(v2::vec(x + std::ptrdiff_t(b) * n * inc, n, inc));
-        v2::larft_detail::trmv_upper_row_owner(ex, av, xv, v2::vec(y + std::ptrdiff_t(b) * n, n));
+        const auto av = device::mat(a + std::ptrdiff_t(b) * ld * n, n, n, ld);
+        const auto xv = device::assume_published(device::vec(x + std::ptrdiff_t(b) * n * inc, n, inc));
+        device::larft_detail::trmv_upper_row_owner(ex, av, xv, device::vec(y + std::ptrdiff_t(b) * n, n));
     });
     const auto got = dev.down(y, hy.size());
     EXPECT_EQ(items_differing(got, n), 0) << where;
@@ -193,11 +192,11 @@ void trmv_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per_item, c
 TYPED_TEST(DeviceBlasV2LarftTest, TrmvUpperRowOwnerOnEveryExecutor) {
     using T = TypeParam;
     auto& d = this->dev;
-    trmv_case<64, T>(d, [](sycl::nd_item<1> it) { return v2::WorkGroup<64>{it}; }, 1, 64, "WorkGroup<64>");
+    trmv_case<64, T>(d, [](sycl::nd_item<1> it) { return device::WorkGroup<64>{it}; }, 1, 64, "WorkGroup<64>");
     // n = 23 rows over 16 lanes (rows wrap) and over one item; WG = 1024 is the launch ceiling.
-    trmv_case<32, T>(d, [](sycl::nd_item<1> it) { return v2::Partition<16>{it.get_sub_group()}; }, 2, 16, "Partition<16>");
-    trmv_case<32, T>(d, [](sycl::nd_item<1>) { return v2::Thread{}; }, 32, 1, "Thread");
-    trmv_case<1024, T>(d, [](sycl::nd_item<1> it) { return v2::WorkGroup<1024>{it}; }, 1, 1024, "WorkGroup<1024>");
+    trmv_case<32, T>(d, [](sycl::nd_item<1> it) { return device::Partition<16>{it.get_sub_group()}; }, 2, 16, "Partition<16>");
+    trmv_case<32, T>(d, [](sycl::nd_item<1>) { return device::Thread{}; }, 32, 1, "Thread");
+    trmv_case<1024, T>(d, [](sycl::nd_item<1> it) { return device::WorkGroup<1024>{it}; }, 1, 1024, "WorkGroup<1024>");
 }
 
 // larft's T recurrence on one executor with NO barrier: column j of T is trmv(T(0:j, 0:j), y_j),
@@ -211,11 +210,11 @@ TYPED_TEST(DeviceBlasV2LarftTest, TrmvColumnRecurrenceNeedsNoBarrier) {
     T* dg = this->dev.up(hd);
     this->dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> ex{it};
-        const auto Tm = v2::mat(t + std::ptrdiff_t(b) * ld * n, n, n, ld);
-        v2::copy(ex, v2::vec(dg + std::ptrdiff_t(b) * n, n), v2::vec(Tm.p, n, ld + 1));
+        const device::WorkGroup<WG> ex{it};
+        const auto Tm = device::mat(t + std::ptrdiff_t(b) * ld * n, n, n, ld);
+        device::copy(ex, device::vec(dg + std::ptrdiff_t(b) * n, n), device::vec(Tm.p, n, ld + 1));
         for (int j = 1; j < n; ++j)
-            v2::larft_detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), v2::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
+            device::larft_detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), device::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
     });
     const auto got = this->dev.down(t, hy.size());
     EXPECT_EQ(items_differing(got, ld * n), 0);
@@ -259,18 +258,18 @@ template <class Ops, class T> void larf_frag_case(Dev& dev, const char* where) {
     T* vg = dev.up(hv);
     dev.template run<32>(kBatch / items_per_wg, sizeof(T) * items_per_wg * P, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const auto sg = it.get_sub_group();
-        const v2::Partition<P> part{sg};
+        const device::Partition<P> part{sg};
         const int lane = part.lid(), pi = static_cast<int>(sg.get_local_linear_id()) / P;
         const int b = static_cast<int>(it.get_group_linear_id()) * items_per_wg + pi;
         T* vl = reinterpret_cast<T*>(lm) + pi * P;
-        const auto Cm = v2::mat(c + std::ptrdiff_t(b) * ld * n, n, n, ld);
+        const auto Cm = device::mat(c + std::ptrdiff_t(b) * ld * n, n, n, ld);
         vl[lane] = vg[std::ptrdiff_t(b) * P + lane];
-        v2::Frag<T, P, v2::ColPerLane> col;
+        device::Frag<T, P, device::ColPerLane> col;
 #pragma unroll
         for (int r = 0; r < P; ++r) col[r] = lane < n && r < n ? Cm(r, lane) : T(0);
         sycl::group_barrier(sg);
-        const auto vh = v2::assume_published(v2::Vec<T, v2::Ext<P>, v2::Unit, v2::Mem::Local>{vl, {}});
-        if (lane < n) v2::larf<Side::Left, Ops>(col, vh, tau);
+        const auto vh = device::assume_published(device::Vec<T, device::Ext<P>, device::Unit, device::Mem::Local>{vl, {}});
+        if (lane < n) device::larf<Side::Left, Ops>(col, vh, tau);
 #pragma unroll
         for (int r = 0; r < P; ++r)
             if (lane < n && r < n) Cm(r, lane) = col[r];
@@ -302,11 +301,11 @@ template <class Ops, class T> void larf_frag_case(Dev& dev, const char* where) {
 
 TYPED_TEST(DeviceBlasV2LarftTest, LarfFragLeftOnRegisterColumn) {
     using T = TypeParam;
-    larf_frag_case<v2::arith::Native, T>(this->dev, "Native");
-    larf_frag_case<v2::arith::Explicit, T>(this->dev, "Explicit");
+    larf_frag_case<device::arith::Native, T>(this->dev, "Native");
+    larf_frag_case<device::arith::Explicit, T>(this->dev, "Explicit");
 }
 
-// ---- the larft kernel (v2, the only larft) against LAPACK's recurrence ------------------------
+// ---- the larft kernel (device LA, the only larft) against LAPACK's recurrence ------------------------
 
 // V is materialised unit-lower (as pack_v writes it) with ld_v = m + 3 and poisoned rows past
 // the panel; T has ld_t = ib + 2 and a stride with slack, all NaN on entry; tau has stride ib + 5

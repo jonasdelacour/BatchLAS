@@ -31,7 +31,7 @@ template <class R> struct SplitTol {
 };
 
 // max(|d(i)|, |e(i)|), dlanst 'M', serial on one item. fmax ignores a NaN entry (steqr's rule).
-template <class D, class E> BATCHLAS_DLA_INLINE auto lanst_max(const Thread&, const D& d, const E& e) {
+template <class D, class E> BATCHLAS_DEVICE_INLINE auto lanst_max(const Thread&, const D& d, const E& e) {
     using R = elem_t<D>;
     static_assert(!Arith<R>::is_complex, "steqr_detail::lanst_max: d and e are real");
     const int n = d.size();
@@ -41,12 +41,12 @@ template <class D, class E> BATCHLAS_DLA_INLINE auto lanst_max(const Thread&, co
 }
 
 // x := a x on the window [x.lo, x.hi) only.
-template <class Ex, class T> BATCHLAS_DLA_INLINE void scal_lane(const Ex& ex, const T& a, const LaneVec<T>& x) {
+template <class Ex, class T> BATCHLAS_DEVICE_INLINE void scal_lane(const Ex& ex, const T& a, const LaneVec<T>& x) {
     if (x.owns(ex)) x.v *= a;
 }
 
 // e(j) := 0 for each negligible j < e.size(), serial; true when one was (or already was) zero.
-template <class D, class E, class R> BATCHLAS_DLA_INLINE bool tridiag_split(const Thread& th, const D& d, const E& e, SplitTol<R> tol) {
+template <class D, class E, class R> BATCHLAS_DEVICE_INLINE bool tridiag_split(const Thread& th, const D& d, const E& e, SplitTol<R> tol) {
     bool any = false;
     for_each_owned(th, e.size(), [&](int j) {
         if (sycl::fabs(e(j)) * sycl::fabs(e(j)) <= tol.eps2 * sycl::fabs(d(j)) * sycl::fabs(d(j + 1)) + tol.safmin) {
@@ -59,7 +59,7 @@ template <class D, class E, class R> BATCHLAS_DLA_INLINE bool tridiag_split(cons
 
 // Lane-register form: d is this item's d(lid); e's window must end before the last valid d
 // (d(lid + 1) is read from the next item). An e already zero is left untouched.
-template <class Ex, class T> BATCHLAS_DLA_INLINE void tridiag_split(const Ex& ex, const T& d, const LaneVec<T>& e, SplitTol<T> tol) {
+template <class Ex, class T> BATCHLAS_DEVICE_INLINE void tridiag_split(const Ex& ex, const T& d, const LaneVec<T>& e, SplitTol<T> tol) {
     const T d_next = ex.shift(d, 1);  // every item shuffles; the last one's value is unused
     if (e.owns(ex)) {
         if (e.v != T(0)) {
@@ -71,7 +71,7 @@ template <class Ex, class T> BATCHLAS_DLA_INLINE void tridiag_split(const Ex& ex
 
 // Both windows reversed when `on`: the two sources first, then the two shuffles, so the
 // shuffles share one convergence check (the T := J T J of a tridiagonal block, d and e).
-template <class Ex, class T, class U> BATCHLAS_DLA_INLINE void reverse(const Ex& ex, const LaneVec<T>& x, const LaneVec<U>& y, bool on) {
+template <class Ex, class T, class U> BATCHLAS_DEVICE_INLINE void reverse(const Ex& ex, const LaneVec<T>& x, const LaneVec<U>& y, bool on) {
     const int l = ex.lid();
     const int src_x = (on && l >= x.lo && l < x.hi) ? (x.lo + x.hi - 1 - l) : l;
     const int src_y = (on && l >= y.lo && l < y.hi) ? (y.lo + y.hi - 1 - l) : l;
@@ -80,7 +80,7 @@ template <class Ex, class T, class U> BATCHLAS_DLA_INLINE void reverse(const Ex&
 }
 
 // Memory form, serial: x(lo..hi-1) := x(hi-1..lo).
-template <class X> BATCHLAS_DLA_INLINE void reverse(const Thread&, int lo, int hi, const X& x) {
+template <class X> BATCHLAS_DEVICE_INLINE void reverse(const Thread&, int lo, int hi, const X& x) {
     for (int a = lo, b = hi - 1; a < b; ++a, --b) {
         const auto t = x(a);
         x(a) = x(b);
@@ -97,7 +97,7 @@ template <class T, int Off, class V, class N> T virt_get(const V& v, bool forwar
 // One bulge-chase step on (d, e): T := G^T T G on rows/cols (i, i+1), prev_bulge the fill at
 // (i-1, i+1); returns the fill at (i, i+2). forward == false indexes bottom-up (QL).
 template <class D, class E, class T, class I>
-BATCHLAS_DLA_INLINE T tridiag_rot(const Thread&, const D& d, const E& e, const T& prev_bulge, I i, I j, Givens<T> g, bool forward) {
+BATCHLAS_DEVICE_INLINE T tridiag_rot(const Thread&, const D& d, const E& e, const T& prev_bulge, I i, I j, Givens<T> g, bool forward) {
     const T c = g.c;
     const T s = g.s;
     const I n = d.size();
@@ -145,8 +145,8 @@ template <class R> inline R eig2x2_closest(const R& a, const R& b, const R& c) {
 // ---- the work-group solver's sweep (host steqr_wg and steqr<J, tier::Blocked<1>>) ---------------
 // Core lae2 / laev2 with the operands bound by reference: by value costs the wg Francis kernel 3
 // LDG and 4 REG on sm_89 (src/math-helpers.hh keeps the same binding).
-template <class R> BATCHLAS_DLA_INLINE auto lae2_cref(const R& a, const R& b, const R& c) { return lae2(a, b, c); }
-template <class R> BATCHLAS_DLA_INLINE auto laev2_cref(const R& a, const R& b, const R& c) { return laev2(a, b, c); }
+template <class R> BATCHLAS_DEVICE_INLINE auto lae2_cref(const R& a, const R& b, const R& c) { return lae2(a, b, c); }
+template <class R> BATCHLAS_DEVICE_INLINE auto laev2_cref(const R& a, const R& b, const R& c) { return laev2(a, b, c); }
 
 // {c, -s} of lartg(a, b): the work-group chase's rotation convention.
 template <class R> inline std::array<R, 2> wg_givens(const R& a, const R& b) {
@@ -157,7 +157,7 @@ template <class R> inline std::array<R, 2> wg_givens(const R& a, const R& b) {
 
 // An unreduced 2 x 2 block (n_local == 2) in closed form, e(0) := 0. With vectors, rot(g) takes
 // the rotation {c, -s} of laev2's eigenvector (applied as rotation 0, forward order).
-template <class R, class D, class E, class Rot> BATCHLAS_DLA_INLINE void wg_solve_2x2(const D& d_, const E& e_, bool vecs, Rot&& rot) {
+template <class R, class D, class E, class Rot> BATCHLAS_DEVICE_INLINE void wg_solve_2x2(const D& d_, const E& e_, bool vecs, Rot&& rot) {
     if (vecs) {
         auto [rt1, rt2, c, s] = laev2_cref(d_(0), e_(0), d_(1));
         d_(0) = rt1;
@@ -174,13 +174,13 @@ template <class R, class D, class E, class Rot> BATCHLAS_DLA_INLINE void wg_solv
 
 // The sweep converges the end the shift is taken from (virtual index n_local - 1), so orient
 // that end at the SMALLER |d|, as dsteqr does: true = QR (forward), false = QL.
-template <class D, class N> BATCHLAS_DLA_INLINE bool wg_forward(const D& d_, N n_local) { return std::abs(d_(n_local - 1)) < std::abs(d_(0)); }
+template <class D, class N> BATCHLAS_DEVICE_INLINE bool wg_forward(const D& d_, N n_local) { return std::abs(d_(n_local - 1)) < std::abs(d_(0)); }
 
 // One implicit QR (QL when !QR) sweep of an unreduced block (d_, e_), n_local >= 3: scale into
 // [ssfmin, ssfmax], Wilkinson shift from the far end, chase the bulge with lartg rotations
 // (rot(j, g) receives rotation j), the split test, unscale. True when an e(j) became negligible.
 template <class R, class D, class E, class N, class Rot>
-BATCHLAS_DLA_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, Rot&& rot) {
+BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, Rot&& rot) {
     const Thread th{};
     const SplitTol<R> tol{eps2<R>(), safmin<R>()};
     const R anorm = lanst_max(th, d_, e_);
@@ -363,9 +363,8 @@ inline void reverse_block(const Partition& partition,
                           int32_t bb,
                           int32_t be,
                           bool rev) {
-    namespace sv = device::steqr_detail;
     const auto ex = device::wrap(partition);
-    sv::reverse(ex, device::lane_vec(diag, bb, be + 1), device::lane_vec(offdiag, bb, be), rev);
+    steqr_detail::reverse(ex, device::lane_vec(diag, bb, be + 1), device::lane_vec(offdiag, bb, be), rev);
     qcache.reverse_columns(bb, be, rev);
 }
 
@@ -653,7 +652,6 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                                    int32_t max_sweeps,
                                    SteqrShiftStrategy cta_shift_strategy,
                                    SteqrUpdateScheme cta_update_scheme) {
-    namespace sv = device::steqr_detail;
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -673,7 +671,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Split the tail, then the block ends at its first zero E (n-1 if none).
         const auto tail_e = device::lane_vec(offdiag, block_begin, n - 1);
-        sv::tridiag_split(ex, diag, tail_e, tol);
+        steqr_detail::tridiag_split(ex, diag, tail_e, tol);
         const int32_t block_end = device::find_first(ex, tail_e, n - 1, is_zero);
         next_block_begin = block_end + 1;
         if (block_end <= block_begin) {
@@ -694,8 +692,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         const T inv_scale = T(1) / scale;
 
         if (scale != T(1)) {
-            sv::scal_lane(ex, scale, blk_d);
-            sv::scal_lane(ex, scale, blk_e);
+            steqr_detail::scal_lane(ex, scale, blk_d);
+            steqr_detail::scal_lane(ex, scale, blk_e);
         }
 
         // QL if |D(l)| <= |D(lend)|, QR otherwise (as dsteqr: the graded small end
@@ -718,7 +716,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
             for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                 // Split the active subproblem [l..lend]; m = its first zero E, else lend.
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
-                sv::tridiag_split(ex, diag, act_e, tol);
+                steqr_detail::tridiag_split(ex, diag, act_e, tol);
                 const int32_t m = device::find_first(ex, act_e, block_end, is_zero);
 
                 if (m == l) {
@@ -752,8 +750,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Rescale converged block back to the original magnitude.
         if (scale != T(1)) {
-            sv::scal_lane(ex, inv_scale, blk_d);
-            sv::scal_lane(ex, inv_scale, blk_e);
+            steqr_detail::scal_lane(ex, inv_scale, blk_d);
+            steqr_detail::scal_lane(ex, inv_scale, blk_e);
         }
 
         if (failed) break;
@@ -776,7 +774,6 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                                  int32_t max_sweeps,
                                  SteqrShiftStrategy cta_shift_strategy,
                                  SteqrUpdateScheme cta_update_scheme) {
-    namespace sv = device::steqr_detail;
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -806,7 +803,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                     offdiag = T(0);
                 }
                 const auto tail_e = device::lane_vec(offdiag, bb, n - 1);
-                sv::tridiag_split(ex, diag, tail_e, tol);
+                steqr_detail::tridiag_split(ex, diag, tail_e, tol);
                 const int32_t be = device::find_first(ex, tail_e, n - 1, is_zero);
                 next_block_begin = be + 1;
                 if (be <= bb) {
@@ -828,8 +825,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 }
                 inv_scale = T(1) / scale;
                 if (scale != T(1)) {
-                    sv::scal_lane(ex, scale, blk_d);
-                    sv::scal_lane(ex, scale, blk_e);
+                    steqr_detail::scal_lane(ex, scale, blk_d);
+                    steqr_detail::scal_lane(ex, scale, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -852,7 +849,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 closing = true;
             } else {
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
-                sv::tridiag_split(ex, diag, act_e, tol);
+                steqr_detail::tridiag_split(ex, diag, act_e, tol);
                 m = device::find_first(ex, act_e, block_end, is_zero);
                 if (m == l) {
                     l += 1;
@@ -872,8 +869,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
             if (closing) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
                 if (scale != T(1)) {
-                    sv::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    sv::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = true;
                 if (failed || next_block_begin >= n) {
@@ -904,7 +901,6 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                                      int32_t max_sweeps,
                                      SteqrShiftStrategy cta_shift_strategy,
                                      SteqrUpdateScheme cta_update_scheme) {
-    namespace sv = device::steqr_detail;
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -933,7 +929,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                 if (opening && bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                     offdiag = T(0);
                 }
-                sv::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
+                steqr_detail::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
                 const int32_t be = device::find_first(ex, device::lane_vec(offdiag, bb, n - 1), n - 1,
                                                   [&](T x) { return opening && x == T(0); });
                 const bool opened = opening && be > bb;
@@ -948,8 +944,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                     sc = ssfmin<T>() / anorm;
                 }
                 if (opened && sc != T(1)) {
-                    sv::scal_lane(ex, sc, blk_d);
-                    sv::scal_lane(ex, sc, blk_e);
+                    steqr_detail::scal_lane(ex, sc, blk_d);
+                    steqr_detail::scal_lane(ex, sc, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -979,7 +975,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             const bool cap = testing && sweeps_at_l >= max_sweeps;
             const bool active = testing && !cap;
             if (lockstep_any(partition, active)) {
-                sv::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
+                steqr_detail::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
                 const int32_t mm = device::find_first(ex, device::lane_vec(offdiag, l, block_end), block_end,
                                                   [&](T x) { return active && x == T(0); });
                 const bool adv1 = active && mm == l;
@@ -1003,8 +999,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             if (lockstep_any(partition, closing)) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
                 if (closing && scale != T(1)) {
-                    sv::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    sv::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = need_block || closing;
                 done = done || (closing && (failed || next_block_begin >= n));
@@ -1067,7 +1063,7 @@ inline bool steqr_cta_solve(const Partition& partition,
 
 // No report between the solve and the stores (the device op returns the flag instead).
 struct NoReport {
-    BATCHLAS_DLA_INLINE void operator()(bool) const {}
+    BATCHLAS_DEVICE_INLINE void operator()(bool) const {}
 };
 
 // The CTA tier's one body (the host steqr_cta kernel's too): load Q, d, e; solve; report(failed);
@@ -1075,7 +1071,7 @@ struct NoReport {
 // collective, and writes nothing. True when a block did not converge within max_sweeps.
 template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache,
           typename Report = NoReport>
-BATCHLAS_DLA_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
+BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
                                        int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live,
                                        Report report = {}) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -1130,7 +1126,7 @@ template <bool Vecs, class T> struct wg_plan {
 // host rotation kernel's), so z sees each block's rotations in the host's order. Returns the
 // number of e(j) != 0 left (LAPACK's info), uniform.
 template <bool Vecs, int WG, class T, class D, class E, class Z>
-BATCHLAS_DLA_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, const E& e, const Z& z, int n, int max_sweeps, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, const E& e, const Z& z, int n, int max_sweeps, const Workspace& ws) {
     const wg_plan<Vecs, T> plan(n);
     Givens<T>* const rot = carve_global(ws, plan.rot);
     WgBlock* const blk = carve_global(ws, plan.blk);
@@ -1160,7 +1156,7 @@ BATCHLAS_DLA_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, const 
             if (len > 2) b.qr = wg_forward(d.tail(b.lo).head(len), len) ? 1 : 0;
         }
         if constexpr (!Vecs) {
-            const auto noop = [](auto&&...) BATCHLAS_DLA_BODY {};
+            const auto noop = [](auto&&...) BATCHLAS_DEVICE_BODY {};
             for (int s = lid; s < nblk; s += WG) {
                 const WgBlock b = blk[s];
                 const int len = b.hi - b.lo;
@@ -1186,9 +1182,9 @@ BATCHLAS_DLA_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, const 
                     const auto e_ = e.tail(b.lo).head(len - 1);
                     Givens<T>* const r = rot + b.lo;
                     if (len == 2) {
-                        wg_solve_2x2<T>(d_, e_, true, [&](const Givens<T>& g) BATCHLAS_DLA_BODY { r[0] = g; });
+                        wg_solve_2x2<T>(d_, e_, true, [&](const Givens<T>& g) BATCHLAS_DEVICE_BODY { r[0] = g; });
                         b.run = 0;
-                    } else if (wg_sweep<T>(d_, e_, len, b.qr != 0, [&](std::size_t j, const Givens<T>& g) BATCHLAS_DLA_BODY { r[j] = g; })) {
+                    } else if (wg_sweep<T>(d_, e_, len, b.qr != 0, [&](std::size_t j, const Givens<T>& g) BATCHLAS_DEVICE_BODY { r[j] = g; })) {
                         b.run = 0;
                     }
                     b.rot = 1;
@@ -1275,7 +1271,7 @@ template <JobType J, class Tier, class T> constexpr WorkspaceSize steqr_buffer_s
 //                     of e(j) != 0 left (LAPACK's info). z may be complex (real rotations).
 // Returns 0 on success (uniform); -2 when n is outside [1, N].
 template <JobType J, class Tier, class Ex, class D, class E, class Z>
-BATCHLAS_DLA_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
+BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
                               const steqr_opts& opts = {}) {
     using T = std::remove_cv_t<elem_t<D>>;
     using R = routine::steqr<J>;

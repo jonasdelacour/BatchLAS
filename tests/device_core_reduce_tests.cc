@@ -6,7 +6,7 @@
 // (Lowest and Highest), NaN (First and Skip), empty candidates, and a WG = 1024 launch where
 // every one of 1024 items must be bit-identical to its period-3 representative (SLM scratch).
 // Red set (each break was made once, 2026-11-04, and this suite failed): the butterfly mask loop
-// starting at Hi instead of Hi / 2; v2.2 (AtomicMinSlot): fetch_min replaced by fetch_max.
+// starting at Hi instead of Hi / 2; AtomicMinSlot: fetch_min replaced by fetch_max.
 #include <tests/device_core_common.hh>
 #include <batchlas/device/reduce.hh>
 
@@ -22,7 +22,7 @@ template <class T> class DeviceCoreReduceTest : public DeviceCoreTest<T> {};
 TYPED_TEST_SUITE(DeviceCoreReduceTest, AllTypes);
 
 struct Plus {
-    template <class T> T operator()(const T& a, const T& b) const { return dv::Arith<T>::add(a, b); }
+    template <class T> T operator()(const T& a, const T& b) const { return batchlas::device::Arith<T>::add(a, b); }
 };
 
 // butterfly<Lo, Hi> on a sub-group: lane l ends with the sum over lanes that agree with l
@@ -35,7 +35,7 @@ template <class T, int Lo, int Hi, class Order> void check_butterfly(Dev& d) {
     d.template run<SG>(groups, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto sg = it.get_sub_group();
         const int g = static_cast<int>(it.get_global_linear_id());
-        out[g] = dv::butterfly<Lo, Hi, Order>(sg, x[g], Plus{});
+        out[g] = batchlas::device::butterfly<Lo, Hi, Order>(sg, x[g], Plus{});
     });
     const auto got = d.down(out, x_h.size());
     for (int grp = 0; grp < groups; ++grp)
@@ -50,11 +50,11 @@ template <class T, int Lo, int Hi, class Order> void check_butterfly(Dev& d) {
 
 TYPED_TEST(DeviceCoreReduceTest, ButterflyCoversExactlyItsMaskRange) {
     using T = TypeParam;
-    check_butterfly<T, 1, 32, dv::bfly::Down>(this->dev);
-    check_butterfly<T, 1, 32, dv::bfly::Asc>(this->dev);
-    check_butterfly<T, 2, 16, dv::bfly::Down>(this->dev);
-    check_butterfly<T, 4, 8, dv::bfly::Asc>(this->dev);
-    check_butterfly<T, 1, 4, dv::bfly::Down>(this->dev);
+    check_butterfly<T, 1, 32, batchlas::device::bfly::Down>(this->dev);
+    check_butterfly<T, 1, 32, batchlas::device::bfly::Asc>(this->dev);
+    check_butterfly<T, 2, 16, batchlas::device::bfly::Down>(this->dev);
+    check_butterfly<T, 4, 8, batchlas::device::bfly::Asc>(this->dev);
+    check_butterfly<T, 1, 4, batchlas::device::bfly::Down>(this->dev);
 }
 
 TYPED_TEST(DeviceCoreReduceTest, ShuffleXorMovesBothPartsAndShiftReduceFeedsTheLeader) {
@@ -68,8 +68,8 @@ TYPED_TEST(DeviceCoreReduceTest, ShuffleXorMovesBothPartsAndShiftReduceFeedsTheL
     d.template run<SG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto sg = it.get_sub_group();
         const int l = static_cast<int>(sg.get_local_linear_id());
-        sh[l] = dv::shuffle_xor(sg, x[l], 5u);
-        red[l] = dv::shift_reduce<8>(sg, x[l], Plus{});
+        sh[l] = batchlas::device::shuffle_xor(sg, x[l], 5u);
+        red[l] = batchlas::device::shift_reduce<8>(sg, x[l], Plus{});
     });
     const auto s = d.down(sh, SG), r = d.down(red, SG);
     for (int l = 0; l < SG; ++l) EXPECT_TRUE(same_bits(s[l], x_h[l ^ 5])) << l;
@@ -81,13 +81,13 @@ TYPED_TEST(DeviceCoreReduceTest, ShuffleXorMovesBothPartsAndShiftReduceFeedsTheL
 }
 
 TEST(DeviceCoreReduceHost, ArgmaxMergeTieAndNanRules) {
-    using A = dv::ArgMax<float>;
+    using A = batchlas::device::ArgMax<float>;
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const A none{-1, -std::numeric_limits<float>::infinity()};
     const A a{3, 2.f}, b{1, 2.f}, c{5, 7.f}, n1{4, nan}, n2{2, nan};
-    auto low = [](A x, A y) { return dv::argmax_merge<dv::tie::Lowest, dv::nan::First>(x, y); };
-    auto high = [](A x, A y) { return dv::argmax_merge<dv::tie::Highest, dv::nan::First>(x, y); };
-    auto skip = [](A x, A y) { return dv::argmax_merge<dv::tie::Lowest, dv::nan::Skip>(x, y); };
+    auto low = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Lowest, batchlas::device::nan::First>(x, y); };
+    auto high = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Highest, batchlas::device::nan::First>(x, y); };
+    auto skip = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>(x, y); };
     EXPECT_EQ(low(a, b).index, 1);
     EXPECT_EQ(low(b, a).index, 1);
     EXPECT_EQ(high(a, b).index, 3);
@@ -112,26 +112,26 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
     for (int p = 0; p < period; ++p)
         for (int i = 0; i < n; ++i) x_h[p * n + i] = val<T>(p * 7919 + i);
     // Ties: the maximum |re| + |im| appears twice in pattern 0 and 1; pattern 2 holds a NaN.
-    x_h[0 * n + 100] = x_h[0 * n + 900] = dv::lift<T>(R(9));
-    x_h[1 * n + 50] = dv::lift<T>(R(-9));
-    x_h[1 * n + 950] = dv::lift<T>(R(9));
-    x_h[2 * n + 600] = dv::qnan<T>();
+    x_h[0 * n + 100] = x_h[0 * n + 900] = batchlas::device::lift<T>(R(9));
+    x_h[1 * n + 50] = batchlas::device::lift<T>(R(-9));
+    x_h[1 * n + 950] = batchlas::device::lift<T>(R(9));
+    x_h[2 * n + 600] = batchlas::device::qnan<T>();
     T* x = d.up(x_h);
     int* lo = d.template alloc<int>(items, -7);
     int* hi = d.template alloc<int>(items, -7);
     int* sk = d.template alloc<int>(items, -7);
-    using AM = dv::ArgMax<R>;
-    constexpr int slots = dv::scratch_elements<dv::op::Reduce, dv::WorkGroup<WG>, AM>();
+    using AM = batchlas::device::ArgMax<R>;
+    constexpr int slots = batchlas::device::scratch_elements<batchlas::device::op::Reduce, batchlas::device::WorkGroup<WG>, AM>();
     d.template run<WG>(items, sizeof(AM) * slots, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const dv::WorkGroup<WG> ex{it};
+        const batchlas::device::WorkGroup<WG> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
         const T* xb = x + (b % period) * n;
-        const dv::Scratch<AM, slots> scr{reinterpret_cast<AM*>(lm)};
+        const batchlas::device::Scratch<AM, slots> scr{reinterpret_cast<AM*>(lm)};
         const int i = ex.lid();
-        const AM mine = i < n ? AM{i, dv::abs1(xb[i])} : AM{-1, R(0)};
-        const AM l = dv::allreduce(ex, scr, mine, dv::ArgMaxMerge<dv::tie::Lowest, dv::nan::First>{});
-        const AM h = dv::allreduce(ex, scr, mine, dv::ArgMaxMerge<dv::tie::Highest, dv::nan::First>{});
-        const AM s = dv::allreduce(ex, scr, mine, dv::ArgMaxMerge<dv::tie::Lowest, dv::nan::Skip>{});
+        const AM mine = i < n ? AM{i, batchlas::device::abs1(xb[i])} : AM{-1, R(0)};
+        const AM l = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Lowest, batchlas::device::nan::First>{});
+        const AM h = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Highest, batchlas::device::nan::First>{});
+        const AM s = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>{});
         if (i == 517) {  // a non-leader item reads the uniform result
             lo[b] = l.index;
             hi[b] = h.index;
@@ -157,7 +157,7 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
 }
 
 
-// v2.2: AtomicMinSlot on a WG = 1024 work-group: every item offers a value, the minimum (held by
+// AtomicMinSlot on a WG = 1024 work-group: every item offers a value, the minimum (held by
 // one item of the last sub-group) wins; no offer leaves INT_MAX (or_zero: 0).
 TYPED_TEST(DeviceCoreReduceTest, AtomicMinSlotKeepsTheMinimumOffer) {
     using T = TypeParam;
@@ -165,8 +165,8 @@ TYPED_TEST(DeviceCoreReduceTest, AtomicMinSlotKeepsTheMinimumOffer) {
     constexpr int WG = 1024;
     int* out = d.template alloc<int>(3, -1);
     d.template run<WG>(1, sizeof(int), [=](sycl::nd_item<1> it, unsigned char* lm) {
-        const dv::WorkGroup<WG, 32> ex{it};
-        const auto slot = dv::atomic_min_slot(reinterpret_cast<int*>(lm));
+        const batchlas::device::WorkGroup<WG, 32> ex{it};
+        const auto slot = batchlas::device::atomic_min_slot(reinterpret_cast<int*>(lm));
         slot.reset(ex);
         ex.barrier();
         slot.offer(ex.lid() == 1000 ? 7 : 7 + (ex.lid() * 37) % 991 + 1);

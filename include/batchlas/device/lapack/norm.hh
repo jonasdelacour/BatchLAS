@@ -15,7 +15,7 @@ namespace batchlas::device {
 /// @param[in] a   the matrix operand, any m and n
 /// @return the norm, the same value on every item
 template <NormType NT, class Alg = alg::Unscaled, Scope S = Scope::Auto, class Ex, class MA>
-BATCHLAS_DLA_INLINE auto norm(const Ex& ex, const MA& a) {
+BATCHLAS_DEVICE_INLINE auto norm(const Ex& ex, const MA& a) {
     static_assert(NT != NormType::Spectral, "norm: NormType::Spectral needs a device syev, not a device op yet");
     return lange<NT, Alg, S>(ex, a);
 }

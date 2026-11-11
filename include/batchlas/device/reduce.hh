@@ -34,10 +34,10 @@ template <class R> struct ArgMax {
 };
 
 namespace detail {
-template <class Part, class R> BATCHLAS_DLA_INLINE R shfl_xor_word(const Part& part, R v, std::uint32_t m) {
+template <class Part, class R> BATCHLAS_DEVICE_INLINE R shfl_xor_word(const Part& part, R v, std::uint32_t m) {
     return xor_shuffle(part, v, m);  // exec.hh: portable::permute_group_by_xor, or ADL into SubGroupPartition
 }
-template <class Part, class R> BATCHLAS_DLA_INLINE R shfl_down_word(const Part& part, R v, std::uint32_t d) {
+template <class Part, class R> BATCHLAS_DEVICE_INLINE R shfl_down_word(const Part& part, R v, std::uint32_t d) {
     if constexpr (std::is_same_v<Part, sycl::sub_group>) return sycl::shift_group_left(part, v, d);
     else return shift_group_left(part, v, d);  // ADL
 }
@@ -48,7 +48,7 @@ template <class R> inline constexpr bool is_argmax_v<ArgMax<R>> = true;
 // v of lane (lane ^ m). Complex values and ArgMax pairs move member by member (a shuffle is
 // one 32/64-bit word per call). `part` is a sycl::sub_group, a SubGroupPartition, or an executor
 // holding one (Partition: its .part), as the Jacobi kernels call it.
-template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_xor(const Part& part, T v, std::uint32_t m) {
+template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_xor(const Part& part, T v, std::uint32_t m) {
     if constexpr (requires { part.part; }) {
         return shuffle_xor(part.part, v, m);
     } else if constexpr (detail::is_argmax_v<T>) {
@@ -62,7 +62,7 @@ template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_xor(const Part& par
 }
 
 // v of lane (lane + d); past the end: unspecified.
-template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_down(const Part& part, T v, std::uint32_t d) {
+template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_down(const Part& part, T v, std::uint32_t d) {
     if constexpr (Arith<T>::is_complex) {
         using A = Arith<T>;
         return A::make(detail::shfl_down_word(part, A::re(v), d), detail::shfl_down_word(part, A::im(v), d));
@@ -80,7 +80,7 @@ template <class Part, class T> BATCHLAS_DLA_INLINE T shuffle_down(const Part& pa
 // butterfly (inline policy, core.hh); butterfly forwards to it.
 namespace bfly {
 template <int Lo, int Hi, class Order = Down, class Part, class T, class Op>
-BATCHLAS_DLA_INLINE T inline_body(const Part& part, T v, Op op) {
+BATCHLAS_DEVICE_INLINE T inline_body(const Part& part, T v, Op op) {
     static_assert(detail::is_pow2(Lo) && detail::is_pow2(Hi) && Lo <= Hi, "butterfly: Lo <= Hi, powers of two");
     static_assert(std::is_same_v<Order, bfly::Down> || std::is_same_v<Order, bfly::Asc>, "butterfly: bfly::Down or bfly::Asc");
     if constexpr (std::is_same_v<Order, bfly::Down>) {
@@ -94,14 +94,14 @@ BATCHLAS_DLA_INLINE T inline_body(const Part& part, T v, Op op) {
 }
 }  // namespace bfly
 template <int Lo, int Hi, class Order = bfly::Down, class Part, class T, class Op>
-BATCHLAS_DLA_HELPER T butterfly(const Part& part, T v, Op op) {
+BATCHLAS_DEVICE_HELPER T butterfly(const Part& part, T v, Op op) {
     return bfly::inline_body<Lo, Hi, Order>(part, v, op);
 }
 // The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2),
 // lo >= 1. always_inline, unsigned masks: the hand form it replaced (plain inline, cdouble
 // geqr2 resident: +4 REG).
 template <class Order = bfly::Down, class Part, class T, class Op>
-BATCHLAS_DLA_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
+BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
     const auto ulo = static_cast<std::uint32_t>(lo), uhi = static_cast<std::uint32_t>(hi);
     if constexpr (std::is_same_v<Order, bfly::Down>) {
         for (std::uint32_t m = uhi / 2; m >= ulo; m >>= 1) v = op(v, shuffle_xor(part, v, m));
@@ -115,7 +115,7 @@ BATCHLAS_DLA_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
 // op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partial values (the
 // result is LEADER-ONLY: broadcast it if every lane needs it). Count <= the partition width.
 template <int Count, class Part, class T, class Op = sycl::plus<T>>
-BATCHLAS_DLA_HELPER T shift_reduce(const Part& part, T v, Op op = {}) {
+BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}) {
     static_assert(detail::is_pow2(Count), "shift_reduce: Count is a power of two");
 #pragma unroll
     for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(d)));
@@ -134,7 +134,7 @@ template <int N> constexpr int ilog2() {
 // powers of two; x a Frag<T, K> or T[K]): lane l returns the sum over all lanes of x[l / (P / K)].
 // log2(K) halving steps over the xor masks P/2 .. P/K, then an all-reduce over the low
 // log2(P / K) lane bits. Consumes x. (The one-sided Jacobi Gram and column-norm passes.)
-template <int K, class Ex, class X> BATCHLAS_DLA_INLINE auto reduce_scatter(const Ex& ex, X& x) {
+template <int K, class Ex, class X> BATCHLAS_DEVICE_INLINE auto reduce_scatter(const Ex& ex, X& x) {
     using T = std::remove_cvref_t<decltype(x[0])>;
     constexpr int P = Ex::size;
     static_assert(Ex::sub_whole && detail::is_pow2(K) && K <= P, "reduce_scatter: K | P on a partition executor");
@@ -171,7 +171,7 @@ template <int K, class Ex, class X> BATCHLAS_DLA_INLINE auto reduce_scatter(cons
 // equal values by Tie (tie::Lowest: lower index, tie::Highest: higher index). Commutative and
 // associative, so every butterfly order gives the same pair.
 template <class Tie = tie::Lowest, class NaN = nan::First, class R>
-BATCHLAS_DLA_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b) {
+BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b) {
     static_assert(std::is_same_v<Tie, tie::Lowest> || std::is_same_v<Tie, tie::Highest>, "argmax_merge: tie::Lowest or tie::Highest");
     static_assert(std::is_same_v<NaN, nan::First> || std::is_same_v<NaN, nan::Skip>, "argmax_merge: nan::First or nan::Skip");
     constexpr bool low = std::is_same_v<Tie, tie::Lowest>;
@@ -193,7 +193,7 @@ BATCHLAS_DLA_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& 
 }
 
 template <class Tie = tie::Lowest, class NaN = nan::First> struct ArgMaxMerge {
-    template <class R> BATCHLAS_DLA_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
+    template <class R> BATCHLAS_DEVICE_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
         return argmax_merge<Tie, NaN>(a, b);
     }
 };
@@ -205,7 +205,7 @@ template <class Tie = tie::Lowest, class NaN = nan::First> struct ArgMaxMerge {
 // write to the scratch is behind another barrier anyway). Sub-scope executors (SubGroup,
 // Partition, Teams) take the butterfly alone and ignore the scratch.
 template <class Ex, class T, int Slots, class Op>
-BATCHLAS_DLA_HELPER T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op, bool trailing_barrier = true) {
+BATCHLAS_DEVICE_HELPER T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op, bool trailing_barrier = true) {
     if constexpr (is_work_group_v<Ex>) {
         static_assert(Slots >= Ex::nteams, "allreduce: the scratch holds one slot per sub-group");
         v = butterfly<1, Ex::sg_size>(ex.sub(), v, op);
@@ -234,19 +234,19 @@ BATCHLAS_DLA_HELPER T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op,
 // the leader, barrier, offer() from any item, barrier, value() (INT_MAX if none; or_zero(): 0).
 struct AtomicMinSlot {
     int* p;
-    template <class Ex> BATCHLAS_DLA_INLINE void reset(const Ex& ex) const {
+    template <class Ex> BATCHLAS_DEVICE_INLINE void reset(const Ex& ex) const {
         if (ex.leader()) *p = INT_MAX;
     }
-    BATCHLAS_DLA_INLINE void offer(int v) const {
+    BATCHLAS_DEVICE_INLINE void offer(int v) const {
         sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group, sycl::access::address_space::local_space>(*p)
             .fetch_min(v);
     }
-    BATCHLAS_DLA_INLINE int value() const { return *p; }
-    BATCHLAS_DLA_INLINE int or_zero() const {
+    BATCHLAS_DEVICE_INLINE int value() const { return *p; }
+    BATCHLAS_DEVICE_INLINE int or_zero() const {
         const int v = *p;
         return v == INT_MAX ? 0 : v;
     }
 };
-BATCHLAS_DLA_INLINE AtomicMinSlot atomic_min_slot(int* p) { return {p}; }
+BATCHLAS_DEVICE_INLINE AtomicMinSlot atomic_min_slot(int* p) { return {p}; }
 
 }  // namespace batchlas::device

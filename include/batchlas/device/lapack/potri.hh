@@ -49,11 +49,11 @@ template <class T> struct BlockedPanelPlan {
 // trmm writes W, W is copied back. The diagonal block is inverted as A11^-1 I (W := I, trsm),
 // then its triangle copied into A. Ends on a global barrier.
 template <Uplo UL, Diag DG, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DLA_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
     constexpr bool unit = DG == Diag::Unit;
     constexpr Part kTri = UL == Uplo::Lower ? (unit ? Part::StrictLower : Part::Lower) : (unit ? Part::StrictUpper : Part::Upper);
     const int n = A.rows();
-    auto invert_diag = [&](int j, int jb) BATCHLAS_DLA_BODY {
+    auto invert_diag = [&](int j, int jb) BATCHLAS_DEVICE_BODY {
         const auto W = mat(w, jb, jb, jb);
         const auto A11 = A.sub(j, j, jb, jb);
         laset(ex, Zero{}, One{}, W);
@@ -97,7 +97,7 @@ BATCHLAS_DLA_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, l3:
 // blocks below (right), through W; the diagonal block := its own herk (a zero-padded copy in W,
 // beta 0: xLAUU2) plus the herk of the blocks below (right). Ends on a global barrier.
 template <Uplo UL, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DLA_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
     constexpr Transpose kCT = Transpose::ConjTrans, kN = Transpose::NoTrans;
     const int n = A.rows();
     for (int i = 0; i < n; i += NB) {
@@ -137,14 +137,14 @@ BATCHLAS_DLA_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, l3:
 
 // The shared prologue: -2 / -3 argument checks, then (zero_check) the first exactly zero
 // diagonal entry as info. 0 means: go on with the carved pointers.
-template <class Ex, class MA> BATCHLAS_DLA_INLINE int potri_blocked_prologue(const Ex& ex, const MA& a, const Workspace& ws, bool zero_check) {
+template <class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri_blocked_prologue(const Ex& ex, const MA& a, const Workspace& ws, bool zero_check) {
     using T = typename MA::value_type;
     const int n = a.rows();
     if (n < 0 || a.cols() != n) return -2;
     if (n == 0) return 0;
     if (!potrf_detail::blocked_ws_ok(ws, true)) return -3;
     if (!zero_check) return 0;
-    const int z = find_first(ex, n, [&](int i) BATCHLAS_DLA_BODY { return Arith<T>::is_zero(a(i, i)); });
+    const int z = find_first(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { return Arith<T>::is_zero(a(i, i)); });
     return z + 1;
 }
 
@@ -152,7 +152,7 @@ template <class Ex, class MA> BATCHLAS_DLA_INLINE int potri_blocked_prologue(con
 enum class BlockedChain { Trtri, Lauum, Potri };
 
 template <BlockedChain C, Uplo UL, Diag DG, int NB, class Alg, int WG, int SG, class MA>
-BATCHLAS_DLA_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
     using Cfg = potrf_detail::BlockedCfg<T>;
     static_assert(std::is_same_v<Alg, alg::Default>, "potri / trtri / lauum: tier::Blocked has one algorithm");
@@ -232,7 +232,7 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize lauum_buffer_siz
 
 // A's UL triangle, potrf's factor of the Hermitian positive definite A, := that of A^-1 (the other
 // triangle neither read nor written); returns info (see the file head).
-template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int potri(const Ex& ex, const MA& A, const Workspace& ws) {
+template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potri<UL>, T, Tier>;
     static_assert(potrf_detail::is_blocked_v<Tr>, "potri: tier::Blocked<NB> (the CTA tier lands with WP7)");
@@ -240,7 +240,7 @@ template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int potri
 }
 
 // A's UL triangle := its inverse; DG = Unit never reads or writes the diagonal.
-template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int trtri(const Ex& ex, const MA& A, const Workspace& ws) {
+template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int trtri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::trtri<UL, DG>, T, Tier>;
     static_assert(potrf_detail::is_blocked_v<Tr>, "trtri: tier::Blocked<NB>");
@@ -248,7 +248,7 @@ template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE 
 }
 
 // A's UL triangle := L^H L (Lower) or U U^H (Upper) of that triangle; returns 0 or -i.
-template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DLA_INLINE int lauum(const Ex& ex, const MA& A, const Workspace& ws) {
+template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int lauum(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::lauum<UL>, T, Tier>;
     static_assert(potrf_detail::is_blocked_v<Tr>, "lauum: tier::Blocked<NB>");

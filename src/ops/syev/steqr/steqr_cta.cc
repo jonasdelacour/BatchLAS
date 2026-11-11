@@ -115,7 +115,7 @@ namespace batchlas {
                     // Thin launcher: device::steqr<J, tier::Cta<P>>'s body; info is written before the stores.
                     device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
                         partition, d_prob, e_prob, Q_view.batch_item(b), qcache, n, static_cast<int32_t>(max_sweeps),
-                        cta_shift_strategy, cta_update_scheme, live, [&](bool failed) BATCHLAS_DLA_BODY {
+                        cta_shift_strategy, cta_update_scheme, live, [&](bool failed) BATCHLAS_DEVICE_BODY {
                             if (live && failed && lane == 0) {
                                 // We cannot throw from device code; the host decides how to
                                 // handle it. info_report is an atomic fetch_max, not a store:

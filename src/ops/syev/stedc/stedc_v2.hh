@@ -9,7 +9,6 @@
 
 namespace batchlas::stedc_v2 {
 
-namespace v2 = batchlas::device;
 
 using batchlas::device::laed2_detail::fold;
 using batchlas::device::laed4_detail::is_group_v;

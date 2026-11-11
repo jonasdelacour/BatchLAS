@@ -54,7 +54,7 @@ inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bo
 // dgebd2 on one matrix (one work-item): H(i) from the left, then G(i) from the right. A function,
 // not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
 template <typename T, typename MA, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
+BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
     const device::Thread th{};
     const int32_t m = Ab.rows(), n = Ab.cols(), k = std::min(m, n);
     for (int32_t i = 0; i < k; ++i) {
@@ -101,7 +101,7 @@ BATCHLAS_DLA_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, const 
 // zgebd2 on one matrix: d, e real (ZLARFG's real beta); row i holds conj(u_i) on exit (unmbr 'P'
 // order). H(i) is applied as H^H = I - conj(tau) v v^H, with v(0) = 1 stored.
 template <typename T, typename MA, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
+BATCHLAS_DEVICE_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
     using Real = device::real_t<T>;
     const device::Thread th{};
     const int32_t m = Ab.rows(), n = Ab.cols();
@@ -140,7 +140,7 @@ BATCHLAS_DLA_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, con
 // tile and stores nothing. A function, not the kernel lambda's body, so the lambda calls no view
 // operator() (SemaSYCL entry quirk).
 template <typename T, typename Ex, typename TM, typename AV, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& A_prob,
+BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& A_prob,
                                     const RV& D_prob, const RV& E_prob, const TV& TAUQ_prob, const TV& TAUP_prob,
                                     int32_t n, bool live) {
     const int32_t lane = ex.lid();
@@ -310,7 +310,7 @@ template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int m, 
 // a partition without a matrix passes live = false (a zero tile, nothing read or stored).
 // Returns 0 (no info).
 template <class Tier, class Ex, class MA, class RV, class TV>
-BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
+BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
                               const TV& taup, const Workspace& ws, bool live = true) {
     using T = std::remove_cv_t<std::remove_reference_t<decltype(A(0, 0))>>;
     using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
@@ -336,7 +336,7 @@ BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA
 // products, so every update below is one gemv_acc: y := y0 + alpha (sum of the terms). The body of
 // the host's complex panel (labrd_panel) and of gebrd<tier::Blocked>.
 template <typename T, typename Ex, typename MA, typename MX, typename MY, typename RV, typename TV, typename WV>
-BATCHLAS_DLA_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const MY& Yb, const RV& d, const RV& e, const TV& tauq,
+BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const MY& Yb, const RV& d, const RV& e, const TV& tauq,
                                const TV& taup, const WV& wa, const WV& wx, int32_t j0, int32_t ib) {
     using Real = device::real_t<T>;
     constexpr auto C = Transpose::ConjTrans;
@@ -423,9 +423,9 @@ BATCHLAS_DLA_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const M
 }
 
 // zlabrd on panel columns j0 .. j0+ib-1 of item b of the host's batched views: labrd over the
-// item's operands (A, X, Y rebased by b, d / e / tau through item(), the v1 address).
+// item's operands (A, X, Y rebased by b, d / e / tau through item(), the host view's address).
 template <typename T, typename Ex, typename AV, typename RV, typename TV>
-BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
+BATCHLAS_DEVICE_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
                                      const RV& E, const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work,
                                      int32_t m, int32_t n, int32_t nb, int32_t j0, int32_t ib) {
     const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
@@ -445,7 +445,7 @@ BATCHLAS_DLA_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const
 // (the host's rows >= cols precondition; nothing is written).
 template <class Tier, class Ex, class MA, class RV, class TV>
     requires gebrd_detail::is_blocked_v<resolve_tier_t<routine::gebrd, typename MA::value_type, Tier>>
-BATCHLAS_DLA_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
     using Cfg = gebrd_detail::BlockedCfg<T>;

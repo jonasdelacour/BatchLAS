@@ -688,7 +688,7 @@ TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
     ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
     const char* body = "void gebd2_tile(";
     const char* op = "int gebrd(";
-    ASSERT_FALSE(first_code_line(path, "v2::gebrd<", launch).empty()) << "the kernel does not call device::gebrd";
+    ASSERT_FALSE(first_code_line(path, "device::gebrd<", launch).empty()) << "the kernel does not call device::gebrd";
     ASSERT_FALSE(first_code_line(tile_path, "gebd2_tile<T>(", op).empty()) << "device::gebrd does not call gebd2_tile";
     const auto op_lines = code_lines(tile_path, op, "}");
     ASSERT_GT(op_lines.size(), 3u) << "the device::gebrd scan window is empty";

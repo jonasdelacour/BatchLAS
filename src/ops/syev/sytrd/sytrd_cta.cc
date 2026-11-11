@@ -115,12 +115,11 @@ namespace batchlas {
                     // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
                     // const, and no capture of the mask when unmasked: a mutable flag the nested lambdas
                     // take by reference lands in local memory.
-                    const bool live = [&]() BATCHLAS_DLA_BODY {
+                    const bool live = [&]() BATCHLAS_DEVICE_BODY {
                         if constexpr (Masked) return mask[prob_id] != 0;
                         else return true;
                     }();
 
-                    namespace v2 = batchlas::device;
                     // D, E, TAU, the tile, then A_view: the hand kernel's capture order, so its parameter layout.
                     auto D_prob = D_view.batch_item(prob_id);
                     auto E_prob = E_view.batch_item(prob_id);
@@ -129,12 +128,12 @@ namespace batchlas {
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
                     const auto& A_tile = A_local;
-                    // v1's address expression; extents from the kernel's n, so every guard tests one value.
-                    const auto A = v2::item(A_view, prob_id, n, n);
+                    // the host view's address expression; extents from the kernel's n, so every guard tests one value.
+                    const auto A = device::item(A_view, prob_id, n, n);
 
                     // Thin launcher: the body of device::sytrd<UL, tier::Cta<P>> on the accessors (the
                     // named triangle only, defect 14; an inactive item reduces a zero tile, stores nothing).
-                    v2::sytrd_detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
+                    device::sytrd_detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
                         part, A_tile, base_a, V_local, base_v, W_local, base_w, A, D_prob, E_prob, TAU_prob, n, live);
                 });
         });

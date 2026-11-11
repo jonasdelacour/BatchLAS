@@ -30,12 +30,12 @@ namespace getri_detail {
 // host route's formula) and the first exact zero U(i, i), 1-based, or 0. Every item scans the
 // diagonal, so the result is uniform with no reduction. Ends on a global barrier.
 template <class Ex, class MA, class MC, class P>
-BATCHLAS_DLA_INLINE std::int32_t permute_identity(const Ex& ex, const MA& a, const MC& c, const P& ipiv) {
+BATCHLAS_DEVICE_INLINE std::int32_t permute_identity(const Ex& ex, const MA& a, const MC& c, const P& ipiv) {
     using D = typename MC::value_type;
     const int n = c.rows();
     laset(ex, Zero{}, Zero{}, c);
     ex.barrier(Mem::Global);
-    for_each_owned(ex, n, [&](int i) BATCHLAS_DLA_BODY { c(i, laswp_index<dir::Backward>(ipiv, 0, n, i)) = Arith<D>::one(); });
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { c(i, laswp_index<dir::Backward>(ipiv, 0, n, i)) = Arith<D>::one(); });
     ex.barrier(Mem::Global);
     std::int32_t info = 0;
     for (int i = 0; i < n; ++i)
@@ -71,7 +71,7 @@ template <class Tier, class T> constexpr WorkspaceSize getri_buffer_size(int n) 
 /// @param[in]  live  false: a dead matrix of the launch (executor-uniform)
 /// @return LAPACK's info, uniform across `ex`: 0, or the first k with \f$U_{kk} = 0\f$ exactly
 template <class Tier, class Ex, class MA, class MC>
-BATCHLAS_DLA_INLINE std::int32_t getri(const Ex& ex, const MA& a, const MC& c, const std::int32_t* ipiv, const Workspace& ws = {},
+BATCHLAS_DEVICE_INLINE std::int32_t getri(const Ex& ex, const MA& a, const MC& c, const std::int32_t* ipiv, const Workspace& ws = {},
                                        bool live = true) {
     using D = getrf_detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getri, D, Tier>;

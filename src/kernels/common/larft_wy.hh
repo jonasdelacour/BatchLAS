@@ -47,19 +47,18 @@ sycl::event larft_forward_columnwise_wg(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
-                namespace v2 = batchlas::device;
-                const v2::WorkGroup<WG, 32> ex{it};
-                v2::larft(
-                    ex, v2::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v),
-                    v2::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t),
-                    v2::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib));
+                const device::WorkGroup<WG, 32> ex{it};
+                device::larft(
+                    ex, device::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v),
+                    device::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t),
+                    device::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib));
             });
     });
 }
 
 }  // namespace detail
 
-// Dispatcher over the work-group ladder. v2's gemv needs 32-wide sub-groups: a launch-time
+// Dispatcher over the work-group ladder. device::gemv needs 32-wide sub-groups: a launch-time
 // check, never an in-kernel test.
 template <typename Tag, typename T>
 sycl::event larft_forward_columnwise_batched(Queue& q,

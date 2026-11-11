@@ -39,12 +39,11 @@
 #include <src/queue.hh>
 
 using namespace batchlas;
-namespace dv = batchlas::device;
 
 namespace {
 
-template <class T> using real_of = typename dv::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = dv::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -140,7 +139,7 @@ struct alignas(16) Chunk16 {
 template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vector<T>& band, int n, int kd, int ld) {
     using R = real_of<T>;
     const int nm1 = std::max(0, n - 1);
-    const dv::WorkspaceSize sz = dv::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd);
+    const device::WorkspaceSize sz = device::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd);
     T* ab = dev.up(band);
     R* d = dev.up(std::vector<R>(std::size_t(kBatch) * n + kTail, poison<R>()));
     R* e = dev.up(std::vector<R>(std::size_t(kBatch) * nm1 + kTail, poison<R>()));
@@ -155,19 +154,19 @@ template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vec
            h.parallel_for<UserSb2stKernel<T, P, Tier>>(
                sycl::nd_range<1>(std::size_t(kBatch / per_wg) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                    const auto sg = it.get_sub_group();
-                   const dv::SgpPartition<P> pex{sg};
+                   const device::SgpPartition<P> pex{sg};
                    const int part = static_cast<int>(sg.get_local_linear_id()) / P;
                    const int b = static_cast<int>(it.get_group(0)) * per_wg + part;
                    std::byte* lb = reinterpret_cast<std::byte*>(slm.template get_multi_ptr<sycl::access::decorated::no>().get_raw()) +
                                    std::size_t(part) * lbytes;
-                   const dv::Workspace ws{
+                   const device::Workspace ws{
                        sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(lb),
-                       dv::global_slice(gws, sz, b)};
-                   const auto A = dv::mat(ab + std::ptrdiff_t(b) * ld * n, kd + 1, n, ld);
-                   const auto D = dv::vec(d + std::ptrdiff_t(b) * n, n);
-                   const auto E = dv::vec(e + std::ptrdiff_t(b) * nm1, nm1);
-                   const auto Tau = dv::vec(tau + std::ptrdiff_t(b) * nm1, nm1);
-                   const int r = dv::sb2st<Uplo::Lower, Tier>(pex, A, D, E, Tau, kd, ws);
+                       device::global_slice(gws, sz, b)};
+                   const auto A = device::mat(ab + std::ptrdiff_t(b) * ld * n, kd + 1, n, ld);
+                   const auto D = device::vec(d + std::ptrdiff_t(b) * n, n);
+                   const auto E = device::vec(e + std::ptrdiff_t(b) * nm1, nm1);
+                   const auto Tau = device::vec(tau + std::ptrdiff_t(b) * nm1, nm1);
+                   const int r = device::sb2st<Uplo::Lower, Tier>(pex, A, D, E, Tau, kd, ws);
                    if (pex.leader()) info[b] = r;
                });
        }).wait_and_throw();
@@ -214,8 +213,8 @@ TYPED_TEST_SUITE(DeviceApiSb2stTest, Types);
 // the outputs' poisoned tails.
 template <class T, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx, int n, int kd, const Out<T>& host, const std::vector<T>& band) {
     const int ld = kd + 4, nm1 = std::max(0, n - 1);
-    if constexpr (dv::sb2st_detail::is_cta_v<Tier>) {
-        if (!fx.fits(dv::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd).local_bytes * (32 / P))) {
+    if constexpr (device::sb2st_detail::is_cta_v<Tier>) {
+        if (!fx.fits(device::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd).local_bytes * (32 / P))) {
             std::printf("[   NOTE   ] Cta tier at n=%d kd=%d does not fit this device's local memory; not run\n", n, kd);
             return;
         }
@@ -253,14 +252,14 @@ TYPED_TEST(DeviceApiSb2stTest, BothTiersBitIdenticalToThePinnedSubGroupRoute) {
         const auto band = make_band<T>(cs.n, cs.kd, ld, 77 + cs.n);
         const Out<T> host = run_host<T>(this->dev, band, cs.n, cs.kd, ld);
         if (cs.kd <= 3) {
-            expect_bit_identical<T, 4, dv::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
-            expect_bit_identical<T, 4, dv::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 4, device::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 4, device::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
         } else if (cs.kd <= 12) {
-            expect_bit_identical<T, 8, dv::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
-            expect_bit_identical<T, 8, dv::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 8, device::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 8, device::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
         } else {
-            expect_bit_identical<T, 32, dv::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
-            expect_bit_identical<T, 32, dv::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 32, device::tier::Cta<64>>(*this, cs.n, cs.kd, host, band);
+            expect_bit_identical<T, 32, device::tier::Blocked<32>>(*this, cs.n, cs.kd, host, band);
         }
     }
 }
@@ -273,7 +272,7 @@ TYPED_TEST(DeviceApiSb2stTest, NarrowBandsBitIdenticalToTheHostExtracts) {
         const int n = 10, ld = kd + 4;
         const auto band = make_band<T>(n, kd, ld, 5 + kd);
         const Out<T> host = run_host<T>(this->dev, band, n, kd, ld);
-        expect_bit_identical<T, 4, dv::tier::Cta<64>>(*this, n, kd, host, band);
+        expect_bit_identical<T, 4, device::tier::Cta<64>>(*this, n, kd, host, band);
     }
 }
 
@@ -283,8 +282,8 @@ TYPED_TEST(DeviceApiSb2stTest, CtaBoundReturnsMinusOneAndBlockedRunsIt) {
     ScopedEnvVar pin("BATCHLAS_SB2ST_SUBGROUP", "1");
     const int n = 65, kd = 3, ld = kd + 4;
     const auto band = make_band<T>(n, kd, ld, 901);
-    if (this->fits(dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Cta<64>, T>(n, kd).local_bytes * 8)) {
-        const Out<T> got = run_device<T, 4, dv::tier::Cta<64>>(this->dev, band, n, kd, ld);
+    if (this->fits(device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<64>, T>(n, kd).local_bytes * 8)) {
+        const Out<T> got = run_device<T, 4, device::tier::Cta<64>>(this->dev, band, n, kd, ld);
         EXPECT_EQ(std::count(got.info.begin(), got.info.end(), -1), kBatch);
         EXPECT_EQ(poison_lost(got.d, 0), 0);
         EXPECT_EQ(poison_lost(got.e, 0), 0);
@@ -294,7 +293,7 @@ TYPED_TEST(DeviceApiSb2stTest, CtaBoundReturnsMinusOneAndBlockedRunsIt) {
         std::printf("[   NOTE   ] Cta<64> at n=65 does not fit this device's local memory; the -1 check did not run\n");
     }
     const Out<T> host = run_host<T>(this->dev, band, n, kd, ld);
-    expect_bit_identical<T, 4, dv::tier::Blocked<32>>(*this, n, kd, host, band);
+    expect_bit_identical<T, 4, device::tier::Blocked<32>>(*this, n, kd, host, band);
 }
 
 // kd > 32: the host runs its work-group kernel (another body), so d and e agree to rounding only.
@@ -305,7 +304,7 @@ TYPED_TEST(DeviceApiSb2stTest, WideBandMatchesTheWorkGroupRoute) {
     const int n = 64, kd = 40, ld = kd + 4, nm1 = n - 1;
     const auto band = make_band<T>(n, kd, ld, 4242);
     const Out<T> host = run_host<T>(this->dev, band, n, kd, ld);
-    const Out<T> got = run_device<T, 32, dv::tier::Blocked<32>>(this->dev, band, n, kd, ld);
+    const Out<T> got = run_device<T, 32, device::tier::Blocked<32>>(this->dev, band, n, kd, ld);
     EXPECT_EQ(std::count(got.info.begin(), got.info.end(), 0), kBatch);
     const double tol = 64.0 * n * std::numeric_limits<R>::epsilon() * (kd + 1);
     int bad = 0;
@@ -317,23 +316,23 @@ TYPED_TEST(DeviceApiSb2stTest, WideBandMatchesTheWorkGroupRoute) {
 }
 
 // ---- host-side: the workspace plan and with_tier --------------------------------------------
-using Lower8 = dv::routine::sb2st<Uplo::Lower, 8>;
+using Lower8 = device::routine::sb2st<Uplo::Lower, 8>;
 
-constexpr auto kCta = dv::sb2st_detail::band_layout<dv::tier::Cta<64>, std::complex<double>>(37, 5);
+constexpr auto kCta = device::sb2st_detail::band_layout<device::tier::Cta<64>, std::complex<double>>(37, 5);
 static_assert(kCta.c.offset == 0 && kCta.work.offset % 16 == 0 && kCta.work.offset >= kCta.c.count * sizeof(double));
 static_assert(kCta.ab.offset % 16 == 0 && kCta.ab.offset >= kCta.work.offset + kCta.work.count * sizeof(std::complex<double>));
 static_assert(kCta.size.local_bytes >= kCta.ab.offset + kCta.ab.count * sizeof(std::complex<double>) && kCta.size.global_bytes == 0);
-constexpr auto kBlk = dv::sb2st_detail::band_layout<dv::tier::Blocked<32>, float>(37, 5);
+constexpr auto kBlk = device::sb2st_detail::band_layout<device::tier::Blocked<32>, float>(37, 5);
 static_assert(kBlk.size.local_bytes == 0 && kBlk.size.global_bytes >= (37 + 5 + 2) * 2 * sizeof(float));
-static_assert(dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Cta<64>, float>(10, 1) == dv::WorkspaceSize{});
-static_assert(dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Blocked<32>, float>(0, 5) == dv::WorkspaceSize{});
-static_assert(std::is_same_v<dv::resolve_tier_t<Lower8, float, dv::tier::upto<4096>>, dv::tier::Cta<4096>>);
-static_assert(std::is_same_v<dv::resolve_tier_t<Lower8, float, dv::tier::upto<4097>>, dv::tier::Blocked<32>>);
+static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<64>, float>(10, 1) == device::WorkspaceSize{});
+static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Blocked<32>, float>(0, 5) == device::WorkspaceSize{});
+static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4096>>, device::tier::Cta<4096>>);
+static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4097>>, device::tier::Blocked<32>>);
 
-template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class T> std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<Lower8, T>(lim, n, [&]<class Tier>(Tier) { got = dv::sb2st_detail::is_cta_v<Tier> ? "cta" : "blocked"; });
+        device::with_tier<Lower8, T>(lim, n, [&]<class Tier>(Tier) { got = device::sb2st_detail::is_cta_v<Tier> ? "cta" : "blocked"; });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string("throw:") + e.what();
     }
@@ -342,9 +341,9 @@ template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
 
 TEST(DeviceApiSb2stHost, WithTierStraddlesLocalMemoryAndTheCtaBound) {
     const int n = 200;
-    const std::size_t need = dv::sb2st_buffer_size<Uplo::Lower, dv::tier::Cta<4096>, float>(n, 8).local_bytes;
-    EXPECT_EQ(need, (dv::tier_info<Lower8, dv::tier::Cta<4096>, float>::buffer_size(n).local_bytes));
-    dv::DeviceLimits lim{need, {32}, 1024, true};
+    const std::size_t need = device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<4096>, float>(n, 8).local_bytes;
+    EXPECT_EQ(need, (device::tier_info<Lower8, device::tier::Cta<4096>, float>::buffer_size(n).local_bytes));
+    device::DeviceLimits lim{need, {32}, 1024, true};
     EXPECT_EQ(pick<float>(lim, n), "cta");
     lim.local_mem_bytes = need - 1;
     EXPECT_EQ(pick<float>(lim, n), "blocked");

@@ -104,11 +104,10 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
-namespace v2 = batchlas::device;
 
 // The complex labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
 constexpr int32_t kPanelWG = 128;
-using PanelEx = v2::WorkGroup<kPanelWG>;
+using PanelEx = device::WorkGroup<kPanelWG>;
 
 // One panel launch of the complex path (one work-group of kPanelWG per item).
 template <typename T>
@@ -142,7 +141,7 @@ void labrd_panel_complex(Queue& ctx,
                                      [=](sycl::nd_item<1> item) {
             const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
             if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
-            v2::labrd_panel<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
+            device::labrd_panel<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
         });
     });
 }
@@ -161,7 +160,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                          int32_t block_size,
                          Span<const std::uint8_t> mask_span) {
     using Real = typename base_type<T>::type;
-    using v2::conj;
+    using device::conj;
     constexpr bool kComplex = detail::is_complex<T>::value;
 
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
@@ -201,8 +200,8 @@ Event gebrd_blocked_impl(Queue& ctx,
         (void)x_panel.fill_zeros(ctx);
         (void)y_panel.fill_zeros(ctx);
 
-        // Complex panels run on the v2 core (explicit complex arithmetic, 1.3x faster); real
-        // panels keep the legacy kernel below (the v2 port cost float REG 64 -> 80 and 4%).
+        // Complex panels run on the device core (explicit complex arithmetic, 1.3x faster); real
+        // panels keep the legacy kernel below (the device port cost float REG 64 -> 80 and 4%).
         if constexpr (kComplex)
             labrd_panel_complex<T>(ctx, a, d_out, e_out, tauq_out, taup_out, x_mat, y_mat, mask, nb, j0, ib);
         else ctx->submit([&](sycl::handler& h) {
@@ -255,7 +254,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        const auto scalars = v2::larfg_scalars<v2::conv::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
+                        const auto scalars = device::larfg_scalars<device::conv::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
                         beta_q = scalars.beta;
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
@@ -343,7 +342,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        const auto scalars = v2::larfg_scalars<v2::conv::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        const auto scalars = device::larfg_scalars<device::conv::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
                         beta_p = scalars.beta;
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;

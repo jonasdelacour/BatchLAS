@@ -148,18 +148,17 @@ Event syevx_direct(Queue& ctx,
             batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
-                    namespace v2 = batchlas::device;
-                    const v2::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
                     const int nn = static_cast<int>(n);
                     // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;
                     // V's columns [write, dst_cols) are exactly zero, as on the DirectSubset path.
-                    const int64_t count = v2::syevx_select(
-                        ex, v2::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
-                        reverse, block, v2::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
-                        v2::mat(src_ptr + bid * n * n, nn, nn, nn),
-                        v2::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols), static_cast<int>(dst_ld)));
+                    const int64_t count = device::syevx_select(
+                        ex, device::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
+                        reverse, block, device::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
+                        device::mat(src_ptr + bid * n * n, nn, nn, nn),
+                        device::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols), static_cast<int>(dst_ld)));
 
                     if (m_ptr != nullptr && ex.leader()) {
                         // The TRUE count: m[b] > capacity is the truncation signal.

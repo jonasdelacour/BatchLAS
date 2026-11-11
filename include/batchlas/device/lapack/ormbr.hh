@@ -47,7 +47,7 @@ template <char Vect, Side SD, Transpose TR, class Tier, class T> constexpr Works
 // A.cols() ('P'); A is m x n, m >= n. Trans is real only. COLLECTIVE over a work-group; A, tau, C
 // visible on entry, C on return. Returns 0, or -1 / -3 for a mismatched A / C (nothing written).
 template <char Vect, Side SD, Transpose TR, class Tier = tier::Blocked<1>, class Ex, class MA, class TV, class MC>
-BATCHLAS_DLA_INLINE int ormbr(const Ex& ex, const MA& A, const TV& tau, const MC& C, const Workspace&) {
+BATCHLAS_DEVICE_INLINE int ormbr(const Ex& ex, const MA& A, const TV& tau, const MC& C, const Workspace&) {
     using T = typename MC::value_type;
     using Ar = Arith<T>;
     using Ro = routine::ormbr<Vect, SD, TR>;

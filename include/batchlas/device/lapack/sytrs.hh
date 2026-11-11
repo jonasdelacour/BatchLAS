@@ -27,14 +27,14 @@ namespace sytrs_detail {
 template <class T> struct LdlBlock2 {
     T akm1, ak, denom, b0, b1;
 };
-template <class T> BATCHLAS_DLA_INLINE LdlBlock2<T> ldl_block2(T x0, T x1, T d0, T d1, T off) {
+template <class T> BATCHLAS_DEVICE_INLINE LdlBlock2<T> ldl_block2(T x0, T x1, T d0, T d1, T off) {
     using A = arith_t<arith::Fma, T>;
     const T akm1 = A::div(d0, off);
     const T ak = A::div(d1, off);
     const T denom = A::sub(A::mul(akm1, ak), A::one());
     return {akm1, ak, denom, A::div(x0, off), A::div(x1, off)};
 }
-template <class T> BATCHLAS_DLA_INLINE T ldl_block2_row(const LdlBlock2<T>& b, bool second) {
+template <class T> BATCHLAS_DEVICE_INLINE T ldl_block2_row(const LdlBlock2<T>& b, bool second) {
     using A = arith_t<arith::Fma, T>;
     return second ? A::div(A::sub(A::mul(b.akm1, b.b1), b.b0), b.denom) : A::div(A::sub(A::mul(b.ak, b.b0), b.b1), b.denom);
 }
@@ -42,7 +42,7 @@ template <class T> BATCHLAS_DLA_INLINE T ldl_block2_row(const LdlBlock2<T>& b, b
 // Row t of D^-1 x for a block of kind kd (0: 1 x 1; 1 / 2: the first / second row of a 2 x 2):
 // x is row t's value, xp its partner's, dtt and dpp their diagonals, off the block's
 // off-diagonal. Bitwise sytrs_col's rows.
-template <class T> BATCHLAS_DLA_HELPER T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
+template <class T> BATCHLAS_DEVICE_HELPER T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
     using A = arith_t<arith::Fma, T>;
     if (kd == 0) return A::mul(x, A::recip(dtt));
     const bool first = kd == 1;
@@ -107,7 +107,7 @@ inline void build_perm(const int* ps, int n, int* perm, int* kind) {
 // element by frag_bcast: no reduction, no barrier. Collective. Pending core: trsv<alg::LanePerRow>
 // over a multi-register lane-cyclic Frag with the sub(mul) update.
 template <Transpose TR, class Ex, class ML, class T, int R>
-BATCHLAS_DLA_INLINE void trsv_frag(const Ex& ex, const ML& l, int n, Frag<T, R, Cyclic>& x) {
+BATCHLAS_DEVICE_INLINE void trsv_frag(const Ex& ex, const ML& l, int n, Frag<T, R, Cyclic>& x) {
     static_assert(Ex::size == 32, "sytrs trsv_frag: a 32-lane executor");
     using A = arith_t<arith::Fma, T>;
     const int lane = ex.lane();
@@ -137,7 +137,7 @@ BATCHLAS_DLA_INLINE void trsv_frag(const Ex& ex, const ML& l, int n, Frag<T, R, 
 // diagonal on d(t, t), e[k] the off-diagonal of the block starting at k. The partner rows come
 // from neighbor_exchange.
 template <class Ex, class MD, class T, int R>
-BATCHLAS_DLA_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* kind, const T* e, int n, Frag<T, R, Cyclic>& x) {
+BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* kind, const T* e, int n, Frag<T, R, Cyclic>& x) {
     static_assert(Ex::size == 32, "sytrs ldl_dsolve_frag: a 32-lane executor");
     Frag<T, R, Cyclic> up, dn;
     neighbor_exchange(ex, x, up, dn);
@@ -160,7 +160,7 @@ BATCHLAS_DLA_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* k
 // in step order (a 2 x 2 step at k swaps row k + 1), and the 2 x 2 off-diagonal of a block
 // starting at j moved to e[j]. ps is the logical ipiv (+(p + 1) / -(p + 1)). e is never null:
 // a null test on a local e breaks AdaptiveCpp's Metal address-space inference.
-template <class T, class ML> BATCHLAS_DLA_HELPER void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
+template <class T, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
     for (int k = 0; k < n;) {
         const int v = ps[k];
         if (v > 0) {
@@ -193,7 +193,7 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
         k += raw > 0 ? 1 : 2;
     }
     if (g.uniform(ok ? 1 : 0) == 0) {
-        for_each_owned(g, n, [&](int i) BATCHLAS_DLA_BODY { b(i) = qnan<D>(); });
+        for_each_owned(g, n, [&](int i) BATCHLAS_DEVICE_BODY { b(i) = qnan<D>(); });
         sync<scope::Group>(g, Mem::Global);
         return;
     }
@@ -207,7 +207,7 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
             sync<scope::Group>(g, Mem::Global);
             const D bk = b(k);
             sync<scope::Group>(g, Mem::Global);
-            for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DLA_BODY { b(i) = A::sub(b(i), A::mul(S(i, k), bk)); });
+            for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { b(i) = A::sub(b(i), A::mul(S(i, k), bk)); });
             if (g.leader()) b(k) = sytrs_detail::ldl_dsolve_row(0, bk, bk, S(k, k), S(k, k), S(k, k));
             sync<scope::Group>(g, Mem::Global);
             k += 1;
@@ -217,7 +217,7 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
             sync<scope::Group>(g, Mem::Global);
             const D bk = b(k), bk1 = b(k + 1);
             sync<scope::Group>(g, Mem::Global);
-            for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DLA_BODY {
+            for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                 b(i) = A::sub(A::sub(b(i), A::mul(S(i, k), bk)), A::mul(S(i, k + 1), bk1));
             });
             if (g.leader()) {
@@ -234,7 +234,7 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
     while (k >= 0) {
         const int raw = piv(phys(k));
         D p0 = A::zero(), p1 = A::zero();
-        for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DLA_BODY {
+        for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY {
             p0 = A::add(p0, A::mul(S(i, k), b(i)));
             if (raw < 0) p1 = A::add(p1, A::mul(S(i, k - 1), b(i)));
         });
@@ -260,10 +260,10 @@ inline bool syconv(const Acc& L, int n, const int* ps, int* perm, int* kind, D* 
     sync<scope::Group>(ex, Mem::Global);
     const bool ok = *flag != 0;
     if (ok) {
-        for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { syconv_col<D>(L, ps, n, j, e); });
+        for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY { syconv_col<D>(L, ps, n, j, e); });
         if (ex.leader()) sytrs_detail::build_perm(ps, n, perm, kind);
     } else {
-        for_each_owned(ex, n, [&](int t) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, n, [&](int t) BATCHLAS_DEVICE_BODY {
             perm[t] = t;
             kind[t] = 0;
         });
@@ -280,14 +280,14 @@ inline bool syconv(const Acc& L, int n, const int* ps, int* perm, int* kind, D* 
 template <typename D, typename Dst, typename Src, typename Ex>
 inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, const int* kind, int* sig, int* inv,
                           const Ex& ex) {
-    for_each_owned(ex, n, [&](int t) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, n, [&](int t) BATCHLAS_DEVICE_BODY {
         sig[t] = t;
         inv[t] = t;
     });
     sync<scope::Group>(ex, Mem::Global);
     for (int j = n - 1; j >= 0; --j) {
         const bool two = kind[j] == 1;
-        for_each_owned(ex, Range{j + 1, n}, [&](int t) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, Range{j + 1, n}, [&](int t) BATCHLAS_DEVICE_BODY {
             W(t, j) = two && t == j + 1 ? arith_t<arith::Fma, D>::zero() : G(sig[t], j);
         });
         sync<scope::Group>(ex, Mem::Global);
@@ -325,7 +325,7 @@ inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, c
     for (int c = sgid; c < nrhs; c += nsg) {
         D* const col = bb + static_cast<std::ptrdiff_t>(c) * ldb;
         if (!ok) {
-            for_each_owned(ex, n, [&](int t) BATCHLAS_DLA_BODY { col[t] = qnan<D>(); });
+            for_each_owned(ex, n, [&](int t) BATCHLAS_DEVICE_BODY { col[t] = qnan<D>(); });
             continue;
         }
         Frag<D, R, Cyclic> x;
@@ -410,7 +410,7 @@ template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int n
 
 // LAPACK's argument numbers (?sytrs and ?sysv): -2 (N: A not square or outside the tier),
 // -5 (LDA), -7 (B: not n rows), -8 (LDB < max(1, n)); -1 the executor as sytrf's.
-template <class Tier, class Ex, class MA, class MB> BATCHLAS_DLA_INLINE int sytrs_check(const Ex& ex, const MA& a, const MB& b) {
+template <class Tier, class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE int sytrs_check(const Ex& ex, const MA& a, const MB& b) {
     if (const int e = sytrf_detail::sytrf_exec_check<Tier>(ex); e != 0) return e;
     const int n = a.rows(), lo = n > 1 ? n : 1;
     if (a.cols() != n || !detail::bound_admits<Tier>(n)) return -2;
@@ -424,17 +424,17 @@ template <class Tier, class Ex, class MA, class MB> BATCHLAS_DLA_INLINE int sytr
 // `cta`): S's logical ipiv from `raw` (LAPACK's, physical order), ?syconv, then every column of
 // B (ld ldb) on sub-group sgid of nsg. `flag`: one int of local memory. No trailing barrier.
 template <int R, class All, typename D>
-BATCHLAS_DLA_INLINE void sytrs_cta_solve(const All& all, const sycl::sub_group& sg, int lane, int sgid, int nsg, const Staged<D>& S,
+BATCHLAS_DEVICE_INLINE void sytrs_cta_solve(const All& all, const sycl::sub_group& sg, int lane, int sgid, int nsg, const Staged<D>& S,
                                          const int* raw, bool rev, int* flag, D* bb, std::ptrdiff_t ldb, int nrhs) {
     const int n = S.n;
-    for_each_owned(all, n, [&](int k) BATCHLAS_DLA_BODY { S.ps[k] = logical_piv(raw[rev ? n - 1 - k : k], n, rev); });
+    for_each_owned(all, n, [&](int k) BATCHLAS_DEVICE_BODY { S.ps[k] = logical_piv(raw[rev ? n - 1 - k : k], n, rev); });
     sync<scope::Group>(all, Mem::Global);
     const bool ok = syconv<D>(S, n, S.ps, S.perm, S.kind, S.e, all, flag);
     sytrs_cols<R>(sg, lane, sgid, nsg, S, ok, rev, bb, ldb, nrhs);
 }
 
 template <Uplo UL, int N, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     constexpr bool rev = UL == Uplo::Upper;
     const int n = A.rows(), ldt = n | 1;
@@ -449,7 +449,7 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, cons
 }
 
 template <Uplo UL, class Ex, class MA, class MB>
-BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Rl = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -472,7 +472,7 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& A, 
 // factor and each trsm takes UL. An invalid list gives an all-NaN X, as every sytrs route.
 template <Uplo UL, int NB, class Ex, class MA, class MB>
     requires(NB > 1)
-BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Cfg = sytrf_detail::sytrf_l3_cfg<D>;
     static_assert(!is_runtime_v<Ex> && Ex::size == Cfg::threads, "sytrs tier::Blocked<NB>: a WorkGroup<256, 32> executor");
@@ -490,7 +490,7 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A,
     D* const bb = &B(0, 0);
     const int ldb = static_cast<int>(sytrf_detail::sytrf_ld(B));
     const int total = n * nrhs;
-    for_each_owned(ex, n, [&](int k) BATCHLAS_DLA_BODY { ps[k] = logical_piv(ipiv[rev ? n - 1 - k : k], n, rev); });
+    for_each_owned(ex, n, [&](int k) BATCHLAS_DEVICE_BODY { ps[k] = logical_piv(ipiv[rev ? n - 1 - k : k], n, rev); });
     sync<scope::Group>(ex, Mem::Global);
     if (ex.leader()) {
         const bool valid = piv_list_valid(ps, n);
@@ -499,7 +499,7 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A,
     }
     sync<scope::Group>(ex, Mem::Global);
     if (*flag == 0) {
-        for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { bb[e % n + (e / n) * ldb] = qnan<D>(); });
+        for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { bb[e % n + (e / n) * ldb] = qnan<D>(); });
         sync<scope::Group>(ex, Mem::Global);
         return;
     }
@@ -509,12 +509,12 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A,
         const int lt = rev ? n - 1 - t : t;
         return rev ? n - 1 - perm[lt] : perm[lt];
     };
-    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { y[e] = bb[src(e % n) + (e / n) * ldb]; });
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { y[e] = bb[src(e % n) + (e / n) * ldb]; });
     sync<scope::Group>(ex, Mem::Global);
     constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
     const l3::Global<D> L{lw, n, n, n}, Y{y, n, n, nrhs};
     trsm<Side::Left, tri, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
-    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY {
         const int t = e % n;  // logical: x reads through the reversal
         const int kd = kind[t];
         if (kd == 2) return;  // the first row of its block writes both
@@ -529,7 +529,7 @@ BATCHLAS_DLA_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A,
     });
     sync<scope::Group>(ex, Mem::Global);
     trsm<Side::Left, tri, Transpose::Trans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
-    for_each_owned(ex, total, [&](int e) BATCHLAS_DLA_BODY { bb[src(e % n) + (e / n) * ldb] = y[e]; });
+    for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { bb[src(e % n) + (e / n) * ldb] = y[e]; });
     sync<scope::Group>(ex, Mem::Global);
 }
 

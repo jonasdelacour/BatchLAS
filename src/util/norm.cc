@@ -116,11 +116,10 @@ namespace batchlas
             auto [data, batch_size, rows, cols, ld, stride] =
                 std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
             batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(cgh, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> item) {
-                namespace v2 = ::batchlas::device;
                 const auto b = item.get_group_linear_id();
                 if (masked && !mk[b]) return;  // I1: uniform per work-group, before any barrier
-                const v2::WorkGroup<WG> ex{item};
-                const auto r = v2::norm<NT>(ex, v2::mat(data + b * stride, rows, cols, ld));
+                const device::WorkGroup<WG> ex{item};
+                const auto r = device::norm<NT>(ex, device::mat(data + b * stride, rows, cols, ld));
                 if (ex.leader()) norms[b] = r;
             });
         });

@@ -124,7 +124,7 @@ namespace batchlas {
             return ::batchlas::device::lamch<'E', T>() * ::batchlas::device::lamch<'E', T>();
         }
 
-        // Device LA v2 scalar lartg; complex<float> works in double except on Metal (no fp64,
+        // Device LA scalar lartg; complex<float> works in double except on Metal (no fp64,
         // chosen at JIT time) to cut rounding noise in the downstream bulge chase.
         template <typename T>
         __attribute__((always_inline)) inline ::batchlas::device::LartgResult<T> lartg(const T& f, const T& g)

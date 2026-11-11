@@ -19,7 +19,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = ::batchlas::device;
 
 template <typename Real>
 bool bdsqr_implicit_qr_attempt(Queue& ctx,
@@ -34,7 +33,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                Span<int32_t> fail_flags,
                                const std::uint8_t* mask) {
     // DBDSQR's tolerance and iteration cap, formed on the host.
-    const auto params = v2::bdsqr_detail::params<Real>(n);
+    const auto params = device::bdsqr_detail::params<Real>(n);
 
     ctx->submit([&](sycl::handler& cgh) {
         auto D = d;
@@ -61,9 +60,9 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
             Real* db = D.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(D.stride());
             Real* eb = (nn > 1) ? (E.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(E.stride())) : nullptr;
             Real* sb = out + static_cast<size_t>(b) * static_cast<size_t>(nn);
-            // device::bdsqr on one item (lapack/bdsqr.hh): U and Vh addressed as v1's (i, j, b).
-            fail[b] = v2::bdsqr<v2::tier::Blocked<1>>(v2::Thread{}, v2::vec(db, nn), v2::vec(eb, nn > 1 ? nn - 1 : 0), v2::vec(sb, nn),
-                                                      v2::Workspace{}, v2::item(U, b, urows, ucols), v2::item(Vh, b, vrows, vcols),
+            // device::bdsqr on one item (lapack/bdsqr.hh): U and Vh addressed as the host view's (i, j, b).
+            fail[b] = device::bdsqr<device::tier::Blocked<1>>(device::Thread{}, device::vec(db, nn), device::vec(eb, nn > 1 ? nn - 1 : 0), device::vec(sb, nn),
+                                                      device::Workspace{}, device::item(U, b, urows, ucols), device::item(Vh, b, vrows, vcols),
                                                       descending, params);
         });
     });

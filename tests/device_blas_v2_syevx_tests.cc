@@ -24,13 +24,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;
 
@@ -86,7 +85,7 @@ template <class T> class DeviceBlasV2SyevxTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -107,14 +106,14 @@ template <class T> void run_flips(Dev& dev, int wg) {
     T* o = dev.up(ho);
     T* v = dev.up(hv);
     dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
-        const v2::RtGroup<> ex{it};
+        const device::RtGroup<> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
         const bool rev = (b & 1) != 0;
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * n * lda, m, n, lda);
-        v2::lacpy<v2::Part::Full, Transpose::NoTrans, v2::alg::Flat>(ex, v2::flip<v2::axis::Cols>(A, rev),
-                                                                     v2::mat(o + std::ptrdiff_t(b) * n * ldo, m, n, ldo));
-        const auto xv = v2::vec(x + std::ptrdiff_t(b) * nx * inc, nx, inc);
-        v2::copy(ex, v2::flip(xv.tail(off).head(len), rev), v2::vec(v + std::ptrdiff_t(b) * nx, len));
+        const auto A = device::mat(a + std::ptrdiff_t(b) * n * lda, m, n, lda);
+        device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(ex, device::flip<device::axis::Cols>(A, rev),
+                                                                     device::mat(o + std::ptrdiff_t(b) * n * ldo, m, n, ldo));
+        const auto xv = device::vec(x + std::ptrdiff_t(b) * nx * inc, nx, inc);
+        device::copy(ex, device::flip(xv.tail(off).head(len), rev), device::vec(v + std::ptrdiff_t(b) * nx, len));
     });
     const auto go = dev.down(o, ho.size()), gv = dev.down(v, hv.size());
     int bad = 0, poison = 0;
@@ -153,12 +152,12 @@ TYPED_TEST(DeviceBlasV2SyevxTest, SubScaledBatch) {
     const R* s = this->dev.up(hs);
     T* d = this->dev.up(hd);
     this->dev.run(kBatch, 96, [=](sycl::nd_item<1> it) {
-        const v2::RtGroup<> ex{it};
+        const device::RtGroup<> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto A = v2::mat(a + std::ptrdiff_t(b) * n * ld, m, n, ld);
-        const auto X = v2::mat(x + std::ptrdiff_t(b) * n * ld, m, n, ld);
-        const auto D = v2::mat(d + std::ptrdiff_t(b) * n * ldd, m, n, ldd);
-        v2::for_each_owned_2d(ex, m, n, [&](int r, int c) { D(r, c) = v2::sub_scale_real(A(r, c), s[b], X(r, c)); });
+        const auto A = device::mat(a + std::ptrdiff_t(b) * n * ld, m, n, ld);
+        const auto X = device::mat(x + std::ptrdiff_t(b) * n * ld, m, n, ld);
+        const auto D = device::mat(d + std::ptrdiff_t(b) * n * ldd, m, n, ldd);
+        device::for_each_owned_2d(ex, m, n, [&](int r, int c) { D(r, c) = device::sub_scale_real(A(r, c), s[b], X(r, c)); });
     });
     const auto gd = this->dev.down(d, hd.size());
     double worst = 0;
@@ -197,11 +196,11 @@ TYPED_TEST(DeviceBlasV2SyevxTest, UpperBoundAndSubScaleRealSpecials) {
     else z = T(3), hinf = T(inf);
     this->dev.run(1, 32, [=](sycl::nd_item<1> it) {
         if (it.get_local_linear_id() != 0) return;
-        const auto xv = v2::vec(x, nx);
-        for (int q = 0; q < nq; ++q) cnt[q] = v2::upper_bound(v2::Thread{}, xv, qv[q]);
-        cnt[nq] = v2::upper_bound(v2::Thread{}, v2::vec(x, 0), R(0));
-        sc[0] = v2::sub_scale_real(z, R(2), hinf);
-        sc[1] = v2::sub_scale_real(z, R(-0.5), z);
+        const auto xv = device::vec(x, nx);
+        for (int q = 0; q < nq; ++q) cnt[q] = device::upper_bound(device::Thread{}, xv, qv[q]);
+        cnt[nq] = device::upper_bound(device::Thread{}, device::vec(x, 0), R(0));
+        sc[0] = device::sub_scale_real(z, R(2), hinf);
+        sc[1] = device::sub_scale_real(z, R(-0.5), z);
     });
     const auto gc = this->dev.down(cnt, hq.size() + 1);
     for (int q = 0; q < nq; ++q) EXPECT_EQ(gc[q], want[q]) << "query " << q;

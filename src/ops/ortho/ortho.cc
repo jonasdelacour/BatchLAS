@@ -27,7 +27,6 @@
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
 namespace batchlas {
-    namespace dla = device;
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};
@@ -179,7 +178,7 @@ namespace batchlas {
         // syrk writes only the lower triangle; potrf/trsm/shift read only that.
         // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
         // BATCHLAS_ORTHO_GRAM=gemm.
-        constexpr bool gram_is_real = !dla::Arith<T>::is_complex;
+        constexpr bool gram_is_real = !device::Arith<T>::is_complex;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
@@ -215,7 +214,7 @@ namespace batchlas {
         };
 
         auto conj_vector = [&](const VectorView<T>& v) {
-            if constexpr (dla::Arith<T>::is_complex) {
+            if constexpr (device::Arith<T>::is_complex) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
                     if (masked && !mk[id[0]]) return;
@@ -267,9 +266,9 @@ namespace batchlas {
                         [=](sycl::nd_item<1> item){
                             auto bid = item.get_group_linear_id();
                             if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
-                            const dla::RtGroup<> ex{item};
-                            const auto v = dla::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
-                            dla::ortho_detail::normalize(ex, v);  // the device ortho's CGS2 step
+                            const device::RtGroup<> ex{item};
+                            const auto v = device::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
+                            device::ortho_detail::normalize(ex, v);  // the device ortho's CGS2 step
                         });
                 });
             }
@@ -280,17 +279,17 @@ namespace batchlas {
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
-                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item) BATCHLAS_DEVICE_BODY {
                     auto bid = item.get_group_linear_id();
                     if (masked && !mk[bid]) return;
-                    const dla::RtGroup<> ex{item};  // WG = k: item i owns C(i, i)
-                    const auto d = dla::vec(ATA_ptr + bid * ATA_stride, k, k + 1);  // diag(C)
+                    const device::RtGroup<> ex{item};  // WG = k: item i owns C(i, i)
+                    const auto d = device::vec(ATA_ptr + bid * ATA_stride, k, k + 1);  // diag(C)
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
-                    const float_t fro2 = ex.group_reduce(dla::Arith<T>::re(d(ex.lid())));
-                    const float_t eps = dla::lamch<'P', float_t>();
+                    const float_t fro2 = ex.group_reduce(device::Arith<T>::re(d(ex.lid())));
+                    const float_t eps = device::lamch<'P', float_t>();
                     const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
-                    dla::for_each_owned_exact(ex, k, [&](int i) { d(i) = dla::Arith<T>::add(d(i), T(shift)); });  // C + shift I
+                    device::for_each_owned_exact(ex, k, [&](int i) { d(i) = device::Arith<T>::add(d(i), T(shift)); });  // C + shift I
                 });
             });
             //Compute the Cholesky Factorization of StS
@@ -316,15 +315,15 @@ namespace batchlas {
                 // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
                 // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
                 // as non-null), leaving stale diags.
-                const dla::RtGroup<> ex{item};  // WG = k: one diagonal entry per item
+                const device::RtGroup<> ex{item};  // WG = k: one diagonal entry per item
                 // D = diag(A^H A)^(-1/2)
                 // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
                 // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
-                const auto c_diag = dla::vec(ATA_ptr + bid * k * k, k, k + 1);
-                const auto d_out = dla::vec(diags.data() + bid * k, k);
-                dla::for_each_owned_exact(ex, k, [&](int i) {
-                    const float_t diag = sycl::fmax(float_t(0), dla::Arith<T>::re(c_diag(i)));
-                    d_out(i) = (diag <= dla::lamch<'U', float_t>()) ? float_t(0) : sycl::rsqrt(diag);
+                const auto c_diag = device::vec(ATA_ptr + bid * k * k, k, k + 1);
+                const auto d_out = device::vec(diags.data() + bid * k, k);
+                device::for_each_owned_exact(ex, k, [&](int i) {
+                    const float_t diag = sycl::fmax(float_t(0), device::Arith<T>::re(c_diag(i)));
+                    d_out(i) = (diag <= device::lamch<'U', float_t>()) ? float_t(0) : sycl::rsqrt(diag);
                 });
                 });
             });
@@ -334,12 +333,12 @@ namespace batchlas {
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto bid = item.get_group_linear_id();
-                const dla::RtGroup<> ex{item};  // WG = k: one row per item
-                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
-                const auto d_in = dla::vec(diags.data() + bid * k, k);
-                dla::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
+                const device::RtGroup<> ex{item};  // WG = k: one row per item
+                const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
+                const auto d_in = device::vec(diags.data() + bid * k, k);
+                device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
                 const auto D = ex.publish(d_slm);
-                krylov_v2::laqge(ex, D, D, dla::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
+                krylov_v2::laqge(ex, D, D, device::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
                 });
             });
 
@@ -351,15 +350,15 @@ namespace batchlas {
                 auto C_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto bid = item.get_group_linear_id();
-                const dla::RtGroup<> ex{item};  // WG = k: one row per item
-                const auto d_slm = dla::vec<dla::Mem::Local>(util::get_raw_ptr(D_local), k);
-                const auto d_in = dla::vec(diags.data() + bid * k, k);
-                dla::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
+                const device::RtGroup<> ex{item};  // WG = k: one row per item
+                const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
+                const auto d_in = device::vec(diags.data() + bid * k, k);
+                device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
                 const auto D = ex.publish(d_slm);
                 const float_t* lam = lambdas.data() + bid * k;
-                const float_t tau = dla::lamch<'P', float_t>() * std::abs(lam[k - 1]);
-                const auto lam_rsqrt = dla::fn_vec(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
-                krylov_v2::laqge(ex, D, lam_rsqrt, dla::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
+                const float_t tau = device::lamch<'P', float_t>() * std::abs(lam[k - 1]);
+                const auto lam_rsqrt = device::fn_vec(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
+                krylov_v2::laqge(ex, D, lam_rsqrt, device::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
@@ -377,12 +376,12 @@ namespace batchlas {
             ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
                 auto batch_idx = item.get_group().get_group_id()[0];
                 if (masked && !mk[batch_idx]) return;
-                const dla::RtGroup<> ex{item};
-                const auto Q = dla::mat(output_basis.data() + batch_idx * m * k, m, k, m);
+                const device::RtGroup<> ex{item};
+                const auto Q = device::mat(output_basis.data() + batch_idx * m * k, m, k, m);
                 T* const a = Adata + batch_idx * A_stride;
                 // A := Q, or rows of A := Q^H (is_A_trans is uniform: one branch per launch)
-                if (is_A_trans) dla::lacpy<dla::Part::Full, Transpose::ConjTrans, dla::alg::DivMod>(ex, Q, dla::mat(a, k, m, A_ld));
-                else dla::lacpy<dla::Part::Full, Transpose::NoTrans, dla::alg::DivMod>(ex, Q, dla::mat(a, m, k, A_ld));
+                if (is_A_trans) device::lacpy<device::Part::Full, Transpose::ConjTrans, device::alg::DivMod>(ex, Q, device::mat(a, k, m, A_ld));
+                else device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, Q, device::mat(a, m, k, A_ld));
             });
         };
 
@@ -472,7 +471,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-        auto trans = dla::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = device::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
         auto no_trans = Transpose::NoTrans;
         auto inv_transA = transA == trans ? no_trans : trans;
         auto inv_transM = transM == trans ? no_trans : trans;

@@ -22,8 +22,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device;
-namespace sv = batchlas::device::steqr_detail;
 
 template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
@@ -125,17 +123,17 @@ Event steqr_wg_impl(Queue& ctx,
                     if (n_local == 1) continue;
                     // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (steqr_detail::wg_*).
                     if (n_local == 2) {
-                        sv::wg_solve_2x2<T>(d_, e_, store_givens, [&](const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
+                        device::steqr_detail::wg_solve_2x2<T>(d_, e_, store_givens, [&](const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
                             rotations_view(0, 0, gid) = {g.c, g.s};
                             order_view[gid] = ApplyOrder::Forward;
                         });
                         continue;
                     }
 
-                    bool QR = sv::wg_forward(d_, n_local);
+                    bool QR = device::steqr_detail::wg_forward(d_, n_local);
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        const bool deflatable = sv::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const v2::Givens<T>& g) BATCHLAS_DLA_BODY {
+                        const bool deflatable = device::steqr_detail::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {g.c, g.s};
                             }
@@ -165,9 +163,9 @@ Event steqr_wg_impl(Queue& ctx,
                     for (int i = 0; i < rotations_view.cols(); ++i) {
                         const auto rots = [&](int j) {
                             const auto& r = rotations_view(j, i, gid);
-                            return v2::Givens<T>{r[0], r[1]};
+                            return device::Givens<T>{r[0], r[1]};
                         };
-                        v2::lasr<v2::rot_conv::Transposed>(v2::Thread{}, ncols, rots, q_row);
+                        device::lasr<device::rot_conv::Transposed>(device::Thread{}, ncols, rots, q_row);
                     }
                 }
             });

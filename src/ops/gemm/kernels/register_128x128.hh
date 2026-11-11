@@ -35,8 +35,6 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device;
-namespace gc = batchlas::device::l3;
 using batchlas::device::l3::copy_async_commit;
 using batchlas::device::l3::copy_async_wait;
 using batchlas::device::l3::copy_async_zfill;
@@ -226,9 +224,9 @@ struct Gemm128x128Body {
         }
 #endif
 
-        const v2::Grid2D<> ex{item};
-        v2::Tile<T, ThreadTile, ThreadTile> accum;
-        v2::fill(accum, T(0));
+        const device::Grid2D<> ex{item};
+        device::Tile<T, ThreadTile, ThreadTile> accum;
+        device::fill(accum, T(0));
 
         // Stages == 2 (the Stages > 2 lane map is described at kLaneMap):
         // one packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
@@ -325,15 +323,15 @@ BATCHLAS_UNROLL_FULL
                 const Vec4<T> b1 = vec4_ref(&xb[kk * BStride + BandN + nb]);
                 const T af[ThreadTile] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
                 const T bf[ThreadTile] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
-                gc::outer_mac(accum, af, bf);
+                device::l3::outer_mac(accum, af, bf);
             }
         };
 
         // The register-prefetched double buffer (one barrier per slab; unrolled by two so the
         // buffer index is a constant: a runtime one costs a spill at the 128 cap).
         const int slabs = (k + TileK - 1) / TileK;
-        auto mainloop = [&](auto edge) BATCHLAS_DLA_BODY {
-            gc::kloop_prefetch2<TileK>(
+        auto mainloop = [&](auto edge) BATCHLAS_DEVICE_BODY {
+            device::l3::kloop_prefetch2<TileK>(
                 ex, slabs, [&](int k0) __attribute__((always_inline)) { gload(k0, edge); }, sstore, compute);
         };
         if constexpr (Stages > 2) {
@@ -391,7 +389,7 @@ BATCHLAS_UNROLL_FULL
                     gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
                 }
             };
-            gc::kloop_async<Stages, TileK>(
+            device::l3::kloop_async<Stages, TileK>(
                 ex, slabs, issue, []() __attribute__((always_inline)) { copy_async_commit(); },
                 []() __attribute__((always_inline)) { copy_async_wait<Stages - 2>(); },
                 []() __attribute__((always_inline)) { copy_async_wait<0>(); }, compute);

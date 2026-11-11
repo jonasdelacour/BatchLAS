@@ -79,7 +79,7 @@ template <class R> constexpr Layout<R> dc_layout(int n, bool own_z) {
 }
 
 // rank(i) among x(0..s) by (value, index): a stable ascending sort as a gather-free scatter.
-template <class R> BATCHLAS_DLA_INLINE int sort_rank(const R* x, int s, int i) {
+template <class R> BATCHLAS_DEVICE_INLINE int sort_rank(const R* x, int s, int i) {
     const R xi = x[i];
     int r = 0;
     for (int j = 0; j < s; ++j) {
@@ -96,7 +96,7 @@ template <class R> struct Ptrs {
     local_mptr<std::int32_t> reduced;
     l3::Smem<gemm_cfg<R>> smem;
 };
-template <class R> BATCHLAS_DLA_INLINE Ptrs<R> ptrs(const Workspace& ws, const Layout<R>& L) {
+template <class R> BATCHLAS_DEVICE_INLINE Ptrs<R> ptrs(const Workspace& ws, const Layout<R>& L) {
     return {carve_global(ws, L.d_a),     carve_global(ws, L.z_a),      carve_global(ws, L.d_b),      carve_global(ws, L.z_b),
             carve_global(ws, L.lam),     carve_global(ws, L.absx),     carve_global(ws, L.qp),       carve_global(ws, L.tmp),
             carve_global(ws, L.map_a),   carve_global(ws, L.map_b),    carve_global(ws, L.keep),     carve_global(ws, L.perm),
@@ -108,7 +108,7 @@ template <class R> BATCHLAS_DLA_INLINE Ptrs<R> ptrs(const Workspace& ws, const L
 // halves' ascending eigenvalues, rho the tear e(o + m - 1). On return they hold the merged
 // problem's, ascending. Returns this item's count of unconverged roots.
 template <class Ex, class PEx, class W, class R>
-BATCHLAS_DLA_HELPER int merge(const Ex& ex, const PEx& pex, int part_id, int parts, int n, int o, int s, int m, R rho, const W& w,
+BATCHLAS_DEVICE_HELPER int merge(const Ex& ex, const PEx& pex, int part_id, int parts, int n, int o, int s, int m, R rho, const W& w,
                               const l3::Global<R>& Z, const Ptrs<R>& P, std::int32_t max_iter) {
     const int ld = Z.ld;
     R* const q0 = Z.p + o + static_cast<std::ptrdiff_t>(o) * ld;
@@ -195,7 +195,7 @@ BATCHLAS_DLA_HELPER int merge(const Ex& ex, const PEx& pex, int part_id, int par
 
 // The op on Z (n x n, column-major, ld): leaves, then the merges bottom-up.
 template <class Ex, class D, class E, class W, class R>
-BATCHLAS_DLA_HELPER int bottom_up(const Ex& ex, const D& d, const E& e, const W& w, const l3::Global<R>& Z, const Ptrs<R>& P,
+BATCHLAS_DEVICE_HELPER int bottom_up(const Ex& ex, const D& d, const E& e, const W& w, const l3::Global<R>& Z, const Ptrs<R>& P,
                             std::int32_t max_iter) {
     const int n = d.size();
     // Every off-diagonal tears: w(i) = d(i) - |e(i-1)| - |e(i)|, the 1 x 1 leaves; Z = I.
@@ -261,7 +261,7 @@ template <JobType J, class Tier, class T> constexpr WorkspaceSize stedc_buffer_s
 /// return. Returns xSTEDC's info, uniform: 0, or 1 when a secular root ran out of
 /// params.max_sec_iter. Workspace: stedc_buffer_size<J, Tier, T>(n), ws.global this matrix's slice.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DLA_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p,
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p,
                               const Z& z) {
     static_assert(J == JobType::EigenVectors, "stedc: J = NoEigenVectors takes no Z (its Z lives in the workspace)");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
@@ -275,7 +275,7 @@ BATCHLAS_DLA_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, 
 
 /// Eigenvalues only (J = NoEigenVectors): the merges still form the vectors, in the workspace.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class R>
-BATCHLAS_DLA_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p) {
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p) {
     static_assert(J == JobType::NoEigenVectors, "stedc: J = EigenVectors takes Z");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
     stedc_detail::assert_types<Ex, D, R>();

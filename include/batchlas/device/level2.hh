@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2 level 2. Argument order is BLAS's: (ex, alpha, A, x, beta, y) and
+// Device LA level 2. Argument order is BLAS's: (ex, alpha, A, x, beta, y) and
 // (ex, alpha, x, y, A). The algorithm is a template parameter whose default is a type
 // computed from (executor, transpose); no kernel ever compiles the path it does not take.
 //
@@ -30,7 +30,7 @@ template <class Alg, class Default> using pick_t = std::conditional_t<std::is_vo
 template <class S> inline constexpr bool is_scalar_value_v = false;
 template <class T> inline constexpr bool is_scalar_value_v<Scalar<T>> = true;
 template <class Shape, class Ops, class Side, class AS, class T, class BS, class Ref>
-BATCHLAS_DLA_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
+BATCHLAS_DEVICE_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
     if constexpr (std::is_same_v<Side, alpha_side::Right> && is_scalar_value_v<AS>) {
         store<Shape, Ops>(One{}, arith_t<Ops, T>::mul(acc, static_cast<T>(alpha.v)), beta, y);
     } else {
@@ -38,7 +38,7 @@ BATCHLAS_DLA_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
         store<Shape, Ops>(alpha, acc, beta, y);
     }
 }
-template <class Ex> BATCHLAS_DLA_INLINE auto lane_group(const Ex& ex) {
+template <class Ex> BATCHLAS_DEVICE_INLINE auto lane_group(const Ex& ex) {
     if constexpr (requires { ex.part; }) return ex.part;
     else return ex.sub();
 }
@@ -51,7 +51,7 @@ template <class Ex> BATCHLAS_DLA_INLINE auto lane_group(const Ex& ex) {
 //                    butterfly; the W-block's first lane stores
 template <Transpose TR, class Alg = void, class Ops = arith::Explicit, class Shape = epi::Sum, class AlphaSide = alpha_side::Left,
           class Ex, class AS, class MA, class X, class BS, class Y>
-BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
+BATCHLAS_DEVICE_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
     using Al = detail::pick_t<Alg, decltype(detail::default_gemv_alg<Ex, TR>())>;
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
@@ -62,7 +62,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
     const auto beta = as_tag(beta_);
     const int m = a.rows(), n = a.cols();
     if constexpr (std::is_same_v<Al, alg::RowOwner>) {
-        static_assert(TR == Transpose::NoTrans, "v2::gemv: alg::RowOwner is the NoTrans algorithm");
+        static_assert(TR == Transpose::NoTrans, "gemv: alg::RowOwner is the NoTrans algorithm");
         const int step = detail::size_of(ex);
         for (int r = ex.lid(); r < m; r += step) {
             T acc = Ar::zero();
@@ -71,7 +71,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             detail::gemv_put<Shape, Ops, AlphaSide>(alpha, acc, beta, y(r));
         }
     } else if constexpr (std::is_same_v<Al, alg::SgPerCol>) {
-        static_assert(TR != Transpose::NoTrans, "v2::gemv: alg::SgPerCol is the (Conj)Trans algorithm");
+        static_assert(TR != Transpose::NoTrans, "gemv: alg::SgPerCol is the (Conj)Trans algorithm");
         const int lane = ex.lane();
         const int nteams = detail::nteams_of(ex), tsize = detail::team_size_of(ex);
         for (int c = ex.team(); c < n; c += nteams) {
@@ -84,7 +84,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             if (lane == 0) detail::gemv_put<Shape, Ops, AlphaSide>(alpha, acc, beta, y(c));
         }
     } else if constexpr (std::is_same_v<Al, alg::Serial>) {
-        static_assert(is_thread_v<Ex>, "v2::gemv: alg::Serial needs a one-item executor (Thread)");
+        static_assert(is_thread_v<Ex>, "gemv: alg::Serial needs a one-item executor (Thread)");
         if constexpr (TR == Transpose::NoTrans) {
             for (int r = 0; r < m; ++r) {
                 T acc = Ar::zero();
@@ -102,7 +102,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             }
         }
     } else if constexpr (std::is_same_v<Al, alg::GroupReducePerOutput>) {
-        static_assert(TR != Transpose::NoTrans, "v2::gemv: alg::GroupReducePerOutput is a (Conj)Trans algorithm");
+        static_assert(TR != Transpose::NoTrans, "gemv: alg::GroupReducePerOutput is a (Conj)Trans algorithm");
         for (int c = 0; c < n; ++c) {
             T acc = Ar::zero();
             for (int r = ex.lid(); r < m; r += detail::size_of(ex)) {
@@ -113,7 +113,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             if (ex.leader()) detail::gemv_put<Shape, Ops, AlphaSide>(alpha, acc, beta, y(c));
         }
     } else if constexpr (std::is_same_v<Al, alg::TeamPerRow>) {
-        static_assert(TR == Transpose::NoTrans, "v2::gemv: alg::TeamPerRow is a NoTrans algorithm");
+        static_assert(TR == Transpose::NoTrans, "gemv: alg::TeamPerRow is a NoTrans algorithm");
         const int lane = ex.lane();
         const int nteams = detail::nteams_of(ex), tsize = detail::team_size_of(ex);
         for (int r = ex.team(); r < m; r += nteams) {
@@ -123,7 +123,7 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             if (lane == 0) detail::gemv_put<Shape, Ops, AlphaSide>(alpha, acc, beta, y(r));
         }
     } else if constexpr (requires { Al::width; }) {
-        static_assert(TR != Transpose::NoTrans, "v2::gemv: alg::ColDot<W> is a (Conj)Trans algorithm");
+        static_assert(TR != Transpose::NoTrans, "gemv: alg::ColDot<W> is a (Conj)Trans algorithm");
         constexpr int W = Al::width;
         const int w = ex.lid() & (W - 1), g = ex.lid() / W, ng = detail::size_of(ex) / W;
         const auto grp = detail::lane_group(ex);
@@ -137,19 +137,19 @@ BATCHLAS_DLA_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp,
             if (w == 0) detail::gemv_put<Shape, Ops, AlphaSide>(alpha, acc, beta, y(c));
         }
     } else {
-        static_assert(sizeof(Al) == 0, "v2::gemv: unknown algorithm tag");
+        static_assert(sizeof(Al) == 0, "gemv: unknown algorithm tag");
     }
 }
 
 namespace detail {
 template <bool Herm, Uplo UL, class Alg, class Ops, class Ex, class AS, class MA, class X, class BS, class Y>
-BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
+BATCHLAS_DEVICE_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
     using Al = pick_t<Alg, alg::RowOwnerSplit>;
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
-    static_assert(UL == Uplo::Lower, "v2::symv/hemv: only Uplo::Lower is implemented");
+    static_assert(UL == Uplo::Lower, "symv/hemv: only Uplo::Lower is implemented");
     static_assert(std::is_same_v<Al, alg::RowOwnerSplit> || (Herm && std::is_same_v<Al, alg::RowOwnerSplitStoredDiag>),
-                  "v2::symv/hemv: alg::RowOwnerSplit (or, hemv only, alg::RowOwnerSplitStoredDiag)");
+                  "symv/hemv: alg::RowOwnerSplit (or, hemv only, alg::RowOwnerSplitStoredDiag)");
     constexpr bool masked_diag = Herm && Ar::is_complex && std::is_same_v<Al, alg::RowOwnerSplit>;
     require_published<Ex, X>();
     const auto& x = unpub(xp);
@@ -158,7 +158,7 @@ BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X
     if constexpr (is_trailing_v<MA>) {
         // Parent coordinates: rows/columns [k, n), the hand kernels' loop shape.
         static_assert(is_trailing_v<std::remove_cvref_t<decltype(x)>> && is_trailing_v<Y>,
-                      "v2::symv/hemv: a Trailing A takes Trailing x and y");
+                      "symv/hemv: a Trailing A takes Trailing x and y");
         const int k = a.first(), n = a.end();
         for (int r = k + ex.lid(); r < n; r += size_of(ex)) {
             const int c_split = sycl::min(r, n - 1);
@@ -207,7 +207,7 @@ BATCHLAS_DLA_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, const X
 }
 
 template <bool Conj, class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& yp, const MA& a) {
+BATCHLAS_DEVICE_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& yp, const MA& a) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     require_published<Ex, Y>();
@@ -220,7 +220,7 @@ BATCHLAS_DLA_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& 
             for (int r = ex.lid(); r < m; r += size_of(ex)) Ar::mac(a(r, c), x(r), yc);
         }
     } else {
-        static_assert(std::is_same_v<Alg, alg::Flat>, "v2::ger: alg::Cyclic or alg::Flat");
+        static_assert(std::is_same_v<Alg, alg::Flat>, "ger: alg::Cyclic or alg::Flat");
         require_published<Ex, X>();
         const auto& xv = unpub(x);
         for_each_owned_2d<alg::Walk>(ex, m, n, [&](int r, int c) {
@@ -233,12 +233,12 @@ BATCHLAS_DLA_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const Y& 
 
 // y := alpha A x + beta y, A symmetric with the UL triangle stored.
 template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
-BATCHLAS_DLA_INLINE void symv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
+BATCHLAS_DEVICE_INLINE void symv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
     detail::symv_impl<false, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
 // y := alpha A x + beta y, A Hermitian with the UL triangle stored (Im of the diagonal ignored).
 template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
-BATCHLAS_DLA_INLINE void hemv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
+BATCHLAS_DEVICE_INLINE void hemv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
     detail::symv_impl<true, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
 
@@ -247,19 +247,19 @@ BATCHLAS_DLA_INLINE void hemv(const Ex& ex, AS alpha, const MA& a, const X& x, B
 // ownership of for_each_owned_2d (x read across owners: Published). Ops: the mac's arithmetic.
 // RowFrag form: the item holds row r of A in a register Frag and x(r) as xr: a[j] += xr * alpha y(j).
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void geru(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
+BATCHLAS_DEVICE_INLINE void geru(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     detail::ger_impl<false, Alg, Ops>(ex, alpha, x, y, a);
 }
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void gerc(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
+BATCHLAS_DEVICE_INLINE void gerc(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     detail::ger_impl<true, Alg, Ops>(ex, alpha, x, y, a);
 }
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
+BATCHLAS_DEVICE_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     geru<Alg, Ops>(ex, alpha, x, y, a);
 }
 template <bool Conj = false, class Ops = arith::Explicit, class AS, class T, class Y, int N>
-BATCHLAS_DLA_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, N, RowFrag>& arow, int live = N) {
+BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, N, RowFrag>& arow, int live = N) {
     using Ar = arith_t<Ops, T>;
     const auto alpha = as_tag(alpha_);
 #pragma unroll
@@ -270,14 +270,14 @@ BATCHLAS_DLA_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, N, 
     }
 }
 
-// ---- v2.1: subtract-from and multi-term gemv, triangular solve / multiply -------------------
+// ---- subtract-from and multi-term gemv, triangular solve / multiply -------------------------
 
 // y := b - A x (NoTrans, RowOwner): the running value starts at b(r) and every term is
 // subtracted from it (Ops::msub), the order of the hand kernels' column updates. That rounding
 // is not alpha * (A x) + b, so a strict port of such a loop needs this form (latrd P3, sytrf).
 // y may alias b.
 template <class Ops = arith::Explicit, class Ex, class MA, class X, class B, class Y>
-BATCHLAS_DLA_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& xp, const B& b, const Y& y) {
+BATCHLAS_DEVICE_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& xp, const B& b, const Y& y) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     detail::require_published<Ex, X>();
@@ -295,13 +295,13 @@ template <class MA, class X> struct GemvTerm {
     MA a;
     X x;
 };
-template <class MA, class X> BATCHLAS_DLA_INLINE GemvTerm<MA, X> term(const MA& a, const X& x) { return {a, x}; }
+template <class MA, class X> BATCHLAS_DEVICE_INLINE GemvTerm<MA, X> term(const MA& a, const X& x) { return {a, x}; }
 
 // y := y0 + alpha * sum_t A_t x_t (NoTrans, RowOwner) in ONE accumulator per row: the terms'
 // products are summed in argument order, then scaled once (gebrd's gemv_pair, sytrd's Fit
 // gemv). Every x_t is read by every item (Published, or assume_published). y may alias y0.
 template <class Ops = arith::Explicit, class Ex, class AS, class Y0, class Y, class... Terms>
-BATCHLAS_DLA_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, const Y& y, const Terms&... terms) {
+BATCHLAS_DEVICE_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, const Y& y, const Terms&... terms) {
     using T = elem_t<Y>;
     using Ar = arith_t<Ops, T>;
     (detail::require_published<Ex, decltype(terms.x)>(), ...);
@@ -326,7 +326,7 @@ template <class X> constexpr int tri_cap_of(const X*) { return 0; }
 template <class T, int N, class L> constexpr int tri_cap_of(const Frag<T, N, L>*) { return N; }
 
 // Element (i, j) of op(A) for a stored UL triangle; called only inside op(A)'s triangle.
-template <Transpose TR, class T, class MA> BATCHLAS_DLA_INLINE T op_at(const MA& a, int i, int j) {
+template <Transpose TR, class T, class MA> BATCHLAS_DEVICE_INLINE T op_at(const MA& a, int i, int j) {
     if constexpr (TR == Transpose::NoTrans) return a(i, j);
     else if constexpr (TR == Transpose::Trans) return a(j, i);
     else return Arith<T>::conj(static_cast<T>(a(j, i)));
@@ -334,7 +334,7 @@ template <Transpose TR, class T, class MA> BATCHLAS_DLA_INLINE T op_at(const MA&
 }  // namespace detail
 
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
-BATCHLAS_DLA_INLINE void trsv(const Thread&, const MA& a, X& x, int n) {
+BATCHLAS_DEVICE_INLINE void trsv(const Thread&, const MA& a, X& x, int n) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
@@ -383,7 +383,7 @@ BATCHLAS_DLA_INLINE void trsv(const Thread&, const MA& a, X& x, int n) {
 }
 
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
-BATCHLAS_DLA_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
+BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
@@ -419,18 +419,18 @@ BATCHLAS_DLA_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
 // Memory-vector forms take x by const view (the view, not the data, is const).
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
-BATCHLAS_DLA_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
+BATCHLAS_DEVICE_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
     X xv = x;
     trsv<UL, TR, DG, Ops>(th, a, xv, x.size());
 }
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
-BATCHLAS_DLA_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
+BATCHLAS_DEVICE_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
     X xv = x;
     trmv<UL, TR, DG, Ops>(th, a, xv, x.size());
 }
 
-// ---- v2.2 level 2 (design A.2) ------------------------------------------------------------------
+// ---- level 2 (design A.2) -----------------------------------------------------------------------
 
 // A := alpha x y^H + conj(alpha) y x^H + A on part P of A (real T: alpha (x y^T + y x^T)). Each
 // element adds tag_mul(alpha, x(r) conj(y(c))) and then tag_mul(conj(alpha), y(r) conj(x(c))), in
@@ -439,7 +439,7 @@ BATCHLAS_DLA_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
 //   alg::RowOwner    rows Cyclic over the items, each item serial over its row's columns
 //   alg::TeamPerRow  team t owns rows t mod nteams, its lanes stride the columns
 template <Part P, class Alg = alg::RowOwner, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
-BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp, const MA& a) {
+BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp, const MA& a) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     detail::require_published<Ex, X>();
@@ -455,12 +455,12 @@ BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp,
     constexpr bool native_tag = std::is_same_v<Ops, arith::Native> && (std::is_same_v<S, One> || std::is_same_v<S, NegOne>);
     const int m = a.rows(), n = a.cols();
     // Columns of row r that part P can touch: the triangle bound keeps a Lower trip count at r + 1.
-    auto col_end = [&](int r) BATCHLAS_DLA_BODY {
+    auto col_end = [&](int r) BATCHLAS_DEVICE_BODY {
         if constexpr (P == Part::Lower) return sycl::min(n, r + 1);
         else if constexpr (P == Part::StrictLower) return sycl::min(n, r);
         else return n;
     };
-    auto upd = [&](int r, int c) BATCHLAS_DLA_BODY {
+    auto upd = [&](int r, int c) BATCHLAS_DEVICE_BODY {
         if (!detail::in_part<P>(r, c)) return;
         T v;
         // Native with a One / NegOne alpha: one expression, so -ffp-contract=on fuses each product
@@ -486,7 +486,7 @@ BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp,
             for (int c = 0; c < ce; ++c) upd(r, c);
         });
     } else {
-        static_assert(std::is_same_v<Alg, alg::TeamPerRow>, "v2::her2: alg::RowOwner or alg::TeamPerRow");
+        static_assert(std::is_same_v<Alg, alg::TeamPerRow>, "her2: alg::RowOwner or alg::TeamPerRow");
         const int nt = detail::nteams_of(ex), ts = detail::team_size_of(ex);
         for (int r = ex.team(); r < m; r += nt) {
             const int ce = col_end(r);
@@ -500,7 +500,7 @@ BATCHLAS_DLA_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp,
 //   alg::LanePerRow  lane i holds x(i) in the register x (n <= the executor's size); step j
 //                    finalises x(j) on lane j and broadcasts it, the later lanes update. COLLECTIVE.
 namespace detail {
-template <class DG, class Ar, class T> BATCHLAS_DLA_INLINE T tri_diag_apply(T xi, const T& aii) {
+template <class DG, class Ar, class T> BATCHLAS_DEVICE_INLINE T tri_diag_apply(T xi, const T& aii) {
     if constexpr (std::is_same_v<DG, tri_diag::Unit>) return xi;
     else if constexpr (std::is_same_v<DG, tri_diag::Div>) return Ar::div(xi, aii);
     else if constexpr (std::is_same_v<DG, tri_diag::Recip>) return Ar::mul(xi, Ar::recip(aii));
@@ -511,7 +511,7 @@ template <class DG, class Ar, class T> BATCHLAS_DLA_INLINE T tri_diag_apply(T xi
 }
 }  // namespace detail
 template <Uplo UL, Transpose TR, class DG, class Alg = alg::Serial, class Ops = arith::Explicit, class Ex, class MA, class X>
-BATCHLAS_DLA_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
+BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
@@ -520,7 +520,7 @@ BATCHLAS_DLA_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
         else return detail::op_at<TR, T>(a, i, i);
     };
     if constexpr (std::is_same_v<Alg, alg::Serial>) {
-        static_assert(is_thread_v<Ex>, "v2::trsv: alg::Serial is a Thread algorithm");
+        static_assert(is_thread_v<Ex>, "trsv: alg::Serial is a Thread algorithm");
         constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
         if constexpr (N > 0) {
             if constexpr (lower) {
@@ -557,8 +557,8 @@ BATCHLAS_DLA_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
             }
         }
     } else {
-        static_assert(std::is_same_v<Alg, alg::LanePerRow>, "v2::trsv: alg::Serial or alg::LanePerRow");
-        static_assert(std::is_same_v<X, T>, "v2::trsv<LanePerRow>: x is the lane's register element");
+        static_assert(std::is_same_v<Alg, alg::LanePerRow>, "trsv: alg::Serial or alg::LanePerRow");
+        static_assert(std::is_same_v<X, T>, "trsv<LanePerRow>: x is the lane's register element");
         const int l = ex.lid();
         for (int s = 0; s < n; ++s) {
             const int j = lower ? s : n - 1 - s;
@@ -573,7 +573,7 @@ BATCHLAS_DLA_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
 // operands; C may alias B); 2-D flat ownership. A real d on a complex matrix scales both parts
 // (no cross terms); otherwise each element is mul(b, d).
 template <Side SD, class Ops = arith::Explicit, class Ex, class D, class MA>
-BATCHLAS_DLA_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
+BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
     using T = typename MA::value_type;
     using A = arith_t<Ops, T>;
     using S = std::remove_cvref_t<decltype(d(0))>;
@@ -585,7 +585,7 @@ BATCHLAS_DLA_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
     });
 }
 template <Side SD, class Ops = arith::Explicit, class Ex, class D, class MB, class MC>
-BATCHLAS_DLA_INLINE void dgmm(const Ex& ex, const D& d, const MB& b, const MC& c) {
+BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MB& b, const MC& c) {
     using T = typename MC::value_type;
     using A = arith_t<Ops, T>;
     using S = std::remove_cvref_t<decltype(d(0))>;
@@ -601,8 +601,8 @@ BATCHLAS_DLA_INLINE void dgmm(const Ex& ex, const D& d, const MB& b, const MC& c
 // band storage, A(i, j) = ab(KU + i - j, j). Row owner, ascending j; x read across owners
 // (Published); beta == Zero never reads y.
 template <int KL, int KU, class Ops = arith::Explicit, class Ex, class AS, class MB, class X, class BS, class Y>
-BATCHLAS_DLA_INLINE void gbmv(const Ex& ex, AS alpha_, const MB& ab, const X& xp, BS beta_, const Y& y) {
-    static_assert(KL >= 0 && KU >= 0, "v2::gbmv: KL, KU >= 0");
+BATCHLAS_DEVICE_INLINE void gbmv(const Ex& ex, AS alpha_, const MB& ab, const X& xp, BS beta_, const Y& y) {
+    static_assert(KL >= 0 && KU >= 0, "gbmv: KL, KU >= 0");
     using T = elem_t<Y>;
     using Ar = arith_t<Ops, T>;
     detail::require_published<Ex, X>();

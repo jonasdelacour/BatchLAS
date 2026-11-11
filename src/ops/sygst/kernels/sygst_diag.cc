@@ -20,15 +20,14 @@ namespace batchlas::sycl_sygst {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;
 
 template <typename D>
-using Pack = v2::sygst_detail::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
+using Pack = device::sygst_detail::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
 template <typename D>
-constexpr int kVec = v2::sygst_detail::pack16_elems<D>;
+constexpr int kVec = device::sygst_detail::pack16_elems<D>;
 
 template <bool Inverse, int KB, typename T, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
@@ -44,14 +43,14 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
             sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
                 // The arguments name the captures in the hand kernel's order (its parameter order).
                 // I2: a masked item is a dead block, never loaded, computed or stored.
-                v2::sygs2_group<Inverse, KB>(
-                    v2::RtGroup<>{it}, static_cast<int>(it.get_local_id(0)), kb, lower, it.get_group(0), ipw,
+                device::sygs2_group<Inverse, KB>(
+                    device::RtGroup<>{it}, static_cast<int>(it.get_local_id(0)), kb, lower, it.get_group(0), ipw,
                     reinterpret_cast<D*>(&slm[0]), fper,
-                    [=](std::ptrdiff_t itm) { return v2::mat(ap + itm * stride_a, kb, kb, lda); }, sper, lds, wg,
-                    [=](std::ptrdiff_t itm) BATCHLAS_DLA_BODY { return itm >= batch || (mask && !mask[itm]); },
-                    [=](std::ptrdiff_t itm) BATCHLAS_DLA_BODY { return v2::mat(bp + itm * stride_b, kb, kb, ldb); }, ldf,
-                    [=](std::ptrdiff_t itm, int row, int c, const D& v) BATCHLAS_DLA_BODY {
-                        if (hp) v2::mat(hp + itm * stride_h, kb, kb, ldh)(row, c) = v;
+                    [=](std::ptrdiff_t itm) { return device::mat(ap + itm * stride_a, kb, kb, lda); }, sper, lds, wg,
+                    [=](std::ptrdiff_t itm) BATCHLAS_DEVICE_BODY { return itm >= batch || (mask && !mask[itm]); },
+                    [=](std::ptrdiff_t itm) BATCHLAS_DEVICE_BODY { return device::mat(bp + itm * stride_b, kb, kb, ldb); }, ldf,
+                    [=](std::ptrdiff_t itm, int row, int c, const D& v) BATCHLAS_DEVICE_BODY {
+                        if (hp) device::mat(hp + itm * stride_h, kb, kb, ldh)(row, c) = v;
                     });
             });
     });
@@ -100,8 +99,8 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             const int r = static_cast<int>(e % per), i = r % kb, c = r / kb;
             // H = the Hermitian A, real diagonal. H is named first: the capture order is the kernel's
             // parameter order (hp, then ap), as in the hand kernel.
-            const auto H = v2::mat(hp + itm * stride_f, kb, kb, ldf);
-            v2::lacpy(v2::ElemAt<true>{i, c}, v2::sygst_detail::herm(v2::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
+            const auto H = device::mat(hp + itm * stride_f, kb, kb, ldf);
+            device::lacpy(device::ElemAt<true>{i, c}, device::sygst_detail::herm(device::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
         });
     });
     return ctx.get_event();

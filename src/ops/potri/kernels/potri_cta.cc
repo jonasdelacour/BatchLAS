@@ -3,7 +3,7 @@
 // its upper one P = diag(L) L^-1 transposed, so neither overwrites the other; Upper runs the same
 // code on L = U^H. Both O(m^3) phases accumulate TS x TS register tiles (one or two per work-item)
 // and read 2 TS local values per TS^2 multiply-adds. evidence: docs/perf/potri.md#potri-the-algorithm
-// The body is written on device LA v2.1 core (include/batchlas/device.hh) and the
+// The body is written on device LA core (include/batchlas/device.hh) and the
 // potri-private tile ops of src/ops/potri/potri_v2.hh.
 //
 // Invariants: acc[] tiles are indexed only by unrolled constants (a dynamic index moves them to
@@ -33,7 +33,6 @@ namespace batchlas::sycl_potri {
 
 namespace {
 
-namespace v2 = batchlas::device;
 
 template <typename T> class PotriCtaKernel;
 
@@ -102,8 +101,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
         sycl::local_accessor<R, 1> rdt(sycl::range<1>(static_cast<std::size_t>(mp)), h);
         impl::parallel_for<PotriCtaKernel<T>>(h, sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {
             using namespace sycl_device;
-            const v2::RtGroup<> ex(it);
-            const v2::Thread th{};
+            const device::RtGroup<> ex(it);
+            const device::Thread th{};
             const int tid = ex.lid();
             const std::size_t g = it.get_group_linear_id();
             const std::ptrdiff_t item = static_cast<std::ptrdiff_t>(g / nblk);
@@ -120,7 +119,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 auto Af = [&](int r, int c) -> D& { return Ai[r + static_cast<std::ptrdiff_t>(c) * lda]; };
                 int z = -1;
                 if (md == 1) {
-                    z = v2::find_first(
+                    z = device::find_first(
                         ex, sn, [&](int i) { return dev_is_zero(Ai[static_cast<std::ptrdiff_t>(i) * (lda + 1)]); });
                     if (j0 == 0 && tid == 0) flags[item] = z + 1;
                 } else if (flags[item] != 0) {
@@ -173,7 +172,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
 
             int zero = -1;
             if (md == 0) {
-                zero = v2::find_first(ex, m, [&](int i) { return dev_is_zero(g_at(i, i)); });
+                zero = device::find_first(ex, m, [&](int i) { return dev_is_zero(g_at(i, i)); });
                 if (ex.leader() && info_ptr) info_ptr[item] = zero + 1;
             }
             if (zero >= 0) return; // work-group uniform: no barrier is left unmatched
@@ -188,14 +187,14 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 ti[q] = rc.r * TS;
                 tj[q] = rc.c * TS;
             }
-            v2::Tile<D, TS, TS> acc[NT];
+            device::Tile<D, TS, TS> acc[NT];
 
             if (md != 2) {
                 // trti2, right-looking by TS pivots: tile row K solves with M(K, K) in registers and
                 // publishes P(K, j) at s(j, K); the tiles below take acc -= M(rows, K) P(K, cols).
                 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < NT; ++q)
-                    v2::laset(acc[q], v2::Zero{}, v2::One{}, tj[q] - ti[q]);  // 1 on the global diagonal
+                    device::laset(acc[q], device::Zero{}, device::One{}, tj[q] - ti[q]);  // 1 on the global diagonal
                 for (int kb = 0; kb < mpw; kb += TS) {
                     BATCHLAS_UNROLL_FULL
                     for (int q = 0; q < NT; ++q) {
@@ -230,7 +229,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 }
                 ex.barrier();
                 if (md == 1) {
-                    v2::for_each_owned_2d(ex, m, m, [&](int r, int c) {
+                    device::for_each_owned_2d(ex, m, m, [&](int r, int c) {
                         if (lower ? r < c : r > c) return;
                         // X(r, c) sits at s(c, r); Upper wants (L^-1)^H.
                         g_at(r, c) = lower ? s(c, r) : dev_conj(s(r, c));
@@ -243,12 +242,12 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
             // zero for x > k.
             BATCHLAS_UNROLL_FULL
             for (int q = 0; q < NT; ++q) {
-                v2::fill(acc[q], D{});
+                device::fill(acc[q], D{});
                 if (!has[q]) continue;
                 for (int k = ti[q]; k < mpw; ++k) {
-                    v2::Frag<D, TS> xi, xj;
-                    v2::load(xi, [&](int x) { return dev_conj(s(ti[q] + x, k)); });
-                    v2::load(xj, [&](int y) { return s(tj[q] + y, k); });
+                    device::Frag<D, TS> xi, xj;
+                    device::load(xi, [&](int x) { return dev_conj(s(ti[q] + x, k)); });
+                    device::load(xj, [&](int y) { return s(tj[q] + y, k); });
                     reg::ger(th, xi, xj, acc[q]);
                 }
             }
@@ -266,7 +265,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
 
             // Y is A^-1 (Potri) or the product (Lauum) for either uplo; full fills the other triangle.
             const bool mirror = full && md == 0;
-            v2::for_each_owned_2d(ex, m, m, [&](int r, int c) {
+            device::for_each_owned_2d(ex, m, m, [&](int r, int c) {
                 const bool owned = lower ? r >= c : r <= c;
                 if (!owned && !mirror) return;
                 g_at(r, c) = r > c ? s(r, c) : r == c ? dev_from_real<D>(rd[r]) : dev_conj(s(c, r));

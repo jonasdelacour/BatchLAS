@@ -28,9 +28,9 @@ inline int slab_count(int value, int divisor) { return (value + divisor - 1) / d
 /// Stages * StageASize / StageBSize local elements. Exact: k % TileK == 0, no tail tests. Ends
 /// on a barrier after the last read of both stages (kloop), so an epilogue may reuse them.
 template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, class Stage, class T>
-BATCHLAS_DLA_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
+BATCHLAS_DEVICE_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
                                       const int& k, Tile<T, G::ThreadTileRows, G::ThreadTileCols>& accum) {
-    auto load_stage = [&](int kk0, int s) BATCHLAS_DLA_BODY {
+    auto load_stage = [&](int kk0, int s) BATCHLAS_DEVICE_BODY {
         T* tile_a_stage = &tile_a[s * G::StageASize];
         T* tile_b_stage = &tile_b[s * G::StageBSize];
         auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * G::TileAStride + r]; };
@@ -50,7 +50,7 @@ BATCHLAS_DLA_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col
 
 /// f(t) for t = 0 .. count - 1 on the whole executor, one barrier after each: the staged
 /// epilogue reuses the stage memory the next tile's first load writes. f must be uniform in t.
-template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_tile(const Ex& ex, int count, F&& f) {
+template <class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_tile(const Ex& ex, int count, F&& f) {
     for (int t = 0; t < count; ++t) {
         f(t);
         ex.barrier();

@@ -25,13 +25,12 @@
 namespace batchlas {
 namespace {
 
-namespace v2 = batchlas::device;
 
 template <typename T>
 using RealT = typename base_type<T>::type;
 
 // |x| of every drop and pivot test, host and device (std::abs, or hypot for complex).
-using v2::iluk_detail::pivot_modulus;
+using device::iluk_detail::pivot_modulus;
 
 template <typename T>
 inline T real_scalar(RealT<T> value) {
@@ -87,7 +86,7 @@ bool u_diagonals_are_usable(const T* vals,
         if (host_mask != nullptr && host_mask[b] == 0) continue;  // an inactive item's factor is scratch
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
-            (void)v2::iluk_detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
+            (void)device::iluk_detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
             if (status != 0) return false;
         }
     }
@@ -887,8 +886,8 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
 
             // Item b's slots of the slot-major working values; row i as the device op runs it
             // (operands in the body's first-use order: the capture layout is unchanged).
-            const v2::InterleavedVec<T> at{work, batch, b};
-            v2::iluk_detail::eliminate_row(at, i, step_ptr, step_target, step_pivot, step_upd_ptr, upd_dst, upd_src, sym_ro, diag_abs,
+            const device::InterleavedVec<T> at{work, batch, b};
+            device::iluk_detail::eliminate_row(at, i, step_ptr, step_target, step_pivot, step_upd_ptr, upd_dst, upd_src, sym_ro, diag_abs,
                                            drop_tolerance, modified_ilu, fill_factor, orig_nnz, diagonal_shift, diag_pivot_threshold, st);
         });
     }
@@ -969,7 +968,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         if (masked && mask[b] == 0) return;  // neutral: an inactive item counts as usable
         const int slot = c2s[diag_off[i]];
         int32_t local = 0;
-        (void)v2::iluk_detail::stabilize_pivot(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0), diagonal_shift,
+        (void)device::iluk_detail::stabilize_pivot(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0), diagonal_shift,
                                                RealT<T>(0), &local);
         if (local != 0) *df = 1;
     });
@@ -1367,19 +1366,19 @@ Event iluk_apply(Queue& ctx,
         const int b = linear / nrhs;
         const int col = linear % nrhs;
         if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
-        const v2::WorkGroup<wg_size> ex{item};
+        const device::WorkGroup<wg_size> ex{item};
 
         // Thin launcher over the device iluk_apply. The operands are formed in the order the solve
         // reads them, so the kernel's capture layout (its parameter order) is the hand kernel's.
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
-        const v2::BasedVec<const T> lu_val{lu_vals, lu_base};
-        const v2::BasedVec<const int> lu_col{lu_ci, lu_base};
-        const v2::BasedVec<const T> rhs_col{rhs_data, b * rhs_kv.stride_ + col * rhs_kv.ld_};
-        const v2::BasedVec<T> y{out_data, b * out_kv.stride_ + col * out_kv.ld_};
-        const v2::IlukFactor<T> factor{lu_val,   lu_col,      l_levels, l_level_ptr, l_rows, lu_ro,     ro_base,
+        const device::BasedVec<const T> lu_val{lu_vals, lu_base};
+        const device::BasedVec<const int> lu_col{lu_ci, lu_base};
+        const device::BasedVec<const T> rhs_col{rhs_data, b * rhs_kv.stride_ + col * rhs_kv.ld_};
+        const device::BasedVec<T> y{out_data, b * out_kv.stride_ + col * out_kv.ld_};
+        const device::IlukFactor<T> factor{lu_val,   lu_col,      l_levels, l_level_ptr, l_rows, lu_ro,     ro_base,
                                        u_levels, u_level_ptr, u_rows,   diag_pos,    b * n,  diag_shift};
-        (void)v2::iluk_apply<v2::tier::Blocked<1>>(ex, factor, rhs_col, y);
+        (void)device::iluk_apply<device::tier::Blocked<1>>(ex, factor, rhs_col, y);
     });
 
     // No host sync here: the caller owns synchronization, so repeated applications

@@ -46,7 +46,7 @@ template <int NB, class A> inline constexpr bool ormqr_is_blocked_v<tier::Blocke
 
 // The blocks in application order: forward for Q^H C and C Q, backward for Q C and C Q^H.
 template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class T>
-BATCHLAS_DLA_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a, const l3::Global<T>& c, int k, const T* tau,
+BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a, const l3::Global<T>& c, int k, const T* tau,
                                          const OrmqrSlots<T>& s, const Workspace& w) {
     const l3::Smem<Cfg> sm{carve_local(w, s.smem).get_raw()};
     T* const vb = carve_global(w, s.v);
@@ -97,7 +97,7 @@ template <Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize or
 /// @return 0, or -i for a bad i-th argument after the executor (1: A.rows() is not Q's order,
 ///         3: tau shorter than k, 4: no global workspace), uniform
 template <Side SD, Transpose TR, class Tier, class Ex, class MA, class MC, class Tau>
-BATCHLAS_DLA_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const Tau& tau, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const Tau& tau, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::ormqr<SD, TR>, T, Tier>;
     static_assert(HasTier<routine::ormqr<SD, TR>, Tr, T>, "ormqr: this tier is not offered for this scalar type");

@@ -38,7 +38,7 @@ namespace bdsdc_detail {
 // gd := 0 (2n), ge := (d0, e0, d1, ..., d(n-1)) made non-negative (2n - 1), gs := the signs
 // (2n) that undo it; one item: f(2k) = d(k) couples v(k), u(k); f(2k + 1) = e(k) u(k), v(k + 1).
 template <class D, class E, class GD, class GE, class GS>
-BATCHLAS_DLA_INLINE void build_gk(const D& d, const E& e, const GD& gd, const GE& ge, const GS& gs) {
+BATCHLAS_DEVICE_INLINE void build_gk(const D& d, const E& e, const GD& gd, const GE& ge, const GS& gs) {
     using T = elem_t<GD>;
     const Thread th{};
     map(th, gd, [] { return T(0); });
@@ -52,7 +52,7 @@ BATCHLAS_DLA_INLINE void build_gk(const D& d, const E& e, const GD& gd, const GE
 // back at ~1e-20, and 1/1e-20 would write +-inf, NaN every later dot product and make repair
 // reject every axis. COLLECTIVE over the work-group wg.
 template <class Ex, class Z, class GS, class L, class SG, class VR, class UC>
-BATCHLAS_DLA_INLINE void extract_column(const Ex& wg, const Z& z, const GS& gs, int n, const L& lam, int src, const SG& sig, int i,
+BATCHLAS_DEVICE_INLINE void extract_column(const Ex& wg, const Z& z, const GS& gs, int n, const L& lam, int src, const SG& sig, int i,
                                         const VR& vrow, const UC& ucol, bool wu, bool wv) {
     using T = std::remove_cv_t<elem_t<GS>>;
     const auto zv = slice(z, 0, n, 2), zu = slice(z, 1, n, 2);
@@ -83,7 +83,7 @@ BATCHLAS_DLA_INLINE void extract_column(const Ex& wg, const Z& z, const GS& gs, 
 // evidence: docs/perf/gesvd.md#gesvd-bdsdc-null-space-repair-criteria-that-failed
 // evidence: docs/perf/gesvd.md#gesvd-bdsdc-the-repair-threshold-from-the-resolution-limit
 template <class Ex, class MU, class MV, class SG>
-BATCHLAS_DLA_INLINE void repair(const Ex& wg, const MU& U, const MV& Vh, const SG& sg, int n, bool wu, bool wv) {
+BATCHLAS_DEVICE_INLINE void repair(const Ex& wg, const MU& U, const MV& Vh, const SG& sg, int n, bool wu, bool wv) {
     using T = std::remove_cv_t<elem_t<SG>>;
     constexpr int W = Ex::size;
     constexpr T kOrthTarget = T(1e-3);
@@ -216,7 +216,7 @@ template <class Tier, class T> constexpr WorkspaceSize bdsdc_buffer_size(int n) 
 // entry, outputs on return. Workspace: bdsdc_buffer_size<Tier, T>(n). Returns stedc's info: 0, or
 // 1 when a secular root ran out of iterations.
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
-BATCHLAS_DLA_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
+BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
                               bool sort_desc = true) {
     using R = std::remove_cv_t<elem_t<D>>;
     static_assert(std::is_floating_point_v<R>, "bdsdc: a real T");

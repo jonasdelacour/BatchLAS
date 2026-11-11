@@ -54,19 +54,19 @@ template <int C, int WG = 32, int SG = 32> struct StridedTeams {
     int grp_ = lane_ / C;
     int col_ = lane_ % C;
 
-    BATCHLAS_DLA_INLINE int lane() const { return grp_; }
-    BATCHLAS_DLA_INLINE int lid() const { return grp_; }
-    BATCHLAS_DLA_INLINE int team() const { return col_; }
-    BATCHLAS_DLA_INLINE bool leader() const { return lid() == 0; }
-    BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
-    BATCHLAS_DLA_INLINE void barrier(Mem = Mem::Local) const {
+    BATCHLAS_DEVICE_INLINE int lane() const { return grp_; }
+    BATCHLAS_DEVICE_INLINE int lid() const { return grp_; }
+    BATCHLAS_DEVICE_INLINE int team() const { return col_; }
+    BATCHLAS_DEVICE_INLINE bool leader() const { return lid() == 0; }
+    BATCHLAS_DEVICE_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
+    BATCHLAS_DEVICE_INLINE void barrier(Mem = Mem::Local) const {
         if constexpr (WG == SG) sycl::group_barrier(it.get_sub_group());
         else sycl::group_barrier(it.get_group());
     }
-    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T team_reduce(T v, Op op = {}) const {
         return butterfly<C, SG, bfly::Asc>(it.get_sub_group(), v, op);
     }
-    template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T group_reduce(T v, Op op = {}) const {
+    template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
     }
 };
@@ -77,11 +77,11 @@ template <class M> struct WinOf {
     using value_type = std::remove_cvref_t<decltype(std::declval<const M&>()(0, 0))>;
     M a;
     int i0, j0, m, n;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return a(i0 + i, j0 + j); }
-    BATCHLAS_DLA_INLINE int rows() const { return m; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const { return a(i0 + i, j0 + j); }
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <class M> BATCHLAS_DLA_INLINE WinOf<M> win_of(const M& a, int i0, int j0, int m, int n) { return {a, i0, j0, m, n}; }
+template <class M> BATCHLAS_DEVICE_INLINE WinOf<M> win_of(const M& a, int i0, int j0, int m, int n) { return {a, i0, j0, m, n}; }
 
 // x(t) = f(t), t < n, f returning a reference to write through (core fn_vec returns values). Each
 // element keeps the caller's address expression, e.g. a band chase's rotation sequence
@@ -90,10 +90,10 @@ template <class F> struct FnVec {
     using value_type = std::remove_cvref_t<decltype(std::declval<const F&>()(0))>;
     F f;
     int n;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i) const { return f(i); }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return f(i); }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class F> BATCHLAS_DLA_INLINE FnVec<F> fn_vec(int n, F f) { return {f, n}; }
+template <class F> BATCHLAS_DEVICE_INLINE FnVec<F> fn_vec(int n, F f) { return {f, n}; }
 
 // A Hermitian (real: symmetric) matrix in LAPACK lower band storage, half-bandwidth kd:
 // A(i, j), i >= j, lives at p[(i - j) + j * ld]. A(i, j) above the diagonal reads conj(A(j, i));
@@ -103,12 +103,12 @@ template <class T> struct HermBandLower;
 template <class T> struct BandRef {
     HermBandLower<T> b;
     int i, j;
-    BATCHLAS_DLA_INLINE operator T() const { return b.get(i, j); }
-    BATCHLAS_DLA_INLINE const BandRef& operator=(const T& v) const {
+    BATCHLAS_DEVICE_INLINE operator T() const { return b.get(i, j); }
+    BATCHLAS_DEVICE_INLINE const BandRef& operator=(const T& v) const {
         b.set(i, j, v);
         return *this;
     }
-    BATCHLAS_DLA_INLINE const BandRef& operator=(const BandRef& o) const {
+    BATCHLAS_DEVICE_INLINE const BandRef& operator=(const BandRef& o) const {
         b.set(i, j, static_cast<T>(o));
         return *this;
     }
@@ -118,25 +118,25 @@ template <class T> struct BandWin {
     using value_type = T;
     HermBandLower<T> b;
     int i0, j0, m, n;
-    BATCHLAS_DLA_INLINE BandRef<T> operator()(int r, int c) const { return {b, i0 + r, j0 + c}; }
-    BATCHLAS_DLA_INLINE int rows() const { return m; }
-    BATCHLAS_DLA_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE BandRef<T> operator()(int r, int c) const { return {b, i0 + r, j0 + c}; }
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
 // A(i0 : i0 + n, j): a column segment of a band matrix.
 template <class T> struct BandVec {
     using value_type = T;
     HermBandLower<T> b;
     int i0, j, n;
-    BATCHLAS_DLA_INLINE BandRef<T> operator()(int k) const { return {b, i0 + k, j}; }
-    BATCHLAS_DLA_INLINE int size() const { return n; }
-    BATCHLAS_DLA_INLINE BandVec tail(int k) const { return {b, i0 + k, j, n - k}; }
+    BATCHLAS_DEVICE_INLINE BandRef<T> operator()(int k) const { return {b, i0 + k, j}; }
+    BATCHLAS_DEVICE_INLINE int size() const { return n; }
+    BATCHLAS_DEVICE_INLINE BandVec tail(int k) const { return {b, i0 + k, j, n - k}; }
 };
 template <class T> struct HermBandLower {
     using value_type = T;
     T* p;
     int ld;
     int kd;
-    BATCHLAS_DLA_INLINE T get(int i, int j) const {
+    BATCHLAS_DEVICE_INLINE T get(int i, int j) const {
         if (i >= j) {
             const int r = i - j;
             return (r <= kd) ? p[r + j * ld] : T(0);
@@ -144,7 +144,7 @@ template <class T> struct HermBandLower {
         const int r = j - i;
         return (r <= kd) ? arith_t<arith::Native, T>::conj(p[r + i * ld]) : T(0);
     }
-    BATCHLAS_DLA_INLINE void set(int i, int j, T v) const {
+    BATCHLAS_DEVICE_INLINE void set(int i, int j, T v) const {
         if (i >= j) {
             const int r = i - j;
             if (r <= kd) p[r + j * ld] = v;
@@ -153,9 +153,9 @@ template <class T> struct HermBandLower {
             if (r <= kd) p[r + i * ld] = arith_t<arith::Native, T>::conj(v);
         }
     }
-    BATCHLAS_DLA_INLINE BandRef<T> operator()(int i, int j) const { return {*this, i, j}; }
-    BATCHLAS_DLA_INLINE BandWin<T> sub(int i0, int j0, int m, int n) const { return {*this, i0, j0, m, n}; }
-    BATCHLAS_DLA_INLINE BandVec<T> col(int j, int i0, int m) const { return {*this, i0, j, m}; }
+    BATCHLAS_DEVICE_INLINE BandRef<T> operator()(int i, int j) const { return {*this, i, j}; }
+    BATCHLAS_DEVICE_INLINE BandWin<T> sub(int i0, int j0, int m, int n) const { return {*this, i0, j0, m, n}; }
+    BATCHLAS_DEVICE_INLINE BandVec<T> col(int j, int i0, int m) const { return {*this, i0, j, m}; }
 };
 template <class V> inline constexpr bool is_band_win_v = false;
 template <class T> inline constexpr bool is_band_win_v<BandWin<T>> = true;
@@ -165,7 +165,7 @@ template <class T> inline constexpr bool is_band_win_v<BandWin<T>> = true;
 // lane when teams share a sub-group; core gemv<alg::TeamPerRow> stops at each team's bound).
 template <Uplo UL, class Ex, class AS, class MA, class X, class BS, class Y>
     requires is_band_win_v<MA>
-BATCHLAS_DLA_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
+BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
     using T = typename MA::value_type;
     static_assert(UL == Uplo::Lower, "sb2st::hemv_band: lower band storage only");
     detail::require_published<Ex, X>();
@@ -173,7 +173,7 @@ BATCHLAS_DLA_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, const X
     const auto alpha = as_tag(alpha_);
     const auto beta = as_tag(beta_);
     const int m = a.rows(), n = a.cols();
-    for_each_team_owned<loop::Lockstep>(ex, m, [&](int r, bool live) BATCHLAS_DLA_BODY {
+    for_each_team_owned<loop::Lockstep>(ex, m, [&](int r, bool live) BATCHLAS_DEVICE_BODY {
         T acc = T(0);
         if (live) {
             for (int j = ex.lid(); j < n; j += Ex::size) acc += static_cast<T>(a(r, j)) * static_cast<T>(x(j));
@@ -186,13 +186,13 @@ BATCHLAS_DLA_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, const X
 // C := C (I - tau v v^H) in T's own operators: each team owns whole rows of C, reduces C v with
 // team_reduce in a lockstep loop and updates its own row; no barrier inside (core larf<Right> is
 // one row per item, serial over the columns).
-template <class Ex, class Tau, class VP, class MC> BATCHLAS_DLA_INLINE void larf_right(const Ex& ex, Tau tau, const VP& vp, const MC& c) {
+template <class Ex, class Tau, class VP, class MC> BATCHLAS_DEVICE_INLINE void larf_right(const Ex& ex, Tau tau, const VP& vp, const MC& c) {
     using T = typename MC::value_type;
     using N = arith_t<arith::Native, T>;
     detail::require_published<Ex, VP>();
     const auto& v = detail::unpub(vp);
     const int len = c.cols();
-    for_each_team_owned<loop::Lockstep>(ex, c.rows(), [&](int o, bool live) BATCHLAS_DLA_BODY {
+    for_each_team_owned<loop::Lockstep>(ex, c.rows(), [&](int o, bool live) BATCHLAS_DEVICE_BODY {
         T w = T(0);
         if (live) {
             for (int k = ex.lid(); k < len; k += Ex::size) w += static_cast<T>(c(o, k)) * static_cast<T>(v(k));
@@ -206,8 +206,8 @@ template <class Ex, class Tau, class VP, class MC> BATCHLAS_DLA_INLINE void larf
 
 // One rotation (c, s) applied to the vector pair (x, y) (xROT through Rot::rot_pair).
 template <class Rot, class Ex, class X, class Y, class Rc, class Sc>
-BATCHLAS_DLA_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, const Sc& s) {
-    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DLA_BODY { Rot::rot_pair(x(i), y(i), c, s); });
+BATCHLAS_DEVICE_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, const Sc& s) {
+    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DEVICE_BODY { Rot::rot_pair(x(i), y(i), c, s); });
 }
 
 }  // namespace sb2st_detail
@@ -217,7 +217,7 @@ BATCHLAS_DLA_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, cons
 // and WORK the rotation scratch of n + kd + 2 elements, zeroed by the caller. On return the band
 // holds the tridiagonal in rows 0 and 1 (complex: the off-diagonal not yet made real).
 template <class Rot, class Ex, class T, class R>
-BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB, const int ldab, R* C, T* WORK) {
+BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB, const int ldab, R* C, T* WORK) {
     const auto& partition = pex.part;
     const int kd1 = kd + 1;
     const int kdm1 = kd - 1;
@@ -234,18 +234,18 @@ BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB,
     // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the band
     // entries AB(r, j + dc), addressed as the scalar loops address them.
     auto rseq = [&](int cnt, auto at) {
-        return sb2st_detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+        return sb2st_detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
             return at(j1 + t * kd1);
         });
     };
-    auto Cj = [&](int j) BATCHLAS_DLA_BODY -> R& { return C[j]; };
-    auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
+    auto Cj = [&](int j) BATCHLAS_DEVICE_BODY -> R& { return C[j]; };
+    auto Wj = [&](int j) BATCHLAS_DEVICE_BODY -> T& { return WORK[j]; };
     auto band = [&](int r, int dc) {
-        return [&AB_at, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB_at(r, j + dc); };
+        return [&AB_at, r, dc](int j) BATCHLAS_DEVICE_BODY -> T& { return AB_at(r, j + dc); };
     };
 
     if constexpr (Arith<T>::is_complex) {
-        for_each_owned(pex, n, [&](int j) BATCHLAS_DLA_BODY { AB_at(0, j) = force_real(AB_at(0, j)); });
+        for_each_owned(pex, n, [&](int j) BATCHLAS_DEVICE_BODY { AB_at(0, j) = force_real(AB_at(0, j)); });
         group_barrier(partition);
     }
 
@@ -271,7 +271,7 @@ BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB,
                 } else {
                     // Each lane applies its own rotations along the band diagonal (xROT).
                     if (kdm1 > 0) {
-                        for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
+                        for_each_owned(pex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
                             sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(kd - 1, j - kd), kdm1, incx), vec(AB + idx(kd, j - kd), kdm1, incx),
                                                       C[j], WORK[j]);
@@ -336,7 +336,7 @@ BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB,
                     // Each lane applies its own rotations (0 .. nr - 2) from the right (xROT).
                     const int main_nrot = nr - 1;
                     if (kdm1 > 0 && main_nrot > 0) {
-                        for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DLA_BODY {
+                        for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
                             sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, j - 1), kdm1), vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
                         });
@@ -371,7 +371,7 @@ BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB,
 
             if (nr > 0) {
                 // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
-                for_each_owned(pex, nr, [&](int t) BATCHLAS_DLA_BODY {
+                for_each_owned(pex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                     const int j = j1 + t * kd1;
                     WORK[j + kd] = WORK[j] * AB_at(kd, j);
                     AB_at(kd, j) = T(C[j]) * AB_at(kd, j);
@@ -388,7 +388,7 @@ BATCHLAS_DLA_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB,
 // team-per-row executor of the window updates. The reflector count follows the host-side schedule
 // (build_sb2st_hh_schedule), which the back-transform indexes V by. Exit: A holds the tridiagonal.
 template <class Ex, class Rows, class T, class VL, class WL, class VOut, class TauOut>
-BATCHLAS_DLA_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const sb2st_detail::HermBandLower<T>& A, int n, int kd, const VL& vloc,
+BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const sb2st_detail::HermBandLower<T>& A, int n, int kd, const VL& vloc,
                                         const WL& wloc, const VOut& Vb, const TauOut& tau_out) {
     using Real = real_t<T>;
     const int32_t kd_i = kd;
@@ -438,20 +438,20 @@ BATCHLAS_DLA_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const sb
         const auto y = A.col(col, r0, m);  // (alpha; x)
         const auto v = vec(vloc, m);
         // xLARFG scalars from alpha and an unscaled ||x|| (abs2 per element, one reduction).
-        const auto x = fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DLA_BODY { return A.get(r0 + 1 + k, col); });
+        const auto x = fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DEVICE_BODY { return A.get(r0 + 1 + k, col); });
         const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x));
         const T alpha = y(0);
         const auto h = larfg_scalars<conv::Phase>(alpha, xnorm, m);
 
         // v = (1; scale x), read before the column is overwritten below.
         if (ex.leader()) v(0) = T(1);
-        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY { v(k + 1) = (h.tau == T(0)) ? T(0) : static_cast<T>(y(k + 1)) * h.scale; });
+        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DEVICE_BODY { v(k + 1) = (h.tau == T(0)) ? T(0) : static_cast<T>(y(k + 1)) * h.scale; });
         sync(ex, Mem::Global);
 
         if (ex.leader()) y(0) = h.beta;
-        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DLA_BODY { y(k + 1) = T(0); });
+        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DEVICE_BODY { y(k + 1) = T(0); });
         const auto vs = mat(Vb).col(slot).head(kd_i);  // V(:, slot) = (v; 0)
-        for_each_owned(ex, kd_i, [&](int i) BATCHLAS_DLA_BODY { vs(i) = (i < m) ? static_cast<T>(v(i)) : T(0); });
+        for_each_owned(ex, kd_i, [&](int i) BATCHLAS_DEVICE_BODY { vs(i) = (i < m) ? static_cast<T>(v(i)) : T(0); });
         if (ex.leader()) tau_out(slot) = h.tau;
         sync(ex, Mem::Global);
         return h.tau;
@@ -667,20 +667,20 @@ inline void finalize_tridiag(int n, const Diag& diag, const Sub& sub, const D& d
 // storage gets its own chase, elsewhere the pointer is selected once and the chase emitted once.
 // The caller picks c / work the same way.
 template <class Rot, class Ex, class T, class AbL, class R>
-BATCHLAS_DLA_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, const AbL& abl, bool stage, R* c, T* work) {
+BATCHLAS_DEVICE_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, const AbL& abl, bool stage, R* c, T* work) {
     const auto& partition = pex.part;
     const int ldab_l = kd + 1;
     const int cw_len = n + kd + 2;
-    for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DLA_BODY {
+    for_each_owned(pex, cw_len, [&](int i) BATCHLAS_DEVICE_BODY {
         c[i] = R(0);
         work[i] = T(0);
     });
     group_barrier(partition);
     // (r, c) between the band (ld ldg) and the packed local copy (ld kd + 1).
-    auto stage_ab = [&](T* ABl, bool to_local) BATCHLAS_DLA_BODY {
+    auto stage_ab = [&](T* ABl, bool to_local) BATCHLAS_DEVICE_BODY {
         if (!to_local) group_barrier(partition);
         const int ab_elems_l = ldab_l * n;
-        for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DLA_BODY {
+        for_each_owned(pex, ab_elems_l, [&](int t) BATCHLAS_DEVICE_BODY {
             const int ccol = t / ldab_l;
             const int rrow = t - ccol * ldab_l;
             if (to_local) ABl[t] = abg[rrow + ccol * ldg];
@@ -740,7 +740,7 @@ template <class Tier, class T> constexpr Layout<T> band_layout(int n, int kd) {
     return {c, w, ab, p.size()};
 }
 
-template <class M> BATCHLAS_DLA_INLINE int band_ld(const M& a) {
+template <class M> BATCHLAS_DEVICE_INLINE int band_ld(const M& a) {
     if constexpr (requires { a.ld(); }) return static_cast<int>(a.ld());
     else return static_cast<int>(a.ld);
 }
@@ -788,7 +788,7 @@ template <Uplo UL, int KDMax, class T> struct tiers<routine::sb2st<UL, KDMax>, T
 // Returns 0, or -i for a bad i-th argument after the executor (1 ab: rows < kd + 1, or n > N for
 // Cta<N>; 2 d, 3 e, 4 tau: too short; 5 kd < 0), uniform. Outputs are visible on return.
 template <Uplo UL, class Tier, class Ex, class AB, class D, class E, class Tau>
-BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& e, const Tau& tau, int kd, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& e, const Tau& tau, int kd, const Workspace& ws) {
     static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
     static_assert(sb2st_detail::is_sgp_v<Ex>, "sb2st: the executor is a SgpPartition<P>");
     static_assert(sb2st_detail::is_cta_v<Tier> || sb2st_detail::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
@@ -819,11 +819,11 @@ BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& 
     const int ldg = sb2st_detail::band_ld(ab);
     const auto lay = sb2st_detail::band_layout<Tier, T>(n, kd);
     if constexpr (sb2st_detail::is_cta_v<Tier>) {
-        auto abl = [&]() BATCHLAS_DLA_BODY { return carve_local(ws, lay.ab).get_raw(); };
+        auto abl = [&]() BATCHLAS_DEVICE_BODY { return carve_local(ws, lay.ab).get_raw(); };
         sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
                                               carve_local(ws, lay.work).get_raw());
     } else {
-        auto no_abl = []() BATCHLAS_DLA_BODY { return static_cast<T*>(nullptr); };
+        auto no_abl = []() BATCHLAS_DEVICE_BODY { return static_cast<T*>(nullptr); };
         sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
                                               carve_global(ws, lay.work));
     }

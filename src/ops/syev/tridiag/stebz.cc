@@ -31,7 +31,6 @@ namespace batchlas {
 template <Backend B, typename T>
 struct StebzKernel;
 
-namespace v2 = device;
 
 template <Backend B, typename T>
 Event stebz(Queue& ctx,
@@ -84,8 +83,8 @@ Event stebz(Queue& ctx,
         static_cast<size_t>(std::max<int64_t>(max_wanted, 1)));
 
     auto* m_ptr = m.data();
-    using Tier = v2::tier::Blocked<1>;
-    const v2::WorkspaceSize wsz = v2::stebz_buffer_size<Tier, T>(static_cast<int>(n));
+    using Tier = device::tier::Blocked<1>;
+    const device::WorkspaceSize wsz = device::stebz_buffer_size<Tier, T>(static_cast<int>(n));
 
     // Thin launcher (design C.8): the body is the public device::stebz.
     ctx->submit([&](sycl::handler& h) {
@@ -96,13 +95,13 @@ Event stebz(Queue& ctx,
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const v2::RtGroup<> ex{item};
-                const auto dv = v2::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
-                const auto ev = v2::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
-                const v2::stebz_detail::Params<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
+                const device::RtGroup<> ex{item};
+                const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
+                const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
+                const device::stebz_detail::Params<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
                 int found = 0;
-                v2::stebz<Tier>(ex, dv, ev, v2::item(w, static_cast<int>(bid)), found,
-                                v2::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
+                device::stebz<Tier>(ex, dv, ev, device::item(w, static_cast<int>(bid)), found,
+                                device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
                 if (ex.leader()) m_ptr[bid] = found;
             });
     });

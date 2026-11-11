@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2, scalar LAPACK: the 2x2 and reflector kernels every eigen / SVD / QR family
+// Device LA, scalar LAPACK: the 2x2 and reflector kernels every eigen / SVD / QR family
 // recomputes per item. Pure functions of their arguments, no executor; host-callable.
 //   safmin / safmax          dlamch('S') and its reciprocal
 //   lartg                    plane rotation [c s; -conj(s) c] [f; g] = [r; 0] (LAPACK 3.10)
@@ -42,7 +42,7 @@ template <class R, class S = R> struct Givens {
 };
 
 // |a| as LAPACK's abs (hypot for complex), not BLAS abs1.
-template <class T> BATCHLAS_DLA_INLINE real_t<T> modulus(const T& a) {
+template <class T> BATCHLAS_DEVICE_INLINE real_t<T> modulus(const T& a) {
     using A = Arith<T>;
     if constexpr (A::is_complex) return sycl::hypot(A::re(a), A::im(a));
     else return sycl::fabs(a);
@@ -57,7 +57,7 @@ template <class T> struct LartgResult {
 
 namespace detail {
 // CLARTG/ZLARTG with f, g != 0, the scalar math in W (scaled against overflow / underflow).
-template <class W, class T> BATCHLAS_DLA_INLINE LartgResult<T> lartg_complex_scaled(const T& f, const T& g) {
+template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_scaled(const T& f, const T& g) {
     using R = real_t<T>;
     const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
     const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
@@ -153,7 +153,7 @@ template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const
 // ---- symmetric / triangular 2x2 ---------------------------------------------------------------
 // sqrt(adf^2 + (2b)^2) without overflow / underflow (shared by lae2 and laev2).
 namespace detail {
-template <class R> BATCHLAS_DLA_INLINE R lae2_rt(R adf, R ab) {
+template <class R> BATCHLAS_DEVICE_INLINE R lae2_rt(R adf, R ab) {
     if (adf > ab) return adf * sycl::sqrt(R(1) + (ab / adf) * (ab / adf));
     if (adf < ab) return ab * sycl::sqrt(R(1) + (adf / ab) * (adf / ab));
     return ab * sycl::sqrt(R(2));  // includes ab = adf = 0
@@ -161,7 +161,7 @@ template <class R> BATCHLAS_DLA_INLINE R lae2_rt(R adf, R ab) {
 }  // namespace detail
 
 // SLAE2/DLAE2: {rt1, rt2} of [[a, b], [b, c]], |rt1| >= |rt2|.
-template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> lae2(R a, R b, R c) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> lae2(R a, R b, R c) {
     const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
     const R acmx = amax ? a : c, acmn = amax ? c : a;
@@ -178,7 +178,7 @@ template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> lae2(R a, R b, R c) {
 }
 
 // SLAEV2/DLAEV2: {rt1, rt2, cs1, sn1}; (cs1, sn1) is the unit eigenvector of rt1.
-template <class R> BATCHLAS_DLA_INLINE std::array<R, 4> laev2(R a, R b, R c) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(R a, R b, R c) {
     const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
     const R acmx = amax ? a : c, acmn = amax ? c : a;
@@ -222,7 +222,7 @@ template <class R> BATCHLAS_DLA_INLINE std::array<R, 4> laev2(R a, R b, R c) {
 }
 
 // SLAS2/DLAS2: {ssmin, ssmax} of the upper triangular [[f, g], [0, h]], nothing squared.
-template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> las2(R f, R g, R h) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> las2(R f, R g, R h) {
     const R fa = sycl::fabs(f), ga = sycl::fabs(g), ha = sycl::fabs(h);
     const R fhmn = fa < ha ? fa : ha, fhmx = fa < ha ? ha : fa;
     if (fhmn == R(0)) {
@@ -245,7 +245,7 @@ template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> las2(R f, R g, R h) {
 // dsteqr's Wilkinson shift for the window starting at l: the eigenvalue of
 // [[d(l), e(l)], [e(l), d(l+1)]] nearest d(l): g = (d(l+1) - d(l)) / (2 e(l)),
 // d(l) - e(l) / (g + sign(hypot(g, 1), g)). e(l) != 0.
-template <class R> BATCHLAS_DLA_INLINE R wilkinson_shift(R dl, R el, R dl1) {
+template <class R> BATCHLAS_DEVICE_INLINE R wilkinson_shift(R dl, R el, R dl1) {
     const R g = (dl1 - dl) / (R(2) * el);
     const R r = sycl::hypot(g, R(1));
     return dl - el / (g + sycl::copysign(r, g));
@@ -277,8 +277,8 @@ template <class T> struct LarfgScalars {
     bool identity;
 };
 
-template <class Conv = conv::Lapack, class T> BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_scalars(const T& alpha, ScaledSsq<real_t<T>> q) {
-    static_assert(std::is_same_v<Conv, conv::Lapack>, "v2::larfg_scalars(alpha, ScaledSsq): conv::Lapack");
+template <class Conv = conv::Lapack, class T> BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg_scalars(const T& alpha, ScaledSsq<real_t<T>> q) {
+    static_assert(std::is_same_v<Conv, conv::Lapack>, "larfg_scalars(alpha, ScaledSsq): conv::Lapack");
     using A = Arith<T>;
     using R = real_t<T>;
     LarfgScalars<T> out{A::zero(), alpha, A::one(), true, true};
@@ -301,7 +301,7 @@ template <class Conv = conv::Lapack, class T> BATCHLAS_DLA_INLINE LarfgScalars<T
 
 template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
     static_assert(std::is_same_v<Conv, conv::Phase> || std::is_same_v<Conv, conv::RealBeta>,
-                  "v2::larfg_scalars(alpha, xnorm, len): conv::Phase or conv::RealBeta");
+                  "larfg_scalars(alpha, xnorm, len): conv::Phase or conv::RealBeta");
     using R = real_t<T>;
     LarfgScalars<T> out{T(0), alpha, T(0), true, true};
     if constexpr (std::is_same_v<Conv, conv::RealBeta> && Arith<T>::is_complex) {
@@ -330,7 +330,7 @@ template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alp
     return out;
 }
 
-// ---- v2.2 scalar LAPACK (design A.2 scalar.hh) ----------------------------------------------
+// ---- scalar LAPACK (design A.2 scalar.hh) ---------------------------------------------------
 // dlamch: lamch<'E'>() eps (relative machine precision, eps/2 of numeric_limits as LAPACK 3.x
 // with rounding), 'S' safe minimum, 'P' eps * base, 'B' base, 'N' digits, 'U' underflow
 // threshold (min normal), 'O' overflow threshold (max), 'R' 1 (rounding mode).
@@ -350,7 +350,7 @@ template <char C, class R> constexpr R lamch() {
 }
 
 // A quiet NaN of T's real type (both parts NaN for complex T).
-template <class T> BATCHLAS_DLA_INLINE T qnan() {
+template <class T> BATCHLAS_DEVICE_INLINE T qnan() {
     using A = Arith<T>;
     using R = typename A::real_t;
     return A::make(std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::quiet_NaN());
@@ -358,7 +358,7 @@ template <class T> BATCHLAS_DLA_INLINE T qnan() {
 
 // x / |x|, and 1 at x == 0 (a unit-modulus sign: the phase a Hermitian tridiagonal's
 // off-diagonal is rotated by). Real T: copysign(1, x) with +1 at +-0.
-template <class T> BATCHLAS_DLA_INLINE T phase(T x) {
+template <class T> BATCHLAS_DEVICE_INLINE T phase(T x) {
     using A = Arith<T>;
     using R = typename A::real_t;
     if constexpr (A::is_complex) {
@@ -370,7 +370,7 @@ template <class T> BATCHLAS_DLA_INLINE T phase(T x) {
     }
 }
 // sign(re x) as +-1 with +1 at 0 (LAPACK's SIGN(ONE, x) on a real part).
-template <class T> BATCHLAS_DLA_INLINE real_t<T> sign_nonzero_real(T x) {
+template <class T> BATCHLAS_DEVICE_INLINE real_t<T> sign_nonzero_real(T x) {
     using R = real_t<T>;
     const R r = Arith<T>::re(x);
     return r < R(0) ? R(-1) : R(1);
@@ -378,7 +378,7 @@ template <class T> BATCHLAS_DLA_INLINE real_t<T> sign_nonzero_real(T x) {
 
 // The eigenvalue of [[a, b], [b, c]] nearer to c (dsteqr's shift target): rt1 or rt2 of lae2,
 // whichever is closer to c (ties: rt1). The open-coded steqr form.
-template <class R> BATCHLAS_DLA_INLINE R eig2x2_nearest(R a, R b, R c) {
+template <class R> BATCHLAS_DEVICE_INLINE R eig2x2_nearest(R a, R b, R c) {
     const auto [rt1, rt2] = lae2(a, b, c);
     return sycl::fabs(rt1 - c) <= sycl::fabs(rt2 - c) ? rt1 : rt2;
 }
@@ -416,13 +416,13 @@ template <class T, class Ops = arith::Fma> struct SafeRecip {
     T r;
     bool zero;
     bool use_mul;
-    BATCHLAS_DLA_INLINE static SafeRecip make(T d) {
+    BATCHLAS_DEVICE_INLINE static SafeRecip make(T d) {
         using Ar = arith_t<Ops, T>;
         const bool z = Arith<T>::is_zero(d);  // EXACT zero, no epsilon
         const T rc = Ar::recip(d);
         return {d, rc, z, !z && Arith<T>::isfinite(rc) && !Arith<T>::is_zero(rc)};
     }
-    BATCHLAS_DLA_INLINE T apply(T y, T if_zero) const {
+    BATCHLAS_DEVICE_INLINE T apply(T y, T if_zero) const {
         using Ar = arith_t<Ops, T>;
         T x = if_zero;
         if (use_mul) x = Ar::mul(y, r);

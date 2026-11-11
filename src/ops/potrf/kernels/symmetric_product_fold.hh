@@ -39,7 +39,6 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
     const size_t c_stride = static_cast<size_t>(C.stride());
     const size_t p_ld = static_cast<size_t>(product.ld());
     const size_t p_stride = static_cast<size_t>(product.stride());
-    namespace v2 = ::batchlas::device;
     const bool upper = uplo == Uplo::Upper;
     const bool ignore_c = beta == T(0);
     const std::uint8_t* const mask = C.batch_mask().empty() ? nullptr : C.batch_mask().data();
@@ -65,7 +64,7 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
         // P + beta C: real, the one fma `p + beta * c` contracted to; complex, arith::Fma's
         // explicit chain instead of the Annex-G multiply (an algo change, under tolerance).
         T v = p_ptr[p_idx];
-        if (!ignore_c) v2::arith_t<v2::arith::Fma, T>::mac(v, beta, c_ptr[c_idx]);
+        if (!ignore_c) device::arith_t<device::arith::Fma, T>::mac(v, beta, c_ptr[c_idx]);
         c_ptr[c_idx] = v;
     });
 

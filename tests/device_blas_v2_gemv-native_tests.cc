@@ -31,19 +31,17 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace dla = batchlas::sycl_gemv::dla;
 using batchlas::verify::Check;
-using Fma = v2::arith::Fma;
+using Fma = device::arith::Fma;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 template <class T> using Dv = typename sycl_device::DevMap<T>::type;
 // The kernels' shift_reduce op: Arith add (sycl::plus has no Cx operator+).
 struct AddOf {
-    template <class D> D operator()(D u, D w) const { return v2::Arith<D>::add(u, w); }
+    template <class D> D operator()(D u, D w) const { return device::Arith<D>::add(u, w); }
 };
 
 constexpr int kItems = 1029;  // 11 * 1029 is not a multiple of 4: the W = 4 partition shape has a tail
@@ -201,11 +199,11 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
     const D* a = reinterpret_cast<const D*>(dev.up(ha));
     const D* x = reinterpret_cast<const D*>(dev.up(hx));
     D* y = reinterpret_cast<D*>(dev.up(hy));
-    const auto al = v2::MaybeZero{to_dev(alpha), alpha_zero}, be = v2::MaybeZero{to_dev(beta), beta_zero};
+    const auto al = device::MaybeZero{to_dev(alpha), alpha_zero}, be = device::MaybeZero{to_dev(beta), beta_zero};
     const std::int64_t total = std::int64_t(out) * kItems;
-    auto A = [=](std::int64_t b) { return v2::mat_wide(a + b * sa, m, n, ld); };
-    auto X = [=](std::int64_t b) { return v2::vec_wide(x + b * sx, red, xinc); };
-    auto Y = [=](std::int64_t b) { return v2::vec_wide(y + b * sy, out, yinc); };
+    auto A = [=](std::int64_t b) { return device::mat_wide(a + b * sa, m, n, ld); };
+    auto X = [=](std::int64_t b) { return device::vec_wide(x + b * sx, red, xinc); };
+    auto Y = [=](std::int64_t b) { return device::vec_wide(y + b * sy, out, yinc); };
 
     if constexpr (S == Shape::RowThread || S == Shape::ColThread) {
         dev.template run<false>(total, [=](sycl::nd_item<1>, std::int64_t g) {
@@ -214,11 +212,11 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int i = int(g - b * out);
             D acc{};
             if constexpr (S == Shape::RowThread) {
-                if (!al.zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, A(b).row(i), X(b));
+                if (!al.zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, A(b).row(i), X(b));
             } else {
-                if (!al.zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, v2::conj_if(A(b).col(i), conj), X(b));
+                if (!al.zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, device::conj_if(A(b).col(i), conj), X(b));
             }
-            v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
+            device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::RowSegment) {
         dev.template run<true>(kItems, [=](sycl::nd_item<1> it, std::int64_t b) {
@@ -227,20 +225,20 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int lane = int(sg.get_local_linear_id());
             const int i = lane % m, jsub = lane / m;
             D acc{};
-            if (!al.zero && jsub < P) acc = v2::dot_partial<false, Fma>(v2::Slot<P>{jsub}, A(b).row(i), X(b));
-            acc = dla::fold_down<P>(sg, acc, v2::Dyn{m});
-            if (lane < m) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
+            if (!al.zero && jsub < P) acc = device::dot_partial<false, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
+            acc = sycl_gemv::dla::fold_down<P>(sg, acc, device::Dyn{m});
+            if (lane < m) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::ColSubGroup) {
         dev.template run<true>(total, [=](sycl::nd_item<1> it, std::int64_t g) {
             if (g >= total) return;
-            const v2::SubGroup<32> team{it.get_sub_group()};
+            const device::SubGroup<32> team{it.get_sub_group()};
             const std::int64_t b = g / out;
             const int j = int(g - b * out);
             D acc{};
-            if (!al.zero) acc = v2::dot_partial<false, Fma>(team, v2::conj_if(A(b).col(j), conj), X(b));
-            acc = v2::shift_reduce<32>(team.sg, acc, AddOf{});
-            if (team.leader()) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
+            if (!al.zero) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
+            acc = device::shift_reduce<32>(team.sg, acc, AddOf{});
+            if (team.leader()) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     } else {
         constexpr int W = kSg / P;
@@ -248,16 +246,16 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const std::int64_t base = sgid * W;
             if (base >= total) return;
             const auto sg = it.get_sub_group();
-            const v2::Partition<P> team{sg};
+            const device::Partition<P> team{sg};
             const std::int64_t g = base + int(sg.get_local_linear_id()) / P;
             const bool active = g < total;
             const std::int64_t gc = active ? g : total - 1;
             const std::int64_t b = gc / out;
             const int j = int(gc - b * out);
             D acc{};
-            if (!al.zero && active) acc = v2::dot_partial<false, Fma>(team, v2::conj_if(A(b).col(j), conj), X(b));
-            acc = v2::shift_reduce<P>(team.part, acc, AddOf{});
-            if (team.leader() && active) v2::store<v2::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
+            if (!al.zero && active) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
+            acc = device::shift_reduce<P>(team.part, acc, AddOf{});
+            if (team.leader() && active) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     }
 
@@ -335,13 +333,13 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
         const int l = int(sg.get_local_linear_id());
         const D x = v[b * kSg + l];
         D* ob = o + b * kCases * kSg + l;
-        ob[0 * kSg] = dla::fold_down<2>(sg, x, v2::Dyn{13});
-        ob[1 * kSg] = dla::fold_down<4>(sg, x, v2::Dyn{7});
-        ob[2 * kSg] = dla::fold_down<8>(sg, x, v2::Dyn{3});
-        ob[3 * kSg] = dla::fold_down<16>(sg, x, v2::Dyn{2});
-        ob[4 * kSg] = dla::fold_down<32>(sg, x);
-        ob[5 * kSg] = v2::shift_reduce<4>(v2::Partition<4>{sg}.part, x, AddOf{});
-        ob[6 * kSg] = v2::shift_reduce<32>(v2::SubGroup<32>{sg}.sg, x, AddOf{});
+        ob[0 * kSg] = sycl_gemv::dla::fold_down<2>(sg, x, device::Dyn{13});
+        ob[1 * kSg] = sycl_gemv::dla::fold_down<4>(sg, x, device::Dyn{7});
+        ob[2 * kSg] = sycl_gemv::dla::fold_down<8>(sg, x, device::Dyn{3});
+        ob[3 * kSg] = sycl_gemv::dla::fold_down<16>(sg, x, device::Dyn{2});
+        ob[4 * kSg] = sycl_gemv::dla::fold_down<32>(sg, x);
+        ob[5 * kSg] = device::shift_reduce<4>(device::Partition<4>{sg}.part, x, AddOf{});
+        ob[6 * kSg] = device::shift_reduce<32>(device::SubGroup<32>{sg}.sg, x, AddOf{});
     });
     const auto got = this->dev.down(reinterpret_cast<const T*>(o), hout.size());
     const int count[kCases] = {2, 4, 8, 16, 32, 4, 32}, stride[kCases] = {13, 7, 3, 2, 1, 1, 1};
@@ -369,7 +367,7 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, FoldDownStridesAndLeaderSum) {
     EXPECT_VERIFY(T, Check::blas, 2, worst);
 }
 
-// store<MacChain, Fma> with v2 tags: Zero never reads y (NaN), One adds y exactly, NegOne subtracts it.
+// store<MacChain, Fma> with device tags: Zero never reads y (NaN), One adds y exactly, NegOne subtracts it.
 TYPED_TEST(DeviceBlasV2GemvNativeTest, StoreMacChainTags) {
     using T = TypeParam;
     using D = Dv<T>;
@@ -384,9 +382,9 @@ TYPED_TEST(DeviceBlasV2GemvNativeTest, StoreMacChainTags) {
     const D ad = to_dev(alpha);
     this->dev.template run<false>(n, [=](sycl::nd_item<1>, std::int64_t i) {
         if (i >= n) return;
-        v2::store<v2::epi::MacChain, Fma>(v2::Scalar<D>{ad}, a[i], v2::Zero{}, z[i]);
-        v2::store<v2::epi::MacChain, Fma>(v2::Scalar<D>{ad}, a[i], v2::One{}, y1[i]);
-        v2::store<v2::epi::MacChain, Fma>(v2::One{}, a[i], v2::NegOne{}, y2[i]);
+        device::store<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::Zero{}, z[i]);
+        device::store<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::One{}, y1[i]);
+        device::store<device::epi::MacChain, Fma>(device::One{}, a[i], device::NegOne{}, y2[i]);
     });
     const auto gz = this->dev.down(reinterpret_cast<const T*>(z), n);
     const auto g1 = this->dev.down(reinterpret_cast<const T*>(y1), n);

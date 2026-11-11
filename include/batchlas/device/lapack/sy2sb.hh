@@ -61,10 +61,10 @@ template <class Tier, class T> constexpr Layout<T> panel_layout(int n, int kd) {
 }
 
 // The length of band column j of an n x n matrix: min(kd, n - 1 - j) + 1.
-BATCHLAS_DLA_INLINE constexpr int band_len(int kd, int n, int j) { return std::min(kd, n - 1 - j) + 1; }
+BATCHLAS_DEVICE_INLINE constexpr int band_len(int kd, int n, int j) { return std::min(kd, n - 1 - j) + 1; }
 // AB(0 : lk, j) := A(j : j + lk, j), lk = band_len(kd, n, j): column j of the lower band. lk is
 // an argument: computed in the host launcher's own body its SASS stays identical to before.
-template <class Ex, class MA, class MB> BATCHLAS_DLA_INLINE void copy_band_col(const Ex& ex, const MA& a, const MB& ab, int lk, int j) {
+template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void copy_band_col(const Ex& ex, const MA& a, const MB& ab, int lk, int j) {
     copy(ex, a.col(j).tail(j).head(lk), ab.col(j).head(lk));
 }
 
@@ -78,7 +78,7 @@ template <class T> constexpr T minus_half() {
 // and A22 both (LAPACK xSYTRD_SY2SB): P = W T, Y = A22 P, Y -= W (T^H (W^H Y)) / 2,
 // A22 -= W Y^H + Y W^H. Every Level 3 op ends on a global barrier.
 template <class Cfg, class Ex, class MA, class MW, class MT>
-BATCHLAS_DLA_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const MA& a22, const MW& w, const MT& tf, typename Cfg::value_type* pp,
+BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const MA& a22, const MW& w, const MT& tf, typename Cfg::value_type* pp,
                                          typename Cfg::value_type* yp, typename Cfg::value_type* m1p, typename Cfg::value_type* m2p, l3::Smem<Cfg> sm) {
     using T = typename Cfg::value_type;
     constexpr Transpose NT = Transpose::NoTrans;
@@ -140,7 +140,7 @@ template <Uplo UL, int KDMax, class T> struct tiers<routine::sy2sb<UL, KDMax>, T
 // Returns 0, or -i for a bad i-th argument after the executor (1 A not square, 2 AB too small,
 // 3 tau shorter than n - kd, 4 kd < 0), uniform; nothing is written then. Outputs visible on return.
 template <Uplo UL, class Tier, class Ex, class MA, class MB, class Tau>
-BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau& tau, int kd, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau& tau, int kd, const Workspace& ws) {
     static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
     const auto ag = l3::global_of(A);
     const auto bg = l3::global_of(AB);
@@ -161,7 +161,7 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
     laset<Part::Full, alg::Flat>(ex, Zero{}, Zero{}, ab);
     ex.barrier(Mem::Global);
     if (kd == 0 || n <= kd) {
-        for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY {
             sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, j), j);
         });
         ex.barrier(Mem::Global);
@@ -180,7 +180,7 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
         geqr2(rex, v, pk, taup);
         ex.barrier(Mem::Global);
         // Columns [i, i + pk) are final; the strip and A22 below write columns >= i + pk only.
-        for_each_owned(ex, pk, [&](int c) BATCHLAS_DLA_BODY {
+        for_each_owned(ex, pk, [&](int c) BATCHLAS_DEVICE_BODY {
             sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, i + c), i + c);
             tau(i + c) = taup[c];
         });
@@ -194,7 +194,7 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
                                            carve_global(ws, lay.p), carve_global(ws, lay.y), carve_global(ws, lay.m1),
                                            carve_global(ws, lay.m2), sm);
     }
-    for_each_owned(ex, kd, [&](int c) BATCHLAS_DLA_BODY {
+    for_each_owned(ex, kd, [&](int c) BATCHLAS_DEVICE_BODY {
         sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, n - kd + c), n - kd + c);
     });
     ex.barrier(Mem::Global);

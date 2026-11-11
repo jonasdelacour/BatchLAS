@@ -24,14 +24,12 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace glue = batchlas::device::gesvd_glue;
 using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename v2::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = v2::Arith<T>::is_complex;
+template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -97,7 +95,7 @@ template <class T> class V2BdsdcTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "v2 tests launch sub-group size 32";
+        if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
@@ -128,11 +126,11 @@ template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) 
     const VectorView<T> yv(py, ylen, kBatch, 1, ylen);
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto y = v2::slice(v2::item(yv, b), 1, 2 * n, step);
+        const auto y = device::slice(device::item(yv, b), 1, 2 * n, step);
         if constexpr (OnThread) {
-            if (it.get_local_linear_id() == 0) v2::interleave(v2::Thread{}, glue::item_n(av, b, n), glue::item_n(bv, b, nb), y);
+            if (it.get_local_linear_id() == 0) device::interleave(device::Thread{}, device::gesvd_glue::item_n(av, b, n), device::gesvd_glue::item_n(bv, b, nb), y);
         } else {
-            v2::interleave(v2::WorkGroup<WG>{it}, glue::item_n(av, b, n), glue::item_n(bv, b, nb), y);
+            device::interleave(device::WorkGroup<WG>{it}, device::gesvd_glue::item_n(av, b, n), device::gesvd_glue::item_n(bv, b, nb), y);
         }
     });
     const auto g = dev.down(py, hy.size());
@@ -180,21 +178,21 @@ template <class T, int WG> void run_dgmv_many(Dev& dev) {
     const VectorView<T> sv(ps, 2 * n, kBatch, sinc, sstride);
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
-        const v2::WorkGroup<WG> wg{it};
-        const auto z = glue::col_of(v2::item(zm, b, 2 * n, 2), 1);
-        const auto s = v2::item(sv, b);
-        const auto zv = v2::slice(z, 0, n, 2), zu = v2::slice(z, 1, n, 2);
-        const auto s0 = v2::slice(s, 0, n, 2), s1 = v2::slice(s, 1, n, 2);
-        const auto P = v2::item(pm, b, n, 3);
+        const device::WorkGroup<WG> wg{it};
+        const auto z = device::gesvd_glue::col_of(device::item(zm, b, 2 * n, 2), 1);
+        const auto s = device::item(sv, b);
+        const auto zv = device::slice(z, 0, n, 2), zu = device::slice(z, 1, n, 2);
+        const auto s0 = device::slice(s, 0, n, 2), s1 = device::slice(s, 1, n, 2);
+        const auto P = device::item(pm, b, n, 3);
         // BdsdcExtract's terms: y(k) := alpha * (d(k) x(k)) when on, every output in one pass.
         const auto scaled = [](bool on, auto al, const auto& d, const auto& x, const auto& y) {
             return [=](int k) {
-                if (on) y(k) = v2::tag_mul(v2::as_tag(al), v2::Arith<T>::mul(static_cast<T>(d(k)), static_cast<T>(x(k))));
+                if (on) y(k) = device::tag_mul(device::as_tag(al), device::Arith<T>::mul(static_cast<T>(d(k)), static_cast<T>(x(k))));
             };
         };
-        const auto orow = glue::row_of(v2::item(om, b, 3, n), 1);
-        v2::map_many(wg, orow.size(), scaled(true, alpha, s0, zv, orow), scaled(true, v2::One{}, s1, zu, glue::col_of(P, 2)),
-                     scaled(false, off_alpha, s0, zu, glue::col_of(P, 0)));
+        const auto orow = device::gesvd_glue::row_of(device::item(om, b, 3, n), 1);
+        device::map_many(wg, orow.size(), scaled(true, alpha, s0, zv, orow), scaled(true, device::One{}, s1, zu, device::gesvd_glue::col_of(P, 2)),
+                     scaled(false, off_alpha, s0, zu, device::gesvd_glue::col_of(P, 0)));
     });
     const auto go = dev.down(po, ho.size());
     const auto gp = dev.down(pp, hp.size());
@@ -223,7 +221,7 @@ TYPED_TEST(V2BdsdcTest, DgmvManyLinesAndSlices) {
     run_dgmv_many<TypeParam, 1024>(this->dev);
 }
 
-// ---- item_n, row_of and col_of address item b like the v1 views (non-natural ld, inc, stride) -----
+// ---- item_n, row_of and col_of address item b like the host views (non-natural ld, inc, stride) -----
 TYPED_TEST(V2BdsdcTest, ItemNRowColAddressing) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -237,10 +235,10 @@ TYPED_TEST(V2BdsdcTest, ItemNRowColAddressing) {
     this->dev.template run<32>(kBatch, [=](sycl::nd_item<1> it) {
         if (it.get_local_linear_id() != 0) return;
         const int b = static_cast<int>(it.get_group_linear_id());
-        const auto A = v2::item(km, b, m, n);
-        const auto x = glue::item_n(vv, b, vk);
-        const auto rw = glue::row_of(glue::sub_of(A, 0, 0, m, n - 1), r0);
-        const auto cl = glue::col_of(A, c0);
+        const auto A = device::item(km, b, m, n);
+        const auto x = device::gesvd_glue::item_n(vv, b, vk);
+        const auto rw = device::gesvd_glue::row_of(device::gesvd_glue::sub_of(A, 0, 0, m, n - 1), r0);
+        const auto cl = device::gesvd_glue::col_of(A, c0);
         for (int j = 0; j < rw.size(); ++j) rw(j) = T(R(b * 1000 + 100 + j));
         for (int i = 0; i < cl.size(); ++i) cl(i) = T(R(b * 1000 + 200 + i));
         for (int i = 0; i < x.size(); ++i) x(i) = T(R(-(b * 1000 + i)));

@@ -9,7 +9,7 @@
 namespace batchlas::device::tridiag {
 
 // v with (I - 2 v v^T) (a0, a1)^T = (-sign(a0) ||a||, 0)^T; unscaled norms (inputs are O(||T||)).
-template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> house2(R a0, R a1) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> house2(R a0, R a1) {
     const R anorm = sycl::sqrt(a0 * a0 + a1 * a1);
     const R alpha = -sycl::copysign(anorm, a0);
     const R v0 = a0 - alpha, v1 = a1;

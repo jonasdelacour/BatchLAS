@@ -107,9 +107,9 @@ template <class T, Uplo UL, int N> void run_reg(Dev& dev, const KernelMatrixView
     constexpr int kWg = 64, kPer = kWg / N;
     dev.q().submit([&](sycl::handler& h) {
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch / kPer) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-             const dv::Partition<N> ex{it.get_sub_group()};
+             const batchlas::device::Partition<N> ex{it.get_sub_group()};
              const int b = static_cast<int>(it.get_group_linear_id()) * kPer + static_cast<int>(it.get_local_linear_id()) / N;
-             const int r = dv::potrf<UL, dv::tier::Reg<N>>(ex, dv::item(kv, b));
+             const int r = batchlas::device::potrf<UL, batchlas::device::tier::Reg<N>>(ex, batchlas::device::item(kv, b));
              if (ex.leader()) info[b] = r;
          });
      }).wait_and_throw();
@@ -117,16 +117,16 @@ template <class T, Uplo UL, int N> void run_reg(Dev& dev, const KernelMatrixView
 
 // The user kernel: one matrix per work-group of the tier's width, local memory from the plan.
 template <class T, Uplo UL, int N> void run_cta(Dev& dev, const KernelMatrixView<T, MatrixFormat::Dense>& kv, int n, std::int32_t* info) {
-    using Tier = dv::tier::Cta<N>;
-    constexpr int kWg = dv::tier_info<dv::routine::potrf<UL>, Tier, T>::wg_size;
-    const dv::WorkspaceSize ws = dv::potrf_buffer_size<UL, Tier, T>(n);
+    using Tier = batchlas::device::tier::Cta<N>;
+    constexpr int kWg = batchlas::device::tier_info<batchlas::device::routine::potrf<UL>, Tier, T>::wg_size;
+    const batchlas::device::WorkspaceSize ws = batchlas::device::potrf_buffer_size<UL, Tier, T>(n);
     dev.q().submit([&](sycl::handler& h) {
          sycl::local_accessor<Slab, 1> slm(sycl::range<1>(std::max<std::size_t>(ws.local_bytes / sizeof(Slab), 1)), h);
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-             const dv::WorkGroup<kWg, 32> ex{it};
+             const batchlas::device::WorkGroup<kWg, 32> ex{it};
              auto* raw = reinterpret_cast<std::byte*>(batchlas::util::get_raw_ptr(slm));
-             const dv::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw), nullptr};
-             const int r = dv::potrf<UL, Tier>(ex, dv::item(kv, static_cast<int>(it.get_group_linear_id())), w);
+             const batchlas::device::Workspace w{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(raw), nullptr};
+             const int r = batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(kv, static_cast<int>(it.get_group_linear_id())), w);
              if (ex.leader()) info[it.get_group_linear_id()] = r;
          });
      }).wait_and_throw();
@@ -240,7 +240,7 @@ template <class T> class DeviceApiPotrfTest : public DeviceCoreTest<T> {
 };
 TYPED_TEST_SUITE(DeviceApiPotrfTest, AllTypes);
 
-template <class T> constexpr bool kReg32 = dv::potrf_detail::reg_max_n<T> >= 32;
+template <class T> constexpr bool kReg32 = batchlas::device::potrf_detail::reg_max_n<T> >= 32;
 
 TYPED_TEST(DeviceApiPotrfTest, RegMatchesHostRoute) {
     using T = TypeParam;
@@ -286,14 +286,14 @@ TYPED_TEST(DeviceApiPotrfTest, AboveTheTierIsMinusTwo) {
 template <class T> int cta_fit(std::size_t bytes) {
     int n = 0;
     for (int m = 1; m <= 128; ++m)
-        if (dv::potrf_buffer_size<Uplo::Lower, dv::tier::Cta<128>, T>(m).local_bytes <= bytes) n = m;
+        if (batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<128>, T>(m).local_bytes <= bytes) n = m;
     return n;
 }
 
 TYPED_TEST(DeviceApiPotrfTest, CtaAtTheLocalMemoryCeiling) {
     using T = TypeParam;
     // What a work-group of Cta<128>'s width may request (acpp Metal adds 8 B per item of scratch).
-    constexpr int kWg = dv::tier_info<dv::routine::potrf<Uplo::Lower>, dv::tier::Cta<128>, T>::wg_size;
+    constexpr int kWg = batchlas::device::tier_info<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Cta<128>, T>::wg_size;
     const std::size_t local = batchlas::impl::local_mem_bytes(this->dev.q().get_device(), kWg);
     const int n = cta_fit<T>(local);  // the plan does not depend on the tier's bound
     ASSERT_GT(n, 32);
@@ -310,12 +310,12 @@ TYPED_TEST(DeviceApiPotrfTest, CtaAtTheLocalMemoryCeiling) {
     check(this->dev, p, got, got, gi, gi, "Cta<128> ceiling n=" + std::to_string(n));
 }
 
-template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
+template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        dv::with_tier<dv::routine::potrf<Uplo::Lower>, T>(lim, n, [&]<class Tier>(Tier) {
-            if constexpr (dv::potrf_detail::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
-            else if constexpr (dv::potrf_detail::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
+        batchlas::device::with_tier<batchlas::device::routine::potrf<Uplo::Lower>, T>(lim, n, [&]<class Tier>(Tier) {
+            if constexpr (batchlas::device::potrf_detail::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
+            else if constexpr (batchlas::device::potrf_detail::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });
     } catch (const batchlas::invalid_argument& e) {
@@ -326,7 +326,7 @@ template <class T> std::string pick(const dv::DeviceLimits& lim, int n) {
 
 TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
     using T = TypeParam;
-    const dv::DeviceLimits big{std::size_t(1) << 20, {16, 32}, 1024, true};
+    const batchlas::device::DeviceLimits big{std::size_t(1) << 20, {16, 32}, 1024, true};
     EXPECT_EQ(pick<T>(big, 1), "reg8");
     EXPECT_EQ(pick<T>(big, 8), "reg8");
     EXPECT_EQ(pick<T>(big, 9), "reg16");
@@ -343,34 +343,34 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
     const int n32 = cta_fit<T>(k32);
     ASSERT_GT(n32, 32);
     ASSERT_LT(n32, 128);
-    const dv::DeviceLimits metal{k32, {32}, 1024, true};
+    const batchlas::device::DeviceLimits metal{k32, {32}, 1024, true};
     EXPECT_EQ(pick<T>(metal, n32), n32 > 64 ? "cta128" : "cta64");
     EXPECT_EQ(pick<T>(metal, n32 + 1), kReg32<T> ? "blocked32" : "blocked16");
-    const std::size_t blocked_local = dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<4096>, T>(4000).local_bytes;
-    const dv::DeviceLimits starved{blocked_local - 1, {32}, 1024, true};
+    const std::size_t blocked_local = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::upto<4096>, T>(4000).local_bytes;
+    const batchlas::device::DeviceLimits starved{blocked_local - 1, {32}, 1024, true};
     EXPECT_EQ(pick<T>(starved, 200), "throw");
-    EXPECT_LE((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32).local_bytes), k32);
-    EXPECT_GT((dv::potrf_buffer_size<Uplo::Lower, dv::tier::upto<128>, T>(n32 + 1).local_bytes), k32);
+    EXPECT_LE((batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::upto<128>, T>(n32).local_bytes), k32);
+    EXPECT_GT((batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::upto<128>, T>(n32 + 1).local_bytes), k32);
 
-    const dv::DeviceLimits no_fp64{std::size_t(1) << 20, {32}, 1024, false};
+    const batchlas::device::DeviceLimits no_fp64{std::size_t(1) << 20, {32}, 1024, false};
     EXPECT_EQ(pick<T>(no_fp64, 8), (std::is_same_v<real_of<T>, double> ? "throw" : "reg8"));
-    const dv::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
+    const batchlas::device::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
     EXPECT_EQ(pick<T>(sg16, 8), "throw");
     EXPECT_EQ(pick<T>(sg16, 64), "throw");
 
-    static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<8>>, dv::tier::Reg<8>>);
-    static_assert(std::is_same_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<100>>, dv::tier::Cta<128>>);
-    static_assert(dv::potrf_detail::is_blocked_v<dv::resolve_tier_t<dv::routine::potrf<Uplo::Lower>, T, dv::tier::upto<200>>>);
-    static_assert(dv::potrf_buffer_size<Uplo::Upper, dv::tier::Reg<16>, T>(16) == dv::WorkspaceSize{});
+    static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<8>>, batchlas::device::tier::Reg<8>>);
+    static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<100>>, batchlas::device::tier::Cta<128>>);
+    static_assert(batchlas::device::potrf_detail::is_blocked_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<200>>>);
+    static_assert(batchlas::device::potrf_buffer_size<Uplo::Upper, batchlas::device::tier::Reg<16>, T>(16) == batchlas::device::WorkspaceSize{});
 }
 
 // The plan the op carves is the size the host allocates: every slot inside it, aligned, disjoint.
 TYPED_TEST(DeviceApiPotrfTest, BufferSizeIsTheCarvedPlan) {
     using T = TypeParam;
-    using D = dv::potrf_detail::dev_scalar_t<T>;
+    using D = batchlas::device::potrf_detail::dev_scalar_t<T>;
     for (int n : {1, 8, 9, 37, 64, 65, 128}) {
-        const auto pl = dv::potrf_detail::CtaPlan<D>::make(n);
-        const auto sz = dv::potrf_buffer_size<Uplo::Lower, dv::tier::Cta<128>, T>(n);
+        const auto pl = batchlas::device::potrf_detail::CtaPlan<D>::make(n);
+        const auto sz = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<128>, T>(n);
         EXPECT_EQ(sz, pl.size) << n;
         const std::size_t ends[] = {pl.tile.offset + pl.tile.count * sizeof(D), pl.diag.offset + pl.diag.count * sizeof(real_of<T>),
                                     pl.fail.offset + sizeof(int), pl.off.offset + pl.off.count * sizeof(int)};

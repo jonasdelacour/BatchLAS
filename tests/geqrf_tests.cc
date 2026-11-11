@@ -824,7 +824,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
     }
 }
 
-// G8c. v2::larfg_scalars<conv::Lapack>' division arm, on data that reaches it. That arm is taken ONLY
+// G8c. device::larfg_scalars<conv::Lapack>' division arm, on data that reaches it. That arm is taken ONLY
 // on SUBNORMAL input, so a "simplify this to a plain reciprocal-multiply" edit would fill
 // every such column's v with infinities and nothing would go red. Hence FINITENESS and a
 // loose, scale-invariant orthogonality rather than a residual: ||A||_F^2 underflows to
@@ -862,7 +862,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             << "the rescaled problem flushed to all zeros; this test would prove nothing";
         ASSERT_FALSE(std::isfinite(R(1) / static_cast<R>(biggest * 16.0)))
             << "1/(" << biggest * 16.0 << ") is finite in this scalar type, so "
-            << "v2::larfg_scalars<conv::Lapack> keeps use_mul == true and the DIVISION path is never "
+            << "device::larfg_scalars<conv::Lapack> keeps use_mul == true and the DIVISION path is never "
                "reached. This test is vacuous as configured.";
 
         auto V = view_of(p);
@@ -885,7 +885,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             for (int i = 0; i < p.k; ++i) {
                 ASSERT_TRUE(std::isfinite(std::real(MVof<T>::up(tau[i]))) && std::isfinite(std::imag(MVof<T>::up(tau[i]))))
                     << what << ": tau[" << i << "] is not finite at b=" << b
-                    << " -- the reciprocal guard in v2::larfg_scalars<conv::Lapack> is not doing its job";
+                    << " -- the reciprocal guard in device::larfg_scalars<conv::Lapack> is not doing its job";
             }
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i) {

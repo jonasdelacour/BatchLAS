@@ -17,7 +17,7 @@
 \1  ^batchlas::NormKernel<[^,]+, [^,]+, [^,]+, (\d+)>$
 # src/util/transpose.cc transpose_impl: sycl::range<3>(1, TILE, TILE), TILE = 16
 256  ^batchlas::TransposeKernel<
-# src/util/elementwise.cc launch_2d: v2::batched2d_shape(rows, cols) (items = 256, gr * gc * lb == 256)
+# src/util/elementwise.cc launch_2d: device::batched2d_shape(rows, cols) (items = 256, gr * gc * lb == 256)
 256  ::TriangularMaskKernel<[^,]+, [^,]+>$
 256  ::(?:ElementwiseBinaryKernel|AxpbyKernel)<
 # src/kernels/common/triangular_expand.hh: expand_group_shape (rows * cols == 256), mirrored 32 x 8

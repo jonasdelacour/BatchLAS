@@ -35,8 +35,8 @@ struct LinearEpilogue {
 // and with HermDiag a real diagonal (herk / her2k: Im C(i, i) := 0, as zherk does).
 struct NoMask {};
 template <Uplo UL, bool HermDiag = false> struct TriMask {
-    BATCHLAS_DLA_INLINE bool keep(int row, int col) const { return UL == Uplo::Lower ? row >= col : row <= col; }
-    template <class T> BATCHLAS_DLA_INLINE T fix(int row, int col, T v) const {
+    BATCHLAS_DEVICE_INLINE bool keep(int row, int col) const { return UL == Uplo::Lower ? row >= col : row <= col; }
+    template <class T> BATCHLAS_DEVICE_INLINE T fix(int row, int col, T v) const {
         using A = Arith<T>;
         if constexpr (HermDiag && A::is_complex) {
             if (row == col) return A::make(A::re(v), typename A::real_t(0));
@@ -54,7 +54,7 @@ template <Uplo UL, bool HermDiag = false> struct TriMask {
 // (no std::complex operator*). mask drops the elements it does not keep (design B.2 Mask).
 template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ops = arith::Native, class Ex, class T,
           int TR, int TC, class Mask = NoMask>
-BATCHLAS_DLA_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<T, TR, TC>& acc,
+BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<T, TR, TC>& acc,
                                            T* lo, T* hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta,
                                            [[maybe_unused]] Mask mask = {}) {
     constexpr int CS = TileM + 1;

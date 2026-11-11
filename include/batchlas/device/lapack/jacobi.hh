@@ -27,7 +27,7 @@ struct PivotPair {
 // Round-robin ("circle method") pairing for even m: round t in [0, m-2] has m/2 disjoint pairs
 // (k in [0, m/2)), the m-1 rounds cover every pair once; index 0 is fixed, the rest rotate.
 // Weakly equivalent to cyclic-by-rows (Hari & Begovic Kovac 2017). Returns p < q.
-BATCHLAS_DLA_INLINE PivotPair round_robin_pair(int m, int t, int k) {
+BATCHLAS_DEVICE_INLINE PivotPair round_robin_pair(int m, int t, int k) {
     const int ring = m - 1;
     int p, q;
     if (k == 0) {
@@ -45,8 +45,8 @@ BATCHLAS_DLA_INLINE PivotPair round_robin_pair(int m, int t, int k) {
     return {p, q};
 }
 // Both indices (< 128) in one 16-bit slot.
-BATCHLAS_DLA_INLINE std::int16_t pack_pair(PivotPair pq) { return static_cast<std::int16_t>(pq.p | (pq.q << 8)); }
-BATCHLAS_DLA_INLINE PivotPair unpack_pair(std::int16_t packed) {
+BATCHLAS_DEVICE_INLINE std::int16_t pack_pair(PivotPair pq) { return static_cast<std::int16_t>(pq.p | (pq.q << 8)); }
+BATCHLAS_DEVICE_INLINE PivotPair unpack_pair(std::int16_t packed) {
     const int pq = static_cast<int>(packed);
     return {pq & 0xFF, (pq >> 8) & 0xFF};
 }
@@ -70,7 +70,7 @@ template <class T> struct JacobiRotation {
     real_t<T> t, g;
     bool active;  // false: U is the identity (below threshold, or s rounded to 0)
 };
-template <class T> BATCHLAS_DLA_INLINE JacobiRotation<T> identity_rotation() {
+template <class T> BATCHLAS_DEVICE_INLINE JacobiRotation<T> identity_rotation() {
     using R = real_t<T>;
     return {R(1), R(0), T(1), R(0), R(0), false};
 }
@@ -80,7 +80,7 @@ template <class T> BATCHLAS_DLA_INLINE JacobiRotation<T> identity_rotation() {
 template <class R> struct NormPair {
     R p, q;
 };
-template <class T> BATCHLAS_DLA_INLINE NormPair<real_t<T>> rotated_norms2(const JacobiRotation<T>& r, real_t<T> app, real_t<T> aqq) {
+template <class T> BATCHLAS_DEVICE_INLINE NormPair<real_t<T>> rotated_norms2(const JacobiRotation<T>& r, real_t<T> app, real_t<T> aqq) {
     using R = real_t<T>;
     return {sycl::fmax(app - r.t * r.g, R(0)), sycl::fmax(aqq + r.t * r.g, R(0))};
 }
@@ -96,7 +96,7 @@ template <class T> struct Pair2 {
 };
 
 // The entries of U (Conj: of conj(U), for rot_left).
-template <bool Conj, class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Rot2<T> rot2(real_t<T> c, real_t<T> s, T d) {
+template <bool Conj, class Ops = arith::Native, class T> BATCHLAS_DEVICE_INLINE Rot2<T> rot2(real_t<T> c, real_t<T> s, T d) {
     using A = Arith<T>;
     if constexpr (!A::is_complex) {
         (void)d;
@@ -111,14 +111,14 @@ template <bool Conj, class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Rot
 }
 
 // a x + b y with a real and b complex (the explicit form).
-template <class T> BATCHLAS_DLA_INLINE T rx_plus_by(real_t<T> a, T x, T b, T y) {
+template <class T> BATCHLAS_DEVICE_INLINE T rx_plus_by(real_t<T> a, T x, T b, T y) {
     using A = Arith<T>;
     return A::make(a * A::re(x) + A::re(b) * A::re(y) - A::im(b) * A::im(y),
                    a * A::im(x) + A::re(b) * A::im(y) + A::im(b) * A::re(y));
 }
 
 // [x y] := [x y] U: row r of a column pair (A(r, p), A(r, q)) under A := A U.
-template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Pair2<T> rot_right(const Rot2<T>& u, T x, T y) {
+template <class Ops = arith::Native, class T> BATCHLAS_DEVICE_INLINE Pair2<T> rot_right(const Rot2<T>& u, T x, T y) {
     if constexpr (is_native_v<Ops> || !Arith<T>::is_complex) {
         return {x * u.u11 + y * u.u21, x * u.u12 + y * u.u22};
     } else {
@@ -127,7 +127,7 @@ template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Pair2<T> rot_r
     }
 }
 // [x; y] := U^H [x; y] for u = rot2<true>(...): column c of a row pair under A := U^H A.
-template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Pair2<T> rot_left(const Rot2<T>& u, T x, T y) {
+template <class Ops = arith::Native, class T> BATCHLAS_DEVICE_INLINE Pair2<T> rot_left(const Rot2<T>& u, T x, T y) {
     if constexpr (is_native_v<Ops> || !Arith<T>::is_complex) {
         return {u.u11 * x + u.u21 * y, u.u12 * x + u.u22 * y};
     } else {
@@ -136,7 +136,7 @@ template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE Pair2<T> rot_l
     }
 }
 // In place on two elements (both read, then both written).
-template <class Ops = arith::Native, class T> BATCHLAS_DLA_INLINE void rot_right_inplace(const Rot2<T>& u, T& x, T& y) {
+template <class Ops = arith::Native, class T> BATCHLAS_DEVICE_INLINE void rot_right_inplace(const Rot2<T>& u, T& x, T& y) {
     const T a = x;
     const T b = y;
     const Pair2<T> r = rot_right<Ops>(u, a, b);
@@ -153,18 +153,18 @@ template <class T, class CS, class D, class PR> struct RotRound {
     D d;
     PR pairs;
 
-    BATCHLAS_DLA_INLINE PivotPair pair(int k) const { return unpack_pair(pairs(k)); }
-    BATCHLAS_DLA_INLINE sycl::vec<R, 2> coef(int k) const { return cs(k); }
-    BATCHLAS_DLA_INLINE void store(int k, const JacobiRotation<T>& r) const {
+    BATCHLAS_DEVICE_INLINE PivotPair pair(int k) const { return unpack_pair(pairs(k)); }
+    BATCHLAS_DEVICE_INLINE sycl::vec<R, 2> coef(int k) const { return cs(k); }
+    BATCHLAS_DEVICE_INLINE void store(int k, const JacobiRotation<T>& r) const {
         cs(k) = sycl::vec<R, 2>(r.c, r.s);
         if constexpr (Arith<T>::is_complex) d(k) = r.d;
     }
-    template <bool Conj, class Ops = arith::Native> BATCHLAS_DLA_INLINE Rot2<T> rot(int k, R c, R s) const {
+    template <bool Conj, class Ops = arith::Native> BATCHLAS_DEVICE_INLINE Rot2<T> rot(int k, R c, R s) const {
         if constexpr (Arith<T>::is_complex) return rot2<Conj, Ops, T>(c, s, d(k));
         else return rot2<Conj, Ops, T>(c, s, T(1));
     }
 };
-template <class T, class CS, class D, class PR> BATCHLAS_DLA_INLINE RotRound<T, CS, D, PR> rot_round(CS cs, D d, PR pairs) {
+template <class T, class CS, class D, class PR> BATCHLAS_DEVICE_INLINE RotRound<T, CS, D, PR> rot_round(CS cs, D d, PR pairs) {
     return {cs, d, pairs};
 }
 
@@ -172,7 +172,7 @@ template <class T, class CS, class D, class PR> BATCHLAS_DLA_INLINE RotRound<T, 
 // every A_i: the calling item owns that row, and the pairs of a round touch disjoint columns,
 // so no barrier is needed between rotations. One pass serves A and its accumulators (Z := Z U).
 template <class Ops = arith::Native, class T, class CS, class D, class PR, class N, class... Ms>
-BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T, CS, D, PR>& rd, N npairs, int row, const Ms&... ms) {
+BATCHLAS_DEVICE_INLINE void rot_round_right(const RotRound<T, CS, D, PR>& rd, N npairs, int row, const Ms&... ms) {
     using R = real_t<T>;
     for (int k = 0; k < int(npairs); ++k) {
         const sycl::vec<R, 2> cs = rd.coef(k);
@@ -189,7 +189,7 @@ BATCHLAS_DLA_INLINE void rot_round_right(const RotRound<T, CS, D, PR>& rd, N npa
 // second half of a two-sided Jacobi step on a Hermitian A. The pivot entries are stored as
 // their exact values (a_pq = a_qp = 0, real diagonal), not as rounding noise.
 template <class Ops = arith::Native, class T, class CS, class D, class PR, class N, class M>
-BATCHLAS_DLA_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR>& rd, N npairs, int col, const M& a) {
+BATCHLAS_DEVICE_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR>& rd, N npairs, int col, const M& a) {
     using R = real_t<T>;
     for (int k = 0; k < int(npairs); ++k) {
         const sycl::vec<R, 2> cs = rd.coef(k);

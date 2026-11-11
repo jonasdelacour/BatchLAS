@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_core_scalar_tests: the v2.2 core.hh and scalar.hh additions (design A.2) against host
+// device_core_scalar_tests: the core.hh and scalar.hh additions (design A.2) against host
 // references: static_for / static_extent_v / MaybeZero / None, op::FMax / FMin with NaN,
 // lamch, qnan, phase, sign_nonzero_real, eig2x2_nearest and SafeRecip.
 // Guards (agent-guide section 8): SafeRecip straddles both of its thresholds (d where 1/d
@@ -9,7 +9,7 @@
 // (b tiny against a, c) and on the tie a == c; device and host results compared, never device to
 // itself.
 // Red set (each break was made once, 2026-11-04, and this suite failed): SafeRecip with use_mul
-// for an infinite reciprocal; v2.2 (lartg Fast): s = g * inv without f's sign.
+// for an infinite reciprocal; lartg Fast: s = g * inv without f's sign.
 #include <tests/device_core_common.hh>
 
 #include <cmath>
@@ -23,24 +23,24 @@ template <class T> class DeviceCoreScalarTest : public DeviceCoreTest<T> {};
 TYPED_TEST_SUITE(DeviceCoreScalarTest, AllTypes);
 
 // ---- compile-time vocabulary ---------------------------------------------------------------
-static_assert(dv::static_extent_v<dv::Ext<7>> == 7 && dv::static_extent_v<dv::Dyn> == -1);
-static_assert(dv::is_scalar_tag_v<dv::MaybeZero<float>>);
-static_assert(std::is_same_v<dv::tag_t<dv::MaybeZero<double>>, dv::MaybeZero<double>>);
-static_assert(dv::is_none_v<dv::None> && !dv::is_none_v<int>);
-static_assert(dv::lamch<'E', double>() == std::numeric_limits<double>::epsilon() / 2);
-static_assert(dv::lamch<'P', float>() == std::numeric_limits<float>::epsilon());
-static_assert(dv::lamch<'S', double>() == dv::safmin<double>());
-static_assert(dv::lamch<'O', float>() == std::numeric_limits<float>::max());
+static_assert(batchlas::device::static_extent_v<batchlas::device::Ext<7>> == 7 && batchlas::device::static_extent_v<batchlas::device::Dyn> == -1);
+static_assert(batchlas::device::is_scalar_tag_v<batchlas::device::MaybeZero<float>>);
+static_assert(std::is_same_v<batchlas::device::tag_t<batchlas::device::MaybeZero<double>>, batchlas::device::MaybeZero<double>>);
+static_assert(batchlas::device::is_none_v<batchlas::device::None> && !batchlas::device::is_none_v<int>);
+static_assert(batchlas::device::lamch<'E', double>() == std::numeric_limits<double>::epsilon() / 2);
+static_assert(batchlas::device::lamch<'P', float>() == std::numeric_limits<float>::epsilon());
+static_assert(batchlas::device::lamch<'S', double>() == batchlas::device::safmin<double>());
+static_assert(batchlas::device::lamch<'O', float>() == std::numeric_limits<float>::max());
 
 TEST(DeviceCoreScalarHost, StaticForVisitsEveryIndexInOrder) {
     int seen[6] = {};
     int order = 0;
-    dv::static_for<6>([&](auto I) {
+    batchlas::device::static_for<6>([&](auto I) {
         static_assert(decltype(I)::value >= 0 && decltype(I)::value < 6);
         seen[I] = ++order;
     });
     for (int i = 0; i < 6; ++i) EXPECT_EQ(seen[i], i + 1);
-    dv::NoOp{}(1, 2.0, "x");  // compiles to nothing for any arguments
+    batchlas::device::NoOp{}(1, 2.0, "x");  // compiles to nothing for any arguments
 }
 
 TYPED_TEST(DeviceCoreScalarTest, PhaseSignQnanAndNanLosingMinMaxOnDevice) {
@@ -50,7 +50,7 @@ TYPED_TEST(DeviceCoreScalarTest, PhaseSignQnanAndNanLosingMinMaxOnDevice) {
     std::vector<T> x_h = vals<T>(64, 61);
     x_h[0] = T(0);
     x_h[1] = T(R(-0.0));
-    x_h[2] = dv::lift<T>(R(-3));
+    x_h[2] = batchlas::device::lift<T>(R(-3));
     T* x = d.up(x_h);
     T* ph = d.template alloc<T>(64, T(0));
     R* sg = d.template alloc<R>(64, R(0));
@@ -58,18 +58,18 @@ TYPED_TEST(DeviceCoreScalarTest, PhaseSignQnanAndNanLosingMinMaxOnDevice) {
     T* qn = d.template alloc<T>(1, T(0));
     d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
         for (int i = 0; i < 64; ++i) {
-            ph[i] = dv::phase(x[i]);
-            sg[i] = dv::sign_nonzero_real(x[i]);
+            ph[i] = batchlas::device::phase(x[i]);
+            sg[i] = batchlas::device::sign_nonzero_real(x[i]);
         }
         const R one = R(1);
-        const R n = dv::qnan<R>();
-        mm[0] = dv::op::FMax{}(one, n);
-        mm[1] = dv::op::FMax{}(n, one);
-        mm[2] = dv::op::FMin{}(one, n);
-        mm[3] = dv::op::FMin{}(n, one);
-        mm[4] = dv::op::FMax{}(R(-2), R(5));
-        mm[5] = dv::op::FMin{}(R(-2), R(5));
-        qn[0] = dv::qnan<T>();
+        const R n = batchlas::device::qnan<R>();
+        mm[0] = batchlas::device::op::FMax{}(one, n);
+        mm[1] = batchlas::device::op::FMax{}(n, one);
+        mm[2] = batchlas::device::op::FMin{}(one, n);
+        mm[3] = batchlas::device::op::FMin{}(n, one);
+        mm[4] = batchlas::device::op::FMax{}(R(-2), R(5));
+        mm[5] = batchlas::device::op::FMin{}(R(-2), R(5));
+        qn[0] = batchlas::device::qnan<T>();
     });
     const auto P = d.down(ph, 64);
     const auto S = d.down(sg, 64);
@@ -112,7 +112,7 @@ TYPED_TEST(DeviceCoreScalarTest, Eig2x2NearestPicksTheRootNearC) {
         R* p = d.up(abc);
         R* out = d.template alloc<R>(n, R(0));
         d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
-            for (int i = 0; i < n; ++i) out[i] = dv::eig2x2_nearest(p[3 * i], p[3 * i + 1], p[3 * i + 2]);
+            for (int i = 0; i < n; ++i) out[i] = batchlas::device::eig2x2_nearest(p[3 * i], p[3 * i + 1], p[3 * i + 2]);
         });
         const auto got = d.down(out, n);
         for (int i = 0; i < n; ++i) {
@@ -133,7 +133,7 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     using R = real_of<T>;
     auto& d = this->dev;
     const R tiny = std::numeric_limits<R>::denorm_min() * R(4);  // 1 / tiny overflows
-    const std::vector<T> dd{T(R(3)), T(tiny), T(0), dv::lift<T>(dv::safmin<R>())};
+    const std::vector<T> dd{T(R(3)), T(tiny), T(0), batchlas::device::lift<T>(batchlas::device::safmin<R>())};
     const std::vector<T> yy{val<T>(71), T(tiny), val<T>(73), val<T>(74)};
     T* dp = d.up(dd);
     T* yp = d.up(yy);
@@ -141,8 +141,8 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     int* flags = d.template alloc<int>(8, -1);
     d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
         for (int i = 0; i < 4; ++i) {
-            const auto s = dv::SafeRecip<T>::make(dp[i]);
-            out[i] = s.apply(yp[i], dv::lift<T>(R(-7)));
+            const auto s = batchlas::device::SafeRecip<T>::make(dp[i]);
+            out[i] = s.apply(yp[i], batchlas::device::lift<T>(R(-7)));
             flags[2 * i] = s.use_mul;
             flags[2 * i + 1] = s.zero;
         }
@@ -157,13 +157,13 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     EXPECT_LE(err(got[1], LD<T>(1)), tol<T>()) << "tiny / tiny = 1 only through the division";
     EXPECT_EQ(F[4], 0);
     EXPECT_EQ(F[5], 1);
-    EXPECT_TRUE(same_bits(got[2], dv::lift<T>(R(-7)))) << "exact zero: the caller's value";
+    EXPECT_TRUE(same_bits(got[2], batchlas::device::lift<T>(R(-7)))) << "exact zero: the caller's value";
     EXPECT_EQ(F[6], 1) << "1 / safmin is finite: multiply";
-    EXPECT_LE(err(got[3], wide(yy[3]) / wide(dd[3])), tol<T>() * static_cast<double>(1 / dv::safmin<R>()));
+    EXPECT_LE(err(got[3], wide(yy[3]) / wide(dd[3])), tol<T>() * static_cast<double>(1 / batchlas::device::safmin<R>()));
 }
 
 
-// v2.2: lartg<lartg_alg::Fast> (float: rsqrt + Newton inside the unscaled range) against the
+// lartg<lartg_alg::Fast> (float: rsqrt + Newton inside the unscaled range) against the
 // exact rotation within 4 ulp (both use sqrt.approx; Fast's 1/r is rsqrt + Newton), g == 0
 // giving exactly (1, 0, f), and arguments outside the range (|f| ~ 2^120, 2^-140) taking the
 // Exact path bit for bit; other T: Fast is Exact.
@@ -184,8 +184,8 @@ TYPED_TEST(DeviceCoreScalarTest, LartgFastMatchesExact) {
     T* exact = d.template alloc<T>(3 * n, T(0));
     d.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int i = static_cast<int>(it.get_local_linear_id());
-        const auto a = dv::lartg<dv::lartg_alg::Fast>(f[i], g[i]);
-        const auto b = dv::lartg<dv::lartg_alg::Exact>(f[i], g[i]);
+        const auto a = batchlas::device::lartg<batchlas::device::lartg_alg::Fast>(f[i], g[i]);
+        const auto b = batchlas::device::lartg<batchlas::device::lartg_alg::Exact>(f[i], g[i]);
         fast[3 * i] = T(a.c);
         fast[3 * i + 1] = a.s;
         fast[3 * i + 2] = a.r;

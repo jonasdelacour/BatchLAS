@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// stedc-private v2 helpers (src/ops/syev/stedc/stedc_v2.hh: uniform, fold) and the core ops that
+// stedc-private device helpers (src/ops/syev/stedc/stedc_v2.hh: uniform, fold) and the core ops that
 // replaced its copies (prod_scaled, sqrt_scaled, the work-group sync<scope::Group>(ex, Mem::Global)
 // stedc uses as its barrier) against host references. The shared ops the stedc kernels use
 // (RtGroup, nrm2<alg::Blue>, rot, allreduce, for_each_owned_2d, ...) are covered by
@@ -33,8 +33,6 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-namespace v2 = batchlas::device;
-namespace sv = batchlas::stedc_v2;
 using batchlas::verify::Check;
 
 namespace {
@@ -93,32 +91,32 @@ struct Dev {
 struct Rt96 {
     static constexpr const char* name = "RtGroup(96)";
     static constexpr int wg = 96, per_group = 1, lanes = 96;
-    static auto make(sycl::nd_item<1> it) { return v2::RtGroup<>{it}; }
+    static auto make(sycl::nd_item<1> it) { return device::RtGroup<>{it}; }
 };
 struct Rt1024 {
     static constexpr const char* name = "RtGroup(1024)";
     static constexpr int wg = 1024, per_group = 1, lanes = 1024;
-    static auto make(sycl::nd_item<1> it) { return v2::RtGroup<>{it}; }
+    static auto make(sycl::nd_item<1> it) { return device::RtGroup<>{it}; }
 };
 struct WG128 {
     static constexpr const char* name = "WorkGroup<128>";
     static constexpr int wg = 128, per_group = 1, lanes = 128;
-    static auto make(sycl::nd_item<1> it) { return v2::WorkGroup<128>{it}; }
+    static auto make(sycl::nd_item<1> it) { return device::WorkGroup<128>{it}; }
 };
 struct Part8 {
     static constexpr const char* name = "Partition<8>";
     static constexpr int wg = 32, per_group = 4, lanes = 8;
-    static auto make(sycl::nd_item<1> it) { return v2::Partition<8>{it.get_sub_group()}; }
+    static auto make(sycl::nd_item<1> it) { return device::Partition<8>{it.get_sub_group()}; }
 };
 struct SgpPart8 {
     static constexpr const char* name = "SgpPartition<8, Masked>";
     static constexpr int wg = 32, per_group = 4, lanes = 8;
-    static auto make(sycl::nd_item<1> it) { return v2::SgpPartition<8, true>{it.get_sub_group()}; }
+    static auto make(sycl::nd_item<1> it) { return device::SgpPartition<8, true>{it.get_sub_group()}; }
 };
 struct Thread1 {
     static constexpr const char* name = "Thread";
     static constexpr int wg = 32, per_group = 32, lanes = 1;
-    static auto make(sycl::nd_item<1>) { return v2::Thread{}; }
+    static auto make(sycl::nd_item<1>) { return device::Thread{}; }
 };
 
 template <class Spec, class Body> void launch(Dev& dev, int items, std::size_t local_bytes, Body body) {
@@ -145,7 +143,7 @@ template <class F> void for_each_spec(F f) {
 // Empty when the device can run these launches, else why not.
 std::string skip_reason(Dev& dev) {
     if (!dev.ctx) return "no SYCL device visible";
-    if (!dev.ctx->device().supports_sub_group_size(32)) return "v2 tests launch sub-group size 32";
+    if (!dev.ctx->device().supports_sub_group_size(32)) return "device tests launch sub-group size 32";
     return {};
 }
 
@@ -190,13 +188,13 @@ TYPED_TEST(DeviceBlasV2StedcTest, ScaledProductLeavesTheFloatingRange) {
         int* expo = dev.up(std::vector<int>(kBatch, -7777));
         launch<Spec>(dev, kBatch, 0, [=](const auto& ex, int b, unsigned char*) {
             const T* fb = f + std::ptrdiff_t(b % ncase) * n;
-            const auto q = v2::prod_scaled(ex, nn[b], [&](int i) { return fb[i]; });
+            const auto q = device::prod_scaled(ex, nn[b], [&](int i) { return fb[i]; });
             T acc = T(1);
-            v2::for_each_owned(ex, nn[b], [&](int i) { acc *= fb[i]; });
-            const T naive = v2::allreduce(ex, acc, sycl::multiplies<T>());
+            device::for_each_owned(ex, nn[b], [&](int i) { acc *= fb[i]; });
+            const T naive = device::allreduce(ex, acc, sycl::multiplies<T>());
             if (ex.leader()) {
                 T* o = out + std::ptrdiff_t(b) * nslot;
-                o[0] = q.mant, o[1] = v2::sqrt_scaled(q), o[2] = naive, o[3] = T(v2::detail::size_of(ex));
+                o[0] = q.mant, o[1] = device::sqrt_scaled(q), o[2] = naive, o[3] = T(device::detail::size_of(ex));
                 expo[b] = q.expo;
             }
         });
@@ -261,17 +259,17 @@ TYPED_TEST(DeviceBlasV2StedcTest, FoldMatchesHost) {
         const T* x = dev.up(hx);
         T* out = dev.up(std::vector<T>(std::size_t(kBatch) * nslot, T(-7)));
         launch<Spec>(dev, kBatch, sizeof(T) * n, [=](const auto& ex, int b, unsigned char* lm) {
-            const auto xv = v2::vec(x + std::ptrdiff_t(b) * n, n);
+            const auto xv = device::vec(x + std::ptrdiff_t(b) * n, n);
             // Staged through local memory with no barrier: fold reads each element on its owner.
-            const auto s = v2::vec<v2::Mem::Local>(reinterpret_cast<T*>(lm), n);
-            v2::map(ex, s, [](T v) { return -v; }, xv);
-            const T staged = sv::fold(ex, s, sycl::plus<T>());
-            const T mx = sv::fold(ex, xv, sycl::maximum<T>());
-            const T sm = sv::fold(ex, xv, sycl::plus<T>());
+            const auto s = device::vec<device::Mem::Local>(reinterpret_cast<T*>(lm), n);
+            device::map(ex, s, [](T v) { return -v; }, xv);
+            const T staged = stedc_v2::fold(ex, s, sycl::plus<T>());
+            const T mx = stedc_v2::fold(ex, xv, sycl::maximum<T>());
+            const T sm = stedc_v2::fold(ex, xv, sycl::plus<T>());
             // plus: an empty sycl::joint_reduce gives Op's identity (-inf for maximum), T{} on acpp.
-            const T em = sv::fold(ex, xv.head(0), sycl::plus<T>());
-            const T win = sv::fold(ex, xv.tail(lo).head(len), sycl::plus<T>());  // off = lo, not at the start
-            const T wmx = sv::fold(ex, xv.tail(lo).head(len), sycl::minimum<T>());
+            const T em = stedc_v2::fold(ex, xv.head(0), sycl::plus<T>());
+            const T win = stedc_v2::fold(ex, xv.tail(lo).head(len), sycl::plus<T>());  // off = lo, not at the start
+            const T wmx = stedc_v2::fold(ex, xv.tail(lo).head(len), sycl::minimum<T>());
             if (ex.leader()) {
                 T* o = out + std::ptrdiff_t(b) * nslot;
                 o[0] = mx, o[1] = sm, o[2] = em, o[3] = win, o[4] = wmx, o[5] = staged;
@@ -315,14 +313,14 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
         int* gbuf = dev.up(std::vector<int>(std::size_t(items) * L, -7));
         launch<Spec>(dev, items, sizeof(int) * Spec::wg, [=](const auto& ex, int b, unsigned char* lm) {
             const int lid = ex.lid();
-            uni[std::ptrdiff_t(b) * L + lid] = sv::uniform(ex, static_cast<float>(lid * 7 + 3 + b));
-            flag[std::ptrdiff_t(b) * L + lid] = sv::uniform(ex, lid == 0) ? 1 : 0;
-            if constexpr (sv::is_group_v<Ex>) {
+            uni[std::ptrdiff_t(b) * L + lid] = stedc_v2::uniform(ex, static_cast<float>(lid * 7 + 3 + b));
+            flag[std::ptrdiff_t(b) * L + lid] = stedc_v2::uniform(ex, lid == 0) ? 1 : 0;
+            if constexpr (stedc_v2::is_group_v<Ex>) {
                 int* buf = reinterpret_cast<int*>(lm);
                 const int src = (lid + 33) % L;
                 buf[lid] = lid + 1 + b;
                 gbuf[std::ptrdiff_t(b) * L + lid] = 2 * lid + b;
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
                 syn[std::ptrdiff_t(b) * L + lid] = buf[src];
                 gsyn[std::ptrdiff_t(b) * L + lid] = gbuf[std::ptrdiff_t(b) * L + src];
             }
@@ -336,7 +334,7 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
                 const std::size_t k = std::size_t(b) * L + l;
                 bad_u += gu[k] != static_cast<float>(3 + b);
                 bad_f += gf[k] != 1;
-                if constexpr (sv::is_group_v<Ex>) {
+                if constexpr (stedc_v2::is_group_v<Ex>) {
                     bad_s += gs[k] != ((l + 33) % L) + 1 + b;
                     bad_g += gg[k] != 2 * ((l + 33) % L) + b;
                 } else {
@@ -351,8 +349,8 @@ TEST(DeviceBlasV2StedcHelpers, UniformAndGroupSync) {
 }
 
 // Which executors stedc barriers and folds on as a work-group.
-static_assert(sv::is_group_v<v2::RtGroup<>> && sv::is_group_v<v2::WorkGroup<64>>);
-static_assert(!sv::is_group_v<v2::RtGroup<v2::Scope::Sub>> && !sv::is_group_v<v2::Partition<8>> &&
-              !sv::is_group_v<v2::SgpPartition<8, true>> && !sv::is_group_v<v2::Thread>);
+static_assert(stedc_v2::is_group_v<device::RtGroup<>> && stedc_v2::is_group_v<device::WorkGroup<64>>);
+static_assert(!stedc_v2::is_group_v<device::RtGroup<device::Scope::Sub>> && !stedc_v2::is_group_v<device::Partition<8>> &&
+              !stedc_v2::is_group_v<device::SgpPartition<8, true>> && !stedc_v2::is_group_v<device::Thread>);
 
 }  // namespace

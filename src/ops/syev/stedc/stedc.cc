@@ -24,7 +24,6 @@
 
 namespace batchlas {
 
-namespace v2 = batchlas::device;
 
 namespace {
 
@@ -161,10 +160,10 @@ void stedc_merge_step(Queue& ctx,
         batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             if (!v.active(bid)) return;  // I1, no barrier
-            const v2::RtGroup<> ex{item};
+            const device::RtGroup<> ex{item};
             const T v_sign2 = (rho[bid] >= T(0)) ? T(1) : T(-1);
-            const auto z = v2::vec(v.batch_item(bid));
-            v2::laed2_merge_vector(ex, z, m, v2::mat(E1view.batch_item(bid)).row(m - 1), v2::mat(E2view.batch_item(bid)).row(0), v_sign2);
+            const auto z = device::vec(v.batch_item(bid));
+            device::laed2_merge_vector(ex, z, m, device::mat(E1view.batch_item(bid)).row(m - 1), device::mat(E2view.batch_item(bid)).row(0), v_sign2);
         });
     });
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -184,18 +183,18 @@ void stedc_merge_step(Queue& ctx,
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for<StedcDeflation<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        const v2::RtGroup<> ex{item};
+        const device::RtGroup<> ex{item};
         // I1, before any barrier. n_reduced = 0 is neutral: later kernels stop at it, dd_max ignores it.
         if (!v.active(bid)) {
             if (ex.leader()) n_reduced[bid] = 0;
             return;
         }
         const int nn = static_cast<int>(n);
-        const auto d = v2::vec(eigenvalues.batch_item(bid));
-        const auto z = v2::vec(v.batch_item(bid));
-        const auto Qb = v2::mat(Q.data() + static_cast<int64_t>(bid) * Q.stride(), nn, nn, Q.ld());
-        const auto absx = v2::vec<v2::Mem::Local>(util::get_raw_ptr(norm_mem), nn);
-        v2::laed2(  // the batched views' own element expressions
+        const auto d = device::vec(eigenvalues.batch_item(bid));
+        const auto z = device::vec(v.batch_item(bid));
+        const auto Qb = device::mat(Q.data() + static_cast<int64_t>(bid) * Q.stride(), nn, nn, Q.ld());
+        const auto absx = device::vec<device::Mem::Local>(util::get_raw_ptr(norm_mem), nn);
+        device::laed2(  // the batched views' own element expressions
             ex, n, d, z, Qb, absx, [&](auto j) { return eigenvalues(j, bid); }, [&]() { return rho[bid]; },
             [&](auto k) -> int32_t& { return keep_indices(k, bid); }, [&]() { return keep_indices.batch_item(bid).data_ptr(); },
             [&](auto k) -> int32_t& { return permutation(k, bid); }, [&](auto k) { return perm_map(k, bid); }, perm_local,
@@ -232,14 +231,14 @@ void stedc_merge_step(Queue& ctx,
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
-                const v2::RtGroup<> ex{item};
+                const device::RtGroup<> ex{item};
                 auto Q_bid = Qview.batch_item(bid);
                 auto n = n_reduced[bid];
-                const auto poles = v2::vec(eigenvalues.batch_item(bid));
-                const auto Qn = v2::mat(Q_bid);
-                v2::for_each_owned_2d<v2::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
-                v2::for_each_owned(ex, n, [&](int k) {
+                const auto poles = device::vec(eigenvalues.batch_item(bid));
+                const auto Qn = device::mat(Q_bid);
+                device::for_each_owned_2d<device::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::for_each_owned(ex, n, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // info_report is an atomic fetch_max: exactly the "did ANY root
                     // fail" reduction, however many threads report the same item.
@@ -255,7 +254,7 @@ void stedc_merge_step(Queue& ctx,
                                             1);
                     }
                 });
-                v2::sync<v2::scope::Group>(ex, v2::Mem::Global);
+                device::sync<device::scope::Group>(ex, device::Mem::Global);
             });
         });
 
@@ -268,7 +267,7 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
-                    const v2::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{item};
                     auto Qbid = Qview.batch_item(bid);
                     auto dd = n_reduced[bid];
 
@@ -279,7 +278,7 @@ void stedc_merge_step(Queue& ctx,
                     {
                         const T Di = eigenvalues(eid, bid);
                         T partial = T(1);
-                        v2::for_each_owned(ex, dd, [&](int j) {
+                        device::for_each_owned(ex, dd, [&](int j) {
                             const T q_elem = Qbid(eid, j);
                             T ratio;
                             if (j == eid) {
@@ -290,7 +289,7 @@ void stedc_merge_step(Queue& ctx,
                             }
                             partial *= ratio;
                         });
-                        const T valf = v2::allreduce(ex, partial, sycl::multiplies<T>());
+                        const T valf = device::allreduce(ex, partial, sycl::multiplies<T>());
                         if(ex.leader())
                         {
                             T mag  = std::sqrt(std::fabs(valf));
@@ -307,17 +306,17 @@ void stedc_merge_step(Queue& ctx,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();
-                    const v2::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{item};
 
                     const int dd = n_reduced[bid];
-                    const auto Q = v2::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
-                    const auto z = v2::vec(v.batch_item(bid));
+                    const auto Q = device::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
+                    const auto z = device::vec(v.batch_item(bid));
                     for(int eig = 0; eig < dd; ++eig)
                     {
                         const auto q = Q.col(eig);
-                        v2::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
-                        const T nrm = v2::nrm2<v2::alg::Blue>(ex, q);
-                        v2::map(ex, q, [=](T qi) { return qi / nrm; }, q);
+                        device::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
+                        const T nrm = device::nrm2<device::alg::Blue>(ex, q);
+                        device::map(ex, q, [=](T qi) { return qi / nrm; }, q);
                     }
                 });
         });
@@ -326,9 +325,9 @@ void stedc_merge_step(Queue& ctx,
     ctx -> submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<StedcAssignEigenvalues<B, T>>(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
-        const v2::RtGroup<> ex{item};
+        const device::RtGroup<> ex{item};
         const int dd = n_reduced[bid];
-        v2::copy(ex, v2::vec(temp_lambdas.batch_item(bid)).head(dd), v2::vec(eigenvalues.batch_item(bid)).head(dd));
+        device::copy(ex, device::vec(temp_lambdas.batch_item(bid)).head(dd), device::vec(eigenvalues.batch_item(bid)).head(dd));
         });
     });
 

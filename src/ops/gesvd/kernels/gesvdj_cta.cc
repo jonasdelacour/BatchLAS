@@ -41,8 +41,6 @@ class GesvdjCTAKernel;
 
 namespace {
 
-namespace v2 = ::batchlas::device;
-namespace jac = ::batchlas::device::jacobi_detail;
 
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
@@ -156,7 +154,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // Relative threshold (LAWN 169 Remark 2.2); an absolute test would
         // forfeit the relative accuracy this kernel exists for.
-        const auto thr = jac::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
+        const auto thr = device::jacobi_detail::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
         const Real zero_mult = params.zero_sigma_multiplier;
 
         Real* S = s_ptr;
@@ -168,14 +166,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
-        // BATCHLAS_DLA_BODY: direct view/lambda calls would leave the body outlined (SemaSYCL).
+        // BATCHLAS_DEVICE_BODY: direct view/lambda calls would leave the body outlined (SemaSYCL).
         batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) BATCHLAS_DLA_BODY BATCHLAS_REQD_SG_SIZE(32) {
+            [=](sycl::nd_item<1> it) BATCHLAS_DEVICE_BODY BATCHLAS_REQD_SG_SIZE(32) {
                 constexpr int kP = static_cast<int>(P);
                 constexpr int kC = static_cast<int>(C);
                 constexpr int K = static_cast<int>(kGramChunk);
-                using Rows = v2::Frag<T, static_cast<int>(kRPL)>;  // one column on this lane's rows
+                using Rows = device::Frag<T, static_cast<int>(kRPL)>;  // one column on this lane's rows
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
@@ -188,12 +186,12 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
-                    Pair_local[idx] = jac::pack_pair(k < pairs_per_round ? jac::round_robin_pair(mp, t, k) : jac::PivotPair{kC, kC});
+                    Pair_local[idx] = device::jacobi_detail::pack_pair(k < pairs_per_round ? device::jacobi_detail::round_robin_pair(mp, t, k) : device::jacobi_detail::PivotPair{kC, kC});
                 }
                 sycl::group_barrier(wg);
 
                 const auto sg = it.get_sub_group();
-                const v2::SgpPartition<kP> ex{sg};
+                const device::SgpPartition<kP> ex{sg};
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
@@ -209,16 +207,16 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 auto U_prob = U_view.batch_item(pid);
                 auto Vh_prob = Vh_view.batch_item(pid);
 
-                using Tile = v2::Mat<T, v2::Ext<kC>, v2::Ext<kC>, v2::Ext<LD>, v2::Mem::Local, v2::Cyclic,
+                using Tile = device::Mat<T, device::Ext<kC>, device::Ext<kC>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
                                      sycl::local_accessor<T, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without V, V_local is never named, so the kernel does not capture it (an extra
                 // local accessor argument moves the shared-memory layout).
-                std::conditional_t<ComputeV, Tile, v2::None> V{};
+                std::conditional_t<ComputeV, Tile, device::None> V{};
                 if constexpr (ComputeV) V = Tile{V_local, {}, {}, {}, tile_off};
-                const auto nrm = v2::vec(Nrm_local, kC, part_id * kC);
-                const auto inv = v2::vec(Inv_local, kC, part_id * kC);
+                const auto nrm = device::vec(Nrm_local, kC, part_id * kC);
+                const auto inv = device::vec(Inv_local, kC, part_id * kC);
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
 
                 // ---- Load. lane = ROW (rows lane, lane+P, ...), coalesced. ----
@@ -231,20 +229,20 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
-                            v = transposed_f ? v2::conj(A_prob(c, row)) : A_prob(row, c);
+                            v = transposed_f ? device::conj(A_prob(c, row)) : A_prob(row, c);
                         }
                         A(row, c) = v;
                         if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? T(1) : T(0);
                     }
                 }
-                // The partition's barrier, not v2::sync (one per sub-group): see syev_jacobi_cta.
+                // The partition's barrier, not device::sync (one per sub-group): see syev_jacobi_cta.
                 group_barrier(ex.part);
 
                 // ---- Exact column norms: lane c ends holding ||A_c||^2. ----
                 // P columns per pass reduce-scattered over P lanes (no all-reduce); C/P passes.
                 auto exact_norms = [&]() {
                     for (int32_t h = 0; h < static_cast<int32_t>(kRPL); ++h) {
-                        nrm(h * kP + lane) = v2::col_sumsq(ex, A.sub(0, h * kP, v2::Ext<kC>{}, v2::Ext<kP>{}));
+                        nrm(h * kP + lane) = device::col_sumsq(ex, A.sub(0, h * kP, device::Ext<kC>{}, device::Ext<kP>{}));
                     }
                 };
 
@@ -258,9 +256,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // completion fills U, V is identity.
                 // evidence: docs/design/gesvd.md#gesvdj_cta-global-power-of-two-scaling
                 const Real my_n2 = (lane < CC) ? nrm(lane) : Real(0);
-                const Real nmax = v2::allreduce(ex, my_n2, v2::op::FMax{});
-                const Real nmin = v2::allreduce(ex, (lane < CC && my_n2 > Real(0)) ? my_n2 : std::numeric_limits<Real>::max(),
-                                                 v2::op::FMin{});
+                const Real nmax = device::allreduce(ex, my_n2, device::op::FMax{});
+                const Real nmin = device::allreduce(ex, (lane < CC && my_n2 > Real(0)) ? my_n2 : std::numeric_limits<Real>::max(),
+                                                 device::op::FMin{});
                 Real beta = Real(1);
                 if (nmax > Real(0) && nmin <= nmax) {
                     const Real e = sycl::round(Real(0.25) * (sycl::log2(nmax) + sycl::log2(nmin)));
@@ -302,10 +300,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // live registers (80 T, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
                         // Real T never names Rd_local, so the kernel does not capture it.
-                        std::conditional_t<kNeedPhase, decltype(v2::vec(Rd_local, 0)), v2::None> rd{};
-                        if constexpr (kNeedPhase) rd = v2::vec(Rd_local, K, base_r + ch * K);
-                        const auto rnd = jac::rot_round<T>(v2::vec(Rcs_local, K, base_r + ch * K), rd,
-                                                          v2::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
+                        std::conditional_t<kNeedPhase, decltype(device::vec(Rd_local, 0)), device::None> rd{};
+                        if constexpr (kNeedPhase) rd = device::vec(Rd_local, K, base_r + ch * K);
+                        const auto rnd = device::jacobi_detail::rot_round<T>(device::vec(Rcs_local, K, base_r + ch * K), rd,
+                                                          device::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
                         // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
                         // rows. Every index into pk/qk/ap/aq/g must be compile-time or they spill.
@@ -315,14 +313,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         int32_t qk[K];
                         T ap[K][kRPL];
                         T aq[K][kRPL];
-                        v2::Frag<T, K> g;
+                        device::Frag<T, K> g;
 BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < K; ++k) {
-                            const jac::PivotPair pqk = rnd.pair(k);
+                            const device::jacobi_detail::PivotPair pqk = rnd.pair(k);
                             pk[k] = pqk.p;
                             qk[k] = pqk.q;
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
-                            const T acc = v2::load_dotc_owned<static_cast<int>(kRPL)>(ex, A.col(ok ? pk[k] : 0),
+                            const T acc = device::load_dotc_owned<static_cast<int>(kRPL)>(ex, A.col(ok ? pk[k] : 0),
                                                                                      A.col(ok ? qk[k] : 0), ap[k], aq[k]);
                             g[k] = ok ? acc : T(0);
                         }
@@ -330,22 +328,22 @@ BATCHLAS_UNROLL_FULL
                         // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32: lane l ends
                         // with a_{p q} of pair l >> 1. Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
-                        const T apq = v2::reduce_scatter<K>(ex, g);
+                        const T apq = device::reduce_scatter<K>(ex, g);
 
                         const int32_t k_of_lane = lane >> 1;
                         const int32_t slot = ch * K + k_of_lane;
                         // Re-read from LDS: a runtime index into pq[] would spill it.
-                        const jac::PivotPair kpq = rnd.pair(k_of_lane);
+                        const device::jacobi_detail::PivotPair kpq = rnd.pair(k_of_lane);
 
                         bool active = (slot < pairs_per_round) && (kpq.p < CC) && (kpq.q < CC);
                         Real app = Real(0);
                         Real aqq = Real(0);
-                        jac::JacobiRotation<T> jr = jac::identity_rotation<T>();
+                        device::jacobi_detail::JacobiRotation<T> jr = device::jacobi_detail::identity_rotation<T>();
                         if (active) {
                             app = nrm(kpq.p);
                             aqq = nrm(kpq.q);
                             // An identity rotation must not count, or every problem burns all max_sweeps.
-                            jr = v2::sym_schur2<T>(app, aqq, apq, thr);
+                            jr = device::sym_schur2<T>(app, aqq, apq, thr);
                         }
                         active = jr.active;
 
@@ -353,7 +351,7 @@ BATCHLAS_UNROLL_FULL
                         // only. BOTH sides clamp at zero: a negative q side NaNs
                         // the rank sort into an out-of-bounds LDS index.
                         if (active && (lane % 2 == 0)) {
-                            const auto n2 = jac::rotated_norms2(jr, app, aqq);
+                            const auto n2 = device::jacobi_detail::rotated_norms2(jr, app, aqq);
                             nrm(kpq.p) = n2.p;
                             nrm(kpq.q) = n2.q;
                         }
@@ -361,7 +359,7 @@ BATCHLAS_UNROLL_FULL
                         group_barrier(ex.part);
 
                         // Every lane must take part in the count.
-                        const int32_t round_active = v2::allreduce(ex, (active && (lane % 2 == 0)) ? 1 : 0);
+                        const int32_t round_active = device::allreduce(ex, (active && (lane % 2 == 0)) ? 1 : 0);
                         rot_count += round_active;
                         if (round_active == 0) continue;
 
@@ -372,12 +370,12 @@ BATCHLAS_UNROLL_FULL
                             const sycl::vec<Real, 2> cs = rnd.coef(k);
                             // Warp-uniform skip: converged pairs are free.
                             if (cs[1] == Real(0)) continue;
-                            const jac::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
-                            v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
-                                const jac::Pair2<T> r = jac::rot_right(u, ap[k][rr], aq[k][rr]);
+                            const device::jacobi_detail::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
+                            device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
+                                const device::jacobi_detail::Pair2<T> r = device::jacobi_detail::rot_right(u, ap[k][rr], aq[k][rr]);
                                 A(row, pk[k]) = r.x;
                                 A(row, qk[k]) = r.y;
-                                if constexpr (ComputeV) jac::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
+                                if constexpr (ComputeV) device::jacobi_detail::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
                             });
                         }
                         group_barrier(ex.part);
@@ -476,7 +474,7 @@ BATCHLAS_UNROLL_FULL
                             ++deficient_here;
                         }
                     }
-                    const int32_t any_def = v2::allreduce(ex, deficient_here);
+                    const int32_t any_def = device::allreduce(ex, deficient_here);
 
                     // LC, not RR: Thin skips completion unless a column is deficient.
                     if (any_def > 0 || LC > CC) {
@@ -498,21 +496,21 @@ BATCHLAS_UNROLL_FULL
                             while (jcur < RR && !filled) {
                                 const int32_t j = jcur++;
                                 Rows v;
-                                v2::set_unit_owned(ex, j, v);
+                                device::set_unit_owned(ex, j, v);
                                 // TWO CGS passes: one loses orthogonality exactly
                                 // in the near-deficient case that triggers this.
                                 for (int32_t pass = 0; pass < 2; ++pass) {
                                     for (int32_t d2 = 0; d2 < dst; ++d2) {
                                         Rows qv;
-                                        v2::load_owned_masked(ex, A.col(static_cast<int32_t>(inv(d2))), RR, qv);
-                                        const T dot = v2::allreduce(ex, v2::dotc_owned(qv, v));
-                                        v2::sub_mul(v, qv, dot);
+                                        device::load_owned_masked(ex, A.col(static_cast<int32_t>(inv(d2))), RR, qv);
+                                        const T dot = device::allreduce(ex, device::dotc_owned(qv, v));
+                                        device::sub_mul(v, qv, dot);
                                     }
                                 }
-                                const Real nrm2 = v2::allreduce(ex, v2::sumsq_owned(ex, v, RR));
+                                const Real nrm2 = device::allreduce(ex, device::sumsq_owned(ex, v, RR));
                                 if (nrm2 > accept_tol) {
                                     const Real inv_nr = ::batchlas::sycl_device::inv_sqrt(nrm2);
-                                    v2::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
+                                    device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
                                         A(row, cdst) = v[rr] * T(inv_nr);
                                     });
                                     filled = true;
@@ -524,7 +522,7 @@ BATCHLAS_UNROLL_FULL
                     group_barrier(ex.part);
 
                     // Writeback, each orientation coalescing its own output. Hand loops through
-                    // the v1 views: v2::copy/map over v2::mat(..).row() sub-views changed the
+                    // the host views: device::copy/map over device::mat(..).row() sub-views changed the
                     // unrolling (STG +17..+36).
                     if (!transposed_f) {
                         // U(lane, dst) = A(lane, inv(dst)): dst is the output COLUMN, Thin truncates it.
@@ -540,7 +538,7 @@ BATCHLAS_UNROLL_FULL
                             const int32_t dst = lane + cc * kP;
                             if (!live || dst >= LC) continue;
                             const int32_t c = static_cast<int32_t>(inv(dst));
-                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = v2::conj(A(r, c));
+                            for (int32_t r = 0; r < RR; ++r) Vh_prob(dst, r) = device::conj(A(r, c));
                         }
                     }
                 }
@@ -553,7 +551,7 @@ BATCHLAS_UNROLL_FULL
                             const int32_t dst = lane + cc * kP;
                             if (!live || dst >= CC) continue;
                             const int32_t c = static_cast<int32_t>(inv(dst));
-                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = v2::conj(V(r, c));
+                            for (int32_t r = 0; r < CC; ++r) Vh_prob(dst, r) = device::conj(V(r, c));
                         }
                     } else {
                         // U = V' directly. Here lane is the output ROW.

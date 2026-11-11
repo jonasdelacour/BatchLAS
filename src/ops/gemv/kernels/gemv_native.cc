@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Native batched GEMV: five kernel bodies, the work-group ladder they share, and
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
-// The bodies are device LA v2 op sequences (partial dot, lane fold, fused epilogue)
+// The bodies are device LA op sequences (partial dot, lane fold, fused epilogue)
 // that keep the hand code's fma chain, int64 index arithmetic and shuffle trees:
 // core ops plus fold_down (src/ops/gemv/gemv_native_v2.hh: a run-time-stride shift fold).
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies
@@ -29,16 +29,15 @@
 
 namespace batchlas::sycl_gemv {
 
-namespace v2 = batchlas::device;
 using sycl_device::DevMap;
-using Fma = v2::arith::Fma;
+using Fma = device::arith::Fma;
 
 namespace {
 
 // One launch's batched operands, re-typed to the device scalar D at the pointer
 // boundary. NO __restrict__ ON ANY OF THEM: ortho.cc passes views into the same
 // allocation, and __restrict__ is a promise about the object. Item b's views keep
-// the hand code's int64 index arithmetic: v2::mat_wide / vec_wide (ld and inc are
+// the hand code's int64 index arithmetic: device::mat_wide / vec_wide (ld and inc are
 // int, as MatrixView::ld and VectorView::inc are), and a column is a vec_wide from
 // its own int64 pointer, since core Mat::col forms j * ld in int32.
 // The alpha == 0 / beta == 0 flags are NOT members: each kernel captures them as
@@ -71,11 +70,11 @@ struct GemvOperands {
     }
 
     // Row i of item b: A(i, j) = Ab[i + int64(j) * ld].
-    auto row(int64_t b, int i) const { return v2::mat_wide(a + b * stride_a, m, n, lda).row(i); }
+    auto row(int64_t b, int i) const { return device::mat_wide(a + b * stride_a, m, n, lda).row(i); }
     // Column j of item b: (Ab + int64(j) * ld)[i].
-    auto col(int64_t b, int j) const { return v2::vec_wide(a + b * stride_a + static_cast<int64_t>(j) * lda, m); }
-    auto xvec(int64_t b, int len) const { return v2::vec_wide(x + b * stride_x, len, xinc); }
-    auto yvec(int64_t b, int len) const { return v2::vec_wide(y + b * stride_y, len, yinc); }
+    auto col(int64_t b, int j) const { return device::vec_wide(a + b * stride_a + static_cast<int64_t>(j) * lda, m); }
+    auto xvec(int64_t b, int len) const { return device::vec_wide(x + b * stride_x, len, xinc); }
+    auto yvec(int64_t b, int len) const { return device::vec_wide(y + b * stride_y, len, yinc); }
 };
 
 template <typename T> class GemvDirectNKernel;
@@ -223,8 +222,8 @@ Event gemv_direct_notrans(Queue& ctx,
                 const auto xb = op.xvec(b, op.n);
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, Ai, xb);
-                v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(i));
+                if (!alpha_zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, Ai, xb);
+                device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(i));
             });
     });
 
@@ -284,10 +283,10 @@ Event gemv_seg_notrans(Queue& ctx,
                 const auto xb = op.xvec(b, op.n);
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero && jsub < W) acc = v2::dot_partial<false, Fma>(v2::Slot<W>{jsub}, Ai, xb);
-                acc = dla::fold_down<W>(sg, acc, v2::Dyn{seg});  // lanes i + seg*t onto lane i
+                if (!alpha_zero && jsub < W) acc = device::dot_partial<false, Fma>(device::Slot<W>{jsub}, Ai, xb);
+                acc = dla::fold_down<W>(sg, acc, device::Dyn{seg});  // lanes i + seg*t onto lane i
                 if (lane < seg)
-                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(i));
+                    device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(i));
             });
     });
 
@@ -334,12 +333,12 @@ Event gemv_direct_trans(Queue& ctx,
                 const int j = static_cast<int>(gid - b * op.n);
 
                 // y(j) := alpha op(A)(j, :) x + beta y(j), op(A)(j, :) = conj?(A(:, j))^T.
-                const auto Aj = v2::conj_if(op.col(b, j), conj);
+                const auto Aj = device::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) acc = v2::dot<v2::Scope::Auto, Fma>(v2::Thread{}, Aj, xb);
-                v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
+                if (!alpha_zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, Aj, xb);
+                device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 
@@ -348,7 +347,7 @@ Event gemv_direct_trans(Queue& ctx,
 
 // BODY 3 -- `cta`, transA != NoTrans, GPU with an ENUMERATED sub-group
 // size of 32. One 32-lane sub-group per output element, folded through
-// v2::shift_reduce, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
+// device::shift_reduce, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
 // and has to be: a shuffle reached by only some lanes of a sub-group is UB.
 template <typename T>
 Event gemv_cta_trans(Queue& ctx,
@@ -385,7 +384,7 @@ Event gemv_cta_trans(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
-                const v2::SubGroup<kSg> team{it.get_sub_group()};
+                const device::SubGroup<kSg> team{it.get_sub_group()};
                 const int64_t sg_out =
                     static_cast<int64_t>(it.get_group_linear_id()) * sgs +
                     static_cast<int64_t>(team.sg.get_group_linear_id());
@@ -400,14 +399,14 @@ Event gemv_cta_trans(Queue& ctx,
 
                 // The team's partial dots, a shift-down fold (no shared memory, unlike
                 // reduce_over_group), and the leader alone writes y(j).
-                const auto Aj = v2::conj_if(op.col(b, j), conj);
+                const auto Aj = device::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) acc = v2::dot_partial<false, Fma>(team, Aj, xb);
-                acc = v2::shift_reduce<kSg>(team.sg, acc, [](D u, D w) { return v2::Arith<D>::add(u, w); });  // leader-only
+                if (!alpha_zero) acc = device::dot_partial<false, Fma>(team, Aj, xb);
+                acc = device::shift_reduce<kSg>(team.sg, acc, [](D u, D w) { return device::Arith<D>::add(u, w); });  // leader-only
                 if (team.leader())
-                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
+                    device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 
@@ -473,7 +472,7 @@ Event gemv_seg_trans(Queue& ctx,
 
                 // W teams of L lanes: team o owns output base + o, its lane team.lid()
                 // owns the reduction slice i = team.lid() mod L.
-                const v2::Partition<kLanes> team{sg};
+                const device::Partition<kLanes> team{sg};
                 const int o = static_cast<int>(sg.get_local_linear_id()) / kLanes;
 
                 const int64_t sg_out = base + o;
@@ -488,14 +487,14 @@ Event gemv_seg_trans(Queue& ctx,
                 const bool active = in_range && (mask == nullptr || mask[b] != 0);
 
                 // L is compile-time, so the owned-slice loop unrolls -- W's point.
-                const auto Aj = v2::conj_if(op.col(b, j), conj);
+                const auto Aj = device::conj_if(op.col(b, j), conj);
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero && active) acc = v2::dot_partial<false, Fma>(team, Aj, xb);
-                acc = v2::shift_reduce<kLanes>(team.part, acc, [](D u, D w) { return v2::Arith<D>::add(u, w); });  // leader-only
+                if (!alpha_zero && active) acc = device::dot_partial<false, Fma>(team, Aj, xb);
+                acc = device::shift_reduce<kLanes>(team.part, acc, [](D u, D w) { return device::Arith<D>::add(u, w); });  // leader-only
                 if (team.leader() && active)
-                    v2::store<v2::epi::MacChain, Fma>(v2::MaybeZero{op.alpha, alpha_zero}, acc, v2::MaybeZero{op.beta, beta_zero}, yb(j));
+                    device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });
 

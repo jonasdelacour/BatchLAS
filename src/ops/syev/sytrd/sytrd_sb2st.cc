@@ -30,8 +30,6 @@ namespace batchlas {
 
 namespace {
 
-namespace v2 = batchlas::device;
-namespace sbd = batchlas::device::sb2st_detail;
 
 template <typename T>
 inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
@@ -92,7 +90,7 @@ Event kd0_extract(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            v2::sb2st_detail::extract_narrow<0>(n, AB, Db, Eb, Taub);
+            device::sb2st_detail::extract_narrow<0>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -129,7 +127,7 @@ Event kd1_extract_lower(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            v2::sb2st_detail::extract_narrow<1>(n, AB, Db, Eb, Taub);
+            device::sb2st_detail::extract_narrow<1>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -167,7 +165,7 @@ Event btrd_lower_inplace(Queue& q,
             const int b = static_cast<int>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group, before any barrier
             // Runtime stride, as legacy get_local_range(0): a constexpr one lets ptxas unroll the store loops.
-            const v2::RtGroup<v2::Scope::Group> ex{it};
+            const device::RtGroup<device::Scope::Group> ex{it};
 
             auto ABv = ab.batch_item(b);
             auto Cv = c.batch_item(b);
@@ -186,18 +184,18 @@ Event btrd_lower_inplace(Queue& q,
             Real* const Cp = C.data_ptr();  // C / WORK are built with inc = 1
             T* const Wp = WORK.data_ptr();
 
-            v2::for_each_owned(ex, n + kd + 2, [&](int i) BATCHLAS_DLA_BODY {
+            device::for_each_owned(ex, n + kd + 2, [&](int i) BATCHLAS_DEVICE_BODY {
                 C[i] = Real(0);
                 WORK[i] = T(0);
             });
-            v2::sync(ex, v2::Mem::Global);
+            device::sync(ex, device::Mem::Global);
 
             const int kd1 = kd + 1;
             const int kdm1 = kd - 1;
             const int incx = ldab - 1;
             const int kdn = (n - 1 < kd) ? (n - 1) : kd;
 
-            auto idx = [&](int r, int c) BATCHLAS_DLA_BODY -> int { return r + c * ldab; };
+            auto idx = [&](int r, int c) BATCHLAS_DEVICE_BODY -> int { return r + c * ldab; };
 
             int nr = 0;
             int j1 = kdn + 1;
@@ -205,20 +203,20 @@ Event btrd_lower_inplace(Queue& q,
 
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
-            auto rseq = [&](int cnt, auto at) BATCHLAS_DLA_BODY {
-                return sbd::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DLA_BODY -> decltype(auto) {
+            auto rseq = [&](int cnt, auto at) BATCHLAS_DEVICE_BODY {
+                return device::sb2st_detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
             };
-            auto Cj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return C[j]; };
-            auto Wj = [&](int j) BATCHLAS_DLA_BODY -> T& { return WORK[j]; };
-            auto Cpj = [&](int j) BATCHLAS_DLA_BODY -> Real& { return Cp[j]; };
-            auto Wpj = [&](int j) BATCHLAS_DLA_BODY -> T& { return Wp[j]; };
-            auto band = [&](int r, int dc) BATCHLAS_DLA_BODY {
-                return [&ABv, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return ABv(r, j + dc); };
+            auto Cj = [&](int j) BATCHLAS_DEVICE_BODY -> Real& { return C[j]; };
+            auto Wj = [&](int j) BATCHLAS_DEVICE_BODY -> T& { return WORK[j]; };
+            auto Cpj = [&](int j) BATCHLAS_DEVICE_BODY -> Real& { return Cp[j]; };
+            auto Wpj = [&](int j) BATCHLAS_DEVICE_BODY -> T& { return Wp[j]; };
+            auto band = [&](int r, int dc) BATCHLAS_DEVICE_BODY {
+                return [&ABv, r, dc](int j) BATCHLAS_DEVICE_BODY -> T& { return ABv(r, j + dc); };
             };
-            auto band_p = [&](int r, int dc) BATCHLAS_DLA_BODY {
-                return [&idx, AB, r, dc](int j) BATCHLAS_DLA_BODY -> T& { return AB[idx(r, j + dc)]; };
+            auto band_p = [&](int r, int dc) BATCHLAS_DEVICE_BODY {
+                return [&idx, AB, r, dc](int j) BATCHLAS_DEVICE_BODY -> T& { return AB[idx(r, j + dc)]; };
             };
 
             if (ex.leader()) {
@@ -227,13 +225,13 @@ Event btrd_lower_inplace(Queue& q,
                 shared_ints[2] = j2;
                 shared_ints[3] = 0;
             }
-            v2::sync(ex, v2::Mem::Global);
+            device::sync(ex, device::Mem::Global);
 
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (detail::is_complex<T>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
-                v2::for_each_owned(ex, n, [&](int j) BATCHLAS_DLA_BODY { diag[j] = v2::force_real(diag[j]); });
-                v2::sync(ex, v2::Mem::Global);
+                device::for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY { diag[j] = device::force_real(diag[j]); });
+                device::sync(ex, device::Mem::Global);
             }
 
             for (int i = 0; i < n - 2; ++i) {
@@ -246,7 +244,7 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[2] = j2;
                         shared_ints[3] = k;
                     }
-                    v2::sync(ex, v2::Mem::Global);
+                    device::sync(ex, device::Mem::Global);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
@@ -255,8 +253,8 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLARGV: the rotations annihilating the fill WORK(j) against AB(kd, j - kd1).
-                        v2::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
-                        v2::sync(ex, v2::Mem::Global);
+                        device::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
+                        device::sync(ex, device::Mem::Global);
 
                         if (nr > 2 * kd - 1) {
                             // xLARTV down band diagonal l. Iteration l touches (kd-1-l, c) and
@@ -264,21 +262,21 @@ Event btrd_lower_inplace(Queue& q,
                             // columns and rotations are kd1 columns apart: one barrier for the nest
                             // (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
-                                v2::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                device::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
                                                rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj), rseq(nr, Wj));
                             }
-                            v2::sync(ex, v2::Mem::Global);
+                            device::sync(ex, device::Mem::Global);
                         } else {
                             if (ex.leader()) {
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
-                                                     v2::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
+                                        device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
+                                                     device::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
                                     }
                                 }
                             }
-                            v2::sync(ex, v2::Mem::Global);
+                            device::sync(ex, device::Mem::Global);
                         }
                     }
 
@@ -298,8 +296,8 @@ Event btrd_lower_inplace(Queue& q,
                                 if (k > 2) {
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
-                                    sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
-                                                 v2::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
+                                    device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                                 device::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
                                 }
                             }
                             nr += 1;
@@ -309,7 +307,7 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[1] = j1;
                         shared_ints[2] = j2;
                     }
-                    v2::sync(ex, v2::Mem::Global);
+                    device::sync(ex, device::Mem::Global);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
@@ -317,15 +315,15 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                        v2::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
+                        device::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
                                        rseq(nr, Cpj), rseq(nr, Wpj));
-                        v2::sync(ex, v2::Mem::Global);
+                        device::sync(ex, device::Mem::Global);
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                         if constexpr (detail::is_complex<T>::value) {
                             const auto ws = rseq(nr, Wj);
-                            v2::map(ex, ws, [](const T& w) { return v2::arith_t<v2::arith::Native, T>::conj(w); }, ws);
-                            v2::sync(ex, v2::Mem::Global);
+                            device::map(ex, ws, [](const T& w) { return device::arith_t<device::arith::Native, T>::conj(w); }, ws);
+                            device::sync(ex, device::Mem::Global);
                         }
 
                         if (nr > 2 * kd - 1) {
@@ -335,30 +333,30 @@ Event btrd_lower_inplace(Queue& q,
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
-                                    v2::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                    device::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
                                                    rseq(nrt, Cj), rseq(nrt, Wj));
                                 }
                             }
-                            v2::sync(ex, v2::Mem::Global);
+                            device::sync(ex, device::Mem::Global);
                         } else {
                             if (ex.leader()) {
                                 const int j1end = j1 + kd1 * (nr - 2);
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j1inc - 1), kdm1),
-                                                         v2::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
+                                            device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, j1inc - 1), kdm1),
+                                                         device::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
                                         }
                                     }
                                 }
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    sbd::rot_by<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
-                                                 v2::vec(AB + idx(1, last), lend), C[last], WORK[last]);
+                                    device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, last - 1), lend),
+                                                 device::vec(AB + idx(1, last), lend), C[last], WORK[last]);
                                 }
                             }
-                            v2::sync(ex, v2::Mem::Global);
+                            device::sync(ex, device::Mem::Global);
                         }
                     }
 
@@ -371,7 +369,7 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[1] = j1;
                         shared_ints[2] = j2;
                     }
-                    v2::sync(ex, v2::Mem::Global);
+                    device::sync(ex, device::Mem::Global);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
@@ -379,18 +377,18 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
-                        v2::for_each_owned(ex, nr, [&](int t) BATCHLAS_DLA_BODY {
+                        device::for_each_owned(ex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
                             WORK[j + kd] = WORK[j] * ABv(kd, j);
                             ABv(kd, j) = T(C[j]) * ABv(kd, j);
                         });
-                        v2::sync(ex, v2::Mem::Global);
+                        device::sync(ex, device::Mem::Global);
                     }
                 }
             }
 
             if (ex.leader()) {
-                v2::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
+                device::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
             }
         });
     });
@@ -497,8 +495,8 @@ Event sytrd_sb2st(Queue& ctx,
             h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
-                v2::lacpy(v2::Thread{}, v2::mat(ABsrc.batch_item(b)).sub(0, 0, ldab, n),
-                          v2::mat(ABdst.batch_item(b)).sub(0, 0, ldab, n));
+                device::lacpy(device::Thread{}, device::mat(ABsrc.batch_item(b)).sub(0, 0, ldab, n),
+                          device::mat(ABdst.batch_item(b)).sub(0, 0, ldab, n));
             });
         });
     }

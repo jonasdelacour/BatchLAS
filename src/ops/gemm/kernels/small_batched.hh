@@ -31,8 +31,6 @@
 
 namespace batchlas::sycl_gemm_small {
 
-namespace v2 = batchlas::device;
-namespace gc = batchlas::device::l3;
 
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
@@ -120,17 +118,17 @@ Event launch_small_batched(Queue& ctx,
                 // stored \f$k \times m\f$, so a lane's row is a stored column, lda from its neighbours':
                 // it goes through sB in storage order (coalesced) as sB[r + l * kLdb], and the
                 // second barrier keeps it there until every lane of the slot has read its row.
-                const v2::WorkGroup<kSmallWg> ex{it};
-                using Ops = v2::arith::Fma;  // sycl_device's fma_acc / dev_mul, bit for bit
-                v2::Frag<D, NB> a;
+                const device::WorkGroup<kSmallWg> ex{it};
+                using Ops = device::arith::Fma;  // sycl_device's fma_acc / dev_mul, bit for bit
+                device::Frag<D, NB> a;
                 if (ta) {
-                    gc::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, live, Ab, lda, false, ca, k, m,
+                    device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, live, Ab, lda, false, ca, k, m,
                                             [&](int l, int rr) -> D& { return sB[rr + l * kLdb]; });
                     ex.barrier();
-                    v2::load(a, [&](int l) { return sB[r + l * kLdb]; });
+                    device::load(a, [&](int l) { return sB[r + l * kLdb]; });
                     ex.barrier();
                 } else {
-                    v2::load(a, [&](int l) {
+                    device::load(a, [&](int l) {
                         D v{};
                         if (live && r < m && l < k) v = Ab[r + l * lda];
                         return v;
@@ -139,22 +137,22 @@ Event launch_small_batched(Queue& ctx,
 
                 // op(B) into sB[l + c * kLdb], walked in STORAGE order so the global
                 // read is coalesced either way; zero outside k x n.
-                gc::stage_storage<kTpm>(tt, v2::Ext<NB>{}, v2::Ext<NB>{}, live, Bb, ldb, tb, cb, k, n,
+                device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, live, Bb, ldb, tb, cb, k, n,
                                         [&](int l, int c) -> D& { return sB[l + c * kLdb]; });
                 ex.barrier();
 
                 // acc(j) := op(A)(r, :) op(B)(:, c0 + j) in kLc-wide unrolled chunks: one complex loop
                 // over all 64 l is past LLVM's pragma unroll threshold, so a[] went to the stack (512 B).
-                v2::Frag<D, kCpt> acc;
-                v2::fill(acc, D{});
-                gc::gemv_t_frag<kLc, Ops>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
+                device::Frag<D, kCpt> acc;
+                device::fill(acc, D{});
+                device::l3::gemv_t_frag<kLc, Ops>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
 
                 if (live && r < m) {
                     D* const Cb = c_ptr + bi * sc;
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) v2::store<v2::epi::MulMac, Ops>(alpha_d, acc[j], v2::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
+                        if (c < n) device::store<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
                     }
                 }
             });
@@ -181,7 +179,7 @@ Event launch_small_tiled(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
-    using V4 = gc::Vec4<T>;
+    using V4 = device::l3::Vec4<T>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned
@@ -212,9 +210,9 @@ Event launch_small_tiled(Queue& ctx,
                 const T* const Bb = b_ptr + bi * sb;
                 T* const Cb = c_ptr + bi * sc;
                 // Storage order, so both reads are coalesced; zero-padded.
-                gc::stage_storage<kWg>(t, v2::Ext<NB>{}, v2::Dyn{kp}, true, Ab, lda, false, false, m, k,
+                device::l3::stage_storage<kWg>(t, device::Ext<NB>{}, device::Dyn{kp}, true, Ab, lda, false, false, m, k,
                                        [&](int r, int l) -> T& { return sA[l * kLd + r]; });
-                gc::stage_storage<kWg>(t, v2::Dyn{kp}, v2::Ext<NB>{}, true, Bb, ldb, false, false, k, n,
+                device::l3::stage_storage<kWg>(t, device::Dyn{kp}, device::Ext<NB>{}, true, Bb, ldb, false, false, k, n,
                                        [&](int l, int c) -> T& { return sB[c * kLd + l]; });
                 const int tr = t % kTr, tc = t / kTr;
                 T prior[4][4];
@@ -231,8 +229,8 @@ BATCHLAS_UNROLL_FULL
                 it.barrier(sycl::access::fence_space::local_space);  // WG 144 / 196: not a v2::WorkGroup
 
                 // acc += A(:, l) B(l, :) on the lane's 4x4 tile, four l per 16-byte read of each operand.
-                v2::Tile<T, 4, 4> acc;
-                v2::fill(acc, T(0));
+                device::Tile<T, 4, 4> acc;
+                device::fill(acc, T(0));
                 for (int l0 = 0; l0 < kp; l0 += 4) {
                     V4 bv[4];
 BATCHLAS_UNROLL_FULL
@@ -244,7 +242,7 @@ BATCHLAS_UNROLL_FULL
                         const V4 av = *reinterpret_cast<const V4*>(&sA[(l0 + ll) * kLd + tr * 4]);
                         const T a4[4] = {av[0], av[1], av[2], av[3]};
                         const T b4[4] = {bv[0][ll], bv[1][ll], bv[2][ll], bv[3][ll]};
-                        gc::outer_mac(acc, a4, b4);
+                        device::l3::outer_mac(acc, a4, b4);
                     }
                 }
 
@@ -259,7 +257,7 @@ BATCHLAS_UNROLL_FULL
                             // acc.v, not acc(i, j): a direct operator() call in the kernel lambda
                             // would become SemaSYCL's force-inlined "body" (scripts/check_kernel_entry_calls.py).
                             if constexpr (PrefetchC) *dst = alpha * acc.v[i][j] + beta * prior[i][j];
-                            else v2::store<v2::epi::MulMac, v2::arith::Fma>(alpha, acc.v[i][j], v2::MaybeZero<T>{beta, beta_zero}, *dst);
+                            else device::store<device::epi::MulMac, device::arith::Fma>(alpha, acc.v[i][j], device::MaybeZero<T>{beta, beta_zero}, *dst);
                         }
                     }
                 }

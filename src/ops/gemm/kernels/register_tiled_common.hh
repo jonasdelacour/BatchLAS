@@ -21,8 +21,6 @@
 
 namespace batchlas::sycl_gemm {
 
-namespace v2 = batchlas::device;
-namespace gc = batchlas::device::l3;
 using batchlas::device::static_for;  // core.hh; the wide kernels' halves and the host row tables
 using batchlas::device::l3::supports_aligned_packet_loads;
 using batchlas::device::l3::supports_packet_v;
@@ -58,7 +56,7 @@ template <int TileM_,
           int VecB_ = 4,
           int UnrollK_ = 1,
           int Stages_ = 1>
-struct RegisterTilePolicy : gc::RegGeom<TileM_, TileN_, TileK_, ThreadTileRows_, ThreadTileCols_, UnrollK_, Stages_> {
+struct RegisterTilePolicy : device::l3::RegGeom<TileM_, TileN_, TileK_, ThreadTileRows_, ThreadTileCols_, UnrollK_, Stages_> {
     static constexpr int VecA = VecA_;
     static constexpr int VecB = VecB_;
 };
@@ -175,9 +173,9 @@ Event launch_register_tiled(Queue& ctx,
                 T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
                 const int group_row = static_cast<int>(item.get_group(1));
                 const int group_col = static_cast<int>(item.get_group(2));
-                const v2::Grid2D<> ex{item};
-                v2::Tile<T, ThreadTileRows, ThreadTileCols> accum;
-                v2::fill(accum, T(0));
+                const device::Grid2D<> ex{item};
+                device::Tile<T, ThreadTileRows, ThreadTileCols> accum;
+                device::fill(accum, T(0));
 
                 // accum += A(:, t) B(t, :) over every slab's k steps (all TileK when aligned). The
                 // stage callback writes op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B)
@@ -186,24 +184,24 @@ Event launch_register_tiled(Queue& ctx,
                 // in the call, after tile_a / tile_b and before k: the closure's first-use order is
                 // the kernel's argument order (the tuned kernel's, for byte-identical SASS).
                 constexpr int Thr = Policy::ThreadsPerGroup;
-                gc::reg_tile_mma<Policy, AlignedFastPath>(
+                device::l3::reg_tile_mma<Policy, AlignedFastPath>(
                     ex, local_row, local_col, tile_a, tile_b,
-                    [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DLA_BODY {
+                    [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DEVICE_BODY {
                         const int m0 = group_row * TileM, n0 = group_col * TileN;
                         if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
                                       && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
-                            gc::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
-                            gc::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
+                            device::l3::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
+                            device::l3::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
                             return;
                         }
                         if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
-                            if (packet_a) gc::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                            else gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                            if (packet_b) gc::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
-                            else gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                            if (packet_a) device::l3::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            else device::l3::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            if (packet_b) device::l3::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                            else device::l3::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                         } else {
-                            gc::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
-                            gc::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                            device::l3::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                            device::l3::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                         }
                     },
                     k, accum);
@@ -212,7 +210,7 @@ Event launch_register_tiled(Queue& ctx,
                 // so a direct store puts adjacent lanes ldc apart. kloop ends on a barrier after its
                 // last read of both tiles. The odd column stride spreads the TC-strided writes over the banks.
                 // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
-                gc::store_tile_staged<TileM, TileN, Policy::ThreadsPerGroup, Policy::Stages * Policy::StageASize,
+                device::l3::store_tile_staged<TileM, TileN, Policy::ThreadsPerGroup, Policy::Stages * Policy::StageASize,
                                       Policy::Stages * Policy::StageBSize>(
                     ex, linear_tid, local_row, local_col, accum, &tile_a[0], &tile_b[0], c_item, ldc,
                     group_row * TileM, group_col * TileN, m, n, alpha, beta);

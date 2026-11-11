@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA v2 ops private to trsm (kernels/trsm_native.cc V1 CTA, kernels/trsm_sg_left.cc);
+// Device LA ops private to trsm (kernels/trsm_native.cc V1 CTA, kernels/trsm_sg_left.cc);
 // shared ops (arith::Fma, RtGroup, Partition, Frag load_row / store_row) come from core. Diag
 // and the canonical flags stay run-time values: one kernel serves all 24 trsm cases.
 
@@ -13,7 +13,6 @@
 
 namespace batchlas::sycl_trsm::dla {
 
-namespace v2 = batchlas::device;
 
 // ---- views ----------------------------------------------------------------------------------
 // Element (s, t) of the canonical lower factor Lc of a stored triangle: rho(s) = fwd ? s :
@@ -25,21 +24,21 @@ template <class T, bool Left, class Ld = int> struct CanonTri {
     Ld ld;
     int n;
     bool fwd, trans, conj;
-    BATCHLAS_DLA_INLINE value_type operator()(int s, int t) const {
+    BATCHLAS_DEVICE_INLINE value_type operator()(int s, int t) const {
         const int rs = fwd ? s : (n - 1 - s);
         const int rt = fwd ? t : (n - 1 - t);
         const int r = Left ? rs : rt;
         const int c = Left ? rt : rs;
         value_type v = trans ? a[c + static_cast<std::ptrdiff_t>(r) * ld] : a[r + static_cast<std::ptrdiff_t>(c) * ld];
-        if (conj) v = v2::Arith<value_type>::conj(v);
+        if (conj) v = device::Arith<value_type>::conj(v);
         return v;
     }
     // Lc(s, s), addressed as rho(s) * (ld + 1). A kernel body calls this, never operator():
     // see scripts/check_kernel_entry_calls.py (the SemaSYCL kernel-body quirk).
-    BATCHLAS_DLA_INLINE value_type diag(int s) const {
+    BATCHLAS_DEVICE_INLINE value_type diag(int s) const {
         const std::ptrdiff_t rs = fwd ? s : (n - 1 - s);
         value_type v = a[rs + rs * static_cast<std::ptrdiff_t>(ld)];
-        if (conj) v = v2::Arith<value_type>::conj(v);
+        if (conj) v = device::Arith<value_type>::conj(v);
         return v;
     }
 };
@@ -52,15 +51,15 @@ template <class T, bool Left> struct CanonRhs {
     struct Col {
         T* p;
         std::ptrdiff_t b0, ds, udu;
-        BATCHLAS_DLA_INLINE T& operator()(int s) const { return p[b0 + static_cast<std::ptrdiff_t>(s) * ds + udu]; }
+        BATCHLAS_DEVICE_INLINE T& operator()(int s) const { return p[b0 + static_cast<std::ptrdiff_t>(s) * ds + udu]; }
     };
-    BATCHLAS_DLA_INLINE CanonRhs(T* p_, int n, int ld, bool fwd) : p(p_) {
+    BATCHLAS_DEVICE_INLINE CanonRhs(T* p_, int n, int ld, bool fwd) : p(p_) {
         const std::ptrdiff_t unit_s = Left ? 1 : static_cast<std::ptrdiff_t>(ld);
         du = Left ? static_cast<std::ptrdiff_t>(ld) : 1;
         b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
         ds = fwd ? unit_s : -unit_s;
     }
-    BATCHLAS_DLA_INLINE Col rhs(int u) const { return {p, b0, ds, u * du}; }
+    BATCHLAS_DEVICE_INLINE Col rhs(int u) const { return {p, b0, ds, u * du}; }
 };
 
 // An m x q column-major matrix with its rows read in canonical order: (s, c) is
@@ -70,9 +69,9 @@ template <class T, class Ld = int> struct FlipRows {
     Ld ld;
     int m, q;
     bool fwd;
-    BATCHLAS_DLA_INLINE int rows() const { return m; }
-    BATCHLAS_DLA_INLINE int cols() const { return q; }
-    BATCHLAS_DLA_INLINE T& operator()(int s, int c) const {
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return q; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int s, int c) const {
         const int row = fwd ? s : (m - 1 - s);
         return p[static_cast<std::ptrdiff_t>(row) + static_cast<std::ptrdiff_t>(c) * ld];
     }
@@ -82,7 +81,7 @@ template <class T, class Ld = int> struct FlipRows {
 template <class V> struct ColsFrom {
     V v;
     int c0;
-    BATCHLAS_DLA_INLINE auto& operator()(int r, int j) const { return v(r, c0 + j); }
+    BATCHLAS_DEVICE_INLINE auto& operator()(int r, int j) const { return v(r, c0 + j); }
 };
 template <class V> ColsFrom(V, int) -> ColsFrom<V>;
 
@@ -92,19 +91,19 @@ template <class V, class F> struct MapCols {
     V v;
     int c0;
     F f;
-    BATCHLAS_DLA_INLINE auto operator()(int r, int j) const { return f(v(r, c0 + j)); }
+    BATCHLAS_DEVICE_INLINE auto operator()(int r, int j) const { return f(v(r, c0 + j)); }
 };
 template <class V, class F> MapCols(V, int, F) -> MapCols<V, F>;
 
 // ---- packed lower triangle ------------------------------------------------------------------
 // Row-major by row: (s, t <= s) at s(s+1)/2 + t.
-BATCHLAS_DLA_INLINE constexpr int tp_idx(int s, int t) { return s * (s + 1) / 2 + t; }
+BATCHLAS_DEVICE_INLINE constexpr int tp_idx(int s, int t) { return s * (s + 1) / 2 + t; }
 
 // ap := diag(L(0:n, 0:n), I) as an N x N packed lower triangle; no barrier.
-template <int N, class Ex, class L, class T> BATCHLAS_DLA_INLINE void tp_pack_lower(const Ex& ex, const L& l, int n, T* ap) {
-    using Ar = v2::Arith<T>;
+template <int N, class Ex, class L, class T> BATCHLAS_DEVICE_INLINE void tp_pack_lower(const Ex& ex, const L& l, int n, T* ap) {
+    using Ar = device::Arith<T>;
     constexpr std::size_t elems = static_cast<std::size_t>(N) * (N + 1) / 2;
-    const std::size_t stride = static_cast<std::size_t>(v2::detail::size_of(ex));
+    const std::size_t stride = static_cast<std::size_t>(device::detail::size_of(ex));
     for (std::size_t idx = ex.lid(); idx < elems; idx += stride) {
         int s = 0;
         while (tp_idx(s + 1, 0) <= static_cast<int>(idx)) ++s;
@@ -119,8 +118,8 @@ template <int N, class Ex, class L, class T> BATCHLAS_DLA_INLINE void tp_pack_lo
 // rd(s) := 1 / ap(s, s) for s < n (1 when unit or s >= n). A non-finite reciprocal is
 // replaced by 1 and stores 1 into *bad (work-group-scope relaxed atomic); no barrier.
 template <int N, class Ar, class Ex, class T>
-BATCHLAS_DLA_INLINE void tp_diag_recip(const Ex& ex, const T* ap, int n, bool unit, T* rd, int* bad) {
-    const int stride = v2::detail::size_of(ex);
+BATCHLAS_DEVICE_INLINE void tp_diag_recip(const Ex& ex, const T* ap, int n, bool unit, T* rd, int* bad) {
+    const int stride = device::detail::size_of(ex);
     for (int s = ex.lid(); s < N; s += stride) {
         T r = Ar::one();
         if (s < n && !unit) {
@@ -143,7 +142,7 @@ template <class T> struct TpDiag {
     const T* ap;
     const T* rd;
     bool unit, divide;
-    template <class Ar> BATCHLAS_DLA_INLINE T apply(int s, T v) const {
+    template <class Ar> BATCHLAS_DEVICE_INLINE T apply(int s, T v) const {
         if (!unit) v = divide ? Ar::div(v, ap[tp_idx(s, s)]) : Ar::mul(v, rd[s]);
         return v;
     }
@@ -154,7 +153,7 @@ template <class T> struct TpDiag {
 // after the row's dot product. Not core trsv: the dot is accumulated then subtracted (core
 // msubs into x(s)), the diagonal is TpDiag's guarded reciprocal, and b is read lazily.
 template <int N, int STEP, class Ar, class T, class Rhs>
-BATCHLAS_DLA_INLINE void trsv_lower_rows(v2::Frag<T, N>& x, int s0, const T* ap, const TpDiag<T>& d, Rhs&& b) {
+BATCHLAS_DEVICE_INLINE void trsv_lower_rows(device::Frag<T, N>& x, int s0, const T* ap, const TpDiag<T>& d, Rhs&& b) {
     BATCHLAS_UNROLL_FULL
     for (int j = 0; j < STEP; ++j) {
         const int s = s0 + j;
@@ -173,14 +172,14 @@ BATCHLAS_DLA_INLINE void trsv_lower_rows(v2::Frag<T, N>& x, int s0, const T* ap,
 // tile(r, c) := src(r0 + r, c0 + c) inside src, else 0, for r < TR and c < executor width;
 // tile is column-major with leading dimension LDT. The flat index is distributed Cyclic.
 template <int TR, int LDT, class Ex, class Src, class T>
-BATCHLAS_DLA_INLINE void lacpy_tile_in(const Ex& ex, const Src& src, int r0, int c0, T* tile) {
-    const int stride = v2::detail::size_of(ex);
+BATCHLAS_DEVICE_INLINE void lacpy_tile_in(const Ex& ex, const Src& src, int r0, int c0, T* tile) {
+    const int stride = device::detail::size_of(ex);
     for (int i = ex.lid(); i < TR * stride; i += stride) {
         const int r = i % TR;
         const int c = i / TR;
         const int s = r0 + r;
         const int col = c0 + c;
-        T v = v2::Arith<T>::zero();
+        T v = device::Arith<T>::zero();
         if (s < src.rows() && col < src.cols()) v = src(s, col);
         tile[c * LDT + r] = v;
     }
@@ -188,8 +187,8 @@ BATCHLAS_DLA_INLINE void lacpy_tile_in(const Ex& ex, const Src& src, int r0, int
 
 // dst(r0 + r, c0 + c) := tile(r, c) where that element is inside dst.
 template <int TR, int LDT, class Ex, class T, class Dst>
-BATCHLAS_DLA_INLINE void lacpy_tile_out(const Ex& ex, const T* tile, const Dst& dst, int r0, int c0) {
-    const int stride = v2::detail::size_of(ex);
+BATCHLAS_DEVICE_INLINE void lacpy_tile_out(const Ex& ex, const T* tile, const Dst& dst, int r0, int c0) {
+    const int stride = device::detail::size_of(ex);
     for (int i = ex.lid(); i < TR * stride; i += stride) {
         const int r = i % TR;
         const int c = i / TR;
@@ -200,7 +199,7 @@ BATCHLAS_DLA_INLINE void lacpy_tile_out(const Ex& ex, const T* tile, const Dst& 
 }
 
 // p[j] := x[s0 + j] for j < TR, s0 + j < N (a window of the Frag; core store has no offset).
-template <int TR, int N, class T> BATCHLAS_DLA_INLINE void frag_copy_out(const v2::Frag<T, N>& x, int s0, T* p) {
+template <int TR, int N, class T> BATCHLAS_DEVICE_INLINE void frag_copy_out(const device::Frag<T, N>& x, int s0, T* p) {
     BATCHLAS_UNROLL_FULL
     for (int j = 0; j < TR; ++j) {
         const int s = s0 + j;
@@ -215,7 +214,7 @@ template <class T> struct GuardedRecip {
     T d, rinv;
     bool divide;
 };
-template <class Ar, int P, class T> BATCHLAS_DLA_INLINE GuardedRecip<T> guarded_recip(const v2::Partition<P>& ex, T d) {
+template <class Ar, int P, class T> BATCHLAS_DEVICE_INLINE GuardedRecip<T> guarded_recip(const device::Partition<P>& ex, T d) {
     const T rinv = Ar::recip(d);
     int bad = Ar::isfinite(rinv) ? 0 : 1;
     bad = ex.team_reduce(bad, sycl::bit_or<int>());
@@ -228,8 +227,8 @@ template <class Ar, int P, class T> BATCHLAS_DLA_INLINE GuardedRecip<T> guarded_
 // division branch is sub-group-uniform. Unroll = 1 keeps the step loop rolled (nl indexed at
 // run time: local memory, fewer registers). A distributed trsv: core trsv is Thread-only.
 template <int Unroll, class Ar, int P, int QC, class T>
-BATCHLAS_DLA_INLINE void trsm_lower_rowfrag(const v2::Partition<P>& ex, const v2::Frag<T, P>& nl, const GuardedRecip<T>& d,
-                                            int n, bool unit, v2::Frag<T, QC>& x) {
+BATCHLAS_DEVICE_INLINE void trsm_lower_rowfrag(const device::Partition<P>& ex, const device::Frag<T, P>& nl, const GuardedRecip<T>& d,
+                                            int n, bool unit, device::Frag<T, QC>& x) {
     // lane % P, not ex.lid() (lane & (P-1)): the AND form shifts ptxas' register allocation in
     // the unrolled P=16 kernels by 3-4% of the instructions.
     const int r = static_cast<int>(ex.part.get_local_linear_id()) % P;

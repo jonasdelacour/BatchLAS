@@ -35,17 +35,16 @@ namespace batchlas {
                     sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                     sycl::range<3>(1, TILE, TILE)),
                 [=](sycl::nd_item<3> item) {
-                    namespace v2 = ::batchlas::device;
-                    const v2::Grid2D<TILE, TILE, 1> ex{item};
+                    const device::Grid2D<TILE, TILE, 1> ex{item};
                     const int b = ex.batch();
                     if (mask && !mask[b]) return;  // uniform per work-group: before the barrier
                     // B = A^T through a padded SLM tile that holds the A tile transposed.
-                    const auto t = v2::mat<v2::Mem::Local>(util::get_raw_ptr(tile), TILE, TILE, TILE + 1);
+                    const auto t = device::mat<device::Mem::Local>(util::get_raw_ptr(tile), TILE, TILE, TILE + 1);
                     const int row0 = static_cast<int>(item.get_group(2)) * TILE, col0 = static_cast<int>(item.get_group(1)) * TILE;
-                    v2::glue::tile_load_trans<TILE>(ex, v2::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
+                    device::glue::tile_load_trans<TILE>(ex, device::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
                                                     row0, col0, t);
                     ex.barrier();
-                    v2::glue::tile_store<TILE>(ex, t, v2::mat(dst + static_cast<size_t>(b) * stride_dst, cols, rows, ld_dst),
+                    device::glue::tile_store<TILE>(ex, t, device::mat(dst + static_cast<size_t>(b) * stride_dst, cols, rows, ld_dst),
                                                col0, row0);
                 });
         });
