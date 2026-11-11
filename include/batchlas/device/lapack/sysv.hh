@@ -34,14 +34,14 @@ namespace detail {
 // The fused tile of sysv `cta`: the (N + 1) x N factor then e (N); the int part holds ipiv's
 // copy [0, N), ps, perm, kind (N each), the validity flag at 4N and the factor's info at 4N + 1.
 template <int N, class T> struct SysvCtaPlan {
-    ws::Slot<T> tile;
-    ws::Slot<int> idx;
+    WsSlot<T> tile;
+    WsSlot<int> idx;
     WorkspaceSize size;
 };
 template <int N, class T> constexpr SysvCtaPlan<N, T> sysv_cta_plan() {
     Plan p;
-    const auto tile = p.take<T>(ws::Space::Local, static_cast<std::size_t>(N + 1) * N + N);
-    const auto idx = p.take<int>(ws::Space::Local, 4 * static_cast<std::size_t>(N) + 2);
+    const auto tile = p.take<T>(WsSpace::Local, static_cast<std::size_t>(N + 1) * N + N);
+    const auto idx = p.take<int>(WsSpace::Local, 4 * static_cast<std::size_t>(N) + 2);
     return {tile, idx, p.size()};
 }
 
@@ -64,14 +64,14 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
             pp[k] = v;
         },
         [&](int st) { pp[4 * N + 1] = st; });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     const int info = pp[4 * N + 1];
     if (info == 0) {
         const detail::Staged<D> L{tp, ldt, n, tp + ldt * N, pp + N, pp + 2 * N, pp + 3 * N};
         detail::sytrs_cta_run<1>(ex, ex.sub(), ex.lane(), detail::sytrf_team(ex), detail::sytrf_nteams(ex), L, pp,
                                          rev, pp + 4 * N, &B(0, 0), detail::sytrf_ld(B), B.cols());
     }
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     return info;
 }
 

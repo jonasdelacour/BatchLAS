@@ -59,8 +59,8 @@ Event lu_laswp_launch(Queue& ctx,
                 const auto ipiv = device::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, k1);  // 1-BASED
                 // Backward is REVERSE ORDER: the same list applied forwards computes P,
                 // not P^T -- a silently wrong answer in a transposed getrs.
-                if (forward) device::laswp<device::dir::Forward>(device::Thread{}, col, ipiv, k0, k1);
-                else device::laswp<device::dir::Backward>(device::Thread{}, col, ipiv, k0, k1);
+                if (forward) device::laswp<device::Direct::Forward>(device::Thread{}, col, ipiv, k0, k1);
+                else device::laswp<device::Direct::Backward>(device::Thread{}, col, ipiv, k0, k1);
             });
     });
     return ctx.get_event();

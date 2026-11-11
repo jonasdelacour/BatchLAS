@@ -90,7 +90,7 @@ inline int getrf_leaf_wg(int m, int n, int max_wg) {
 inline bool getrf_packable(int m, int n) { return m <= 32 && n <= 32; }
 
 // Matrices per work-group, and the scope that makes that number correct. G > 1 demands
-// LuScope::SubGroup; the two are derived here together so no caller can pair them wrong.
+// device::Scope::Sub; the two are derived here together so no caller can pair them wrong.
 struct GetrfLeafLaunch {
     int wg = 64;
     int G = 1;
@@ -114,12 +114,12 @@ GetrfLeafLaunch getrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int m
     return p;
 }
 
-template <typename T, getrf_native::LuScope SC> class GetrfPanelResidentKernel;
+template <typename T, device::Scope SC> class GetrfPanelResidentKernel;
 template <typename T> class GetrfPanelGlobalKernel;
 
 // The RESIDENT leaf: stage, factor in local memory, store. Under SubGroup scope G matrices
 // share the work-group, one per sub-group; G == 1 keeps work-group scope and the wider group.
-template <typename T, getrf_native::LuScope SC>
+template <typename T, device::Scope SC>
 Event getrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
@@ -133,7 +133,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
     using R = typename DM::real;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
-    static_assert(SC == getrf_native::LuScope::SubGroup || SC == getrf_native::LuScope::WorkGroup);
+    static_assert(SC == device::Scope::Sub || SC == device::Scope::Group);
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     const int kmax = std::min(m, n);
@@ -162,11 +162,11 @@ Event getrf_panel_resident_launch(Queue& ctx,
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const device::RtGroup<SC == getrf_native::LuScope::SubGroup ? device::Scope::Sub : device::Scope::Group> ex{it};
+                const device::RtGroup<SC> ex{it};
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
                 int b, slot;
-                if constexpr (SC == getrf_native::LuScope::SubGroup) {
+                if constexpr (SC == device::Scope::Sub) {
                     slot = static_cast<int>(it.get_sub_group().get_group_linear_id());
                     b = wg_id * G + slot;
                     // Sub-group-uniform, and this scope executes only sub-group
@@ -332,11 +332,11 @@ Event getrf_panel_factorize(Queue& ctx,
     const auto p = getrf_leaf_launch<T>(
         m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
-        return getrf_panel_resident_launch<T, getrf_native::LuScope::SubGroup>(
+        return getrf_panel_resident_launch<T, device::Scope::Sub>(
             ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
             info_ptr, p.wg, p.G, mask);
     }
-    return getrf_panel_resident_launch<T, getrf_native::LuScope::WorkGroup>(
+    return getrf_panel_resident_launch<T, device::Scope::Group>(
         ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
         info_ptr, p.wg, 1, mask);
 }

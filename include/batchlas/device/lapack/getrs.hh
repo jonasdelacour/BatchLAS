@@ -163,7 +163,7 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const MB
     }
     lu_trsm_pair<TR, NB>(ex, a, b, sm);
     if constexpr (TR != Transpose::NoTrans) {
-        laswp<dir::Backward>(ex, bw, piv, 0, a.n);
+        laswp<Direct::Backward>(ex, bw, piv, 0, a.n);
         ex.barrier(Mem::Global);
     }
 }

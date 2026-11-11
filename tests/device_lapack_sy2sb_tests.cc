@@ -18,7 +18,7 @@
 //     work-group size, sub-group size and fp64, and buffer_size equals the carve.
 // Red set (make each break once on the GPU box before calling this suite green): drop the strip
 // update in two_sided_lower (StripCases: n % kd >= 2 fails); hemm -> symm for a complex T
-// (complex Parity fails); lacpy diag_fill::Unit -> Keep (every reduced case fails).
+// (complex Parity fails); lacpy DiagFill::Unit -> Keep (every reduced case fails).
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/extensions.hh>
@@ -413,7 +413,7 @@ TYPED_TEST(DeviceApiSy2sbTest, FusedTwoStageMatchesTheInputAndTheHostPipeline) {
 
 using Lower16 = batchlas::device::routine::sy2sb<Uplo::Lower, 16>;
 constexpr auto kLay = batchlas::device::detail::panel_layout<Blk32, std::complex<double>>(37, 5);
-static_assert(kLay.smem.space == batchlas::device::ws::Space::Local && kLay.smem.count == std::size_t(batchlas::device::l3::smem_elems<batchlas::device::detail::cfg_t<Blk32, std::complex<double>>>()));
+static_assert(kLay.smem.space == batchlas::device::WsSpace::Local && kLay.smem.count == std::size_t(batchlas::device::l3::smem_elems<batchlas::device::detail::cfg_t<Blk32, std::complex<double>>>()));
 static_assert(kLay.size.local_bytes >= kLay.smem.count * sizeof(std::complex<double>));
 static_assert(kLay.taup.offset == 0 && kLay.v.offset % 16 == 0 && kLay.v.offset >= 5 * sizeof(std::complex<double>));
 static_assert(kLay.m2.offset + 5 * 5 * sizeof(std::complex<double>) <= kLay.size.global_bytes && kLay.v.count == 32 * 5);

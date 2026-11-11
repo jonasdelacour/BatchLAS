@@ -31,25 +31,22 @@ struct Workspace {
     std::byte* global = nullptr;
 };
 
-namespace ws {
-enum class Space { Local, Global };
-template <class T> struct Slot {
-    Space space;
+enum class WsSpace { Local, Global };
+template <class T> struct WsSlot {
+    WsSpace space;
     std::size_t offset;
     std::size_t count;
 };
-}  // namespace ws
 
-// The bump allocator both sides run: take<T>(space, count) returns the slot (offset aligned to
-// max(alignof(T), align)), size() the totals; constexpr.
+// The bump allocator both sides run: take<T>(space, count) -> a slot aligned to max(alignof(T), align).
 class Plan {
   public:
     constexpr explicit Plan(std::size_t align = 16) : align_(align) {}
-    template <class T> constexpr ws::Slot<T> take(ws::Space s, std::size_t count) {
-        std::size_t& top = s == ws::Space::Local ? local_ : global_;
+    template <class T> constexpr WsSlot<T> take(WsSpace s, std::size_t count) {
+        std::size_t& top = s == WsSpace::Local ? local_ : global_;
         const std::size_t a = alignof(T) > align_ ? alignof(T) : align_;
         top = (top + a - 1) / a * a;
-        const ws::Slot<T> slot{s, top, count};
+        const WsSlot<T> slot{s, top, count};
         top += count * sizeof(T);
         return slot;
     }
@@ -66,11 +63,11 @@ class Plan {
 
 // The typed pointer of a slot inside this matrix's workspace: a decorated local pointer for a
 // Local slot (a generic T* would lose the shared address space: generic LD/ST), a T* for Global.
-template <class T> BATCHLAS_DEVICE_INLINE local_mptr<T> carve_local(const Workspace& w, const ws::Slot<T>& s) {
+template <class T> BATCHLAS_DEVICE_INLINE local_mptr<T> carve_local(const Workspace& w, const WsSlot<T>& s) {
     return sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
         reinterpret_cast<T*>(w.local.get_raw() + s.offset));
 }
-template <class T> BATCHLAS_DEVICE_INLINE T* carve_global(const Workspace& w, const ws::Slot<T>& s) {
+template <class T> BATCHLAS_DEVICE_INLINE T* carve_global(const Workspace& w, const WsSlot<T>& s) {
     return reinterpret_cast<T*>(w.global + s.offset);
 }
 

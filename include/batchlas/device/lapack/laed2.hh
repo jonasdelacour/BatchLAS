@@ -73,7 +73,7 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
         perm_local[k] = perm_map(k);
     });
 
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
 
     map(ex, absx, abs_of, d);
     const T eig_max = detail::fold(ex, absx, sycl::maximum<T>());
@@ -85,7 +85,7 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
         if (std::abs(d_at(j + 1) - d_at(j)) <= abs_tol) {
             const T f = z(j + 1), g = z(j);
             auto [c, s, r] = lartg(f, g);
-            sync<scope::Group>(ex, Mem::Global);
+            sync<Scope::Group>(ex, Mem::Global);
             if (ex.leader()) {
                 z(j) = T(0.0);
                 z(j + 1) = r;
@@ -96,11 +96,11 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
                 rot(ex, Givens<T>{c, s}, Qb.col(pj1), Qb.col(pj));
             }
             // The leader's z(j), z(j+1) must be visible before the next Givens pair reads z(j+1).
-            sync<scope::Group>(ex, Mem::Global);
+            sync<Scope::Group>(ex, Mem::Global);
         }
     }
 
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     // LAPACK LAED8 based tolerance (small-|z| deflation), using the same absolute tolerance.
 
     map(ex, absx, abs_of, d);
@@ -119,7 +119,7 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
         }
     });
 
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
 
     // Exclusive scans give each kept / deflated pole its slot.
     batchlas::portable::joint_exclusive_scan(ex.it.get_group(), keep_ptr(), keep_ptr() + n, scan_inc_ptr(), 0, sycl::plus<std::int32_t>());

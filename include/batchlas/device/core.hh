@@ -31,17 +31,16 @@
 
 namespace batchlas::device {
 
-// The unroll policy of a v2-owned loop, emitted as loop metadata: Default adds none (LLVM and
-// ptxas decide, the hand loop's behaviour); None is llvm.loop.unroll.disable (PTX .pragma
-// "nounroll"); Count<N> is unroll_count(N); Full is unroll(full) (a compile-time trip count).
-namespace unroll {
-struct Default {};
-struct None {};
-template <int N> struct Count {
+// Loop unroll policy (loop metadata): UnrollDefault none (LLVM and ptxas decide); UnrollNone
+// llvm.loop.unroll.disable; UnrollCount<N> unroll_count(N); UnrollFull unroll(full).
+namespace alg {
+struct UnrollDefault {};
+struct UnrollNone {};
+template <int N> struct UnrollCount {
     static constexpr int count = N;
 };
-struct Full {};
-}  // namespace unroll
+struct UnrollFull {};
+}  // namespace alg
 
 // Elements [lo, hi) in the parent's coordinates (an op on a Range owns i - lo mod size).
 struct Range {
@@ -60,7 +59,9 @@ struct Dyn {
 using Unit = Ext<1>;
 
 enum class Mem { Global, Local, Reg };
-enum class Scope { Auto, Sub, Group };
+// Collective scope: Own = the executor's own unit (reduce: natural_scope; sync: its own barrier),
+// Sub = the sub-group (one team), Group = the whole executor.
+enum class Scope { Own, Sub, Group };
 
 struct Cyclic {};      // element / row i owned by lid == i mod size (r = lid + k*size)
 struct RowFrag {};     // lane l holds matrix row l in registers
@@ -111,18 +112,17 @@ struct Walk {};
 struct Default {};             // a tier's own default algorithm (tier::Cta / Blocked)                 // one division per item, (dr, dc) = (size % m, size / m) per step
 }  // namespace alg
 
-// Butterfly order of a team reduction: xor masks P/2 .. 1 (Down) or 1 .. P/2 (Asc). The two
-// sum in different orders, so a strict port names the hand kernel's.
-namespace bfly {
-struct Down {};
-struct Asc {};
-}  // namespace bfly
+// Butterfly order: xor masks P/2 .. 1 (BflyDown) or 1 .. P/2 (BflyAsc), two summation orders.
+namespace alg {
+struct BflyDown {};
+struct BflyAsc {};
+}  // namespace alg
 
 // Op tags for scratch_elements.
-namespace op {
+namespace reduce_op {
 template <int K> struct ReduceN {};
 using Reduce = ReduceN<1>;
-}  // namespace op
+}  // namespace reduce_op
 
 // A scalar with a host-decided zero flag: an epilogue never reads y when beta's flag is set.
 template <class T> struct MaybeZero {
@@ -152,14 +152,14 @@ template <class E> inline constexpr int static_extent_v = -1;
 template <int N> inline constexpr int static_extent_v<Ext<N>> = N;
 
 // NaN-losing max / min (sycl::fmax / fmin: a NaN operand yields the other), as reduction ops.
-namespace op {
+namespace reduce_op {
 struct FMax {
     template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
 };
 struct FMin {
     template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
 };
-}  // namespace op
+}  // namespace reduce_op
 
 // The part of a matrix an op touches: Full, a triangle with its diagonal (Lower, Upper) or
 // without it (StrictLower, StrictUpper).
@@ -174,43 +174,30 @@ template <Part P> BATCHLAS_DEVICE_INLINE bool in_part(int i, int j) {
 }
 }  // namespace detail
 
-// sync<S>(ex) barrier scopes: Part = the executor's own unit (a masked partition's own barrier;
-// nothing on Teams, whose team is a lockstep slice of a sub-group), Sub = the sub-group,
-// Group = the whole executor (sync(ex): work-group on WorkGroup, sub-group on a team executor).
-namespace scope {
-struct Part {};
-struct Sub {};
-struct Group {};
-}  // namespace scope
-
+namespace alg {
 // Team loops: Lockstep runs ceil(n / nteams) trips on every team; Diverge stops at its own bound.
-namespace loop {
 struct Lockstep {};
 struct Diverge {};
-}  // namespace loop
 
-namespace alg {
 struct TeamPerRow {};                   // gemv N / her2: one team per output row, lanes stride columns
 template <int W> struct ColDot {        // gemv T/C: W consecutive lanes per output column
     static_assert(W > 0 && (W & (W - 1)) == 0, "alg::ColDot: W is a power of two");
     static constexpr int width = W;
 };
 struct LanePerRow {};                   // trsv: lane i holds x(i); column j reaches the lanes by bcast
-}  // namespace alg
-
-// Which side of the accumulated product alpha multiplies (gemv): Left alpha * acc, Right acc * alpha.
-namespace alpha_side {
-struct Left {};
-struct Right {};
-}  // namespace alpha_side
-
-// Triangular-solve diagonal: Unit (not read), Div, Recip (x * (1 / a_ii)), Real (x / re(a_ii)).
-namespace tri_diag {
-struct Unit {};
+// Triangular-solve diagonal: UnitDiag (not read), Div, Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
+struct UnitDiag {};
 struct Div {};
 struct Recip {};
-struct Real {};
-}  // namespace tri_diag
+struct RealDiv {};
+}  // namespace alg
+
+// The diagonal a copy / unit-head view gives: Keep (stored), Unit (1), Real ((re, 0)), Zero (0).
+enum class DiagFill { Keep, Unit, Real, Zero };
+
+// xORMBR's VECT (apply Q or P) and xSYGST's ITYPE (1: inv(F) A inv(F)^H; 2, 3: F^H A F).
+enum class Vect { Q, P };
+enum class Itype { AinvB = 1, AB, BA };
 
 }  // namespace batchlas::device
 

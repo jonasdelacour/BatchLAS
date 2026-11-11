@@ -26,11 +26,11 @@ namespace detail {
 
 // The Blocked plan: the L3 stage slot alone, at potrf's offset.
 template <class T> struct BlockedSolvePlan {
-    ws::Slot<T> smem;
+    WsSlot<T> smem;
     WorkspaceSize size;
     static constexpr BlockedSolvePlan make() {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
+        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
         return {s, p.size()};
     }
 };

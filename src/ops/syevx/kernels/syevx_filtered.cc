@@ -391,10 +391,10 @@ Event syevx_filtered(Queue& ctx,
                         device::for_each_owned(ex, static_cast<int>(kk), [&](int j) {
                             const int col = large ? static_cast<int>(mm) - 1 - j : j;
                             const Real lam = th[b * mm + col];
-                            // The legacy expression (arith::Native: strict). unroll::None keeps the
+                            // The legacy expression (arith::Native: strict). alg::UnrollNone keeps the
                             // row loop rolled; without it LLVM unrolls it (LDG 8 -> 82, +98%).
                             Real acc = Real(0);
-                            device::for_each_owned<device::unroll::None>(device::Thread{}, static_cast<int>(nn), [&](int i) {
+                            device::for_each_owned<device::alg::UnrollNone>(device::Thread{}, static_cast<int>(nn), [&](int i) {
                                 const T d = AXk(i, col, b) - T(lam) * Xk(i, col, b);
                                 if constexpr (is_std_complex_v<T>) {
                                     acc += d.real() * d.real() + d.imag() * d.imag();
@@ -670,7 +670,7 @@ Event syevx_filtered(Queue& ctx,
                     if (v_ptr != nullptr) {
                         const auto Xb = device::mat(Xk.data() + static_cast<int64_t>(b) * Xk.stride(), n_, m_, Xk.ld());
                         device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(
-                            ex, device::flip<device::axis::Cols>(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
+                            ex, device::flip<device::Axis::Cols>(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
                             device::mat(v_ptr + b * v_stride, n_, k_, static_cast<int>(v_ld)));
                     }
                 });

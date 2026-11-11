@@ -254,7 +254,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        const auto scalars = device::larfg_scalars<device::conv::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
+                        const auto scalars = device::larfg_scalars<device::alg::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
                         beta_q = scalars.beta;
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
@@ -342,7 +342,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        const auto scalars = device::larfg_scalars<device::conv::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        const auto scalars = device::larfg_scalars<device::alg::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
                         beta_p = scalars.beta;
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;

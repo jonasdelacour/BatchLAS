@@ -23,16 +23,16 @@ template <Side SD, Transpose TR> struct ormqr {
 
 namespace detail {
 template <class T> struct OrmqrSlots {
-    ws::Slot<T> smem, v, t, work;
+    WsSlot<T> smem, v, t, work;
 };
 // ormqr's carve for C (m x n), k reflectors, block NB, appended to p (orgqr appends to its own).
 template <Side SD, int NB, class Cfg, class T> constexpr OrmqrSlots<T> ormqr_take(Plan& p, int m, int n) {
     const std::size_t nq = static_cast<std::size_t>(SD == Side::Left ? m : n);
     OrmqrSlots<T> s{};
-    s.smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
-    s.v = p.take<T>(ws::Space::Global, nq * NB);
-    s.t = p.take<T>(ws::Space::Global, static_cast<std::size_t>(NB) * NB);
-    s.work = p.take<T>(ws::Space::Global, larfb_work_elems<SD>(m, n, NB));
+    s.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    s.v = p.take<T>(WsSpace::Global, nq * NB);
+    s.t = p.take<T>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
+    s.work = p.take<T>(WsSpace::Global, larfb_work_elems<SD>(m, n, NB));
     return s;
 }
 template <Side SD, int NB, class Cfg, class T> constexpr WorkspaceSize ormqr_size(int m, int n) {

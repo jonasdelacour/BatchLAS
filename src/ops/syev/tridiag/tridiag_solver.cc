@@ -41,7 +41,7 @@ using TridiagEx = device::RtGroup<>;
 template <typename T>
 void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, const int m, const int ld, T* Q) {
     const auto q = device::mat(Q, m, n + 1, ld);
-    for (int k = 0; k < n; k++) device::rot<device::rot_conv::Reflector2>(ex, device::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
+    for (int k = 0; k < n; k++) device::rot<device::alg::RotReflector2>(ex, device::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
 }
 
 // One explicit shifted QR step on the leading n x n block: T - shift = Q R, T := R Q + shift, Q
@@ -53,7 +53,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     auto U2 = [&](int k) -> T& { return U[(n + 1) + k]; };
     // (I - 2 v v^T) on three scattered pairs, unrolled at compile time: the pointers stay in registers.
     auto refl3 = [](const device::Givens<T>& g, const auto& x, const auto& y) BATCHLAS_DEVICE_BODY {
-        device::static_for<3>([&](auto i) BATCHLAS_DEVICE_BODY { device::rot<device::rot_conv::Reflector2>(g, x(i), y(i)); });
+        device::static_for<3>([&](auto i) BATCHLAS_DEVICE_BODY { device::rot<device::alg::RotReflector2>(g, x(i), y(i)); });
     };
 
     // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
@@ -88,7 +88,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         const std::array<T, 2> v{Vout[0], Vout[1]};
         const T t1 = T(0) + D[1] * v[1];
-        device::rot<device::rot_conv::Reflector2>(device::Givens<T>{v[0], v[1]}, D[0], U[0]);
+        device::rot<device::alg::RotReflector2>(device::Givens<T>{v[0], v[1]}, D[0], U[0]);
         L[0] -= T(2) * v[0] * t1;
         D[1] -= T(2) * v[1] * t1;
     }

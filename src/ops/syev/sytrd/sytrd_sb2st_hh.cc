@@ -142,7 +142,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                 // rows: kRowsPar teams of kTpr lanes, one window row / column each (xor masks 1, 2, 4).
                 const device::WorkGroup<kWg> ex{it};
-                const device::Teams<kWg, kTpr, device::bfly::Asc> rows{it};
+                const device::Teams<kWg, kTpr, device::alg::BflyAsc> rows{it};
 
                 T* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
                                       static_cast<size_t>(n);
@@ -290,7 +290,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
                         if (tau == T(0)) continue;
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
-                        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                        device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
                             cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
                             device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     }
@@ -374,7 +374,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     if (tau == T(0)) continue;
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
-                    device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                    device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
                         cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
                         device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     device::sync(cols);
@@ -592,7 +592,7 @@ streaming:
                     const int32_t L = lens_p[k];
 
                     // L may exceed the 32 lanes (kd > 32): the lanes stride the reflector.
-                    device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+                    device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
                         ex, tau, device::assume_published(device::mat(V).col(k).head(L)), device::mat(Z).sub(s, c0, L, c1 - c0));
                 }
             });

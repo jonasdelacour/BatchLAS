@@ -144,11 +144,11 @@ struct Dev {
 // The user's kernel: one matrix per work-group of the tier's wg_size, the op's info per item; the
 // global workspace (Blocked) is batch slices of global_bytes, poisoned with NaN bytes. Wg > 0
 // launches a wider group than the tier's wg_size (Cta: any group of at least N items).
-template <int Itype, Uplo UL, class Tier, int Wg = 0, class T>
+template <device::Itype IT, Uplo UL, class Tier, int Wg = 0, class T>
 void device_call(Dev& dev, T* A, const T* B, const Problem<T>& p, int* info) {
-    using Tr = device::resolve_tier_t<device::routine::sygst<Itype, UL>, T, Tier>;  // Tier may be tier::upto
-    constexpr int WG = Wg > 0 ? Wg : device::tier_info<device::routine::sygst<Itype, UL>, Tr, T>::wg_size;
-    const device::WorkspaceSize ws = device::sygst_buffer_size<Itype, UL, Tier, T>(p.n);
+    using Tr = device::resolve_tier_t<device::routine::sygst<IT, UL>, T, Tier>;  // Tier may be tier::upto
+    constexpr int WG = Wg > 0 ? Wg : device::tier_info<device::routine::sygst<IT, UL>, Tr, T>::wg_size;
+    const device::WorkspaceSize ws = device::sygst_buffer_size<IT, UL, Tier, T>(p.n);
     std::byte* gws = nullptr;
     if (ws.global_bytes) {
         gws = sycl::malloc_device<std::byte>(ws.global_bytes * kBatch, dev.q());
@@ -161,7 +161,7 @@ void device_call(Dev& dev, T* A, const T* B, const Problem<T>& p, int* info) {
            h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                const device::WorkGroup<WG, 32> ex{it};
                const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group_linear_id());
-               const int r = device::sygst<Itype, UL, Tier>(ex, device::mat(A + b * sa, n, n, lda), device::mat(B + b * sb, n, n, ldb),
+               const int r = device::sygst<IT, UL, Tier>(ex, device::mat(A + b * sa, n, n, lda), device::mat(B + b * sb, n, n, ldb),
                                                          device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                                        device::global_slice(gws, ws, b)});
                if (ex.leader()) info[b] = r;
@@ -255,19 +255,19 @@ protected:
         return ran;
     }
 
-    template <int Itype, Uplo UL> void bit_identical(int n) {
+    template <device::Itype IT, Uplo UL> void bit_identical(int n) {
         Problem<T> p(n, UL);
-        const std::string at = "itype " + std::to_string(Itype) + (UL == Uplo::Lower ? " L" : " U") + " n " + std::to_string(n);
+        const std::string at = "itype " + std::to_string(static_cast<int>(IT)) + (UL == Uplo::Lower ? " L" : " U") + " n " + std::to_string(n);
         T* Ah = dev.up(p.a);
         T* Ad = dev.up(p.a);
         const T* B = dev.up(p.b);
         int* info = dev.up(std::vector<int>(kBatch, -99));
         std::string reached;
-        if (!host_call(Ah, B, p, Itype, &reached)) GTEST_SKIP() << "the pinned blocked route cannot run on this queue";
+        if (!host_call(Ah, B, p, static_cast<int>(IT), &reached)) GTEST_SKIP() << "the pinned blocked route cannot run on this queue";
         std::string tier = "none";
-        device::with_tier<device::routine::sygst<Itype, UL>, T, CtaTiers>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+        device::with_tier<device::routine::sygst<IT, UL>, T, CtaTiers>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
             tier = tier_name<Tier>();
-            device_call<Itype, UL, Tier>(dev, Ad, B, p, info);
+            device_call<IT, UL, Tier>(dev, Ad, B, p, info);
         });
         EXPECT_EQ(tier, n <= 8 ? "Cta<8>" : n <= 16 ? "Cta<16>" : "Cta<32>") << at;
         const auto gh = dev.down(Ah, p.a.size()), gd = dev.down(Ad, p.a.size());
@@ -275,32 +275,32 @@ protected:
         EXPECT_EQ(std::count(gi.begin(), gi.end(), 0), kBatch) << at << ": info";
         EXPECT_EQ(std::memcmp(gh.data(), gd.data(), gh.size() * sizeof(T)), 0) << at << ": device call vs pinned host route";
         EXPECT_EQ(std::memcmp(dev.down(B, p.b.size()).data(), p.b.data(), p.b.size() * sizeof(T)), 0) << at << ": B written";
-        check_result(p, gd, Itype, at);
+        check_result(p, gd, static_cast<int>(IT), at);
     }
 
     // tier::Blocked<NB> against the host blocked:nb=32 route (tolerance; skipped where that route
     // cannot run) and the reference; info 0 on every item, B untouched.
-    template <int Itype, Uplo UL, int NB = 32> void blocked_vs_host(int n) {
+    template <device::Itype IT, Uplo UL, int NB = 32> void blocked_vs_host(int n) {
         Problem<T> p(n, UL, real_of<T>(0));
-        const std::string at = "Blocked<" + std::to_string(NB) + "> itype " + std::to_string(Itype) + (UL == Uplo::Lower ? " L" : " U") +
+        const std::string at = "Blocked<" + std::to_string(NB) + "> itype " + std::to_string(static_cast<int>(IT)) + (UL == Uplo::Lower ? " L" : " U") +
                                " n " + std::to_string(n);
         T* Ah = dev.up(p.a);
         T* Ad = dev.up(p.a);
         const T* B = dev.up(p.b);
         int* info = dev.up(std::vector<int>(kBatch, -99));
         std::string tier = "none";
-        device::with_tier<device::routine::sygst<Itype, UL>, T, device::tier::list<device::tier::Blocked<NB>>>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+        device::with_tier<device::routine::sygst<IT, UL>, T, device::tier::list<device::tier::Blocked<NB>>>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
             tier = tier_name<Tier>();
-            device_call<Itype, UL, Tier>(dev, Ad, B, p, info);
+            device_call<IT, UL, Tier>(dev, Ad, B, p, info);
         });
         ASSERT_EQ(tier, "Blocked<" + std::to_string(NB) + ">") << at;
         const auto gd = dev.down(Ad, p.a.size());
         const auto gi = dev.down(info, kBatch);
         EXPECT_EQ(std::count(gi.begin(), gi.end(), 0), kBatch) << at << ": info";
         EXPECT_EQ(std::memcmp(dev.down(B, p.b.size()).data(), p.b.data(), p.b.size() * sizeof(T)), 0) << at << ": B written";
-        check_result(p, gd, Itype, at);
+        check_result(p, gd, static_cast<int>(IT), at);
         std::string reached;
-        if (!host_call(Ah, B, p, Itype, &reached)) return;  // blocked:nb=32 needs a GPU backend
+        if (!host_call(Ah, B, p, static_cast<int>(IT), &reached)) return;  // blocked:nb=32 needs a GPU backend
         const auto gh = dev.down(Ah, p.a.size());
         long double num = 0, den = 0;
         for (int r = 0; r < kPeriod; ++r)
@@ -355,38 +355,38 @@ TYPED_TEST_SUITE(DeviceApiSygstTest, Types);
 
 TYPED_TEST(DeviceApiSygstTest, BitIdenticalToPinnedHostRouteItype1) {
     for (int n : {1, 8, 9, 16, 17, 31, 32}) {
-        this->template bit_identical<1, Uplo::Lower>(n);
-        this->template bit_identical<1, Uplo::Upper>(n);
+        this->template bit_identical<device::Itype::AinvB, Uplo::Lower>(n);
+        this->template bit_identical<device::Itype::AinvB, Uplo::Upper>(n);
     }
 }
 
 TYPED_TEST(DeviceApiSygstTest, BitIdenticalToPinnedHostRouteItype2And3) {
     for (int n : {5, 16, 32}) {
-        this->template bit_identical<2, Uplo::Lower>(n);
-        this->template bit_identical<2, Uplo::Upper>(n);
+        this->template bit_identical<device::Itype::AB, Uplo::Lower>(n);
+        this->template bit_identical<device::Itype::AB, Uplo::Upper>(n);
     }
-    this->template bit_identical<3, Uplo::Upper>(13);
+    this->template bit_identical<device::Itype::BA, Uplo::Upper>(13);
 }
 
 TYPED_TEST(DeviceApiSygstTest, BlockedMatchesHostBlockedRouteItype1) {
     for (int n : {33, 63, 64, 65}) {
-        this->template blocked_vs_host<1, Uplo::Lower>(n);
-        this->template blocked_vs_host<1, Uplo::Upper>(n);
+        this->template blocked_vs_host<device::Itype::AinvB, Uplo::Lower>(n);
+        this->template blocked_vs_host<device::Itype::AinvB, Uplo::Upper>(n);
     }
 }
 
 TYPED_TEST(DeviceApiSygstTest, BlockedMatchesHostBlockedRouteItype2And3) {
     for (int n : {33, 65}) {
-        this->template blocked_vs_host<2, Uplo::Lower>(n);
-        this->template blocked_vs_host<2, Uplo::Upper>(n);
+        this->template blocked_vs_host<device::Itype::AB, Uplo::Lower>(n);
+        this->template blocked_vs_host<device::Itype::AB, Uplo::Upper>(n);
     }
-    this->template blocked_vs_host<3, Uplo::Upper>(64);
+    this->template blocked_vs_host<device::Itype::BA, Uplo::Upper>(64);
 }
 
 // Blocked<16> (the 32 KB fallback) over blocks of 16, 16 and 1; its host comparison is still nb = 32.
 TYPED_TEST(DeviceApiSygstTest, Blocked16OverThreeBlocks) {
-    this->template blocked_vs_host<1, Uplo::Lower, 16>(33);
-    this->template blocked_vs_host<2, Uplo::Upper, 16>(33);
+    this->template blocked_vs_host<device::Itype::AinvB, Uplo::Lower, 16>(33);
+    this->template blocked_vs_host<device::Itype::AB, Uplo::Upper, 16>(33);
 }
 
 // Blocked<32> at n = 32 is one ?sygs2 block, the Cta<32> body on a 256-item group: same bits.
@@ -397,8 +397,8 @@ TYPED_TEST(DeviceApiSygstTest, BlockedOneBlockIsBitIdenticalToCta) {
     T* Ab = this->dev.up(p.a);
     const T* B = this->dev.up(p.b);
     int* info = this->dev.up(std::vector<int>(kBatch, -99));
-    device_call<1, Uplo::Upper, device::tier::Cta<32>>(this->dev, Ac, B, p, info);
-    device_call<1, Uplo::Upper, device::tier::Blocked<32>>(this->dev, Ab, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Upper, device::tier::Cta<32>>(this->dev, Ac, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Upper, device::tier::Blocked<32>>(this->dev, Ab, B, p, info);
     const auto gc = this->dev.down(Ac, p.a.size()), gb = this->dev.down(Ab, p.a.size());
     EXPECT_EQ(std::memcmp(gc.data(), gb.data(), gc.size() * sizeof(T)), 0);
     const auto gi = this->dev.down(info, kBatch);
@@ -415,8 +415,8 @@ TYPED_TEST(DeviceApiSygstTest, CtaOnWiderGroupIsBitIdentical) {
     T* A1 = this->dev.up(p.a);
     const T* B = this->dev.up(p.b);
     int* info = this->dev.up(std::vector<int>(kBatch, -99));
-    device_call<1, Uplo::Lower, device::tier::Cta<16>>(this->dev, A0, B, p, info);
-    device_call<1, Uplo::Lower, device::tier::Cta<16>, 64>(this->dev, A1, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<16>>(this->dev, A0, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<16>, 64>(this->dev, A1, B, p, info);
     const auto g0 = this->dev.down(A0, p.a.size()), g1 = this->dev.down(A1, p.a.size());
     EXPECT_EQ(std::memcmp(g0.data(), g1.data(), g0.size() * sizeof(T)), 0) << "Cta<16> n 13 on 64 items";
     this->check_result(p, g1, 1, "Cta<16> n 13 on 64 items");
@@ -424,8 +424,8 @@ TYPED_TEST(DeviceApiSygstTest, CtaOnWiderGroupIsBitIdentical) {
     T* B0 = this->dev.up(q.a);
     T* B1 = this->dev.up(q.a);
     const T* Bq = this->dev.up(q.b);
-    device_call<2, Uplo::Upper, device::tier::Cta<32>>(this->dev, B0, Bq, q, info);
-    device_call<2, Uplo::Upper, device::tier::Cta<32>, 256>(this->dev, B1, Bq, q, info);
+    device_call<device::Itype::AB, Uplo::Upper, device::tier::Cta<32>>(this->dev, B0, Bq, q, info);
+    device_call<device::Itype::AB, Uplo::Upper, device::tier::Cta<32>, 256>(this->dev, B1, Bq, q, info);
     const auto h0 = this->dev.down(B0, q.a.size()), h1 = this->dev.down(B1, q.a.size());
     EXPECT_EQ(std::memcmp(h0.data(), h1.data(), h0.size() * sizeof(T)), 0) << "Cta<32> n 31 on 256 items";
     this->check_result(q, h1, 2, "Cta<32> n 31 on 256 items");
@@ -436,15 +436,15 @@ TYPED_TEST(DeviceApiSygstTest, CtaOnWiderGroupIsBitIdentical) {
 // tier::upto<32> on n = 5: Cta<32> (a 32-row fragment) over a 5 x 5 matrix, same bits as Cta<8>.
 TYPED_TEST(DeviceApiSygstTest, WiderTierThanNIsBitIdentical) {
     using T = TypeParam;
-    using Up = device::resolve_tier_t<device::routine::sygst<1, Uplo::Lower>, T, device::tier::upto<32>>;
+    using Up = device::resolve_tier_t<device::routine::sygst<device::Itype::AinvB, Uplo::Lower>, T, device::tier::upto<32>>;
     static_assert(std::is_same_v<Up, device::tier::Cta<32>>);
     Problem<T> p(5, Uplo::Lower);
     T* A8 = this->dev.up(p.a);
     T* A32 = this->dev.up(p.a);
     const T* B = this->dev.up(p.b);
     int* info = this->dev.up(std::vector<int>(kBatch, -99));
-    device_call<1, Uplo::Lower, device::tier::Cta<8>>(this->dev, A8, B, p, info);
-    device_call<1, Uplo::Lower, device::tier::upto<32>>(this->dev, A32, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<8>>(this->dev, A8, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Lower, device::tier::upto<32>>(this->dev, A32, B, p, info);
     const auto g8 = this->dev.down(A8, p.a.size()), g32 = this->dev.down(A32, p.a.size());
     EXPECT_EQ(std::memcmp(g8.data(), g32.data(), g8.size() * sizeof(T)), 0);
     this->check_result(p, g32, 1, "upto<32> n 5");
@@ -457,19 +457,19 @@ TYPED_TEST(DeviceApiSygstTest, BadArgumentsReturnMinusIAndTouchNothing) {
     T* A = this->dev.up(p.a);
     const T* B = this->dev.up(p.b);
     int* info = this->dev.up(std::vector<int>(kBatch, -99));
-    device_call<1, Uplo::Lower, device::tier::Cta<8>>(this->dev, A, B, p, info);
+    device_call<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<8>>(this->dev, A, B, p, info);
     auto gi = this->dev.down(info, kBatch);
     EXPECT_EQ(std::count(gi.begin(), gi.end(), -2), kBatch) << "n = 9 on Cta<8>";
     EXPECT_EQ(std::memcmp(this->dev.down(A, p.a.size()).data(), p.a.data(), p.a.size() * sizeof(T)), 0);
     const int n = p.n, lda = p.lda, ldb = p.ldb;
     const std::ptrdiff_t sa = p.sa, sb = p.sb;
-    const device::WorkspaceSize ws = device::sygst_buffer_size<1, Uplo::Lower, device::tier::Cta<16>, T>(n);
+    const device::WorkspaceSize ws = device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<16>, T>(n);
     this->dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(ws.local_bytes), h);
            h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * 32, 32), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                const device::WorkGroup<32, 32> ex{it};
                const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group_linear_id());
-               const int r = device::sygst<1, Uplo::Lower, device::tier::Cta<16>>(
+               const int r = device::sygst<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<16>>(
                    ex, device::mat(A + b * sa, n, n, lda), device::mat(B + b * sb, n - 1, n, ldb),
                    device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr});
                if (ex.leader()) info[b] = r;
@@ -485,7 +485,7 @@ TYPED_TEST(DeviceApiSygstTest, BadArgumentsReturnMinusIAndTouchNothing) {
 // lines of whole 16-byte packs plus one; S: ld n + 1; Blocked: max(that block, the L3 staging)
 // local, H then W global).
 TEST(DeviceApiSygstTiers, WithTierBoundariesFiltersAndBufferSize) {
-    using R = device::routine::sygst<1, Uplo::Lower>;
+    using R = device::routine::sygst<device::Itype::AinvB, Uplo::Lower>;
     auto pick = [](const device::DeviceLimits& lim, int n) {
         std::string got = "none";
         try {
@@ -519,9 +519,9 @@ TEST(DeviceApiSygstTiers, WithTierBoundariesFiltersAndBufferSize) {
         return std::pair<std::size_t, std::size_t>{r16(std::max(blk, stage)), r16(g)};
     };
     for (int n : {1, 16, 32, 33, 65, 100}) {
-        const auto f1 = device::sygst_buffer_size<1, Uplo::Lower, device::tier::Blocked<32>, float>(n);
-        const auto c2 = device::sygst_buffer_size<2, Uplo::Upper, device::tier::Blocked<16>, std::complex<float>>(n);
-        const auto z3 = device::sygst_buffer_size<3, Uplo::Lower, device::tier::Blocked<32>, std::complex<double>>(n);
+        const auto f1 = device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Blocked<32>, float>(n);
+        const auto c2 = device::sygst_buffer_size<device::Itype::AB, Uplo::Upper, device::tier::Blocked<16>, std::complex<float>>(n);
+        const auto z3 = device::sygst_buffer_size<device::Itype::BA, Uplo::Lower, device::tier::Blocked<32>, std::complex<double>>(n);
         EXPECT_EQ(std::pair(f1.local_bytes, f1.global_bytes), blocked_hand(n, 32, 1, 4)) << n;
         EXPECT_EQ(std::pair(c2.local_bytes, c2.global_bytes), blocked_hand(n, 16, 2, 8)) << n;
         EXPECT_EQ(std::pair(z3.local_bytes, z3.global_bytes), blocked_hand(n, 32, 3, 16)) << n;
@@ -532,10 +532,10 @@ TEST(DeviceApiSygstTiers, WithTierBoundariesFiltersAndBufferSize) {
         return (bytes + 15) / 16 * 16;
     };
     for (int n : {1, 3, 8, 13, 31, 32}) {
-        EXPECT_EQ((device::sygst_buffer_size<1, Uplo::Lower, device::tier::Cta<32>, float>(n).local_bytes), hand(n, 4)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<2, Uplo::Upper, device::tier::Cta<32>, std::complex<float>>(n).local_bytes), hand(n, 8)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<1, Uplo::Upper, device::tier::Cta<32>, std::complex<double>>(n).local_bytes), hand(n, 16)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<1, Uplo::Lower, device::tier::Cta<32>, double>(n).global_bytes), 0u) << n;
+        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<32>, float>(n).local_bytes), hand(n, 4)) << n;
+        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AB, Uplo::Upper, device::tier::Cta<32>, std::complex<float>>(n).local_bytes), hand(n, 8)) << n;
+        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Upper, device::tier::Cta<32>, std::complex<double>>(n).local_bytes), hand(n, 16)) << n;
+        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<32>, double>(n).global_bytes), 0u) << n;
     }
 }
 

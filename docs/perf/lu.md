@@ -232,7 +232,7 @@ Older `experiments/` paths live at the tag `perf-evidence/vendor-independence` (
 
 ### Packed resident leaves
 
-`getf2_panel_device` is templated on `LuScope`. Under `SubGroup` all barriers are sub-group scope and `getrf_leaf_launch` packs one matrix per sub-group, for `m, n <= 32` only; under `WorkGroup`, `G > 1` would race, so the launcher derives both together. After/before 0.52-0.80 in every probed cell (double \f$n = 16\f$ b32768 1.49 -> 0.78 ms, vendor 0.41). The win is barrier scope and matrices in flight, not registers.
+`getf2_panel_device` is templated on `device::Scope`. Under `Scope::Sub` all barriers are sub-group scope and `getrf_leaf_launch` packs one matrix per sub-group, for `m, n <= 32` only; under `Scope::Group`, `G > 1` would race, so the launcher derives both together. After/before 0.52-0.80 in every probed cell (double \f$n = 16\f$ b32768 1.49 -> 0.78 ms, vendor 0.41). The win is barrier scope and matrices in flight, not registers.
 
 ## LU: the tiny tier
 

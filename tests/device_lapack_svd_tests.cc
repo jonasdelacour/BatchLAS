@@ -723,8 +723,8 @@ TYPED_TEST(DeviceApiSvd, GebrdBlockedAndOrmbrReconstructA) {
             const auto Am = device::mat(ap + q * sa, m, n, lda);
             const auto tauq = device::vec(tqp + q * st, n), taup = device::vec(tpp + q * st, n);
             (void)device::gebrd<Blk>(ex, Am, device::vec(dp + q * sd, n, 2), device::vec(ep + q * se, std::max(n - 1, 0), 1), tauq, taup, w);
-            (void)device::ormbr<'Q', Side::Left, Transpose::NoTrans>(ex, Am, tauq, device::mat(qp + q * sq, m, m, ldq), device::Workspace{});
-            (void)device::ormbr<'P', Side::Right, Transpose::ConjTrans>(ex, Am, taup, device::mat(pp + q * sp, n, n, ldp), device::Workspace{});
+            (void)device::ormbr<device::Vect::Q, Side::Left, Transpose::NoTrans>(ex, Am, tauq, device::mat(qp + q * sq, m, m, ldq), device::Workspace{});
+            (void)device::ormbr<device::Vect::P, Side::Right, Transpose::ConjTrans>(ex, Am, taup, device::mat(pp + q * sp, n, n, ldp), device::Workspace{});
         });
         const Mats<T> ga = A.with(a.down()), gq = Q.with(qb.down()), gp = Ph.with(pb.down());
         const auto gd = d.down(), ge = e.down();

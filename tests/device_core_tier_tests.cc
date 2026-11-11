@@ -39,7 +39,7 @@ template <class T> struct tier_info<mockdev::mock, tier::Cta<64>, T> {
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) {
         Plan p;
-        p.take<T>(ws::Space::Local, std::size_t(n) * n);
+        p.take<T>(WsSpace::Local, std::size_t(n) * n);
         return p.size();
     }
 };
@@ -48,8 +48,8 @@ template <class T> struct tier_info<mockdev::mock, tier::Blocked<32>, T> {
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) {
         Plan p;
-        p.take<T>(ws::Space::Local, 32 * 32);
-        p.take<T>(ws::Space::Global, std::size_t(n) * 32);
+        p.take<T>(WsSpace::Local, 32 * 32);
+        p.take<T>(WsSpace::Global, std::size_t(n) * 32);
         return p.size();
     }
 };
@@ -123,10 +123,10 @@ TEST(DeviceCoreTierHost, NoTierThrowsNamingTheRoutineAndN) {
 
 TEST(DeviceCoreTierHost, PlanOffsetsAreAlignedAndSumToItsSize) {
     device::Plan p(16);
-    const auto a = p.take<char>(device::ws::Space::Local, 3);
-    const auto b = p.take<double>(device::ws::Space::Local, 5);
-    const auto c = p.take<std::complex<double>>(device::ws::Space::Global, 7);
-    const auto e = p.take<float>(device::ws::Space::Global, 1);
+    const auto a = p.take<char>(device::WsSpace::Local, 3);
+    const auto b = p.take<double>(device::WsSpace::Local, 5);
+    const auto c = p.take<std::complex<double>>(device::WsSpace::Global, 7);
+    const auto e = p.take<float>(device::WsSpace::Global, 1);
     EXPECT_EQ(a.offset, 0u);
     EXPECT_EQ(b.offset, 16u);
     EXPECT_EQ(c.offset, 0u);
@@ -147,9 +147,9 @@ TYPED_TEST(DeviceCoreTest, CarveRoundTripsThroughLocalAndGlobalSlices) {
     auto& d = this->dev;
     constexpr int items = 1024, n = 37;
     device::Plan plan;
-    const auto ls = plan.take<T>(device::ws::Space::Local, n);
-    plan.take<T>(device::ws::Space::Global, 3 * n);  // a global extra ahead: global_bytes != local_bytes
-    const auto gs = plan.take<T>(device::ws::Space::Global, n);
+    const auto ls = plan.take<T>(device::WsSpace::Local, n);
+    plan.take<T>(device::WsSpace::Global, 3 * n);  // a global extra ahead: global_bytes != local_bytes
+    const auto gs = plan.take<T>(device::WsSpace::Global, n);
     const auto sz = plan.size();
     ASSERT_NE(sz.global_bytes, sz.local_bytes);
     const auto x_h = vals<T>(std::size_t(items) * n, 81);

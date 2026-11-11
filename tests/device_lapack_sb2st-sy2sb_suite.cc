@@ -222,9 +222,9 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
     EXPECT_VERIFY(T, Check::blas, 2 * m, worst);
 }
 
-TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowTeamsUp) { run_band_hemv_her2<TypeParam, 256, device::bfly::Asc>(this->dev); }
-TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowTeamsDown) { run_band_hemv_her2<TypeParam, 256, device::bfly::Down>(this->dev); }
-TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowCeilingLaunch) { run_band_hemv_her2<TypeParam, 1024, device::bfly::Asc>(this->dev); }
+TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowTeamsUp) { run_band_hemv_her2<TypeParam, 256, device::alg::BflyAsc>(this->dev); }
+TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowTeamsDown) { run_band_hemv_her2<TypeParam, 256, device::alg::BflyDown>(this->dev); }
+TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowCeilingLaunch) { run_band_hemv_her2<TypeParam, 1024, device::alg::BflyAsc>(this->dev); }
 
 // ---- larf on a band, an SLM row-major tile and a global matrix ----------------------------------
 
@@ -269,14 +269,14 @@ TYPED_TEST(DeviceLapackBandTest, LarfOnBandWindows) {
     this->dev.template run<256>(kBatch, (nc + mr1) * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<256> ex{it};
-        const device::Teams<256, 8, device::bfly::Asc> rows{it};
+        const device::Teams<256, 8, device::alg::BflyAsc> rows{it};
         T* vl = reinterpret_cast<T*>(lm);
         device::copy(ex, device::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), device::vec(vl, nc + mr1));
         device::sync(ex, device::Mem::Global);
         const device::detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
         device::detail::larf_right(rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
         device::sync(ex, device::Mem::Global);
-        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleW, device::loop::Lockstep>(
+        device::larf<Side::Left, device::arith::Native, device::alg::ScaleW, device::alg::Lockstep>(
             rows, tau1, device::assume_published(device::vec<device::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
     });
     const auto gs = this->dev.down(s, hs.size());
@@ -351,13 +351,13 @@ TYPED_TEST(DeviceLapackBandTest, LarfColumnTeamsOnTilesAndGlobal) {
         device::for_each_owned(ex, rows * C, [&](int i) { zl[i] = zb[i]; });
         device::sync(cols);
         const auto V = device::mat(vg + std::ptrdiff_t(b) * ldv * S2, L, S2, ldv);
-        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+        device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
             cols, tau, device::assume_published(V.col(1)), device::StridedMat<T, device::Ext<C>, device::Unit>{zl + s * C, L, C});
         device::sync(cols);
         device::for_each_owned(ex, rows * C, [&](int i) { zb[i] = zl[i]; });
         // (3) on global memory, the same work-group
         const auto Z3 = device::mat(z3 + std::ptrdiff_t(b) * ldz * ncol3, rows, ncol3, ldz);
-        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+        device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
             ex, tau, device::assume_published(device::vec(v3 + std::ptrdiff_t(b) * L3, L3)), Z3.sub(s3, 0, L3, ncol3));
     });
     this->dev.template run<128>(kBatch, rows * C2 * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
@@ -370,7 +370,7 @@ TYPED_TEST(DeviceLapackBandTest, LarfColumnTeamsOnTilesAndGlobal) {
         device::for_each_owned(ex, rows * C2, [&](int i) { zl[i] = zb[i]; });
         device::sync(ex, device::Mem::Global);
         const auto V = device::mat(vg + std::ptrdiff_t(b) * ldv * S2, L2, S2, ldv);
-        device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
+        device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
             cols, tau, device::assume_published(V.col(g)), device::StridedMat<T, device::Ext<C2>, device::Unit>{zl + g * 10 * C2, L2, C2});
         device::sync(ex, device::Mem::Global);
         device::for_each_owned(ex, rows * C2, [&](int i) { zb[i] = zl[i]; });

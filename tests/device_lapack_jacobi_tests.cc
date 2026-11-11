@@ -423,8 +423,8 @@ template <class T, int P, int K> void scatter_case(Dev& dev) {
         for (int k = 0; k < K; ++k) f[k] = x[(std::ptrdiff_t(b) * P + l) * K + k];
         const R r0 = device::Arith<T>::re(f[0]);
         const R lead = (l == 3) ? std::numeric_limits<R>::quiet_NaN() : r0;
-        const R mx = device::allreduce(ex, lead, device::op::FMax{});
-        const R mn = device::allreduce(ex, lead, device::op::FMin{});
+        const R mx = device::allreduce(ex, lead, device::reduce_op::FMax{});
+        const R mn = device::allreduce(ex, lead, device::reduce_op::FMin{});
         const T sc = device::reduce_scatter<K>(ex, f);
         T* ob = o + (std::ptrdiff_t(b) * P + l) * kScatterSlots;
         ob[kScatter] = sc, ob[kSlotFMax] = T(mx), ob[kSlotFMin] = T(mn);
@@ -465,7 +465,7 @@ template <class T, int P, int Rows> void col_sumsq_case(Dev& dev) {
         const int part = static_cast<int>(ex.part.get_group_linear_id());
         const int b = static_cast<int>(it.get_group_linear_id()) * parts + part;
         const Tile A{reinterpret_cast<T*>(lm) + part * LDT * P, {}, {}, {}};
-        device::for_each_owned_frag<Rows, device::unroll::Default>(ex, [&](int, int r) {
+        device::for_each_owned_frag<Rows, device::alg::UnrollDefault>(ex, [&](int, int r) {
             for (int c = 0; c < P; ++c) A(r, c) = a[std::ptrdiff_t(b) * Rows * P + r + c * Rows];
         });
         group_barrier(ex.part);

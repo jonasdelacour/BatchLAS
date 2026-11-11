@@ -771,7 +771,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     if (want_eigenvectors && update_best[0] != 0) {
                         // Where the largest-first presentation happens: slot i of the snapshot
                         // takes column block_vectors-1-i of X, folded into this copy.
-                        // A flat loop, not lacpy(flip<axis::Cols>(...)): that costs f64 REG 48 -> 52,
+                        // A flat loop, not lacpy(flip<Axis::Cols>(...)): that costs f64 REG 48 -> 52,
                         // at WG 256 one resident group fewer per SM (5 -> 4).
                         auto* blockXbest = Xbest_data + bid * (n * neigs);
                         for (int i = int(ex.lid()); i < int(n * neigs); i += ex.width()) {
@@ -1207,7 +1207,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             if (masked && !mk[bid]) return;  // I1
                             const auto Xb = device::mat(Xptr + bid * X_stride, int(nn), int(k), int(X_ld));
                             device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(
-                                ex, device::flip<device::axis::Cols>(Xb.sub(0, int(k - ncols), int(nn), int(ncols)), true),
+                                ex, device::flip<device::Axis::Cols>(Xb.sub(0, int(k - ncols), int(nn), int(ncols)), true),
                                 device::mat(Vptr + bid * V_stride, int(nn), int(ncols), int(V_ld)));
                         });
                 });

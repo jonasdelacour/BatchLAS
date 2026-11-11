@@ -179,14 +179,14 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
                     R smax = (lane >= j) ? device::abs_inf(rA[j]) : R(0);
                     // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
-                    smax = device::detail::xor_butterfly<N, device::bfly::Asc>(ex.part, smax, device::op::FMax());
+                    smax = device::detail::xor_butterfly<N, device::alg::BflyAsc>(ex.part, smax, device::reduce_op::FMax());
 
                     R ssq = R(0);
                     if (lane > j && smax > R(0)) ssq = device::detail::abs2_scaled(rA[j], smax);
-                    ssq = device::detail::xor_butterfly<N, device::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
+                    ssq = device::detail::xor_butterfly<N, device::alg::BflyAsc>(ex.part, ssq, sycl::plus<R>());
 
                     const device::ScaledSsq<R> nrm{smax, ssq};
-                    const device::LarfgScalars<D> hh = device::larfg_scalars<device::conv::Lapack>(alpha, nrm);
+                    const device::LarfgScalars<D> hh = device::larfg_scalars<device::alg::LarfgLapack>(alpha, nrm);
 
                     // NO `if (hh.identity) continue;`: the identity case is arithmetically
                     // inert (tau = 0, beta = alpha, scale = 1), and omitting the branch is

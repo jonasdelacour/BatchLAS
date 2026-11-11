@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The geqr2 leaves' helpers (include/batchlas/device/lapack/geqrf.hh detail, plus the core
-// abs_inf / op::FMax / butterfly forms they call) against host references; the other core ops the
+// abs_inf / reduce_op::FMax / butterfly forms they call) against host references; the other core ops the
 // leaves use (RtGroup, mat_wide, for_each_owned, FmaArith, larfg_scalars) are covered by
 // device_core_ops_tests and device_core_*. Guards (docs/developer/agent-guide.md section 8): non-natural ld,
 // complex data with nonzero imaginary parts, finite poison (1e18) where v's unit head and the rows
@@ -165,7 +165,7 @@ TEST(DeviceLapackGeqrfCx, ArithPredicatesMatchDeviceScalar) {
 
 // ---- xLARFG's two-pass scalars ----------------------------------------------------------------
 // abs_inf = max(|re|, |im|) and abs2_scaled = |a / s|^2 on values past sqrt(max) (|a|^2 would
-// overflow), and op::FMax dropping a NaN on either side.
+// overflow), and reduce_op::FMax dropping a NaN on either side.
 TYPED_TEST(DeviceLapackGeqrfTest, NormScalars) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -182,8 +182,8 @@ TYPED_TEST(DeviceLapackGeqrfTest, NormScalars) {
         const R s = device::abs_inf(a);
         o[b * 4 + 0] = s;
         o[b * 4 + 1] = device::detail::abs2_scaled(a, s);
-        o[b * 4 + 2] = device::op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
-        o[b * 4 + 3] = device::op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
+        o[b * 4 + 2] = device::reduce_op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
+        o[b * 4 + 3] = device::reduce_op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
     });
     const auto got = this->dev.down(o, ho.size());
     EXPECT_EQ(period_bitdiff(got, 4), 0);
@@ -200,7 +200,7 @@ TYPED_TEST(DeviceLapackGeqrfTest, NormScalars) {
 }
 
 // ---- butterfly orders, bit-exact ------------------------------------------------------------
-// The run-time butterfly (masks 16 .. 1 over the sub-group range) and butterfly<1, 8, bfly::Asc> on
+// The run-time butterfly (masks 16 .. 1 over the sub-group range) and butterfly<1, 8, alg::BflyAsc> on
 // SgpPartition<8> (masks 1, 2, 4), each against a host simulation in the same precision: an order change flips
 // bits. Lane 5 of every item is NaN in the max inputs: the Fmax butterflies must drop it.
 TYPED_TEST(DeviceLapackGeqrfTest, ButterflyOrdersAreBitExact) {
@@ -224,9 +224,9 @@ TYPED_TEST(DeviceLapackGeqrfTest, ButterflyOrdersAreBitExact) {
         if constexpr (!is_cplx<T>) {
             const T vm = l == 5 ? std::numeric_limits<T>::quiet_NaN() : v;
             const device::SgpPartition<8> part{it.get_sub_group()};
-            out[1] = device::butterfly(sg, vm, device::op::FMax{}, 1, lanes);
-            out[2] = device::butterfly<1, 8, device::bfly::Asc>(part, v, sycl::plus<R>());
-            out[3] = device::butterfly<1, 8, device::bfly::Asc>(part, vm, device::op::FMax{});
+            out[1] = device::butterfly(sg, vm, device::reduce_op::FMax{}, 1, lanes);
+            out[2] = device::butterfly<1, 8, device::alg::BflyAsc>(part, v, sycl::plus<R>());
+            out[3] = device::butterfly<1, 8, device::alg::BflyAsc>(part, vm, device::reduce_op::FMax{});
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -331,7 +331,7 @@ TYPED_TEST(DeviceLapackGeqrfTest, TeamSlotFolds) {
         const T v = in[std::ptrdiff_t(b) * WG + ex.lid()];
         const auto add = [](const T& p, const T& q) { return A::add(p, q); };
         device::detail::team_slot_put(ex, slots, 0, device::butterfly(ex.sub(), v, add, 1, ex.team_size()));
-        if constexpr (!is_cplx<T>) device::detail::team_slot_put(ex, slots, NT, device::butterfly(ex.sub(), sycl::fabs(v), device::op::FMax{}, 1, ex.team_size()));
+        if constexpr (!is_cplx<T>) device::detail::team_slot_put(ex, slots, NT, device::butterfly(ex.sub(), sycl::fabs(v), device::reduce_op::FMax{}, 1, ex.team_size()));
         ex.barrier();
         if (ex.leader()) {
             o[b * 2] = device::detail::slot_fold_sum(slots, 0, ex.nteams());

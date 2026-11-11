@@ -258,9 +258,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 // completion fills U, V is identity.
                 // evidence: docs/design/gesvd.md#gesvdj_cta-global-power-of-two-scaling
                 const Real my_n2 = (lane < CC) ? nrm(lane) : Real(0);
-                const Real nmax = device::allreduce(ex, my_n2, device::op::FMax{});
+                const Real nmax = device::allreduce(ex, my_n2, device::reduce_op::FMax{});
                 const Real nmin = device::allreduce(ex, (lane < CC && my_n2 > Real(0)) ? my_n2 : std::numeric_limits<Real>::max(),
-                                                 device::op::FMin{});
+                                                 device::reduce_op::FMin{});
                 Real beta = Real(1);
                 if (nmax > Real(0) && nmin <= nmax) {
                     const Real e = sycl::round(Real(0.25) * (sycl::log2(nmax) + sycl::log2(nmin)));

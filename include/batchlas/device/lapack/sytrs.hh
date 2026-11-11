@@ -194,7 +194,7 @@ inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail:
     }
     if (g.uniform(ok ? 1 : 0) == 0) {
         for_each_owned(g, n, [&](int i) BATCHLAS_DEVICE_BODY { b(i) = qnan<D>(); });
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
         return;
     }
     // P L y = b, then D z = y
@@ -204,19 +204,19 @@ inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail:
         if (raw > 0) {
             const int kp = phys(raw - 1);
             if (g.leader() && kp != k) std::swap(b(k), b(kp));
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             const D bk = b(k);
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { b(i) = A::sub(b(i), A::mul(S(i, k), bk)); });
             if (g.leader()) b(k) = detail::ldl_dsolve_row(0, bk, bk, S(k, k), S(k, k), S(k, k));
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             k += 1;
         } else {
             const int kp = phys(-raw - 1);
             if (g.leader() && kp != k + 1) std::swap(b(k + 1), b(kp));
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             const D bk = b(k), bk1 = b(k + 1);
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                 b(i) = A::sub(A::sub(b(i), A::mul(S(i, k), bk)), A::mul(S(i, k + 1), bk1));
             });
@@ -225,7 +225,7 @@ inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail:
                 b(k) = detail::ldl_block2_row(blk, false);
                 b(k + 1) = detail::ldl_block2_row(blk, true);
             }
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             k += 2;
         }
     }
@@ -240,14 +240,14 @@ inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail:
         });
         const D s0 = detail::sum_reduce(g, sum, p0);
         const D s1 = raw < 0 ? detail::sum_reduce(g, sum, p1) : A::zero();
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
         if (g.leader()) {
             b(k) = A::sub(b(k), s0);
             if (raw < 0) b(k - 1) = A::sub(b(k - 1), s1);
             const int kp = phys((raw > 0 ? raw : -raw) - 1);
             if (kp != k) std::swap(b(k), b(kp));
         }
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
         k -= raw > 0 ? 1 : 2;
     }
 }
@@ -257,7 +257,7 @@ inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail:
 template <typename D, typename Acc, typename Ex>
 inline bool syconv(const Acc& L, int n, const int* ps, int* perm, int* kind, D* e, const Ex& ex, int* flag) {
     if (ex.leader()) *flag = detail::piv_list_valid(ps, n) ? 1 : 0;
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     const bool ok = *flag != 0;
     if (ok) {
         for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY { syconv_col<D>(L, ps, n, j, e); });
@@ -268,7 +268,7 @@ inline bool syconv(const Acc& L, int n, const int* ps, int* perm, int* kind, D* 
             kind[t] = 0;
         });
     }
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     return ok;
 }
 
@@ -284,13 +284,13 @@ inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, cons
         sig[t] = t;
         inv[t] = t;
     });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     for (int j = n - 1; j >= 0; --j) {
         const bool two = kind[j] == 1;
         for_each_owned(ex, Range{j + 1, n}, [&](int t) BATCHLAS_DEVICE_BODY {
             W(t, j) = two && t == j + 1 ? arith_t<arith::Fma, D>::zero() : G(sig[t], j);
         });
-        sync<scope::Group>(ex, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
         if (ex.leader() && kind[j] != 2) {
             const int a = two ? j + 1 : j, b = (ps[j] > 0 ? ps[j] : -ps[j]) - 1;
             if (a != b) {
@@ -301,7 +301,7 @@ inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, cons
                 inv[b] = ia;
             }
         }
-        sync<scope::Group>(ex, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
     }
 }
 
@@ -369,42 +369,42 @@ template <Uplo UL> struct sytrs {
 namespace detail {
 
 template <class T> struct SytrsCtaPlan {
-    ws::Slot<T> tile;   // the n x n factor at ld n | 1, then e (n)
-    ws::Slot<int> idx;  // ps, perm, kind (n each), the validity flag
+    WsSlot<T> tile;   // the n x n factor at ld n | 1, then e (n)
+    WsSlot<int> idx;  // ps, perm, kind (n each), the validity flag
     WorkspaceSize size;
 };
 template <class T> constexpr SytrsCtaPlan<T> sytrs_cta_plan(int n) {
     Plan p;
     const auto un = static_cast<std::size_t>(n);
-    const auto tile = p.take<T>(ws::Space::Local, un * static_cast<std::size_t>(n | 1) + un);
-    const auto idx = p.take<int>(ws::Space::Local, 3 * un + 1);
+    const auto tile = p.take<T>(WsSpace::Local, un * static_cast<std::size_t>(n | 1) + un);
+    const auto idx = p.take<int>(WsSpace::Local, 3 * un + 1);
     return {tile, idx, p.size()};
 }
 template <class R> struct SytrsWgPlan {
-    ws::Slot<R> red;  // SumScratch: re then im, one slot per sub-group
+    WsSlot<R> red;  // SumScratch: re then im, one slot per sub-group
     WorkspaceSize size;
 };
 template <class R> constexpr SytrsWgPlan<R> sytrs_wg_plan() {
     Plan p;
-    const auto red = p.take<R>(ws::Space::Local, 2 * (detail::sytrf_wg_max / 32));
+    const auto red = p.take<R>(WsSpace::Local, 2 * (detail::sytrf_wg_max / 32));
     return {red, p.size()};
 }
 template <class T> struct SytrsBlockedPlan {
-    ws::Slot<int> flag;  // local: the pivot list's validity
-    ws::Slot<T> smem;    // local: the in-group trsm's tiles
-    ws::Slot<T> l;       // global: the converted factor, n x n at ld n (the strict triangle)
-    ws::Slot<T> y;       // global: P^T B, n x nrhs at ld n
-    ws::Slot<int> idx;   // global: ps, perm, kind, sig, inv (n each)
+    WsSlot<int> flag;  // local: the pivot list's validity
+    WsSlot<T> smem;    // local: the in-group trsm's tiles
+    WsSlot<T> l;       // global: the converted factor, n x n at ld n (the strict triangle)
+    WsSlot<T> y;       // global: P^T B, n x nrhs at ld n
+    WsSlot<int> idx;   // global: ps, perm, kind, sig, inv (n each)
     WorkspaceSize size;
 };
 template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int nrhs) {
     Plan p;
     const auto un = static_cast<std::size_t>(n);
-    const auto flag = p.take<int>(ws::Space::Local, 1);
-    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<detail::sytrf_l3_cfg<T>>());
-    const auto l = p.take<T>(ws::Space::Global, un * un);
-    const auto y = p.take<T>(ws::Space::Global, un * static_cast<std::size_t>(nrhs));
-    const auto idx = p.take<int>(ws::Space::Global, 5 * un);
+    const auto flag = p.take<int>(WsSpace::Local, 1);
+    const auto sm = p.take<T>(WsSpace::Local, l3::smem_elems<detail::sytrf_l3_cfg<T>>());
+    const auto l = p.take<T>(WsSpace::Global, un * un);
+    const auto y = p.take<T>(WsSpace::Global, un * static_cast<std::size_t>(nrhs));
+    const auto idx = p.take<int>(WsSpace::Global, 5 * un);
     return {flag, sm, l, y, idx, p.size()};
 }
 
@@ -428,7 +428,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_cta_run(const All& all, const sycl::sub_group&
                                          const int* raw, bool rev, int* flag, D* bb, std::ptrdiff_t ldb, int nrhs) {
     const int n = S.n;
     for_each_owned(all, n, [&](int k) BATCHLAS_DEVICE_BODY { S.ps[k] = logical_piv(raw[rev ? n - 1 - k : k], n, rev); });
-    sync<scope::Group>(all, Mem::Global);
+    sync<Scope::Group>(all, Mem::Global);
     const bool ok = syconv<D>(S, n, S.ps, S.perm, S.kind, S.e, all, flag);
     sytrs_cols<R>(sg, lane, sgid, nsg, S, ok, rev, bb, ldb, nrhs);
 }
@@ -445,7 +445,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, c
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(ex, detail::sytrf_view(A, rev), S);
     sytrs_cta_run<(N + 31) / 32>(ex, ex.sub(), ex.lane(), detail::sytrf_team(ex), detail::sytrf_nteams(ex), S, ipiv,
                                    rev, im + 3 * n, &B(0, 0), detail::sytrf_ld(B), B.cols());
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
 }
 
 template <Uplo UL, class Ex, class MA, class MB>
@@ -491,16 +491,16 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
     const int ldb = static_cast<int>(detail::sytrf_ld(B));
     const int total = n * nrhs;
     for_each_owned(ex, n, [&](int k) BATCHLAS_DEVICE_BODY { ps[k] = logical_piv(ipiv[rev ? n - 1 - k : k], n, rev); });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     if (ex.leader()) {
         const bool valid = piv_list_valid(ps, n);
         *flag = valid ? 1 : 0;
         if (valid) build_perm(ps, n, perm, kind);
     }
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     if (*flag == 0) {
         for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { bb[e % n + (e / n) * ldb] = qnan<D>(); });
-        sync<scope::Group>(ex, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
         return;
     }
     syconv_gather<D>(detail::rev_mat(lw, n, n, rev), G, n, ps, kind, ps + 3 * n, ps + 4 * n, ex);
@@ -510,7 +510,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
         return rev ? n - 1 - perm[lt] : perm[lt];
     };
     for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { y[e] = bb[src(e % n) + (e / n) * ldb]; });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
     const l3::Global<D> L{lw, n, n, n}, Y{y, n, n, nrhs};
     trsm<Side::Left, tri, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
@@ -527,10 +527,10 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
         x(t) = ldl_dsolve_row(1, x0, x1, d0, d1, off);
         x(t + 1) = ldl_dsolve_row(2, x1, x0, d1, d0, off);
     });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     trsm<Side::Left, tri, Transpose::Trans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
     for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { bb[src(e % n) + (e / n) * ldb] = y[e]; });
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
 }
 
 }  // namespace detail

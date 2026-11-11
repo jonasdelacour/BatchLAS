@@ -181,13 +181,13 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 device::for_each_owned(ex, n, [&](int k) BATCHLAS_DEVICE_BODY {
                     ps[k] = device::detail::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
                 });
-                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::sync<device::Scope::Group>(ex, device::Mem::Global);
                 if (ex.leader()) {
                     const bool valid = device::detail::piv_list_valid(ps, n);
                     flag[0] = valid ? 1 : 0;
                     if (valid) device::detail::build_perm(ps, n, perm, kind);
                 }
-                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::sync<device::Scope::Group>(ex, device::Mem::Global);
                 const bool ok = flag[0] != 0;
                 if (ok) {
                     device::syconv_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, ex);
@@ -199,7 +199,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                         perm[t] = t;
                         kind[t] = 0;
                     });
-                    device::sync<device::scope::Group>(ex, device::Mem::Global);
+                    device::sync<device::Scope::Group>(ex, device::Mem::Global);
                 }
                 D* const y = bw + i0 * nb;
                 const D* const src = bp + i0 * strb;

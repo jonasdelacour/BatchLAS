@@ -31,15 +31,15 @@ namespace detail {
 // its pivots.
 template <class T> struct InvPlan {
     detail::LuBlockedPlan<T> local;
-    ws::Slot<T> lu;
-    ws::Slot<std::int32_t> ipiv;
+    WsSlot<T> lu;
+    WsSlot<std::int32_t> ipiv;
     WorkspaceSize size;
 };
 template <class T, class Cfg> constexpr InvPlan<T> inv_plan(int n) {
     Plan p;
     const auto local = detail::lu_blocked_take<T, Cfg>(p);
-    const auto lu = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
-    const auto ipiv = p.take<std::int32_t>(ws::Space::Global, static_cast<std::size_t>(n));
+    const auto lu = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
+    const auto ipiv = p.take<std::int32_t>(WsSpace::Global, static_cast<std::size_t>(n));
     return {local, lu, ipiv, p.size()};
 }
 

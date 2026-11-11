@@ -266,7 +266,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
 
     inline void apply(int32_t col0, int32_t col1, T c, T s) {
         const int32_t pN = static_cast<int32_t>(LDQ);
-        device::rot<device::rot_conv::Transposed, T, T, T>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
+        device::rot<device::alg::RotTransposed, T, T, T>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
                         Q_local[base_q + lane + col1 * pN]);
     }
 
@@ -287,7 +287,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
         const int32_t next = idx + Dir * static_cast<int32_t>(LDQ);
         T q0 = carry;
         T q1 = Q_local[next];
-        device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, q0, q1);
+        device::rot<device::alg::RotTransposed>(device::Givens<T>{c, s}, q0, q1);
         Q_local[idx] = q0;
         carry = q1;
         idx = next;
@@ -301,7 +301,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
         const int32_t next = act ? idx + Dir * static_cast<int32_t>(LDQ) : idx;
         T q0 = carry;
         T q1 = Q_local[next];
-        device::rot<device::rot_conv::Transposed>(device::Givens<T>{c, s}, q0, q1);
+        device::rot<device::alg::RotTransposed>(device::Givens<T>{c, s}, q0, q1);
         if (act) Q_local[idx] = q0;
         carry = act ? q1 : carry;
         idx = next;
@@ -493,7 +493,7 @@ inline void implicit_ql_step(const Partition& partition,
                 const T x = act ? eprev : T(1);
                 const T y = act ? bulge : T(0);
 
-                const auto [c1, s1, r1] = device::lartg<device::lartg_alg::Fast>(x, y);
+                const auto [c1, s1, r1] = device::lartg<device::alg::LartgFast>(x, y);
                 const T sigma = -s1; // match steqr.cc / saved-rotation convention
 
                 // Update the offdiagonal to the *higher* physical index (virtual e(v-1) -> physical e(hi)).
@@ -599,7 +599,7 @@ inline void implicit_ql_step(const Partition& partition,
             const T f = s * ei;
             T rout = T(0);
 
-            const auto [c1, s1, r1] = device::lartg<device::lartg_alg::Fast>(g, f);
+            const auto [c1, s1, r1] = device::lartg<device::alg::LartgFast>(g, f);
 
             // In the original local-memory version: E(i+1) = r1 for i != m-1, when i+1 < N-1.
             if (do_e_upd) {
@@ -1093,8 +1093,8 @@ BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, 
 // The CTA tier's workspace: Q (N x N, ld N) in local memory with vectors, nothing otherwise.
 template <bool Vecs, int N, class T> struct steqr_cta_plan {
     Plan plan{};
-    ws::Slot<T> q{};
-    constexpr steqr_cta_plan() : q(plan.take<T>(ws::Space::Local, Vecs ? static_cast<std::size_t>(N) * N : 0)) {}
+    WsSlot<T> q{};
+    constexpr steqr_cta_plan() : q(plan.take<T>(WsSpace::Local, Vecs ? static_cast<std::size_t>(N) * N : 0)) {}
 };
 
 // ---- the Blocked tier: one problem per work-group, any n ------------------------------------------
@@ -1109,11 +1109,11 @@ struct WgBlock {
 // block table (at most n / 2 + 1 blocks of length >= 2).
 template <bool Vecs, class T> struct wg_plan {
     Plan plan{};
-    ws::Slot<Givens<T>> rot{};
-    ws::Slot<WgBlock> blk{};
+    WsSlot<Givens<T>> rot{};
+    WsSlot<WgBlock> blk{};
     constexpr explicit wg_plan(int n)
-        : rot(plan.take<Givens<T>>(ws::Space::Global, Vecs && n > 1 ? static_cast<std::size_t>(n - 1) : 0)),
-          blk(plan.take<WgBlock>(ws::Space::Global, static_cast<std::size_t>(n / 2 + 1))) {}
+        : rot(plan.take<Givens<T>>(WsSpace::Global, Vecs && n > 1 ? static_cast<std::size_t>(n - 1) : 0)),
+          blk(plan.take<WgBlock>(WsSpace::Global, static_cast<std::size_t>(n / 2 + 1))) {}
 };
 
 // The host steqr_wg algorithm inside one work-group: n - 1 passes (none after one that finds no
@@ -1198,7 +1198,7 @@ BATCHLAS_DEVICE_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, con
                         // Row `row` of z in the sweep's virtual column order (dlasr SIDE = R).
                         const auto q_row = [&](int v) -> decltype(auto) { return z(row, b.lo + (fwd ? v : ncols - 1 - v)); };
                         const auto rots = [&](int j) { return rot[b.lo + j]; };
-                        lasr<rot_conv::Transposed>(Thread{}, ncols, rots, q_row);
+                        lasr<alg::RotTransposed>(Thread{}, ncols, rots, q_row);
                     }
                 }
                 live = ex.group_reduce(live);

@@ -43,20 +43,20 @@ template <class R> struct stebz_params {
 // The workspace plan (design C.5): the leader's interval (lo, hi, pivmin) and the selection's
 // (count, first index), both in local memory; nothing global.
 template <class R> struct StebzLayout {
-    ws::Slot<R> bounds;
-    ws::Slot<std::int32_t> found;
+    WsSlot<R> bounds;
+    WsSlot<std::int32_t> found;
     WorkspaceSize size;
 };
 template <class R> constexpr StebzLayout<R> stebz_layout() {
     Plan p;
-    const auto bounds = p.take<R>(ws::Space::Local, 3);
-    const auto found = p.take<std::int32_t>(ws::Space::Local, 2);
+    const auto bounds = p.take<R>(WsSpace::Local, 3);
+    const auto found = p.take<std::int32_t>(WsSpace::Local, 2);
     return {bounds, found, p.size()};
 }
 }  // namespace detail
 
 // [min_i d_i - r_i, max_i d_i + r_i], r_i = |e_{i-1}| + |e_i|: min, then max, then max.
-template <Scope S = Scope::Auto, class Ex, class D, class E>
+template <Scope S = Scope::Own, class Ex, class D, class E>
 BATCHLAS_DEVICE_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& e) {
     using R = elem_t<D>;
     const int n = d.size();

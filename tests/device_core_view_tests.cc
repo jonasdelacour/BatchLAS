@@ -26,10 +26,10 @@ template <class T> T cj(T v) {
 }
 
 using batchlas::Uplo;
-struct LC { using type = batchlas::device::PackedTri<Uplo::Lower, batchlas::device::order::ByCols>; static constexpr Uplo uplo = Uplo::Lower; static int size(int n) { return n * (n + 1) / 2; } };
-struct UC { using type = batchlas::device::PackedTri<Uplo::Upper, batchlas::device::order::ByCols>; static constexpr Uplo uplo = Uplo::Upper; static int size(int n) { return n * (n + 1) / 2; } };
-struct LR { using type = batchlas::device::PackedTri<Uplo::Lower, batchlas::device::order::ByRows>; static constexpr Uplo uplo = Uplo::Lower; static int size(int n) { return n * (n + 1) / 2; } };
-struct UR { using type = batchlas::device::PackedTri<Uplo::Upper, batchlas::device::order::ByRows>; static constexpr Uplo uplo = Uplo::Upper; static int size(int n) { return n * (n + 1) / 2; } };
+struct LC { using type = batchlas::device::PackedTri<Uplo::Lower, batchlas::device::PackOrder::ByCols>; static constexpr Uplo uplo = Uplo::Lower; static int size(int n) { return n * (n + 1) / 2; } };
+struct UC { using type = batchlas::device::PackedTri<Uplo::Upper, batchlas::device::PackOrder::ByCols>; static constexpr Uplo uplo = Uplo::Upper; static int size(int n) { return n * (n + 1) / 2; } };
+struct LR { using type = batchlas::device::PackedTri<Uplo::Lower, batchlas::device::PackOrder::ByRows>; static constexpr Uplo uplo = Uplo::Lower; static int size(int n) { return n * (n + 1) / 2; } };
+struct UR { using type = batchlas::device::PackedTri<Uplo::Upper, batchlas::device::PackOrder::ByRows>; static constexpr Uplo uplo = Uplo::Upper; static int size(int n) { return n * (n + 1) / 2; } };
 
 TEST(DeviceCoreViewHost, PackedTriIndexIsABijectionAndDecodeInvertsIt) {
     auto check = [](auto tag) {
@@ -99,9 +99,9 @@ TYPED_TEST(DeviceCoreViewTest, ViewsMapEveryElementOnDevice) {
             vo[3 * m + i] = i < sl.size() ? sl(i) : T(0);
             vo[4 * m + i] = mp(i);
         }
-        const auto fr = batchlas::device::flip<batchlas::device::axis::Rows>(av);
-        const auto fc = batchlas::device::flip<batchlas::device::axis::Cols>(av);
-        const auto fb = batchlas::device::flip<batchlas::device::axis::Both>(av);
+        const auto fr = batchlas::device::flip<batchlas::device::Axis::Rows>(av);
+        const auto fc = batchlas::device::flip<batchlas::device::Axis::Cols>(av);
+        const auto fb = batchlas::device::flip<batchlas::device::Axis::Both>(av);
         const auto tt = batchlas::device::op_view<batchlas::Transpose::ConjTrans>(av);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) {
@@ -158,8 +158,8 @@ TYPED_TEST(DeviceCoreViewTest, PacketMovesOneAlignedUnit) {
 }
 
 
-// herm_view<UL, storage::Band> of LAPACK band storage and herm_view<UL, storage::Full,
-// loads::Two>, against a host Hermitian built from the full matrix; shifted; refs. The band
+// herm_view<UL, Storage::Band> of LAPACK band storage and herm_view<UL, Storage::Full,
+// alg::TwoLoads>, against a host Hermitian built from the full matrix; shifted; refs. The band
 // array's unused corner and the matrix's unstored triangle are NaN-poisoned.
 TYPED_TEST(DeviceCoreViewTest, HermBandAndTwoLoadViewsShiftedRefs) {
     using T = TypeParam;
@@ -192,9 +192,9 @@ TYPED_TEST(DeviceCoreViewTest, HermBandAndTwoLoadViewsShiftedRefs) {
     T* sh = d.template alloc<T>(n + 2, T(0));
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int g = static_cast<int>(it.get_local_linear_id());
-        const auto two = batchlas::device::herm_view<Uplo::Lower, batchlas::device::storage::Full, batchlas::device::loads::Two>(batchlas::device::mat(lo, n, n, ld));
-        const auto bl = batchlas::device::herm_view<Uplo::Lower, batchlas::device::storage::Band>(batchlas::device::mat(ab, ldab, n, ldab), n, kd);
-        const auto bu = batchlas::device::herm_view<Uplo::Upper, batchlas::device::storage::Band>(batchlas::device::mat(au, ldab, n, ldab), n, kd);
+        const auto two = batchlas::device::herm_view<Uplo::Lower, batchlas::device::Storage::Full, batchlas::device::alg::TwoLoads>(batchlas::device::mat(lo, n, n, ld));
+        const auto bl = batchlas::device::herm_view<Uplo::Lower, batchlas::device::Storage::Band>(batchlas::device::mat(ab, ldab, n, ldab), n, kd);
+        const auto bu = batchlas::device::herm_view<Uplo::Upper, batchlas::device::Storage::Band>(batchlas::device::mat(au, ldab, n, ldab), n, kd);
         for (int e = g; e < n * n; e += 32) {
             const int i = e % n, j = e / n;
             out[e] = two(i, j);
@@ -217,7 +217,7 @@ TYPED_TEST(DeviceCoreViewTest, HermBandAndTwoLoadViewsShiftedRefs) {
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const int e = j * n + i;
-            EXPECT_TRUE(same_bits(o[e], herm(lo_h, true, i, j))) << "loads::Two " << i << "," << j;
+            EXPECT_TRUE(same_bits(o[e], herm(lo_h, true, i, j))) << "alg::TwoLoads " << i << "," << j;
             const bool in_band = std::abs(i - j) <= kd;
             EXPECT_TRUE(same_bits(o[n * n + e], in_band ? herm(lo_h, true, i, j) : T(0))) << "Band Lower " << i << "," << j;
             EXPECT_TRUE(same_bits(o[2 * n * n + e], in_band ? herm(up_h, false, i, j) : T(0))) << "Band Upper " << i << "," << j;

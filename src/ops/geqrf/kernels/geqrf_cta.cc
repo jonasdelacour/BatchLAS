@@ -71,7 +71,7 @@ inline int geqrf_panel_wg(int n, int max_wg) {
 inline bool geqrf_packable(int m, int n) { return m <= 32 && n <= 32; }
 
 // Panels per work-group, and the scope that makes that number correct: G > 1 demands
-// GeqrfScope::SubGroup, so the two are derived together.
+// device::Scope::Sub, so the two are derived together.
 struct GeqrfLeafLaunch {
     int wg = 32;
     int G = 1;
@@ -95,10 +95,10 @@ GeqrfLeafLaunch geqrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int m
     return p;
 }
 
-template <typename T, geqrf_native::GeqrfScope SC> class GeqrfPanelResidentKernel;
+template <typename T, device::Scope SC> class GeqrfPanelResidentKernel;
 template <typename T> class GeqrfPanelGlobalKernel;
 
-template <typename T, geqrf_native::GeqrfScope SC>
+template <typename T, device::Scope SC>
 Event geqrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
@@ -112,7 +112,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     D* const tp = reinterpret_cast<D*>(tau_ptr);
-    static_assert(SC == geqrf_native::GeqrfScope::SubGroup || SC == geqrf_native::GeqrfScope::WorkGroup);
+    static_assert(SC == device::Scope::Sub || SC == device::Scope::Group);
 
     const int kmax = std::min(m, n);
     const std::size_t tile_elems =
@@ -135,7 +135,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
                 int b, slot, tid, lwg;
-                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
+                if constexpr (SC == device::Scope::Sub) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
                     b = wg_id * G + sg_id;
                     slot = sg_id;
@@ -163,7 +163,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                     mine[e] = src[static_cast<std::ptrdiff_t>(r) +
                                   static_cast<std::ptrdiff_t>(c) * ld];
                 }
-                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
+                if constexpr (SC == device::Scope::Sub) {
                     sycl::group_barrier(sg);                  // B0
                 } else {
                     sycl::group_barrier(it.get_group());      // B0
@@ -171,11 +171,11 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
                 // Raw-pointer tile: G panels share one local_accessor, so each needs its own
                 // base; ld unpadded.
-                using Ex = device::RtGroup<SC == geqrf_native::GeqrfScope::SubGroup ? device::Scope::Sub : device::Scope::Group>;
+                using Ex = device::RtGroup<SC>;
                 device::geqr2(Ex{it}, device::mat_wide(mine, m, n, m), kmax,
                           tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
 
-                if constexpr (SC == geqrf_native::GeqrfScope::SubGroup) {
+                if constexpr (SC == device::Scope::Sub) {
                     sycl::group_barrier(sg);                  // B4
                 } else {
                     sycl::group_barrier(it.get_group());      // B4
@@ -468,11 +468,11 @@ Event geqrf_panel_factorize(Queue& ctx,
 
     const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
-        return geqrf_panel_resident_launch<T, geqrf_native::GeqrfScope::SubGroup>(
+        return geqrf_panel_resident_launch<T, device::Scope::Sub>(
             ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
             p.wg, p.G, mask);
     }
-    return geqrf_panel_resident_launch<T, geqrf_native::GeqrfScope::WorkGroup>(
+    return geqrf_panel_resident_launch<T, device::Scope::Group>(
         ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
         p.wg, 1, mask);
 }

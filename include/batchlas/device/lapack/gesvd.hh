@@ -108,11 +108,11 @@ namespace detail {
 // One matrix's workspace for tier::Blocked<NB>; the sub-ops (gebrd, bdsqr) get their own slices,
 // each carved by that op's plan from offset 0 of its slice.
 template <class T> struct GesvdBlockedPlan {
-    ws::Slot<T> at, ub, vb;           // m < n: A^H (n x m), its U (n x vh_rows), its V^H (m x m)
-    ws::Slot<real_t<T>> d, e;         // the bidiagonal: k, k - 1
-    ws::Slot<T> tauq, taup;           // k each
-    ws::Slot<real_t<T>> ur, vr;       // complex with vectors: bdsqr's real k x k U and V^H
-    ws::Slot<std::byte> gebrd_local, gebrd_global, bdsqr_local, bdsqr_global;
+    WsSlot<T> at, ub, vb;           // m < n: A^H (n x m), its U (n x vh_rows), its V^H (m x m)
+    WsSlot<real_t<T>> d, e;         // the bidiagonal: k, k - 1
+    WsSlot<T> tauq, taup;           // k each
+    WsSlot<real_t<T>> ur, vr;       // complex with vectors: bdsqr's real k x k U and V^H
+    WsSlot<std::byte> gebrd_local, gebrd_global, bdsqr_local, bdsqr_global;
     WorkspaceSize size;
 };
 template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr GesvdBlockedPlan<T> driver_plan(int m, int n) {
@@ -124,26 +124,26 @@ template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr GesvdBlocked
     const std::size_t kk = Arith<T>::is_complex && (wu || wv) ? std::size_t(k) * std::size_t(k) : 0;
     Plan p;
     GesvdBlockedPlan<T> b{};
-    b.at = p.take<T>(ws::Space::Global, flip ? std::size_t(n) * std::size_t(m) : 0);
-    b.ub = p.take<T>(ws::Space::Global, flip && wv ? std::size_t(n) * vh_rows : 0);
-    b.vb = p.take<T>(ws::Space::Global, flip && wu ? std::size_t(m) * std::size_t(m) : 0);
-    b.d = p.take<R>(ws::Space::Global, std::size_t(k));
-    b.e = p.take<R>(ws::Space::Global, std::size_t(k > 1 ? k - 1 : 1));
-    b.tauq = p.take<T>(ws::Space::Global, std::size_t(k));
-    b.taup = p.take<T>(ws::Space::Global, std::size_t(k));
-    b.ur = p.take<R>(ws::Space::Global, kk);
-    b.vr = p.take<R>(ws::Space::Global, kk);
+    b.at = p.take<T>(WsSpace::Global, flip ? std::size_t(n) * std::size_t(m) : 0);
+    b.ub = p.take<T>(WsSpace::Global, flip && wv ? std::size_t(n) * vh_rows : 0);
+    b.vb = p.take<T>(WsSpace::Global, flip && wu ? std::size_t(m) * std::size_t(m) : 0);
+    b.d = p.take<R>(WsSpace::Global, std::size_t(k));
+    b.e = p.take<R>(WsSpace::Global, std::size_t(k > 1 ? k - 1 : 1));
+    b.tauq = p.take<T>(WsSpace::Global, std::size_t(k));
+    b.taup = p.take<T>(WsSpace::Global, std::size_t(k));
+    b.ur = p.take<R>(WsSpace::Global, kk);
+    b.vr = p.take<R>(WsSpace::Global, kk);
     const WorkspaceSize g = gebrd_buffer_size<tier::Blocked<NB>, T>(mm, k);
     const WorkspaceSize q = bdsqr_buffer_size<tier::Blocked<1>, R>(k);
-    b.gebrd_local = p.take<std::byte>(ws::Space::Local, g.local_bytes);
-    b.gebrd_global = p.take<std::byte>(ws::Space::Global, g.global_bytes);
-    b.bdsqr_local = p.take<std::byte>(ws::Space::Local, q.local_bytes);
-    b.bdsqr_global = p.take<std::byte>(ws::Space::Global, q.global_bytes);
+    b.gebrd_local = p.take<std::byte>(WsSpace::Local, g.local_bytes);
+    b.gebrd_global = p.take<std::byte>(WsSpace::Global, g.global_bytes);
+    b.bdsqr_local = p.take<std::byte>(WsSpace::Local, q.local_bytes);
+    b.bdsqr_global = p.take<std::byte>(WsSpace::Global, q.global_bytes);
     b.size = p.size();
     return b;
 }
 // The workspace a nested op carves from: its local and global slices of this matrix's.
-BATCHLAS_DEVICE_INLINE Workspace nested_workspace(const Workspace& w, const ws::Slot<std::byte>& l, const ws::Slot<std::byte>& g) {
+BATCHLAS_DEVICE_INLINE Workspace nested_workspace(const Workspace& w, const WsSlot<std::byte>& l, const WsSlot<std::byte>& g) {
     return {w.local + static_cast<std::ptrdiff_t>(l.offset), w.global + g.offset};
 }
 // A Mat over T* (int32 index, Dyn ld) of a global matrix operand (Mat, ItemMat or l3::Global).
@@ -185,8 +185,8 @@ BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, co
                                        Vh.sub(0, 0, want_vh ? k : 0, want_vh ? k : 0));
     }
     ex.barrier(Mem::Global);
-    if (want_u) (void)ormbr<'Q', Side::Left, Transpose::NoTrans>(ex, A, tauq, U, Workspace{});
-    if (want_vh) (void)ormbr<'P', Side::Right, Transpose::ConjTrans>(ex, A, taup, Vh, Workspace{});
+    if (want_u) (void)ormbr<Vect::Q, Side::Left, Transpose::NoTrans>(ex, A, tauq, U, Workspace{});
+    if (want_vh) (void)ormbr<Vect::P, Side::Right, Transpose::ConjTrans>(ex, A, taup, Vh, Workspace{});
     return info;
 }
 }  // namespace detail

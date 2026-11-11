@@ -212,9 +212,9 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int i = int(g - b * out);
             D acc{};
             if constexpr (S == Shape::RowThread) {
-                if (!al.zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, A(b).row(i), X(b));
+                if (!al.zero) acc = device::dot<device::Scope::Own, Fma>(device::Thread{}, A(b).row(i), X(b));
             } else {
-                if (!al.zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, device::conj_if(A(b).col(i), conj), X(b));
+                if (!al.zero) acc = device::dot<device::Scope::Own, Fma>(device::Thread{}, device::conj_if(A(b).col(i), conj), X(b));
             }
             device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });

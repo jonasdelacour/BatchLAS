@@ -139,7 +139,7 @@ template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y
 
 // xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and butterflies: no
 // static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Scalars: larfg_scalars<
-// conv::Lapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), the
+// alg::LarfgLapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), the
 // apply uses conj(tau) (zgeqr2's); tau[j] per reflector, kmax <= min(m, n). COLLECTIVE.
 // ex and a by value: the body is simplified before it is inlined, and through references it
 // keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
@@ -157,7 +157,7 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
         R smax = abs_inf(alpha);
         for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { smax = sycl::fmax(smax, abs_inf(a(r, j))); });
         // Scope::Sub: the run-time xor butterfly; Scope::Group: portable::reduce_over_group.
-        if constexpr (sub) smax = butterfly(ex.sub(), smax, op::FMax{}, 1, lanes);
+        if constexpr (sub) smax = butterfly(ex.sub(), smax, reduce_op::FMax{}, 1, lanes);
         else smax = ex.group_reduce(smax, sycl::maximum<R>());
         R ssq = R(0);  // the collective sits outside the `smax > 0` test: all items reach it
         if (smax > R(0)) {
@@ -165,7 +165,7 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
         }
         if constexpr (sub) ssq = butterfly(ex.sub(), ssq, sycl::plus<R>(), 1, lanes);
         else ssq = ex.group_reduce(ssq, sycl::plus<R>());
-        const LarfgScalars<D> h = larfg_scalars<conv::Lapack>(alpha, ScaledSsq<R>{smax, ssq});
+        const LarfgScalars<D> h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});
 
         ex.barrier(Mem::Global);  // B2 -- every item has read A(j,j) as `alpha`; item 0 overwrites it.
         if (!h.identity) {
@@ -216,7 +216,7 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 
         // Same slots folded in the same order on every item: h is work-group-uniform.
         const R part = (live && r >= j) ? abs_inf(rA[j]) : R(0);
-        detail::team_slot_put(ex, sred, 0, butterfly(ex.sub(), part, op::FMax{}, 1, ex.team_size()));
+        detail::team_slot_put(ex, sred, 0, butterfly(ex.sub(), part, reduce_op::FMax{}, 1, ex.team_size()));
         if (r == j) sw[0] = rA[j];
         ex.barrier(Mem::Global);                                   // B1
         const R smax = detail::slot_fold_max(sred, 0, nsg);
@@ -228,7 +228,7 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
         ex.barrier(Mem::Global);                                   // B2
         const R ssq = detail::slot_fold_sum(sred, nsg, nsg);
 
-        const LarfgScalars<D> h = larfg_scalars<conv::Lapack>(alpha, ScaledSsq<R>{smax, ssq});
+        const LarfgScalars<D> h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});
 
         // NO `if (h.identity) continue;`: inert arithmetically, and omitting it keeps the
         // barrier sequence uniform. tau is a defined output either way.
@@ -281,7 +281,7 @@ struct geqrf {
 
 namespace detail {
 template <class T> struct GeqrfSlots {
-    ws::Slot<T> smem, v, t, work;
+    WsSlot<T> smem, v, t, work;
 };
 // The host blocked route's layout per matrix: V (m x NB), T (NB x NB), W1 / W2 (NB x (n - nb)).
 template <int NB, class Cfg, class T> constexpr GeqrfSlots<T> geqrf_take(Plan& p, int m, int n) {
@@ -289,10 +289,10 @@ template <int NB, class Cfg, class T> constexpr GeqrfSlots<T> geqrf_take(Plan& p
     const int nb = k < NB ? (k > 0 ? k : 1) : NB;
     const int n2max = n - nb > 0 ? n - nb : 0;
     GeqrfSlots<T> s{};
-    s.smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
-    s.v = p.take<T>(ws::Space::Global, static_cast<std::size_t>(m > 0 ? m : 0) * NB);
-    s.t = p.take<T>(ws::Space::Global, static_cast<std::size_t>(NB) * NB);
-    s.work = p.take<T>(ws::Space::Global, larfb_work_elems<Side::Left>(NB, n2max, NB));
+    s.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    s.v = p.take<T>(WsSpace::Global, static_cast<std::size_t>(m > 0 ? m : 0) * NB);
+    s.t = p.take<T>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
+    s.work = p.take<T>(WsSpace::Global, larfb_work_elems<Side::Left>(NB, n2max, NB));
     return s;
 }
 template <int NB, class Cfg, class T> constexpr WorkspaceSize geqrf_size(int m, int n) {

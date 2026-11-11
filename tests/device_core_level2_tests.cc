@@ -4,7 +4,7 @@
 // the Hermitian inputs (her2 must zero it on a triangle and keep it on Full); a non-natural
 // ld = m + 3 whose pad is poisoned (NaN) and must not be read or written; rectangular m != n
 // with m, n not multiples of the team (m = 21, n = 13); ColDot<4> so a butterfly crossing its
-// 4-lane block is visible; trsv diagonals 2 .. 5 with Im(diag) != 0, so tri_diag::Real differs
+// 4-lane block is visible; trsv diagonals 2 .. 5 with Im(diag) != 0, so alg::RealDiv differs
 // from Div by more than the tolerance; gbmv with KL != KU and a band that clips at both edges. Red set
 // (each break made once, 2026-11-04, and this suite failed): her2 adding conj(alpha) to the
 // first term instead of the second.
@@ -60,7 +60,7 @@ TYPED_TEST(DeviceCoreLevel2Test, GemvTeamPerRowColDotAndAlphaRight) {
         batchlas::device::gemv<Transpose::NoTrans, batchlas::device::alg::TeamPerRow>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xn, n)), beta, batchlas::device::vec(yn, m));
         batchlas::device::gemv<Transpose::Trans, batchlas::device::alg::ColDot<4>>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xt, m)), beta, batchlas::device::vec(yt, n));
         batchlas::device::gemv<Transpose::ConjTrans, batchlas::device::alg::ColDot<4>>(ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xt, m)), beta, batchlas::device::vec(yc, n));
-        batchlas::device::gemv<Transpose::NoTrans, void, batchlas::device::arith::Explicit, batchlas::device::epi::Sum, batchlas::device::alpha_side::Right>(
+        batchlas::device::gemv<Transpose::NoTrans, void, batchlas::device::arith::Explicit, batchlas::device::epi::Sum, batchlas::Side::Right>(
             ex, alpha, A, batchlas::device::assume_published(batchlas::device::vec(xn, n)), batchlas::device::Zero{}, batchlas::device::vec(yr, m));
     });
     const auto gn = d.down(yn, m), gt = d.down(yt, n), gc = d.down(yc, n), gr = d.down(yr, m);
@@ -168,7 +168,7 @@ TYPED_TEST(DeviceCoreLevel2Test, TrsvDiagonalPoliciesAndLanePerRow) {
         const batchlas::device::Partition<16> part{it.get_sub_group()};
         const int l = part.lid();
         T xl = l < n ? b[l] : T(0);
-        batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Div, batchlas::device::alg::LanePerRow>(part, A, xl, n);
+        batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::alg::Div, batchlas::device::alg::LanePerRow>(part, A, xl, n);
         if (it.get_local_linear_id() < 16 && l < n) outs[4 * n + l] = xl;
         if (it.get_local_linear_id() == 0) {
             const batchlas::device::Thread th;
@@ -177,10 +177,10 @@ TYPED_TEST(DeviceCoreLevel2Test, TrsvDiagonalPoliciesAndLanePerRow) {
             f1 = f0;
             f2 = f0;
             f3 = f0;
-            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Div>(th, A, f0, n);
-            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Recip>(th, A, f1, n);
-            batchlas::device::trsv<Uplo::Lower, Transpose::ConjTrans, batchlas::device::tri_diag::Real>(th, A, f2, n);
-            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::tri_diag::Unit>(th, A, f3, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::alg::Div>(th, A, f0, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::alg::Recip>(th, A, f1, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::ConjTrans, batchlas::device::alg::RealDiv>(th, A, f2, n);
+            batchlas::device::trsv<Uplo::Lower, Transpose::NoTrans, batchlas::device::alg::UnitDiag>(th, A, f3, n);
             for (int i = 0; i < n; ++i) {
                 outs[i] = f0[i];
                 outs[n + i] = f1[i];

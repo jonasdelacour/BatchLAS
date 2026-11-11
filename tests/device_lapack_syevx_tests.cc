@@ -94,7 +94,7 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackSyevxTest, Types);
 
-// Item b reverses iff b is odd. Columns: lacpy(flip<axis::Cols>(A, rev)) into an ld-padded block;
+// Item b reverses iff b is odd. Columns: lacpy(flip<Axis::Cols>(A, rev)) into an ld-padded block;
 // vector: copy(flip(x.tail(off).head(len), rev)) from a stride-inc source, as syevx_select.
 template <class T> void run_flips(Dev& dev, int wg) {
     constexpr int m = 37, n = 9, lda = m + 3, ldo = m + 5, nx = 23, inc = 2, off = 3, len = nx - 5;
@@ -110,7 +110,7 @@ template <class T> void run_flips(Dev& dev, int wg) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const bool rev = (b & 1) != 0;
         const auto A = device::mat(a + std::ptrdiff_t(b) * n * lda, m, n, lda);
-        device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(ex, device::flip<device::axis::Cols>(A, rev),
+        device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(ex, device::flip<device::Axis::Cols>(A, rev),
                                                                      device::mat(o + std::ptrdiff_t(b) * n * ldo, m, n, ldo));
         const auto xv = device::vec(x + std::ptrdiff_t(b) * nx * inc, nx, inc);
         device::copy(ex, device::flip(xv.tail(off).head(len), rev), device::vec(v + std::ptrdiff_t(b) * nx, len));

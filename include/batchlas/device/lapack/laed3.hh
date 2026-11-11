@@ -67,7 +67,7 @@ BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t 
             const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
             v(eid, bid) = sgn * sqrt_scaled(prod);
         }
-        if constexpr (detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
+        if constexpr (detail::is_group_v<Ex>) sync<Scope::Group>(ex, Mem::Global);
     }
 }
 
@@ -88,7 +88,7 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
         // No barrier: nrm2 walks q with map's owner stride (each item reads what it wrote).
         const T nrm = nrm2<alg::Blue>(ex, q);
         map(ex, q, [=](T qi) { return qi / nrm; }, q);
-        if constexpr (detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
+        if constexpr (detail::is_group_v<Ex>) sync<Scope::Group>(ex, Mem::Global);
     }
 }
 
@@ -115,11 +115,11 @@ BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t f
         detail::denominators(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
     }
 
-    sync<scope::Group>(wex, Mem::Global);
+    sync<Scope::Group>(wex, Mem::Global);
 
     // Rescale reads Q, writes v; form_vectors the reverse. On the group each step syncs itself.
     detail::rescale<T>(do_rescale, pex, first, stride, dd, Q_bid, d_prob, v, bid);
-    if constexpr (!detail::is_group_v<PEx>) sync<scope::Group>(wex, Mem::Global);
+    if constexpr (!detail::is_group_v<PEx>) sync<Scope::Group>(wex, Mem::Global);
     detail::form_vectors<T>(pex, first, stride, dd, Q, v, bid);
 }
 

@@ -51,16 +51,16 @@ enum Step : int { kNone = 0, kStop = 1, kChaseU = 2, kChaseV = 3, kSweep = 4 };
 inline constexpr int kCtrl = 8;  // [0] converged, [1] step, [2] lo, [3] hi, [4] l, [5] iters, [6] info
 
 template <class R> struct BdsqrLayout {
-    ws::Slot<int> ctrl;  // local: the published scan state
-    ws::Slot<R> rot;     // global: 2 (n - 1) (c, s) of U, then 2 (n - 1) of Vh, one block's
-    ws::Slot<int> perm;  // global: n sign flags, then the sort's swap targets
+    WsSlot<int> ctrl;  // local: the published scan state
+    WsSlot<R> rot;     // global: 2 (n - 1) (c, s) of U, then 2 (n - 1) of Vh, one block's
+    WsSlot<int> perm;  // global: n sign flags, then the sort's swap targets
     WorkspaceSize size;
 };
 template <class R> constexpr BdsqrLayout<R> sweep_plan(int n) {
     Plan p;
-    const ws::Slot<int> ctrl = p.take<int>(ws::Space::Local, kCtrl);
-    const ws::Slot<R> rot = p.take<R>(ws::Space::Global, std::size_t(4) * std::size_t(n > 1 ? n - 1 : 1));
-    const ws::Slot<int> perm = p.take<int>(ws::Space::Global, std::size_t(n > 0 ? n : 1));
+    const WsSlot<int> ctrl = p.take<int>(WsSpace::Local, kCtrl);
+    const WsSlot<R> rot = p.take<R>(WsSpace::Global, std::size_t(4) * std::size_t(n > 1 ? n - 1 : 1));
+    const WsSlot<int> perm = p.take<int>(WsSpace::Global, std::size_t(n > 0 ? n : 1));
     return {ctrl, rot, perm, p.size()};
 }
 

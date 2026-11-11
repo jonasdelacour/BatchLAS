@@ -172,8 +172,8 @@ BATCHLAS_DEVICE_INLINE void repair(const Ex& wg, const MU& U, const MV& Vh, cons
 // tier::Blocked<1>'s plan of one matrix: the Golub-Kahan (gd, ge, gs), its eigenvalues w and
 // vectors Z (2n x 2n) in global memory, then the nested stedc's slices.
 template <class R> struct BdsdcLayout {
-    ws::Slot<R> gd, ge, gs, w, z;
-    ws::Slot<std::byte> stedc_local, stedc_global;
+    WsSlot<R> gd, ge, gs, w, z;
+    WsSlot<std::byte> stedc_local, stedc_global;
     WorkspaceSize size;
 };
 template <class R> constexpr BdsdcLayout<R> plan(int n) {
@@ -181,13 +181,13 @@ template <class R> constexpr BdsdcLayout<R> plan(int n) {
     const WorkspaceSize q = stedc_buffer_size<JobType::EigenVectors, tier::Blocked<1>, R>(N);
     Plan p(q.align > 16 ? q.align : 16);
     BdsdcLayout<R> L{};
-    L.gd = p.take<R>(ws::Space::Global, std::size_t(N));
-    L.ge = p.take<R>(ws::Space::Global, std::size_t(N - 1));
-    L.gs = p.take<R>(ws::Space::Global, std::size_t(N));
-    L.w = p.take<R>(ws::Space::Global, std::size_t(N));
-    L.z = p.take<R>(ws::Space::Global, std::size_t(N) * std::size_t(N));
-    L.stedc_local = p.take<std::byte>(ws::Space::Local, q.local_bytes);
-    L.stedc_global = p.take<std::byte>(ws::Space::Global, q.global_bytes);
+    L.gd = p.take<R>(WsSpace::Global, std::size_t(N));
+    L.ge = p.take<R>(WsSpace::Global, std::size_t(N - 1));
+    L.gs = p.take<R>(WsSpace::Global, std::size_t(N));
+    L.w = p.take<R>(WsSpace::Global, std::size_t(N));
+    L.z = p.take<R>(WsSpace::Global, std::size_t(N) * std::size_t(N));
+    L.stedc_local = p.take<std::byte>(WsSpace::Local, q.local_bytes);
+    L.stedc_global = p.take<std::byte>(WsSpace::Global, q.global_bytes);
     L.size = p.size();
     return L;
 }

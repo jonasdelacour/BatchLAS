@@ -6,7 +6,7 @@
 // with R = 3 registers on 8- and 32-lane executors, k on both sides of every register boundary;
 // neighbour exchange at the lane wrap (lane 0 / lane size - 1); a row window c0 > 0 that
 // straddles the triangle's diagonal; a local-memory tile through a decorated pointer. Red set
-// (each break made once, 2026-11-04, and this suite failed): unit_head refl::QL returning v(i)
+// (each break made once, 2026-11-04, and this suite failed): unit_head Refl::QL returning v(i)
 // below the head instead of zero.
 #include <tests/device_core_common.hh>
 #include <batchlas/device/operand.hh>
@@ -33,16 +33,16 @@ TYPED_TEST(DeviceCoreOperandTest, UnitHeadFormsNeverReadTheHead) {
     auto v_h = vals<T>(n, 1);
     v_h[head] = T(std::numeric_limits<R>::quiet_NaN());
     const auto v = batchlas::device::vec(v_h.data(), n);
-    const auto qr = batchlas::device::unit_head<batchlas::device::refl::QR>(v, head);
-    const auto ql = batchlas::device::unit_head<batchlas::device::refl::QL>(v, head);
-    const auto keep = batchlas::device::unit_head<batchlas::device::refl::QL, batchlas::device::unit_fill::Keep>(v, head);
+    const auto qr = batchlas::device::unit_head<batchlas::device::Refl::QR>(v, head);
+    const auto ql = batchlas::device::unit_head<batchlas::device::Refl::QL>(v, head);
+    const auto keep = batchlas::device::unit_head<batchlas::device::Refl::QL, batchlas::device::DiagFill::Keep>(v, head);
     const auto old = batchlas::device::unit_head(v, head);
     for (int i = 0; i < n; ++i) {
         const T one = T(1), zero = T(0);
         EXPECT_TRUE(same_bits(qr(i), i == head ? one : (i > head ? v_h[i] : zero))) << "QR " << i;
         EXPECT_TRUE(same_bits(ql(i), i == head ? one : (i < head ? v_h[i] : zero))) << "QL " << i;
         EXPECT_TRUE(same_bits(keep(i), i == head ? one : v_h[i])) << "Keep " << i;
-        EXPECT_TRUE(same_bits(old(i), qr(i))) << "unit_head(v, k) is refl::QR, unit_fill::Zero";
+        EXPECT_TRUE(same_bits(old(i), qr(i))) << "unit_head(v, k) is Refl::QR, DiagFill::Zero";
     }
 }
 

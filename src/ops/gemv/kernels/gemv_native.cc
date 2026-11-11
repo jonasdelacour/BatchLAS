@@ -222,7 +222,7 @@ Event gemv_direct_notrans(Queue& ctx,
                 const auto xb = op.xvec(b, op.n);
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
-                if (!alpha_zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, Ai, xb);
+                if (!alpha_zero) acc = device::dot<device::Scope::Own, Fma>(device::Thread{}, Ai, xb);
                 device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(i));
             });
     });
@@ -337,7 +337,7 @@ Event gemv_direct_trans(Queue& ctx,
                 const auto xb = op.xvec(b, op.m);
                 const auto yb = op.yvec(b, op.n);
                 D acc{};
-                if (!alpha_zero) acc = device::dot<device::Scope::Auto, Fma>(device::Thread{}, Aj, xb);
+                if (!alpha_zero) acc = device::dot<device::Scope::Own, Fma>(device::Thread{}, Aj, xb);
                 device::store<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(j));
             });
     });

@@ -142,7 +142,7 @@ template <class D> struct RegScalar {
     }
 };
 
-// Bcast (bcast_policy): how column j of L reaches the lanes below the pivot. The failure effects
+// Bcast (alg::BcastShuffle or alg::BcastSlm): how column j of L reaches the lanes below the pivot. The failure effects
 // are value substitutions, never control flow, because `live` is partition-uniform but not
 // sub-group-uniform. rA[k] for k > lane stays exactly zero (the `k <= lane` predicate), so the
 // identity padding stays inert. Scale is a * (1 / L(j, j)).
@@ -167,7 +167,7 @@ template <class D, int N, int NC, OrderGuard G, class Part, class Bcast> struct 
         rA[j] = ::batchlas::device::select(act, ::batchlas::device::select(lane == j, S::from_real(dkk), S::mul_real(rA[j], rinv)), rA[j]);
     }
     BATCHLAS_DEVICE_INLINE void update(int j, bool act) const {
-        if constexpr (std::is_same_v<Bcast, bcast_policy::Shuffle>) {
+        if constexpr (std::is_same_v<Bcast, alg::BcastShuffle>) {
 BATCHLAS_UNROLL_FULL
             for (int k = j + 1; k < NC; ++k) {
                 if constexpr (skips) {
@@ -276,7 +276,7 @@ BATCHLAS_DEVICE_INLINE std::int32_t potrf_reg_run(const Part& part, D* a, int ld
     Frag<D, N> rA;
     if (upper) reg_load_upper<D, N>(rA.v, a, ld, lane, row_live, real_diag);
     else reg_load_lower<D, N>(rA.v, a, ld, lane, row_live, real_diag);
-    const std::int32_t linfo = potf2_reg<D, N, N>(part, rA, n, live, bcast_policy::Shuffle{});
+    const std::int32_t linfo = potf2_reg<D, N, N>(part, rA, n, live, alg::BcastShuffle{});
     if (upper) reg_store_upper<D, N>(rA.v, a, ld, lane, row_live);
     else reg_store_lower<D, N>(rA.v, a, ld, lane, row_live);
     return linfo;
@@ -664,10 +664,10 @@ constexpr int cta_items(int n, int nb, int ts) {
 template <class D> struct PotrfCtaPlan {
     int lda;
     int rt0;
-    ws::Slot<D> tile;
-    ws::Slot<real_t<D>> diag;
-    ws::Slot<int> fail;
-    ws::Slot<int> off;
+    WsSlot<D> tile;
+    WsSlot<real_t<D>> diag;
+    WsSlot<int> fail;
+    WsSlot<int> off;
     WorkspaceSize size;
     static constexpr PotrfCtaPlan make(int n) {
         using C = CtaConst<D>;
@@ -675,10 +675,10 @@ template <class D> struct PotrfCtaPlan {
         const int m2_0 = (n > C::nb) ? (n - C::nb) : 0;
         const int rt0 = (m2_0 + C::ts - 1) / C::ts;
         Plan p;
-        const auto t = p.take<D>(ws::Space::Local, static_cast<std::size_t>(lda) * static_cast<std::size_t>(n));
-        const auto d = p.take<real_t<D>>(ws::Space::Local, static_cast<std::size_t>(C::nb));
-        const auto f = p.take<int>(ws::Space::Local, 1);
-        const auto o = p.take<int>(ws::Space::Local, static_cast<std::size_t>(rt0 + 1));
+        const auto t = p.take<D>(WsSpace::Local, static_cast<std::size_t>(lda) * static_cast<std::size_t>(n));
+        const auto d = p.take<real_t<D>>(WsSpace::Local, static_cast<std::size_t>(C::nb));
+        const auto f = p.take<int>(WsSpace::Local, 1);
+        const auto o = p.take<int>(WsSpace::Local, static_cast<std::size_t>(rt0 + 1));
         return {lda, rt0, t, d, f, o, p.size()};
     }
 };
@@ -807,17 +807,17 @@ static_assert(PotrfBlockedCfg<float>::threads == kBlockedWg);
 // posv's potrs carves the same bytes potrf did (potrs.hh static_asserts it).
 template <class T, int NB> struct PotrfBlockedPlan {
     using D = dev_scalar_t<T>;
-    ws::Slot<T> smem;     // BlockedCfg<T>'s stages
-    ws::Slot<D> blk;      // the NB x NB diagonal block, ld NB
-    ws::Slot<real_t<D>> diag;
-    ws::Slot<int> fail;   // info of the current panel, written by lane 0 of sub-group 0
+    WsSlot<T> smem;     // BlockedCfg<T>'s stages
+    WsSlot<D> blk;      // the NB x NB diagonal block, ld NB
+    WsSlot<real_t<D>> diag;
+    WsSlot<int> fail;   // info of the current panel, written by lane 0 of sub-group 0
     WorkspaceSize size;
     static constexpr PotrfBlockedPlan make() {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(PotrfBlockedCfg<T>::smem_elems));
-        const auto b = p.take<D>(ws::Space::Local, static_cast<std::size_t>(NB) * NB);
-        const auto d = p.take<real_t<D>>(ws::Space::Local, static_cast<std::size_t>(NB));
-        const auto f = p.take<int>(ws::Space::Local, 1);
+        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(PotrfBlockedCfg<T>::smem_elems));
+        const auto b = p.take<D>(WsSpace::Local, static_cast<std::size_t>(NB) * NB);
+        const auto d = p.take<real_t<D>>(WsSpace::Local, static_cast<std::size_t>(NB));
+        const auto f = p.take<int>(WsSpace::Local, 1);
         return {s, b, d, f, p.size()};
     }
 };

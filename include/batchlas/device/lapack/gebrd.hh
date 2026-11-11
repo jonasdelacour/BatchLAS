@@ -28,7 +28,7 @@ namespace batchlas::device {
 
 namespace detail {
 // larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
-// The leader forms the scalars (conv::Phase: tau = 0, beta = alpha for len <= 1); on return lane
+// The leader forms the scalars (alg::Phase: tau = 0, beta = alpha for len <= 1); on return lane
 // `head` holds beta, the x lanes v (x * scale when tau != 0), and every lane gets tau.
 template <typename Ex, typename T>
 inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bool x_active) {
@@ -38,7 +38,7 @@ inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bo
     xnorm = ex.bcast(xnorm, 0u);
     const T alpha_h = ex.bcast(alpha, static_cast<std::uint32_t>(head));
     device::LarfgScalars<T> s{};
-    if (ex.leader()) s = device::larfg_scalars<device::conv::Phase>(alpha_h, xnorm, len);
+    if (ex.leader()) s = device::larfg_scalars<device::alg::Phase>(alpha_h, xnorm, len);
     const T beta = ex.bcast(s.beta, 0u);
     const T tau = ex.bcast(s.tau, 0u);
     const T scale = ex.bcast(s.scale, 0u);
@@ -61,7 +61,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, con
         // H(i) annihilates A(i+1:m, i), then A(i:m, i+1:n) := H(i) A(i:m, i+1:n).
         const auto xq = Ab.col(i).tail(i + 1);
         const T sigma = device::dot(th, xq, xq);
-        const auto hl = device::larfg_scalars<device::conv::Phase>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
+        const auto hl = device::larfg_scalars<device::alg::Phase>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
         if (hl.tau != T(0)) {
             Ab(i, i) = T(1);
             device::scal(th, hl.scale, xq);
@@ -79,7 +79,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, con
         // G(i) annihilates A(i, i+2:n), then A(i+1:m, i+1:n) := A(i+1:m, i+1:n) G(i).
         const auto xp = Ab.row(i).tail(i + 2);
         const T sigma_r = device::dot(th, xp, xp);
-        const auto hr = device::larfg_scalars<device::conv::Phase>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
+        const auto hr = device::larfg_scalars<device::alg::Phase>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
         if (hr.tau != T(0)) {
             Ab(i, i + 1) = T(1);
             device::scal(th, hr.scale, xp);
@@ -108,7 +108,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, 
     for (int32_t i = 0; i < n; ++i) {
         const auto xq = Ab.col(i).tail(i + 1);
         const Real sigma = device::sumsq<device::alg::Unfused>(th, xq);
-        const auto lq = device::larfg_scalars<device::conv::RealBeta>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
+        const auto lq = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
         device::scal(th, lq.scale, xq);
         Ab(i, i) = T(1);
         device::larf<Side::Left>(th, device::Arith<T>::conj(lq.tau), Ab.col(i).tail(i), Ab.sub(i, i + 1, m - i, n - i - 1));
@@ -124,7 +124,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, 
         const auto xp = Ab.row(i).tail(i + 2);
         device::lacgv(th, row);
         const Real sigma_r = device::sumsq<device::alg::Unfused>(th, xp);
-        const auto rp = device::larfg_scalars<device::conv::RealBeta>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
+        const auto rp = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
         device::scal(th, rp.scale, xp);
         Ab(i, i + 1) = T(1);
         device::larf<Side::Right>(th, rp.tau, row, Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
@@ -231,12 +231,12 @@ struct gebrd {
 
 namespace detail {
 template <class T> struct GebrdCtaPlan {
-    ws::Slot<T> tile;  // the matrix's P x P tile, ld = P
+    WsSlot<T> tile;  // the matrix's P x P tile, ld = P
     WorkspaceSize size;
 };
 template <int P, class T> constexpr GebrdCtaPlan<T> gebrd_cta_plan() {
     Plan p;
-    const ws::Slot<T> tile = p.take<T>(ws::Space::Local, std::size_t(P) * std::size_t(P));
+    const WsSlot<T> tile = p.take<T>(WsSpace::Local, std::size_t(P) * std::size_t(P));
     return {tile, p.size()};
 }
 template <int P> inline constexpr bool cta_width_v = P == 4 || P == 8 || P == 16 || P == 32;
@@ -248,17 +248,17 @@ template <class T> using GebrdBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>
 inline constexpr int blocked_wg = 256;
 inline constexpr int blocked_nb = 16;  // the default panel width (the host's gebrd_block_size)
 template <class T> struct GebrdBlockedPlan {
-    ws::Slot<T> work;  // local: wa (NB), wx (NB)
-    ws::Slot<T> smem;  // local: l3::Smem<BlockedCfg<T>>
-    ws::Slot<T> x, y;  // global: X (ld m), Y (ld n)
+    WsSlot<T> work;  // local: wa (NB), wx (NB)
+    WsSlot<T> smem;  // local: l3::Smem<BlockedCfg<T>>
+    WsSlot<T> x, y;  // global: X (ld m), Y (ld n)
     WorkspaceSize size;
 };
 template <int NB, class T> constexpr GebrdBlockedPlan<T> labrd_plan(int m, int n) {
     Plan p;
-    const ws::Slot<T> work = p.take<T>(ws::Space::Local, std::size_t(2) * NB);
-    const ws::Slot<T> smem = p.take<T>(ws::Space::Local, std::size_t(l3::smem_elems<GebrdBlockedCfg<T>>()));
-    const ws::Slot<T> x = p.take<T>(ws::Space::Global, std::size_t(m) * NB);
-    const ws::Slot<T> y = p.take<T>(ws::Space::Global, std::size_t(n) * NB);
+    const WsSlot<T> work = p.take<T>(WsSpace::Local, std::size_t(2) * NB);
+    const WsSlot<T> smem = p.take<T>(WsSpace::Local, std::size_t(l3::smem_elems<GebrdBlockedCfg<T>>()));
+    const WsSlot<T> x = p.take<T>(WsSpace::Global, std::size_t(m) * NB);
+    const WsSlot<T> y = p.take<T>(WsSpace::Global, std::size_t(n) * NB);
     return {work, smem, x, y, p.size()};
 }
 }  // namespace detail
@@ -358,7 +358,7 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
         const auto xq = Ab.col(gi).tail(gi + 1);
         const T alpha_q = Ab(gi, gi);
         const Real sigma = device::sumsq<device::alg::Unfused>(ex, xq);
-        const auto hq = device::larfg_scalars<device::conv::RealBeta>(alpha_q, sycl::sqrt(sigma), mt);
+        const auto hq = device::larfg_scalars<device::alg::RealBeta>(alpha_q, sycl::sqrt(sigma), mt);
         if (ex.leader()) {
             d(gi) = device::Arith<T>::re(hq.beta);
             tauq(gi) = hq.tau;
@@ -393,7 +393,7 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
         const auto xp = Ab.row(gi).tail(gi + 2);
         const T alpha_p = Ab(gi, gi + 1);
         const Real sigma_r = device::sumsq<device::alg::Unfused>(ex, xp);
-        const auto hp = device::larfg_scalars<device::conv::RealBeta>(alpha_p, sycl::sqrt(sigma_r), nt);
+        const auto hp = device::larfg_scalars<device::alg::RealBeta>(alpha_p, sycl::sqrt(sigma_r), nt);
         if (ex.leader()) {
             e(gi) = device::Arith<T>::re(hp.beta);
             taup(gi) = hp.tau;

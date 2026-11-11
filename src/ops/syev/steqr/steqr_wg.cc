@@ -165,7 +165,7 @@ Event steqr_wg_impl(Queue& ctx,
                             const auto& r = rotations_view(j, i, gid);
                             return device::Givens<T>{r[0], r[1]};
                         };
-                        device::lasr<device::rot_conv::Transposed>(device::Thread{}, ncols, rots, q_row);
+                        device::lasr<device::alg::RotTransposed>(device::Thread{}, ncols, rots, q_row);
                     }
                 }
             });

@@ -3,7 +3,7 @@
 
 // The REGISTER panel leaf's plan: one panel ROW per work-item, the m x N panel in registers. The
 // body is the public device::geqr2_reg (include/batchlas/device/lapack/geqrf.hh); xLARFG is
-// device::larfg_scalars<conv::Lapack> (tau's real-beta convention is read by ormqr/orgqr/ormbr/sy2sb).
+// device::larfg_scalars<alg::LarfgLapack> (tau's real-beta convention is read by ormqr/orgqr/ormbr/sy2sb).
 // evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
 
 #include <src/ops/geqrf/geqrf_cta_device.hh>

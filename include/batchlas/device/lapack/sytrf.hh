@@ -34,7 +34,7 @@ namespace detail {
 
 // Logical (i, j) of an m x n matrix; with rev, physical (m - 1 - i, n - 1 - j). The Upper
 // triangle of A is the Lower triangle of its reversal, so one Lower loop serves both uplo.
-// Pending core: flip<axis::Both> lacks value_type and a 64-bit ld.
+// Pending core: flip<Axis::Both> lacks value_type and a 64-bit ld.
 template <class T> struct RevMat {
     using value_type = std::remove_cv_t<T>;
     T* p;
@@ -96,7 +96,7 @@ template <class Ex, class R> BATCHLAS_DEVICE_HELPER void argmax_reduce(const Ex&
         scr.v[sg.get_group_linear_id()] = v;
         scr.i[sg.get_group_linear_id()] = idx;
     }
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     v = scr.v[0];
     idx = scr.i[0];
     for (int s = 1; s < nsg; ++s)
@@ -104,7 +104,7 @@ template <class Ex, class R> BATCHLAS_DEVICE_HELPER void argmax_reduce(const Ex&
             v = scr.v[s];
             idx = scr.i[s];
         }
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
 }
 
 template <class Ex, class R> BATCHLAS_DEVICE_HELPER R sum_reduce_real(const Ex& ex, R v, R* slots) {
@@ -113,10 +113,10 @@ template <class Ex, class R> BATCHLAS_DEVICE_HELPER R sum_reduce_real(const Ex& 
     const int nsg = detail::size_of(ex) / 32;
     if (nsg == 1) return v;
     if (sg.leader()) slots[sg.get_group_linear_id()] = v;
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     v = slots[0];
     for (int s = 1; s < nsg; ++s) v += slots[s];
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     return v;
 }
 template <class Ex, class T, class R> BATCHLAS_DEVICE_HELPER T sum_reduce(const Ex& ex, SumScratch<R> scr, T v) {
@@ -246,14 +246,14 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detai
                     if (kstep == 2) std::swap(S(k + 1, k), S(kp, k));
                 }
             }
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             if (kstep == 1) {  // A22 -= A21 d^-1 A21^T (?syr), then L21 = A21 d^-1
                 const D mr1 = A::neg(A::recip(S(k, k)));
                 for (int j = k + 1; j < n; ++j) {
                     const D t = A::mul(mr1, S(j, k));
                     for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, j) = A::add(S(i, j), A::mul(S(i, k), t)); });
                 }
-                sync<scope::Group>(g, Mem::Global);
+                sync<Scope::Group>(g, Mem::Global);
                 const D r1 = A::neg(mr1);
                 for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, k) = A::mul(r1, S(i, k)); });
             } else if (k < n - 2) {  // A22 -= A21 D^-1 A21^T, then L21 = A21 D^-1
@@ -264,7 +264,7 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detai
                         S(i, j) = A::sub(A::sub(S(i, j), A::mul(S(i, k), a)), A::mul(S(i, k + 1), b));
                     });
                 }
-                sync<scope::Group>(g, Mem::Global);
+                sync<Scope::Group>(g, Mem::Global);
                 for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                     const D a = blk.first(S(i, k), S(i, k + 1)), b = blk.second(S(i, k), S(i, k + 1));
                     S(i, k) = a;
@@ -280,7 +280,7 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detai
                 piv_out(phys(k + 1), -(phys(kp) + 1));
             }
         }
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
         k += kstep;
     }
     return info;
@@ -303,7 +303,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     for (int i = k0 + lid; i < n; i += nl)
         for (int c = 0; c <= nb; ++c) W(i, c) = A::zero();
-    sync<scope::Group>(g, Mem::Global);
+    sync<Scope::Group>(g, Mem::Global);
     // W(k:n, dst) := source - A(k:n, start:k) W(r, start-k0:k-k0): the panel's finished columns only.
     auto update_col = [&](int k, int dst, int r, auto&& source) {
         for (int i = k + lid; i < n; i += nl) {
@@ -311,7 +311,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
             for (int l = start - k0; l < k - k0; ++l) acc = A::sub(acc, A::mul(S(i, k0 + l), W(r, l)));
             W(i, dst) = acc;
         }
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
     };
     int k = start;
     while (k < k0 + nb) {
@@ -343,7 +343,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
             detail::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k)
                 for (int i = k + lid; i < n; i += nl) W(i, c) = W(i, c + 1);
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
         }
         if (stage == detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
@@ -359,7 +359,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
                 for (int l = start + lid; l < kk; l += nl) std::swap(S(kk, l), S(kp, l));
                 for (int l = start - k0 + lid; l <= kk - k0; l += nl) std::swap(W(kk, l), W(kp, l));
             }
-            sync<scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(g, Mem::Global);
             if (kstep == 1) {
                 const D r1 = A::recip(W(k, c));
                 for (int i = k + lid; i < n; i += nl) S(i, k) = i == k ? W(k, c) : A::mul(r1, W(i, c));
@@ -385,7 +385,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
                 piv_out(phys(k + 1), -(phys(kp) + 1));
             }
         }
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
         k += kstep;
     }
     // The last step's row search may have left column imax in W(:, nb) though the block was \f$1 \times 1\f$:
@@ -410,7 +410,7 @@ inline void lasyf_undo(const detail::RevMat<D>& S, int start, int end, const Ex&
         --j;
         if (jp != jj && j >= start)
             for (int l = start + lid; l <= j; l += nl) std::swap(S(jp, l), S(jj, l));
-        sync<scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(g, Mem::Global);
     }
 }
 
@@ -442,24 +442,24 @@ namespace detail {
 inline constexpr int sytrf_wg_max = 256;
 
 template <int N, class T> struct SytrfCtaPlan {
-    ws::Slot<T> tile;
+    WsSlot<T> tile;
     WorkspaceSize size;
 };
 // The Cta tier's (N + 1) x N tile: the host launch's odd ld.
 template <int N, class T> constexpr SytrfCtaPlan<N, T> sytrf_cta_plan() {
     Plan p;
-    const auto tile = p.take<T>(ws::Space::Local, static_cast<std::size_t>(N + 1) * N);
+    const auto tile = p.take<T>(WsSpace::Local, static_cast<std::size_t>(N + 1) * N);
     return {tile, p.size()};
 }
 template <class R> struct SytrfWgPlan {
-    ws::Slot<R> v;
-    ws::Slot<int> i;
+    WsSlot<R> v;
+    WsSlot<int> i;
     WorkspaceSize size;
 };
 template <class R> constexpr SytrfWgPlan<R> sytrf_wg_plan() {
     Plan p;
-    const auto v = p.take<R>(ws::Space::Local, sytrf_wg_max / 32);
-    const auto i = p.take<int>(ws::Space::Local, sytrf_wg_max / 32);
+    const auto v = p.take<R>(WsSpace::Local, sytrf_wg_max / 32);
+    const auto i = p.take<int>(WsSpace::Local, sytrf_wg_max / 32);
     return {v, i, p.size()};
 }
 
@@ -469,18 +469,18 @@ inline constexpr int sytrf_blocked_wg = 256;
 static_assert(sytrf_l3_cfg<float>::threads == sytrf_blocked_wg);
 
 template <int NB, class T> struct SytrfBlockedPlan {
-    ws::Slot<real_t<T>> v;
-    ws::Slot<int> i;
-    ws::Slot<T> smem;
-    ws::Slot<T> w;  // global: ?lasyf's W, n x (NB + 1) at ld n
+    WsSlot<real_t<T>> v;
+    WsSlot<int> i;
+    WsSlot<T> smem;
+    WsSlot<T> w;  // global: ?lasyf's W, n x (NB + 1) at ld n
     WorkspaceSize size;
 };
 template <int NB, class T> constexpr SytrfBlockedPlan<NB, T> sytrf_blocked_plan(int n) {
     Plan p;
-    const auto v = p.take<real_t<T>>(ws::Space::Local, sytrf_wg_max / 32);
-    const auto i = p.take<int>(ws::Space::Local, sytrf_wg_max / 32);
-    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<sytrf_l3_cfg<T>>());
-    const auto w = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * (NB + 1));
+    const auto v = p.take<real_t<T>>(WsSpace::Local, sytrf_wg_max / 32);
+    const auto i = p.take<int>(WsSpace::Local, sytrf_wg_max / 32);
+    const auto sm = p.take<T>(WsSpace::Local, l3::smem_elems<sytrf_l3_cfg<T>>());
+    const auto w = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * (NB + 1));
     return {v, i, sm, w, p.size()};
 }
 
@@ -533,7 +533,7 @@ template <class All, class Sub, typename D, typename R, typename PivOut, typenam
 BATCHLAS_DEVICE_INLINE int sytrf_cta_run(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
                                          bool rev, ArgMaxScratch<R> am, PivOut&& piv_out, InfoOut&& info_out) {
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
-    sync<scope::Group>(all, Mem::Global);
+    sync<Scope::Group>(all, Mem::Global);
     int st = 0;
     if (factors) {
         st = sytf2(S, n, rev, g, am, piv_out);
@@ -555,7 +555,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, in
     // One sub-group factors: its arg-max never reaches the cross-sub-group scratch.
     const int st = sytrf_cta_run(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev, ArgMaxScratch<R>{nullptr, nullptr},
                                     [&](int k, int v) { ipiv[k] = v; }, NoOp{});
-    sync<scope::Group>(ex, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     if constexpr (Ex::sub_whole) return st;
     else return ex.uniform(st);
 }
@@ -618,7 +618,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
         const auto pass = l3::make_pass<true, false>(rank, [=](int r, int kk) BATCHLAS_DEVICE_BODY { return lp[r + kk * lda]; },
                                                       [=](int kk, int col) BATCHLAS_DEVICE_BODY { return wp[col + kk * n]; });
         l3::rank_update<Cfg, tri, false>(ex, sm, c, neg_one, one, pass);
-        sync<scope::Group>(ex, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
     }
     lasyf_undo(S, first, end, ex, partner);
     const int sub = n - end;

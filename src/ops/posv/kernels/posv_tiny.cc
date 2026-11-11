@@ -155,10 +155,10 @@ BATCHLAS_UNROLL_FULL
         int32_t linfo;
         if constexpr (Slm) {
             linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(
-                device::wrap(part), rA, n, live, device::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
+                device::wrap(part), rA, n, live, device::alg::BcastSlm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
         } else {
             linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(device::wrap(part), rA, n, live,
-                                                                                              device::bcast_policy::Shuffle{});
+                                                                                              device::alg::BcastShuffle{});
         }
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,

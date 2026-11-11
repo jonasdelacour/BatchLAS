@@ -32,13 +32,13 @@ namespace detail {
 // One plan for every op here: the L3 stage slot (local) and the n x NB panel W (global). Each
 // use of W takes its own leading dimension, inside the n * NB elements.
 template <class T> struct BlockedPanelPlan {
-    ws::Slot<T> smem;
-    ws::Slot<T> w;
+    WsSlot<T> smem;
+    WsSlot<T> w;
     WorkspaceSize size;
     static constexpr BlockedPanelPlan make(int n, int nb) {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
-        const auto g = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
+        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
+        const auto g = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
         return {s, g, p.size()};
     }
 };
@@ -114,7 +114,7 @@ BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, 
                 lacpy(ex, W, Ai0);
                 ex.barrier(Mem::Global);
             }
-            lacpy<Part::Lower, kN, alg::Walk, edge::ZeroPad>(ex, A11, W2);
+            lacpy<Part::Lower, kN, alg::Walk, alg::EdgeZeroPad>(ex, A11, W2);
             ex.barrier(Mem::Global);
             herk<Uplo::Lower, kCT, Cfg>(ex, W2, A11, One{}, Zero{}, sm);
             if (rest > 0) herk<Uplo::Lower, kCT, Cfg>(ex, A.sub(i + ib, i, rest, ib), A11, One{}, One{}, sm);
@@ -127,7 +127,7 @@ BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, 
                 lacpy(ex, W, A0i);
                 ex.barrier(Mem::Global);
             }
-            lacpy<Part::Upper, kN, alg::Walk, edge::ZeroPad>(ex, A11, W2);
+            lacpy<Part::Upper, kN, alg::Walk, alg::EdgeZeroPad>(ex, A11, W2);
             ex.barrier(Mem::Global);
             herk<Uplo::Upper, kN, Cfg>(ex, W2, A11, One{}, Zero{}, sm);
             if (rest > 0) herk<Uplo::Upper, kN, Cfg>(ex, A.sub(i, i + ib, ib, rest), A11, One{}, One{}, sm);

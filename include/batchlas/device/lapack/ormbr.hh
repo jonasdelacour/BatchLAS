@@ -23,39 +23,38 @@
 namespace batchlas::device {
 
 namespace routine {
-template <char Vect, Side SD, Transpose TR> struct ormbr {
+template <Vect VT, Side SD, Transpose TR> struct ormbr {
     static constexpr const char* name = "ormbr";
 };
 }  // namespace routine
 
-template <char Vect, Side SD, Transpose TR, class T> struct tiers<routine::ormbr<Vect, SD, TR>, T> {
+template <Vect VT, Side SD, Transpose TR, class T> struct tiers<routine::ormbr<VT, SD, TR>, T> {
     using type = tier::list<tier::Blocked<1>>;
 };
 // No workspace (C is updated in place); any work-group width runs it.
-template <char Vect, Side SD, Transpose TR, class T> struct tier_info<routine::ormbr<Vect, SD, TR>, tier::Blocked<1>, T> {
+template <Vect VT, Side SD, Transpose TR, class T> struct tier_info<routine::ormbr<VT, SD, TR>, tier::Blocked<1>, T> {
     static constexpr int wg_size = 256, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <char Vect, Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize ormbr_buffer_size(int n) {
-    using Ro = routine::ormbr<Vect, SD, TR>;
+template <Vect VT, Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize ormbr_buffer_size(int n) {
+    using Ro = routine::ormbr<VT, SD, TR>;
     return tier_info<Ro, resolve_tier_t<Ro, T, Tier>, T>::buffer_size(n);
 }
 
-// xORMBR, host order (A, tau, C, ws), vect / side / trans as template parameters ('Q': tauq,
-// 'P': taup). Q / P has order C.rows() (Left) or C.cols() (Right), which must be A.rows() ('Q') or
-// A.cols() ('P'); A is m x n, m >= n. Trans is real only. COLLECTIVE over a work-group; A, tau, C
+// xORMBR, host order (A, tau, C, ws), vect / side / trans as template parameters (Vect::Q: tauq,
+// Vect::P: taup). Q / P has order C.rows() (Left) or C.cols() (Right), which must be A.rows() (Q)
+// or A.cols() (P); A is m x n, m >= n. Trans is real only. COLLECTIVE over a work-group; A, tau, C
 // visible on entry, C on return. Returns 0, or -1 / -3 for a mismatched A / C (nothing written).
-template <char Vect, Side SD, Transpose TR, class Tier = tier::Blocked<1>, class Ex, class MA, class TV, class MC>
+template <Vect VT, Side SD, Transpose TR, class Tier = tier::Blocked<1>, class Ex, class MA, class TV, class MC>
 BATCHLAS_DEVICE_INLINE int ormbr(const Ex& ex, const MA& A, const TV& tau, const MC& C, const Workspace&) {
     using T = typename MC::value_type;
     using Ar = Arith<T>;
-    using Ro = routine::ormbr<Vect, SD, TR>;
-    static_assert(Vect == 'Q' || Vect == 'P', "ormbr: Vect is 'Q' or 'P'");
+    using Ro = routine::ormbr<VT, SD, TR>;
     static_assert(std::is_same_v<resolve_tier_t<Ro, T, Tier>, tier::Blocked<1>>, "ormbr: tier::Blocked<1>");
     static_assert(TR != Transpose::Trans || !Ar::is_complex, "ormbr: a complex T takes Transpose::ConjTrans");
     static_assert(is_work_group_v<Ex>, "ormbr: tier::Blocked<1> runs on a WorkGroup");
-    constexpr bool q = Vect == 'Q';
+    constexpr bool q = VT == Vect::Q;
     const int nq = SD == Side::Left ? C.rows() : C.cols();
     const int m = A.rows(), n = A.cols();
     if (m < n) return -1;

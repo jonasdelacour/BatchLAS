@@ -60,8 +60,8 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LacpyEdgesAndDiagFillLasetOffsetAndRegisterF
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const batchlas::device::WorkGroup<WG, 32> ex{it};
         const auto A = batchlas::device::mat(a, ma, na, lda);
-        batchlas::device::lacpy<batchlas::device::Part::Lower, Transpose::ConjTrans, batchlas::device::alg::Walk, batchlas::device::edge::ZeroPad, batchlas::device::diag_fill::Real>(ex, A, batchlas::device::mat(bz, mb, nb, ldb));
-        batchlas::device::lacpy<batchlas::device::Part::Full, Transpose::NoTrans, batchlas::device::alg::Walk, batchlas::device::edge::Guard, batchlas::device::diag_fill::Unit>(ex, A, batchlas::device::mat(bg, mb, nb, ldb));
+        batchlas::device::lacpy<batchlas::device::Part::Lower, Transpose::ConjTrans, batchlas::device::alg::Walk, batchlas::device::alg::EdgeZeroPad, batchlas::device::DiagFill::Real>(ex, A, batchlas::device::mat(bz, mb, nb, ldb));
+        batchlas::device::lacpy<batchlas::device::Part::Full, Transpose::NoTrans, batchlas::device::alg::Walk, batchlas::device::alg::EdgeGuard, batchlas::device::DiagFill::Unit>(ex, A, batchlas::device::mat(bg, mb, nb, ldb));
         batchlas::device::laset<batchlas::device::Part::Upper>(ex, alpha, beta, batchlas::device::mat(bs, mb, nb, ldb), 2);
         if (ex.leader()) {
             batchlas::device::Frag<T, 8> f;
@@ -121,9 +121,9 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LaswpIndexGatherAndLapmr) {
         const auto P = batchlas::device::vec(ip, m);
         batchlas::device::laswp(ex, batchlas::device::mat(sw, m, n, ld), P, 1, m);  // in place, rows 1 .. m-1 forward
         batchlas::device::laswp_gather(ex, batchlas::device::mat(a, m, n, ld), P, 1, m, batchlas::device::mat(ga, m, n, ld));
-        batchlas::device::laswp_gather<batchlas::device::dir::Backward>(ex, batchlas::device::mat(a, m, n, ld), P, 1, m, batchlas::device::mat(gb, m, n, ld));
+        batchlas::device::laswp_gather<batchlas::device::Direct::Backward>(ex, batchlas::device::mat(a, m, n, ld), P, 1, m, batchlas::device::mat(gb, m, n, ld));
         batchlas::device::lapmr(ex, batchlas::device::mat(a, m, n, ld), batchlas::device::vec(pm, m), batchlas::device::mat(pf, m, n, ld));
-        batchlas::device::lapmr<batchlas::device::dir::Backward>(ex, batchlas::device::mat(a, m, n, ld), batchlas::device::vec(pm, m), batchlas::device::mat(pb, m, n, ld));
+        batchlas::device::lapmr<batchlas::device::Direct::Backward>(ex, batchlas::device::mat(a, m, n, ld), batchlas::device::vec(pm, m), batchlas::device::mat(pb, m, n, ld));
     });
     // host: the sequential interchanges
     std::vector<int> rowf(m), rowb(m);
@@ -175,7 +175,7 @@ TYPED_TEST(DeviceCoreLapackAuxTest, RotationVectorsMatchLapackFormulas) {
         batchlas::device::lar2v(ex, batchlas::device::vec(lx, n), batchlas::device::vec(ly, n), batchlas::device::vec(lz, n), batchlas::device::vec(gc, n), batchlas::device::vec(gy, n));
         if constexpr (!is_cplx<T>) {
             const R v0 = R(0.6), v1 = R(0.8);
-            batchlas::device::rot<batchlas::device::rot_conv::Reflector2>(ex, batchlas::device::Givens<R>{v0, v1}, batchlas::device::vec(r2, n), batchlas::device::vec(r2y, n));
+            batchlas::device::rot<batchlas::device::alg::RotReflector2>(ex, batchlas::device::Givens<R>{v0, v1}, batchlas::device::vec(r2, n), batchlas::device::vec(r2y, n));
         }
     });
     const auto cx = d.down(gx, n), cs = d.down(gy, n);
@@ -226,8 +226,8 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LarfFormsLoopsAndLaneLarfg) {
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const batchlas::device::Teams<WG, 8> tm{it};
         const auto V = batchlas::device::assume_published(batchlas::device::vec(v, m));
-        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::larf_form::ScaleW, batchlas::device::loop::Lockstep>(tm, tau, V, batchlas::device::mat(c1, m, n, ld));
-        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::larf_form::ScaleV, batchlas::device::loop::Lockstep>(tm, tau, V, batchlas::device::mat(c2, m, n, ld));
+        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::alg::ScaleW, batchlas::device::alg::Lockstep>(tm, tau, V, batchlas::device::mat(c1, m, n, ld));
+        batchlas::device::larf<Side::Left, batchlas::device::arith::Explicit, batchlas::device::alg::ScaleV, batchlas::device::alg::Lockstep>(tm, tau, V, batchlas::device::mat(c2, m, n, ld));
         const int g = static_cast<int>(it.get_local_linear_id());
         if (g < n) {  // the register column form: item g holds column g of cf
             batchlas::device::Frag<T, m> col;
@@ -255,7 +255,7 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LarfFormsLoopsAndLaneLarfg) {
         }
         for (int r = m; r < ld; ++r) EXPECT_TRUE(is_nan(g1[j * ld + r])) << "pad";
     }
-    // larfg (conv::Phase, complex beta = -phase(alpha) ||(alpha, x)||): H [alpha; x] = [beta; 0]
+    // larfg (alg::Phase, complex beta = -phase(alpha) ||(alpha, x)||): H [alpha; x] = [beta; 0]
     // with v = [1; x_out], H = I - tau v v^H
     const auto out = d.down(xl, 16);
     const T tg = d.down(tau_out, 1)[0];

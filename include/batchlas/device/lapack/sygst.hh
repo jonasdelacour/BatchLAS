@@ -186,12 +186,12 @@ static inline Frag<D, NF> apply(Frag<D, NF> c, const D* f, int ldf, int kb) {
 // The local memory of one Cta-tier matrix: one block, in whole 16-byte packs.
 template <class D> struct SygstCtaPlan {
     Plan plan;
-    ws::Slot<Pack16<D>> block;
+    WsSlot<Pack16<D>> block;
 };
 template <class D> constexpr SygstCtaPlan<D> sygst_cta_plan(int n) {
     SygstCtaPlan<D> p{Plan(16), {}};
     const std::size_t v = static_cast<std::size_t>(pack16_elems<D>);
-    p.block = p.plan.template take<Pack16<D>>(ws::Space::Local, (sygs2_block_elems<D>(n) + v - 1) / v);
+    p.block = p.plan.template take<Pack16<D>>(WsSpace::Local, (sygs2_block_elems<D>(n) + v - 1) / v);
     return p;
 }
 
@@ -263,8 +263,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
 }
 
 namespace routine {
-template <int Itype, Uplo UL> struct sygst {
-    static_assert(Itype >= 1 && Itype <= 3, "sygst: itype is 1, 2 or 3");
+template <Itype IT, Uplo UL> struct sygst {
     static constexpr const char* name = "sygst";
 };
 }  // namespace routine
@@ -272,7 +271,7 @@ template <int Itype, Uplo UL> struct sygst {
 // tier::Cta<N>, N <= 32 (the column of the block in one item's registers), then tier::Blocked<NB>
 // for any n; Blocked<16> is the fallback where Blocked<32>'s diagonal block does not fit (complex
 // double on 32 KB of local memory).
-template <int Itype, Uplo UL, class T> struct tiers<routine::sygst<Itype, UL>, T> {
+template <Itype IT, Uplo UL, class T> struct tiers<routine::sygst<IT, UL>, T> {
     using type = tier::list<tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>, tier::Blocked<16>>;
 };
 
@@ -291,17 +290,17 @@ template <class D> using blocked_cfg_t = l3::cfg::RegTiled<D, 32, 32, 8, 2, 2>;
 // (NB x NB, ld NB), and for itypes 2, 3 W, the n x NB panel product of the out-of-place trmm.
 template <class D> struct SygstBlockedPlan {
     WorkspaceSize size;
-    ws::Slot<D> h, w;
+    WsSlot<D> h, w;
 };
-template <class D, int NB, int Itype> constexpr SygstBlockedPlan<D> sygst_blocked_plan(int n) {
+template <class D, int NB, Itype IT> constexpr SygstBlockedPlan<D> sygst_blocked_plan(int n) {
     Plan p(16);
     const int kb = n < NB ? n : NB;
     const std::size_t blk = sygs2_block_elems<D>(kb) * sizeof(D), stage = l3::smem_bytes<blocked_cfg_t<D>>();
-    p.take<std::byte>(ws::Space::Local, blk > stage ? blk : stage);
+    p.take<std::byte>(WsSpace::Local, blk > stage ? blk : stage);
     SygstBlockedPlan<D> r{};
     if (n > NB) {
-        r.h = p.take<D>(ws::Space::Global, static_cast<std::size_t>(NB) * NB);
-        if (Itype != 1) r.w = p.take<D>(ws::Space::Global, static_cast<std::size_t>(n) * NB);
+        r.h = p.take<D>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
+        if (IT != Itype::AinvB) r.w = p.take<D>(WsSpace::Global, static_cast<std::size_t>(n) * NB);
     }
     r.size = p.size();
     return r;
@@ -310,25 +309,25 @@ template <class D, int NB, int Itype> constexpr SygstBlockedPlan<D> sygst_blocke
 
 /// Local and global bytes of one matrix of order n (Cta: n <= N, global none; Blocked: any n);
 /// Tier may be tier::upto.
-template <int Itype, Uplo UL, class Tier, class T> constexpr WorkspaceSize sygst_buffer_size(int n) {
+template <Itype IT, Uplo UL, class Tier, class T> constexpr WorkspaceSize sygst_buffer_size(int n) {
     using D = std::remove_cv_t<T>;
-    using Tr = resolve_tier_t<routine::sygst<Itype, UL>, D, Tier>;
+    using Tr = resolve_tier_t<routine::sygst<IT, UL>, D, Tier>;
     static_assert(detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
     if constexpr (detail::sygst_is_cta_v<Tr>) return detail::sygst_cta_plan<D>(n).plan.size();
-    else return detail::sygst_blocked_plan<D, Tr::nb, Itype>(n).size;
+    else return detail::sygst_blocked_plan<D, Tr::nb, IT>(n).size;
 }
 
-template <int Itype, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<Itype, UL>, tier::Cta<N, Alg>, T> {
+template <Itype IT, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, T> {
     static_assert(N >= 1 && N <= 32, "sygst: tier::Cta<N>, N <= 32");
     static constexpr int wg_size = (N + 31) / 32 * 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<Itype, UL, tier::Cta<N, Alg>, T>(n); }
+    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Cta<N, Alg>, T>(n); }
 };
-template <int Itype, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<Itype, UL>, tier::Blocked<NB, Alg>, T> {
+template <Itype IT, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, T> {
     static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
     static constexpr int wg_size = detail::blocked_cfg_t<std::remove_cv_t<T>>::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<Itype, UL, tier::Blocked<NB, Alg>, T>(n); }
+    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Blocked<NB, Alg>, T>(n); }
 };
 
 namespace detail {
@@ -369,7 +368,7 @@ BATCHLAS_DEVICE_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c
 // reduction (sygs2_group, one block, in `lmem`), then trsm (itype 1) or trmm (2, 3), the gemm
 // with the mirrored diagonal block H (LAPACK's hemm) and her2k / syr2k on the panel and trailing
 // parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
-template <int Itype, Uplo UL, int NB, class Ex, class D, class DB>
+template <Itype IT, Uplo UL, int NB, class Ex, class D, class DB>
 BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
     using Cfg = blocked_cfg_t<D>;
     using Ar = Arith<D>;
@@ -388,7 +387,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
     auto diag = [&](int at, int kb, bool full) BATCHLAS_DEVICE_BODY {
         const auto ab = mat(a.p + at + at * a.ld, kb, kb, a.ld);
         const auto bb = mat(b.p + at + at * b.ld, kb, kb, b.ld);
-        sygs2_one<Itype == 1, NB>(ex, kb, lower, lmem, ab, bb, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DEVICE_BODY {
+        sygs2_one<IT == Itype::AinvB, NB>(ex, kb, lower, lmem, ab, bb, [&](std::ptrdiff_t, int r, int c, const D& v) BATCHLAS_DEVICE_BODY {
             if (full) h[r + c * NB] = v;
         });
         sync(ex, Mem::Global);
@@ -401,7 +400,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
     for (int k = 0; k < n; k += NB) {
         const int kb = n - k < NB ? n - k : NB, m = n - k - kb, r = k + kb;
         const l3::Global<D> hm{h, NB, kb, kb};
-        if constexpr (Itype == 1) {
+        if constexpr (IT == Itype::AinvB) {
             diag(k, kb, m > 0);
             if (m == 0) break;
             const auto f11 = gsub(b, k, k, kb, kb);
@@ -466,10 +465,10 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
 /// return. ws: sygst_buffer_size<Itype, UL, Tier, T>(n), 16-byte aligned (Blocked, n > NB: a
 /// global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller than n x n);
 /// uniform over the executor.
-template <int Itype, Uplo UL, class Tier, class Ex, class MA, class MB>
+template <Itype IT, Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
-    using Tr = resolve_tier_t<routine::sygst<Itype, UL>, D, Tier>;
+    using Tr = resolve_tier_t<routine::sygst<IT, UL>, D, Tier>;
     static_assert(detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
     if constexpr (detail::sygst_is_cta_v<Tr>) {
         constexpr int N = Tr::n_max;
@@ -479,7 +478,7 @@ BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const W
         if (b.rows() < n || b.cols() < n) return -3;
         if (n == 0) return 0;
         D* const f = reinterpret_cast<D*>(carve_local(ws, detail::sygst_cta_plan<D>(n).block).get_raw());
-        detail::sygs2_one<Itype == 1, N>(ex, n, UL == Uplo::Lower, f, a, b,
+        detail::sygs2_one<IT == Itype::AinvB, N>(ex, n, UL == Uplo::Lower, f, a, b,
                                                [](std::ptrdiff_t, int, int, const D&) BATCHLAS_DEVICE_BODY {});
         sync(ex, Mem::Global);  // A's result visible to every item
         return 0;
@@ -490,8 +489,8 @@ BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const W
         if (a.rows() != n) return -2;
         if (b.rows() < n || b.cols() < n) return -3;
         if (n == 0) return 0;
-        const auto plan = detail::sygst_blocked_plan<D, Tr::nb, Itype>(n);
-        detail::blocked<Itype, UL, Tr::nb>(ex, l3::global_of(a), l3::global_of(b), reinterpret_cast<D*>(ws.local.get_raw()),
+        const auto plan = detail::sygst_blocked_plan<D, Tr::nb, IT>(n);
+        detail::blocked<IT, UL, Tr::nb>(ex, l3::global_of(a), l3::global_of(b), reinterpret_cast<D*>(ws.local.get_raw()),
                                                  carve_global(ws, plan.h), carve_global(ws, plan.w));
         sync(ex, Mem::Global);
         return 0;

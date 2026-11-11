@@ -3,7 +3,7 @@
 """Placement guard for the public device LA layer (v22 design A.0).
 
     scripts/check_device_placement.py [--root DIR] [--allowlist FILE] [--write-allowlist] [--self-test]
-                                       [--layout] [--enforce-layout]
+                                       [--layout]
 
 Rules, each a (rule, file, name) finding:
   src-device     src/ defines a name in namespace batchlas::device (any sub-namespace): src/ops/<op>/
@@ -26,8 +26,9 @@ names each namespace-scope declaration (function, class, enum, alias, variable).
 a body (`void f(int);`, `struct S;`), using-declarations and class template specializations
 (`struct tier_info<routine::potrf<UL>, ...> {...}`: a routine's facts for a core template) are not
 definitions.
-Layout rules (#250 cleanup plan section 1; layout_findings lists them): warnings only, counted on every
-run, listed with --layout, failing with --enforce-layout (WP R-d turns that on).
+Layout rules (#250 cleanup plan section 1; layout_findings lists them) are enforced the same way
+(since WP R-d): a layout finding not on the allowlist fails, and so does a stale layout entry.
+--layout lists every layout finding, allowlisted or not.
 Exit codes: 0 clean, 1 findings or stale entries (or a failed self-test).
 """
 import argparse
@@ -305,7 +306,7 @@ TIER_TRAIT = re.compile(r"^is_(?:reg|cta|blocked)_v$")
 
 
 def layout_findings(root):
-    """{(rule, file, name): first line} for the plan section-1 layout (warn mode until WP R-d).
+    """{(rule, file, name): first line} for the plan section-1 layout (enforced since WP R-d).
 
     layout-ns         a definition in a batchlas::device namespace outside LAYOUT_NS, or any inline
                       namespace, in a device file
@@ -438,7 +439,7 @@ def read_allowlist(path):
 
 def write_allowlist(path, found):
     with open(path, "w") as fh:
-        fh.write("# device_placement_tests allowlist: today's A.0 violations (scripts/check_device_placement.py).\n"
+        fh.write("# device_placement_tests allowlist: today's A.0 and layout violations (scripts/check_device_placement.py).\n"
                  "# One `<rule> <file> <name>` per line; work packages delete lines, never add them.\n"
                  "# Regenerate: python3 scripts/check_device_placement.py --write-allowlist\n")
         for rule, rel, name in sorted(found):
@@ -535,14 +536,15 @@ def main():
     ap.add_argument("--allowlist", default=DEFAULT_ALLOWLIST)
     ap.add_argument("--write-allowlist", action="store_true", help="replace the allowlist with today's findings")
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("--layout", action="store_true", help="list every layout warning (default: counts only)")
-    ap.add_argument("--enforce-layout", action="store_true", help="layout warnings fail (WP R-d turns this on)")
+    ap.add_argument("--layout", action="store_true", help="list every layout finding (default: counts only)")
     a = ap.parse_args()
     if self_test() != 0 or layout_self_test() != 0:
         return 1
     if a.self_test:
         return 0
     found = findings(a.root)
+    layout = layout_findings(a.root)
+    found.update(layout)
     if a.write_allowlist:
         write_allowlist(a.allowlist, found)
         print(f"check_device_placement: wrote {len(found)} entries to {a.allowlist}")
@@ -554,17 +556,17 @@ def main():
         print(f"{rel}:{found[(rule, rel, name)]}: {rule}: {name}")
     for rule, rel, name in stale:
         print(f"{os.path.relpath(a.allowlist, a.root)}: stale entry (fixed? delete the line): {rule} {rel} {name}")
-    count = collections.Counter(r for r, _, _ in found)
-    print(f"check_device_placement: {len(found)} findings ({', '.join(f'{k} {v}' for k, v in sorted(count.items()))}), "
-          f"{len(new)} not allowlisted, {len(stale)} stale")
-    layout = layout_findings(a.root)
-    if a.layout or a.enforce_layout:
+    count = collections.Counter(k[0] for k in found if k not in layout)
+    print(f"check_device_placement: {len(found) - len(layout)} findings "
+          f"({', '.join(f'{k} {v}' for k, v in sorted(count.items()))}), {len(new)} not allowlisted, {len(stale)} stale")
+    if a.layout:
         for rule, rel, name in sorted(layout):
             print(f"{rel}:{layout[(rule, rel, name)]}: {rule}: {name}")
     lcount = collections.Counter(r for r, _, _ in layout)
-    print(f"check_device_placement: layout {'errors' if a.enforce_layout else 'warnings'} {len(layout)} "
-          f"({', '.join(f'{k} {v}' for k, v in sorted(lcount.items()))}){'' if a.layout else '; --layout lists them'}")
-    return 1 if new or stale or (a.enforce_layout and layout) else 0
+    print(f"check_device_placement: layout findings {len(layout)} "
+          f"({', '.join(f'{k} {v}' for k, v in sorted(lcount.items()))}, all enforced against the allowlist)"
+          f"{'' if a.layout else '; --layout lists them'}")
+    return 1 if new or stale else 0
 
 
 if __name__ == "__main__":

@@ -50,11 +50,11 @@ template <class T, int Lo, int Hi, class Order> void check_butterfly(Dev& d) {
 
 TYPED_TEST(DeviceCoreReduceTest, ButterflyCoversExactlyItsMaskRange) {
     using T = TypeParam;
-    check_butterfly<T, 1, 32, batchlas::device::bfly::Down>(this->dev);
-    check_butterfly<T, 1, 32, batchlas::device::bfly::Asc>(this->dev);
-    check_butterfly<T, 2, 16, batchlas::device::bfly::Down>(this->dev);
-    check_butterfly<T, 4, 8, batchlas::device::bfly::Asc>(this->dev);
-    check_butterfly<T, 1, 4, batchlas::device::bfly::Down>(this->dev);
+    check_butterfly<T, 1, 32, batchlas::device::alg::BflyDown>(this->dev);
+    check_butterfly<T, 1, 32, batchlas::device::alg::BflyAsc>(this->dev);
+    check_butterfly<T, 2, 16, batchlas::device::alg::BflyDown>(this->dev);
+    check_butterfly<T, 4, 8, batchlas::device::alg::BflyAsc>(this->dev);
+    check_butterfly<T, 1, 4, batchlas::device::alg::BflyDown>(this->dev);
 }
 
 TYPED_TEST(DeviceCoreReduceTest, ShuffleXorMovesBothPartsAndShiftReduceFeedsTheLeader) {
@@ -85,9 +85,9 @@ TEST(DeviceCoreReduceHost, ArgmaxMergeTieAndNanRules) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const A none{-1, -std::numeric_limits<float>::infinity()};
     const A a{3, 2.f}, b{1, 2.f}, c{5, 7.f}, n1{4, nan}, n2{2, nan};
-    auto low = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Lowest, batchlas::device::nan::First>(x, y); };
-    auto high = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Highest, batchlas::device::nan::First>(x, y); };
-    auto skip = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>(x, y); };
+    auto low = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>(x, y); };
+    auto high = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieHighest, batchlas::device::alg::NanFirst>(x, y); };
+    auto skip = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>(x, y); };
     EXPECT_EQ(low(a, b).index, 1);
     EXPECT_EQ(low(b, a).index, 1);
     EXPECT_EQ(high(a, b).index, 3);
@@ -121,7 +121,7 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
     int* hi = d.template alloc<int>(items, -7);
     int* sk = d.template alloc<int>(items, -7);
     using AM = batchlas::device::ArgMax<R>;
-    constexpr int slots = batchlas::device::scratch_elements<batchlas::device::op::Reduce, batchlas::device::WorkGroup<WG>, AM>();
+    constexpr int slots = batchlas::device::scratch_elements<batchlas::device::reduce_op::Reduce, batchlas::device::WorkGroup<WG>, AM>();
     d.template run<WG>(items, sizeof(AM) * slots, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
@@ -129,9 +129,9 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
         const batchlas::device::Scratch<AM, slots> scr{reinterpret_cast<AM*>(lm)};
         const int i = ex.lid();
         const AM mine = i < n ? AM{i, batchlas::device::abs1(xb[i])} : AM{-1, R(0)};
-        const AM l = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Lowest, batchlas::device::nan::First>{});
-        const AM h = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Highest, batchlas::device::nan::First>{});
-        const AM s = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>{});
+        const AM l = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>{});
+        const AM h = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieHighest, batchlas::device::alg::NanFirst>{});
+        const AM s = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>{});
         if (i == 517) {  // a non-leader item reads the uniform result
             lo[b] = l.index;
             hi[b] = h.index;

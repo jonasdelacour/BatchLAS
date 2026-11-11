@@ -206,7 +206,7 @@ What the clamp costs: crossovers sit at float \f$n = 64\f$ between \f$m = 192\f$
 
 `geqrf_cta_fits` is the tier's predicate (occupancy-scaled); `geqrf_leaf_fits` is residency at the whole budget. `geqrf_panel_factorize` and the blocked driver use the latter, so no blocked panel loses residency to the occupancy target, and only the resident leaf can reach the 48 KB hole.
 
-`geqr2_panel_device` is templated on `GeqrfScope`; under `SubGroup` (packed panels, `m <= 32 && n <= 32`) barriers and reductions are sub-group butterflies (`geqrf_sg_max`, `geqrf_sg_sum`), 1.2-5.0x faster.
+`geqr2_panel_device` is templated on `device::Scope`; under `Scope::Sub` (packed panels, `m <= 32 && n <= 32`) barriers and reductions are sub-group butterflies (`geqrf_sg_max`, `geqrf_sg_sum`), 1.2-5.0x faster.
 
 ## The tiny tier (WP6 / P1): square n <= 32 in registers {#the-tiny-tier-wp6--p1-square-n--32-in-registers}
 

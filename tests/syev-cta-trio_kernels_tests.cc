@@ -742,14 +742,14 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
             T* eb = e + std::ptrdiff_t(b) * n;
             T* tb = tu + std::ptrdiff_t(b) * n;
             device::detail::lacpy_herm<UL, device::arith::Native>(device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
-            device::sync<device::scope::Part>(ex);
+            device::sync<device::Scope::Own>(ex);
             const T tl = device::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
                 if constexpr (UL == Uplo::Lower) {
                     eb[i] = beta;
                     tb[i] = t;
                 }
             });
-            device::sync<device::scope::Part>(ex);
+            device::sync<device::Scope::Own>(ex);
             const int lane = ex.lid();
             if (lane < n) d[std::ptrdiff_t(b) * n + lane] = tile(lane, lane);
             if constexpr (UL == Uplo::Upper) {
@@ -812,7 +812,7 @@ template <class T> void larfg_case(Dev& dev, int n, int ai) {
         const bool act = lane < n && lane != ai;
         T alpha = lane == ai ? xb[lane] : T(0);
         T xv = act ? xb[lane] : T(0);
-        const T tau = device::larfg<device::conv::Phase, device::arith::Native>(ex, n, ai, alpha, xv, act);
+        const T tau = device::larfg<device::alg::Phase, device::arith::Native>(ex, n, ai, alpha, xv, act);
         if (lane == ai) y[std::ptrdiff_t(b) * P + lane] = alpha;
         else if (act) y[std::ptrdiff_t(b) * P + lane] = xv;
         if (lane == 0) t[b] = tau;
@@ -881,17 +881,17 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
         device::detail::lacpy_herm<UL, device::arith::Native>(fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
         device::copy(fx, device::vec(x + std::ptrdiff_t(b) * m, m), xl);
         device::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
-        device::sync<device::scope::Part>(ex);
+        device::sync<device::Scope::Own>(ex);
         const auto B1 = t1.sub(o, o, m, m);
         device::detail::gemv_rows<device::arith::Native>(fx, alpha, B1, device::assume_published(xl), yl);  // reads t1 rows of others
         const T s = device::detail::dotc<device::arith::Native>(fx, xl, yl);
         device::axpy<device::arith::Native>(fx, device::Scalar<T>{device::Arith<T>::neg(s)}, xl, yl);
-        device::sync<device::scope::Part>(ex);
+        device::sync<device::Scope::Own>(ex);
         if (ex.lid() == 0) ob[NT * NT + 2 * m] = s;
         device::copy(fx, yl, device::vec(ob + NT * NT + m, m));
         device::copy(fx, xl, device::vec(ob + NT * NT, m));
         device::detail::her2_full_sub<device::arith::Native>(fx, device::assume_published(xl), device::assume_published(yl), B1);
-        device::sync<device::scope::Part>(ex);
+        device::sync<device::Scope::Own>(ex);
         device::lacpy(ex, t1, device::mat(ob, NT, NT, NT));
     });
     const auto g = dev.down(out, ho.size());

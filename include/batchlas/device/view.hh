@@ -29,11 +29,7 @@ template <class M> BATCHLAS_DEVICE_INLINE auto col(const M& a, int j) { return a
 template <class M> BATCHLAS_DEVICE_INLINE auto window(const M& a, int i0, int j0, int m, int n) { return a.sub(i0, j0, m, n); }
 
 // ---- flip: reversed index order ---------------------------------------------------------
-namespace axis {
-struct Rows {};
-struct Cols {};
-struct Both {};
-}  // namespace axis
+enum class Axis { Rows, Cols, Both };
 
 // Vector: x(n - 1 - i) when on (a run-time switch, uniform), else x(i).
 template <class V> struct Flipped {
@@ -43,21 +39,21 @@ template <class V> struct Flipped {
     BATCHLAS_DEVICE_INLINE int size() const { return v.size(); }
 };
 // Matrix: rows (m - 1 - i), columns (n - 1 - j) or both reversed when on.
-template <class Axis, class M> struct FlippedMat {
+template <Axis AX, class M> struct FlippedMat {
     M a;
     bool on;
     BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const {
-        if constexpr (!std::is_same_v<Axis, axis::Cols>) i = on ? a.rows() - 1 - i : i;
-        if constexpr (!std::is_same_v<Axis, axis::Rows>) j = on ? a.cols() - 1 - j : j;
+        if constexpr (AX != Axis::Cols) i = on ? a.rows() - 1 - i : i;
+        if constexpr (AX != Axis::Rows) j = on ? a.cols() - 1 - j : j;
         return a(i, j);
     }
     BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
     BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
 };
-template <class Axis = axis::Rows, class X> BATCHLAS_DEVICE_INLINE auto flip(const X& x, bool on = true) {
-    static_assert(std::is_same_v<Axis, axis::Rows> || std::is_same_v<Axis, axis::Cols> || std::is_same_v<Axis, axis::Both>,
-                  "flip: axis::Rows, axis::Cols or axis::Both");
-    if constexpr (detail::is_mat_like_v<X>) return FlippedMat<Axis, X>{x, on};
+template <Axis AX = Axis::Rows, class X> BATCHLAS_DEVICE_INLINE auto flip(const X& x, bool on = true) {
+    static_assert(AX == Axis::Rows || AX == Axis::Cols || AX == Axis::Both,
+                  "flip: Axis::Rows, Axis::Cols or Axis::Both");
+    if constexpr (detail::is_mat_like_v<X>) return FlippedMat<AX, X>{x, on};
     else return Flipped<X>{x, on};
 }
 
@@ -155,23 +151,20 @@ template <Uplo UL, bool DiagReal = false, class M> BATCHLAS_DEVICE_INLINE HermVi
 template <Uplo UL, class M> BATCHLAS_DEVICE_INLINE HermView<UL, false, false, M> sym_view(const M& a) { return {a}; }
 
 // The general Hermitian view (Im(diag) always dropped): herm_view<UL, Storage, Load>.
-//   storage::Full        a is the n x n matrix, its UL triangle stored
-//   storage::Band        a is LAPACK band storage of the UL band (kd + 1 rows, n columns):
+//   Storage::Full        a is the n x n matrix, its UL triangle stored
+//   Storage::Band        a is LAPACK band storage of the UL band (kd + 1 rows, n columns):
 //                        Lower AB(i - j, j) = A(i, j) for 0 <= i - j <= kd, Upper AB(kd + i - j, j);
 //                        outside the band the view reads 0
-//   loads::One           one load at the selected index; loads::Two: one load per branch
+//   alg::OneLoad           one load at the selected index; alg::TwoLoads: one load per branch
 //                        (the stored and the mirrored element are separate loads, so a caller's
 //                        guard folds into one CFG: syev's herm_load)
-namespace storage {
-struct Full {};
-struct Band {};
-}  // namespace storage
-namespace loads {
-struct One {};
-struct Two {};
-}  // namespace loads
-template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
-    static_assert(std::is_same_v<Load, loads::One> || std::is_same_v<Load, loads::Two>, "herm_view: loads::One or loads::Two");
+enum class Storage { Full, Band };
+namespace alg {
+struct OneLoad {};
+struct TwoLoads {};
+}  // namespace alg
+template <Uplo UL, Storage ST, class Load, class M> struct HermViewOf {
+    static_assert(std::is_same_v<Load, alg::OneLoad> || std::is_same_v<Load, alg::TwoLoads>, "herm_view: alg::OneLoad or alg::TwoLoads");
     M a;
     int n;
     int kd;
@@ -181,14 +174,14 @@ template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
         const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
         const int si = stored ? i : j, sj = stored ? j : i;  // the stored element's indices
         T v;
-        if constexpr (std::is_same_v<Storage, storage::Band>) {
+        if constexpr (ST == Storage::Band) {
             const int d = UL == Uplo::Lower ? si - sj : sj - si;
             if (d > kd) return A::zero();
             const int br = UL == Uplo::Lower ? d : kd - d;
             v = static_cast<T>(a(br, sj));
         } else {
-            static_assert(std::is_same_v<Storage, storage::Full>, "herm_view: storage::Full or storage::Band");
-            if constexpr (std::is_same_v<Load, loads::Two>) {
+            static_assert(ST == Storage::Full, "herm_view: Storage::Full or Storage::Band");
+            if constexpr (std::is_same_v<Load, alg::TwoLoads>) {
                 if (stored) v = static_cast<T>(a(i, j));
                 else v = static_cast<T>(a(j, i));
             } else {
@@ -205,12 +198,12 @@ template <Uplo UL, class Storage, class Load, class M> struct HermViewOf {
     BATCHLAS_DEVICE_INLINE int rows() const { return n; }
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <Uplo UL, class Storage, class Load = loads::One, class M> BATCHLAS_DEVICE_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& a) {
-    static_assert(std::is_same_v<Storage, storage::Full>, "herm_view<UL, storage::Band>: pass kd and n, herm_view<UL, storage::Band>(ab, n, kd)");
+template <Uplo UL, Storage ST, class Load = alg::OneLoad, class M> BATCHLAS_DEVICE_INLINE HermViewOf<UL, ST, Load, M> herm_view(const M& a) {
+    static_assert(ST == Storage::Full, "herm_view<UL, Storage::Band>: pass kd and n, herm_view<UL, Storage::Band>(ab, n, kd)");
     return {a, a.rows(), 0};
 }
-template <Uplo UL, class Storage, class Load = loads::One, class M>
-BATCHLAS_DEVICE_INLINE HermViewOf<UL, Storage, Load, M> herm_view(const M& ab, int n, int kd) {
+template <Uplo UL, Storage ST, class Load = alg::OneLoad, class M>
+BATCHLAS_DEVICE_INLINE HermViewOf<UL, ST, Load, M> herm_view(const M& ab, int n, int kd) {
     return {ab, n, kd};
 }
 
@@ -246,18 +239,15 @@ template <class T, class... U> BATCHLAS_DEVICE_INLINE Refs<T, 1 + int(sizeof...(
 // Upper (i <= j): i + j (j + 1) / 2; Lower (i >= j): i + j (2n - j - 1) / 2. ByRows is the
 // transposed traversal: Lower row i holds (i, 0..i): i (i + 1) / 2 + j; Upper row i holds
 // (i, i..n-1). decode(k) inverts index exactly (an integer square root, then a +-1 fix).
-namespace order {
-struct ByCols {};
-struct ByRows {};
-}  // namespace order
+enum class PackOrder { ByCols, ByRows };
 
-template <Uplo UL, class Order = order::ByCols> struct PackedTri {
-    static_assert(std::is_same_v<Order, order::ByCols> || std::is_same_v<Order, order::ByRows>, "PackedTri: order::ByCols or ByRows");
+template <Uplo UL, PackOrder OR = PackOrder::ByCols> struct PackedTri {
+    static_assert(OR == PackOrder::ByCols || OR == PackOrder::ByRows, "PackedTri: PackOrder::ByCols or ByRows");
     // Number of stored elements.
     static constexpr int size(int n) { return n * (n + 1) / 2; }
     static constexpr int index(int i, int j, int n) {
         // ByRows of Lower == ByCols of Upper with (i, j) swapped, and the same for Upper.
-        constexpr bool cols = std::is_same_v<Order, order::ByCols>;
+        constexpr bool cols = OR == PackOrder::ByCols;
         constexpr bool head = (UL == Uplo::Upper) == cols;  // a triangular-number prefix layout
         const int a = cols ? i : j, b = cols ? j : i;       // a: within the line, b: the line
         if constexpr (head) return a + b * (b + 1) / 2;
@@ -267,7 +257,7 @@ template <Uplo UL, class Order = order::ByCols> struct PackedTri {
         int i, j;
     };
     static RowCol decode(int k, int n) {
-        constexpr bool cols = std::is_same_v<Order, order::ByCols>;
+        constexpr bool cols = OR == PackOrder::ByCols;
         constexpr bool head = (UL == Uplo::Upper) == cols;
         int b, a;
         if constexpr (head) {
@@ -290,14 +280,14 @@ template <Uplo UL, class Order = order::ByCols> struct PackedTri {
 };
 
 // A packed view: (i, j) inside the UL triangle of a packed array; outside it is not addressable.
-template <Uplo UL, class Order, class P> struct PackedMat {
+template <Uplo UL, PackOrder OR, class P> struct PackedMat {
     P p;  // T* or any base with p[k]
     int n;
-    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const { return p[PackedTri<UL, Order>::index(i, j, n)]; }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i, int j) const { return p[PackedTri<UL, OR>::index(i, j, n)]; }
     BATCHLAS_DEVICE_INLINE int rows() const { return n; }
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
-template <Uplo UL, class Order = order::ByCols, class P> BATCHLAS_DEVICE_INLINE PackedMat<UL, Order, P> packed(P p, int n) { return {p, n}; }
+template <Uplo UL, PackOrder OR = PackOrder::ByCols, class P> BATCHLAS_DEVICE_INLINE PackedMat<UL, OR, P> packed(P p, int n) { return {p, n}; }
 
 // ---- Packet: one vector-width unit as a plain struct ---------------------------------------
 // Bytes / sizeof(T) elements loaded or stored through a pointer the caller guarantees is

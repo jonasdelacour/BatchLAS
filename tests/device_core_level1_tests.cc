@@ -176,10 +176,10 @@ TYPED_TEST(DeviceCoreLevel1Test, ArgmaxThroughScratchHonoursRangeSkipTieAndNaN) 
         const batchlas::device::WorkGroup<WG, 32> ex{it};
         const batchlas::device::Scratch<AM, 32> scr{reinterpret_cast<AM*>(lm)};
         const batchlas::device::Range r{1, 2999};
-        const auto a = batchlas::device::argmax<batchlas::device::tie::Lowest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
-        const auto b = batchlas::device::argmax<batchlas::device::tie::Highest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
-        const auto c = batchlas::device::argmax<batchlas::device::tie::Lowest, batchlas::device::nan::First>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
-        const auto e = batchlas::device::argmax<batchlas::device::tie::Lowest, batchlas::device::nan::Skip>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
+        const auto a = batchlas::device::argmax<batchlas::device::alg::TieLowest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
+        const auto b = batchlas::device::argmax<batchlas::device::alg::TieHighest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
+        const auto c = batchlas::device::argmax<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
+        const auto e = batchlas::device::argmax<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
         if (ex.leader()) {
             idx[0] = a.index;
             idx[1] = b.index;

@@ -47,21 +47,21 @@ template <class R> struct stein_params {
 // The workspace plan (design C.5): one local broadcast slot; per vector j the shifted
 // tridiagonal's LU rows dl, dd, du, du2, the iterate x and the pivot flags at j * n.
 template <class R> struct SteinLayout {
-    ws::Slot<R> norm;
-    ws::Slot<R> dl, dd, du, du2, x;
-    ws::Slot<unsigned char> piv;
+    WsSlot<R> norm;
+    WsSlot<R> dl, dd, du, du2, x;
+    WsSlot<unsigned char> piv;
     WorkspaceSize size;
 };
 template <class R> constexpr SteinLayout<R> stein_layout(int n, int k) {
     Plan p;
     const std::size_t nk = std::size_t(n) * std::size_t(k);
-    const auto norm = p.take<R>(ws::Space::Local, 1);
-    const auto dl = p.take<R>(ws::Space::Global, nk);
-    const auto dd = p.take<R>(ws::Space::Global, nk);
-    const auto du = p.take<R>(ws::Space::Global, nk);
-    const auto du2 = p.take<R>(ws::Space::Global, nk);
-    const auto x = p.take<R>(ws::Space::Global, nk);
-    const auto piv = p.take<unsigned char>(ws::Space::Global, nk);
+    const auto norm = p.take<R>(WsSpace::Local, 1);
+    const auto dl = p.take<R>(WsSpace::Global, nk);
+    const auto dd = p.take<R>(WsSpace::Global, nk);
+    const auto du = p.take<R>(WsSpace::Global, nk);
+    const auto du2 = p.take<R>(WsSpace::Global, nk);
+    const auto x = p.take<R>(WsSpace::Global, nk);
+    const auto piv = p.take<unsigned char>(WsSpace::Global, nk);
     return {norm, dl, dd, du, du2, x, piv, p.size()};
 }
 
@@ -190,7 +190,7 @@ BATCHLAS_DEVICE_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e
         if (j > 0 && (w(j) - w(j - 1)) > gap_tol) cluster_start = j;
         const auto zj = z.col(j);
         for (int i = cluster_start; i < j; ++i) {
-            const T dt = dot<Scope::Auto, arith::Native>(ex, z.col(i), zj);
+            const T dt = dot<Scope::Own, arith::Native>(ex, z.col(i), zj);
             axpy<arith::Native>(ex, -dt, z.col(i), zj);
             sync(ex, Mem::Global);
         }

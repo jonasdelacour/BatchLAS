@@ -26,39 +26,39 @@ template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<cons
 // emitted as loop metadata; whether ptxas honours a PTX nounroll needs a gate check per use.
 namespace detail {
 template <class U, class F> BATCHLAS_DEVICE_INLINE void strided_loop(int lo, int hi, int step, F& f) {
-    if constexpr (std::is_same_v<U, unroll::Default>) {
+    if constexpr (std::is_same_v<U, alg::UnrollDefault>) {
         for (int i = lo; i < hi; i += step) f(i);
-    } else if constexpr (std::is_same_v<U, unroll::None>) {
+    } else if constexpr (std::is_same_v<U, alg::UnrollNone>) {
 #pragma clang loop unroll(disable)
         for (int i = lo; i < hi; i += step) f(i);
-    } else if constexpr (std::is_same_v<U, unroll::Full>) {
+    } else if constexpr (std::is_same_v<U, alg::UnrollFull>) {
 #pragma clang loop unroll(full)
         for (int i = lo; i < hi; i += step) f(i);
     } else {
         constexpr int N = U::count;
-        static_assert(N >= 1, "for_each_owned: unroll::Count<N> needs N >= 1");
+        static_assert(N >= 1, "for_each_owned: alg::UnrollCount<N> needs N >= 1");
 #pragma clang loop unroll_count(N)
         for (int i = lo; i < hi; i += step) f(i);
     }
 }
 }  // namespace detail
 
-template <class U = unroll::Default, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
-    if constexpr (std::is_same_v<U, unroll::Default> && !is_runtime_v<Ex>) {
+template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
+    if constexpr (std::is_same_v<U, alg::UnrollDefault> && !is_runtime_v<Ex>) {
         for (int i = ex.lid(); i < n; i += Ex::size) f(i);  // the first spelling, SASS-pinned by the lab
     } else {
         detail::strided_loop<U>(ex.lid(), n, detail::size_of(ex), f);
     }
 }
-template <class U = unroll::Default, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, Range r, F&& f) {
-    if constexpr (std::is_same_v<U, unroll::Default> && !is_runtime_v<Ex>) {
+template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, Range r, F&& f) {
+    if constexpr (std::is_same_v<U, alg::UnrollDefault> && !is_runtime_v<Ex>) {
         for (int i = r.lo + ex.lid(); i < r.hi; i += Ex::size) f(i);
     } else {
         detail::strided_loop<U>(r.lo + ex.lid(), r.hi, detail::size_of(ex), f);
     }
 }
 // for_each_owned(ex, Range{first, end}, f), the P3 spelling.
-template <class U = unroll::Default, class Ex, class F>
+template <class U = alg::UnrollDefault, class Ex, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f) {
     for_each_owned<U>(ex, Range{first, end}, f);
 }
@@ -68,34 +68,34 @@ template <class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_exact(co
     f(ex.lid());
 }
 // Fit<Ex> (exec.hh): index lid only, one guarded call (n <= size); Range: lo + lid.
-template <class U = unroll::Default, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, int n, F&& f) {
+template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, int n, F&& f) {
     const int i = ex.lid();
     if (i >= 0 && i < n) f(i);
 }
-template <class U = unroll::Default, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, Range r, F&& f) {
+template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, Range r, F&& f) {
     const int i = r.lo + ex.lid();
     if (i < r.hi) f(i);
 }
 // Grid1D (exec.hh): the launch's element i; Exact drops the i < n test.
-template <class U = unroll::Default, bool E, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Grid1D<E>& g, int n, F&& f) {
+template <class U = alg::UnrollDefault, bool E, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Grid1D<E>& g, int n, F&& f) {
     if constexpr (E) f(g.i);
     else if (g.i < n) f(g.i);
 }
 
 // The team loop: f(o, live) for the outputs o this item's team owns (o = team + k * nteams).
-// loop::Lockstep: every team runs ceil(nout / nteams) trips with live = o < nout, so a team
-// collective inside f is reached by every lane; loop::Diverge: o < nout only (live is true).
-template <class Loop = loop::Lockstep, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_team_owned(const Ex& ex, int nout, F&& f) {
+// alg::Lockstep: every team runs ceil(nout / nteams) trips with live = o < nout, so a team
+// collective inside f is reached by every lane; alg::Diverge: o < nout only (live is true).
+template <class Loop = alg::Lockstep, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_team_owned(const Ex& ex, int nout, F&& f) {
     const int nt = detail::nteams_of(ex);
     const int t = is_thread_v<Ex> ? 0 : ex.team();
-    if constexpr (std::is_same_v<Loop, loop::Lockstep>) {
+    if constexpr (std::is_same_v<Loop, alg::Lockstep>) {
         const int nb = (nout + nt - 1) / nt;
         for (int ob = 0; ob < nb; ++ob) {
             const int o = ob * nt + t;
             f(o, o < nout);
         }
     } else {
-        static_assert(std::is_same_v<Loop, loop::Diverge>, "for_each_team_owned: loop::Lockstep or loop::Diverge");
+        static_assert(std::is_same_v<Loop, alg::Diverge>, "for_each_team_owned: alg::Lockstep or alg::Diverge");
         for (int o = t; o < nout; o += nt) f(o, true);
     }
 }
@@ -249,7 +249,7 @@ template <class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE void swap(const Ex&
 // Scope::Group: the whole executor; on a WorkGroup without Scratch this is
 // portable::reduce_over_group (the tree the legacy kernels use, so ports stay bit-identical).
 namespace detail {
-template <Scope S, class Ex> constexpr Scope resolve_scope() { return S == Scope::Auto ? Ex::natural_scope : S; }
+template <Scope S, class Ex> constexpr Scope resolve_scope() { return S == Scope::Own ? Ex::natural_scope : S; }
 
 template <Scope S, class Ex, class T, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE T scope_reduce(const Ex& ex, T v, Op op = {}) {
@@ -303,7 +303,7 @@ BATCHLAS_DEVICE_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slot
         team_reduce_each(ex, v, std::make_index_sequence<K>{});
         return v;
     } else {
-        static_assert(Slots >= Ex::nteams * K, "packed_sum: Scratch smaller than scratch_elements<op::ReduceN<K>, Ex, T>()");
+        static_assert(Slots >= Ex::nteams * K, "packed_sum: Scratch smaller than scratch_elements<reduce_op::ReduceN<K>, Ex, T>()");
         if (!packed_contract_holds(ex)) {
             reduce_each<Scope::Group>(ex, v);
             return v;
@@ -329,7 +329,7 @@ BATCHLAS_DEVICE_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slot
 }  // namespace detail
 
 // sum over i < n of f(i)
-template <Scope S = Scope::Auto, class Ex, class F> BATCHLAS_DEVICE_INLINE auto reduce(const Ex& ex, int n, F&& f) {
+template <Scope S = Scope::Own, class Ex, class F> BATCHLAS_DEVICE_INLINE auto reduce(const Ex& ex, int n, F&& f) {
     using T = std::remove_cvref_t<decltype(f(0))>;
     T acc = Arith<T>::zero();
     for_each_owned(ex, n, [&](int i) { acc = Arith<T>::add(acc, f(i)); });
@@ -357,12 +357,12 @@ BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
 }  // namespace detail
 
 // x^T y (no conjugation)
-template <Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class X, class Y>
+template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot(const Ex& ex, const X& x, const Y& y) {
     return detail::scope_reduce<S>(ex, detail::dot_partial<false, Ops>(ex, x, y));
 }
 // x^H y
-template <Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class X, class Y>
+template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
     return detail::scope_reduce<S>(ex, detail::dot_partial<true, Ops>(ex, x, y));
 }
@@ -415,7 +415,7 @@ BATCHLAS_DEVICE_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scrat
 }
 // Without Scratch: one loop over y, then one scope-S reduction per x in argument order (on a
 // WorkGroup, portable::reduce_over_group each: the legacy kernels' trees, bit-identical).
-template <bool Conj = false, Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
+template <bool Conj = false, Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
     auto acc = detail::dot_many_partial<Conj, Ops>(ex, y, xs...);
     detail::reduce_each<S>(ex, acc);
@@ -424,7 +424,7 @@ BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) 
 
 // Without Scratch: K independent reductions of scope S (on a sub-group or partition these are
 // shuffles only, so nothing is exchanged).
-template <int K, bool Conj = false, Scope S = Scope::Auto, class Ex, class X, class Y>
+template <int K, bool Conj = false, Scope S = Scope::Own, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const Y& y) {
     auto acc = detail::dotn_partial<K, Conj>(ex, xs, y);
     detail::reduce_each<S>(ex, acc);
@@ -432,7 +432,7 @@ BATCHLAS_DEVICE_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const
 }
 
 // sum |re| + |im|
-template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto asum(const Ex& ex, const X& x) {
+template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto asum(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
     R acc = R(0);
     for_each_owned(ex, x.size(), [&](int i) { acc += abs1(x(i)); });
@@ -440,7 +440,7 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto 
 }
 
 // max |re| + |im|. NaN policy (NaN::Propagate): any NaN element makes the result NaN.
-template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto amax(const Ex& ex, const X& x) {
+template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto amax(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
     R m = R(0);
     int nan = 0;
@@ -456,7 +456,7 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto 
 
 // 0-based index of max |re| + |im|; ties -> the lowest index; NaN policy (NaN::First): the
 // lowest index holding a NaN wins over every number; n <= 0 -> -1. Three collectives.
-template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE int iamax(const Ex& ex, const X& x) {
+template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE int iamax(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
     R best = R(-1);
     int bi = INT_MAX, nani = INT_MAX;
@@ -474,7 +474,7 @@ template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE int i
 
 // LAPACK lassq without the incoming pair: scale = max |component|, scale^2 * ssq = sum |x_i|^2,
 // computed in two passes so no square overflows or underflows to zero.
-template <Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto lassq(const Ex& ex, const X& x) {
+template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto lassq(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using A = Arith<T>;
     using R = real_t<T>;
@@ -561,7 +561,7 @@ template <class R> BATCHLAS_DEVICE_INLINE R blue_finish(R abig, R amed, R asml) 
 //                  sqrt(min). Inf beats NaN only by accident of the sum.
 //   alg::Blue      dnrm2.f90's three accumulators, one exchange.
 //   alg::Scaled    two-pass lassq (max, then the scaled sum): two exchanges.
-template <class Alg, Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_INLINE auto nrm2(const Ex& ex, const X& x) {
+template <class Alg, Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto nrm2(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using R = real_t<T>;
     if constexpr (std::is_same_v<Alg, alg::Unscaled>) {
@@ -594,16 +594,16 @@ template <class Alg, Scope S = Scope::Auto, class Ex, class X> BATCHLAS_DEVICE_I
 // ---- reductions ------------------------------------------------------------------------------
 
 // v reduced over scope S (T, or std::array<T, K>: one reduction per value, pack-expanded).
-template <Scope S = Scope::Auto, class Ex, class T, class Op = sycl::plus<T>>
+template <Scope S = Scope::Own, class Ex, class T, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE T allreduce(const Ex& ex, T v, Op op = {}) {
     return detail::scope_reduce<S>(ex, v, op);
 }
-template <Scope S = Scope::Auto, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
+template <Scope S = Scope::Own, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, std::array<T, K> v, Op op = {}) {
     detail::reduce_each<S>(ex, v, op);
     return v;
 }
-// K sums in one packed exchange through Scratch (scratch_elements<op::ReduceN<K>, Ex, T>()).
+// K sums in one packed exchange through Scratch (scratch_elements<reduce_op::ReduceN<K>, Ex, T>()).
 template <class Ex, class T, int Slots, std::size_t K>
 BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
     return detail::packed_sum<int(K)>(ex, scr, v);
@@ -629,7 +629,7 @@ template <class Alg, class R, class T> BATCHLAS_DEVICE_INLINE void acc_abs2(R& a
     }
 }
 }  // namespace detail
-template <class Alg = alg::Fused, Scope S = Scope::Auto, class Ex, class X, class... Xs>
+template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class X, class... Xs>
 BATCHLAS_DEVICE_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
     using R = real_t<elem_t<X>>;
     constexpr std::size_t K = 1 + sizeof...(Xs);
@@ -646,7 +646,7 @@ BATCHLAS_DEVICE_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
 
 // The first i in [0, n) with pred(i), or -1 (uniform). Each item stops at its first owned hit
 // (owned indices ascend), then one min-reduction. The x overload tests pred(x(i)).
-template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred) {
+template <Scope S = Scope::Own, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred) {
     int first = INT_MAX;
     const int step = detail::size_of(ex);
     for (int i = ex.lid(); i < n; i += step)
@@ -657,31 +657,31 @@ template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DEVICE_INLINE int f
     first = detail::scope_reduce<S>(ex, first, sycl::minimum<int>());
     return first == INT_MAX ? -1 : first;
 }
-template <Scope S = Scope::Auto, class Ex, class X, class P>
+template <Scope S = Scope::Own, class Ex, class X, class P>
     requires(requires(const X& x) { x.size(); x(0); })
 BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred) {
     return find_first<S>(ex, x.size(), [&](int i) { return pred(x(i)); });
 }
 
-// argmax over i of key(x(i)): {index, key} (ArgMax, tie::, nan::: reduce.hh). Tie: tie::Lowest | tie::Highest index among equal
-// keys. NaN: nan::First (the lowest index holding a NaN key wins, as iamax), nan::Skip (NaN keys
-// never win; all NaN -> {-1, -inf-like}). Key: key::Abs1 (|re| + |im|, BLAS), key::Abs (hypot),
-// key::Real (re). Uniform result; n <= 0 -> index -1.
-namespace key {
-struct Abs1 {};
-struct Abs {};
-struct Real {};
-}  // namespace key
-template <class Tie = tie::Lowest, class NaN = nan::First, class Key = key::Abs1, Scope S = Scope::Auto, class Ex, class X>
+// argmax over i of key(x(i)): {index, key} (ArgMax, tie::, nan::: reduce.hh). Tie: alg::TieLowest | alg::TieHighest index among equal
+// keys. NaN: alg::NanFirst (the lowest index holding a NaN key wins, as iamax), alg::NanSkip (NaN keys
+// never win; all NaN -> {-1, -inf-like}). Key: alg::KeyAbs1 (|re| + |im|, BLAS), alg::KeyAbs (hypot),
+// alg::KeyReal (re). Uniform result; n <= 0 -> index -1.
+namespace alg {
+struct KeyAbs1 {};
+struct KeyAbs {};
+struct KeyReal {};
+}  // namespace alg
+template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class Key = alg::KeyAbs1, Scope S = Scope::Own, class Ex, class X>
 BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using R = real_t<T>;
-    constexpr bool low = std::is_same_v<Tie, tie::Lowest>;
-    static_assert(low || std::is_same_v<Tie, tie::Highest>, "argmax: tie::Lowest or tie::Highest");
-    static_assert(std::is_same_v<NaN, nan::First> || std::is_same_v<NaN, nan::Skip>, "argmax: nan::First or nan::Skip");
+    constexpr bool low = std::is_same_v<Tie, alg::TieLowest>;
+    static_assert(low || std::is_same_v<Tie, alg::TieHighest>, "argmax: alg::TieLowest or alg::TieHighest");
+    static_assert(std::is_same_v<NaN, alg::NanFirst> || std::is_same_v<NaN, alg::NanSkip>, "argmax: alg::NanFirst or alg::NanSkip");
     auto keyf = [](const T& v) -> R {
-        if constexpr (std::is_same_v<Key, key::Abs1>) return abs1(v);
-        else if constexpr (std::is_same_v<Key, key::Abs>) return modulus(v);
+        if constexpr (std::is_same_v<Key, alg::KeyAbs1>) return abs1(v);
+        else if constexpr (std::is_same_v<Key, alg::KeyAbs>) return modulus(v);
         else return Arith<T>::re(v);
     };
     const R lowest = -std::numeric_limits<R>::infinity();
@@ -690,7 +690,7 @@ BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x
     for_each_owned(ex, x.size(), [&](int i) {
         const R a = keyf(x(i));
         if (sycl::isnan(a)) {
-            if constexpr (std::is_same_v<NaN, nan::First>) nani = i < nani ? i : nani;
+            if constexpr (std::is_same_v<NaN, alg::NanFirst>) nani = i < nani ? i : nani;
         } else if (a > best || (a == best && !low)) {
             best = a;
             bi = i;
@@ -698,7 +698,7 @@ BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x
             bi = i;  // the first -inf key
         }
     });
-    if constexpr (std::is_same_v<NaN, nan::First>) {
+    if constexpr (std::is_same_v<NaN, alg::NanFirst>) {
         nani = detail::scope_reduce<S>(ex, nani, sycl::minimum<int>());
         if (nani != INT_MAX) return {nani, std::numeric_limits<R>::quiet_NaN()};
     }
@@ -713,22 +713,22 @@ BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x
     return {idx, m};
 }
 
-// max key over x with a NaN policy: nan::Propagate (any NaN -> NaN, as amax) or nan::Skip
+// max key over x with a NaN policy: alg::NanPropagate (any NaN -> NaN, as amax) or alg::NanSkip
 // (fmax: NaN ignored, the bdsqr / tridiag rule).
-template <class NaN = nan::Propagate, class Key = key::Abs1, Scope S = Scope::Auto, class Ex, class X>
+template <class NaN = alg::NanPropagate, class Key = alg::KeyAbs1, Scope S = Scope::Own, class Ex, class X>
 BATCHLAS_DEVICE_INLINE auto amax_by(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using R = real_t<T>;
-    if constexpr (std::is_same_v<NaN, nan::Propagate> && std::is_same_v<Key, key::Abs1>) {
+    if constexpr (std::is_same_v<NaN, alg::NanPropagate> && std::is_same_v<Key, alg::KeyAbs1>) {
         return amax<S>(ex, x);
     } else {
-        static_assert(std::is_same_v<NaN, nan::Skip>, "amax_by: nan::Propagate (key::Abs1) or nan::Skip");
+        static_assert(std::is_same_v<NaN, alg::NanSkip>, "amax_by: alg::NanPropagate (alg::KeyAbs1) or alg::NanSkip");
         R m = R(0);
         for_each_owned(ex, x.size(), [&](int i) {
             const T v = x(i);
             R a;
-            if constexpr (std::is_same_v<Key, key::Abs1>) a = abs1(v);
-            else if constexpr (std::is_same_v<Key, key::Abs>) a = modulus(v);
+            if constexpr (std::is_same_v<Key, alg::KeyAbs1>) a = abs1(v);
+            else if constexpr (std::is_same_v<Key, alg::KeyAbs>) a = modulus(v);
             else a = sycl::fabs(Arith<T>::re(v));
             m = sycl::fmax(m, a);
         });
@@ -865,25 +865,25 @@ template <class R> BATCHLAS_DEVICE_INLINE R sqrt_scaled(ScaledProd<R> q) {
 
 // find_first with the miss value named (none instead of -1); LaneVec form: the smallest lid in
 // [x.lo, x.hi) whose element satisfies pred, else none (a min butterfly, masks ascending).
-template <Scope S = Scope::Auto, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred, int none) {
+template <Scope S = Scope::Own, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred, int none) {
     const int f = find_first<S>(ex, n, pred);
     return f < 0 ? none : f;
 }
 template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, int none, P&& pred) {
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
-    return bfly::inline_body<1, Ex::size, bfly::Asc>(ex, cand, sycl::minimum<int>());
+    return detail::butterfly_inline<1, Ex::size, alg::BflyAsc>(ex, cand, sycl::minimum<int>());
 }
 
 // argmax over x(i), i in [r.lo, r.hi) except i == skip, through a Group-scope exchange: per-item
 // candidates merged by argmax_merge<Tie, NaN> in ONE allreduce (reduce.hh) over Scratch<ArgMax<R>>
-// (scratch_elements<op::Reduce, Ex, ArgMax<R>>() slots). Uniform; no candidate -> index -1.
-template <class Tie = tie::Lowest, class NaN = nan::First, class Key = key::Abs1, class Ex, class R, int Slots, class X>
+// (scratch_elements<reduce_op::Reduce, Ex, ArgMax<R>>() slots). Uniform; no candidate -> index -1.
+template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class Key = alg::KeyAbs1, class Ex, class R, int Slots, class X>
 BATCHLAS_DEVICE_INLINE ArgMax<R> argmax(const Ex& ex, Scratch<ArgMax<R>, Slots> scr, const X& x, Range r, int skip = -1) {
     using T = elem_t<X>;
     auto keyf = [](const T& v) -> R {
-        if constexpr (std::is_same_v<Key, key::Abs1>) return abs1(v);
-        else if constexpr (std::is_same_v<Key, key::Abs>) return modulus(v);
+        if constexpr (std::is_same_v<Key, alg::KeyAbs1>) return abs1(v);
+        else if constexpr (std::is_same_v<Key, alg::KeyAbs>) return modulus(v);
         else return Arith<T>::re(v);
     };
     ArgMax<R> best{-1, R(0)};
@@ -895,16 +895,16 @@ BATCHLAS_DEVICE_INLINE ArgMax<R> argmax(const Ex& ex, Scratch<ArgMax<R>, Slots> 
 
 // ---- Cyclic rows of a static extent N (N % size == 0): item l owns rows l + k*size ----------
 // f(k, row) for the item's N / size rows, k a compile-time Frag slot; no bound check.
-// U = unroll::Full is a full unroll pragma, unroll::Default none.
-template <int N, class U = unroll::Full, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_frag(const Ex& ex, F&& f) {
+// U = alg::UnrollFull is a full unroll pragma, alg::UnrollDefault none.
+template <int N, class U = alg::UnrollFull, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_frag(const Ex& ex, F&& f) {
     static_assert(N % Ex::size == 0, "for_each_owned_frag: N must be a multiple of the executor size");
     constexpr int K = N / Ex::size;
     const int l = ex.lid();
-    if constexpr (std::is_same_v<U, unroll::Full>) {
+    if constexpr (std::is_same_v<U, alg::UnrollFull>) {
 #pragma unroll
         for (int k = 0; k < K; ++k) f(k, l + k * Ex::size);
     } else {
-        static_assert(std::is_same_v<U, unroll::Default>, "for_each_owned_frag: unroll::Full or unroll::Default");
+        static_assert(std::is_same_v<U, alg::UnrollDefault>, "for_each_owned_frag: alg::UnrollFull or alg::UnrollDefault");
         for (int k = 0; k < K; ++k) f(k, l + k * Ex::size);
     }
 }

@@ -36,18 +36,18 @@ template <class Tier, class T> using cfg_t = typename sy2sb_cfg_of<Tier, T>::typ
 // which bounds every later one: the tile staging (local), then (global) the panel's tau, its
 // unit-lower V, P = V T, Y = A22 P, T, and the pk x kd products M1, M2.
 template <class T> struct Sy2sbLayout {
-    ws::Slot<T> smem, taup, v, p, y, tf, m1, m2;
+    WsSlot<T> smem, taup, v, p, y, tf, m1, m2;
     WorkspaceSize size;
 };
 template <class Tier, class T> constexpr Sy2sbLayout<T> panel_layout(int n, int kd) {
     Sy2sbLayout<T> l{};
     Plan p;
     if (kd > 0 && n > kd) {
-        constexpr ws::Space g = ws::Space::Global;
+        constexpr WsSpace g = WsSpace::Global;
         const std::size_t pn0 = static_cast<std::size_t>(n - kd);
         const std::size_t kdz = static_cast<std::size_t>(kd);
         const std::size_t pk0 = pn0 < kdz ? pn0 : kdz;
-        l.smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<cfg_t<Tier, T>>()));
+        l.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<cfg_t<Tier, T>>()));
         l.taup = p.take<T>(g, pk0);
         l.v = p.take<T>(g, pn0 * pk0);
         l.p = p.take<T>(g, pn0 * pk0);
@@ -185,7 +185,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
             tau(i + c) = taup[c];
         });
         const auto w = mat(vp, pn, pk, pn);
-        lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, edge::ZeroPad, diag_fill::Unit>(ex, v, w);
+        lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, alg::EdgeZeroPad, DiagFill::Unit>(ex, v, w);
         ex.barrier(Mem::Global);
         const auto tf = mat(tfp, pk, pk, pk);
         larft(ex, w, tf, vec(taup, pk));

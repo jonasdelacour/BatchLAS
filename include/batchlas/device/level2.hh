@@ -25,16 +25,15 @@ template <class Ex, Transpose TR> constexpr auto default_gemv_alg() {
     else return alg::SgPerCol{};
 }
 template <class Alg, class Default> using pick_t = std::conditional_t<std::is_void_v<Alg>, Default, Alg>;
-// gemv's output: store<Shape, Ops>(alpha, acc, beta, y); alpha_side::Right with a Scalar alpha
+// gemv's output: store<Shape, Ops>(alpha, acc, beta, y); Side::Right with a Scalar alpha
 // forms acc * alpha first (then beta's term as a One-alpha store).
 template <class S> inline constexpr bool is_scalar_value_v = false;
 template <class T> inline constexpr bool is_scalar_value_v<Scalar<T>> = true;
-template <class Shape, class Ops, class Side, class AS, class T, class BS, class Ref>
+template <class Shape, class Ops, Side AlphaSide, class AS, class T, class BS, class Ref>
 BATCHLAS_DEVICE_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
-    if constexpr (std::is_same_v<Side, alpha_side::Right> && is_scalar_value_v<AS>) {
+    if constexpr (AlphaSide == Side::Right && is_scalar_value_v<AS>) {
         store<Shape, Ops>(One{}, arith_t<Ops, T>::mul(acc, static_cast<T>(alpha.v)), beta, y);
     } else {
-        static_assert(std::is_same_v<Side, alpha_side::Left> || std::is_same_v<Side, alpha_side::Right>, "gemv: alpha_side::Left or Right");
         store<Shape, Ops>(alpha, acc, beta, y);
     }
 }
@@ -45,11 +44,11 @@ template <class Ex> BATCHLAS_DEVICE_INLINE auto lane_group(const Ex& ex) {
 }  // namespace detail
 
 // y := alpha op(A) x + beta y; beta == Zero never reads y. Ops: the arithmetic of the dot;
-// Shape: the epilogue (store<Shape, Ops>, arith.hh); AlphaSide: alpha_side::Right forms acc * alpha.
+// Shape: the epilogue (store<Shape, Ops>, arith.hh); AlphaSide: Side::Right forms acc * alpha.
 //   alg::TeamPerRow  NoTrans: team t owns rows t mod nteams, lanes stride the columns, lane 0 stores
 //   alg::ColDot<W>   (Conj)Trans: W consecutive lanes per column (W | the sub-group), a W-lane
 //                    butterfly; the W-block's first lane stores
-template <Transpose TR, class Alg = void, class Ops = arith::Explicit, class Shape = epi::Sum, class AlphaSide = alpha_side::Left,
+template <Transpose TR, class Alg = void, class Ops = arith::Explicit, class Shape = epi::Sum, Side AlphaSide = Side::Left,
           class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DEVICE_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
     using Al = detail::pick_t<Alg, decltype(detail::default_gemv_alg<Ex, TR>())>;
@@ -495,17 +494,18 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
     }
 }
 
-// x := op(A)^{-1} x for A n x n triangular (UL stored), diagonal policy DG (tri_diag::, core.hh):
+// x := op(A)^{-1} x for A n x n triangular (UL stored), diagonal policy DG (alg::UnitDiag,
+// Div, Recip or RealDiv; core.hh):
 //   alg::Serial      one item (Thread); x a register Frag (n <= N) or a memory vector
 //   alg::LanePerRow  lane i holds x(i) in the register x (n <= the executor's size); step j
 //                    finalises x(j) on lane j and broadcasts it, the later lanes update. COLLECTIVE.
 namespace detail {
-template <class DG, class Ar, class T> BATCHLAS_DEVICE_INLINE T tri_diag_apply(T xi, const T& aii) {
-    if constexpr (std::is_same_v<DG, tri_diag::Unit>) return xi;
-    else if constexpr (std::is_same_v<DG, tri_diag::Div>) return Ar::div(xi, aii);
-    else if constexpr (std::is_same_v<DG, tri_diag::Recip>) return Ar::mul(xi, Ar::recip(aii));
+template <class DG, class Ar, class T> BATCHLAS_DEVICE_INLINE T trsv_diag_apply(T xi, const T& aii) {
+    if constexpr (std::is_same_v<DG, alg::UnitDiag>) return xi;
+    else if constexpr (std::is_same_v<DG, alg::Div>) return Ar::div(xi, aii);
+    else if constexpr (std::is_same_v<DG, alg::Recip>) return Ar::mul(xi, Ar::recip(aii));
     else {
-        static_assert(std::is_same_v<DG, tri_diag::Real>, "trsv: tri_diag::Unit, Div, Recip or Real");
+        static_assert(std::is_same_v<DG, alg::RealDiv>, "trsv: alg::UnitDiag, Div, Recip or RealDiv");
         return Ar::div_real(xi, Ar::re(aii));
     }
 }
@@ -516,7 +516,7 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
     using Ar = arith_t<Ops, T>;
     constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
     auto diag = [&](int i) -> T {
-        if constexpr (std::is_same_v<DG, tri_diag::Unit>) return Ar::one();
+        if constexpr (std::is_same_v<DG, alg::UnitDiag>) return Ar::one();
         else return detail::op_at<TR, T>(a, i, i);
     };
     if constexpr (std::is_same_v<Alg, alg::Serial>) {
@@ -530,7 +530,7 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
                     T xi = x[i];
 #pragma unroll
                     for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                    x[i] = detail::tri_diag_apply<DG, Ar>(xi, diag(i));
+                    x[i] = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
                 }
             } else {
 #pragma unroll
@@ -540,20 +540,20 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
 #pragma unroll
                     for (int j = i + 1; j < N; ++j)
                         if (j < n) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                    x[i] = detail::tri_diag_apply<DG, Ar>(xi, diag(i));
+                    x[i] = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
                 }
             }
         } else if constexpr (lower) {
             for (int i = 0; i < n; ++i) {
                 T xi = x(i);
                 for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                x(i) = detail::tri_diag_apply<DG, Ar>(xi, diag(i));
+                x(i) = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
             }
         } else {
             for (int i = n - 1; i >= 0; --i) {
                 T xi = x(i);
                 for (int j = i + 1; j < n; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                x(i) = detail::tri_diag_apply<DG, Ar>(xi, diag(i));
+                x(i) = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
             }
         }
     } else {
@@ -562,7 +562,7 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
         const int l = ex.lid();
         for (int s = 0; s < n; ++s) {
             const int j = lower ? s : n - 1 - s;
-            if (l == j) x = detail::tri_diag_apply<DG, Ar>(x, diag(j));
+            if (l == j) x = detail::trsv_diag_apply<DG, Ar>(x, diag(j));
             const T xj = ex.bcast(x, j);
             if (lower ? (l > j && l < n) : (l < j)) Ar::msub(x, detail::op_at<TR, T>(a, l, j), xj);
         }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // device_core_scalar_tests: the core.hh and scalar.hh additions (design A.2) against host
-// references: static_for / static_extent_v / MaybeZero / None, op::FMax / FMin with NaN,
+// references: static_for / static_extent_v / MaybeZero / None, reduce_op::FMax / FMin with NaN,
 // lamch, qnan, phase, sign_nonzero_real, eig2x2_nearest and SafeRecip.
 // Guards (agent-guide section 8): SafeRecip straddles both of its thresholds (d where 1/d
 // overflows: the divide arm; d = 0: the caller's value; ordinary d: the multiply arm), checked
@@ -63,12 +63,12 @@ TYPED_TEST(DeviceCoreScalarTest, PhaseSignQnanAndNanLosingMinMaxOnDevice) {
         }
         const R one = R(1);
         const R n = batchlas::device::qnan<R>();
-        mm[0] = batchlas::device::op::FMax{}(one, n);
-        mm[1] = batchlas::device::op::FMax{}(n, one);
-        mm[2] = batchlas::device::op::FMin{}(one, n);
-        mm[3] = batchlas::device::op::FMin{}(n, one);
-        mm[4] = batchlas::device::op::FMax{}(R(-2), R(5));
-        mm[5] = batchlas::device::op::FMin{}(R(-2), R(5));
+        mm[0] = batchlas::device::reduce_op::FMax{}(one, n);
+        mm[1] = batchlas::device::reduce_op::FMax{}(n, one);
+        mm[2] = batchlas::device::reduce_op::FMin{}(one, n);
+        mm[3] = batchlas::device::reduce_op::FMin{}(n, one);
+        mm[4] = batchlas::device::reduce_op::FMax{}(R(-2), R(5));
+        mm[5] = batchlas::device::reduce_op::FMin{}(R(-2), R(5));
         qn[0] = batchlas::device::qnan<T>();
     });
     const auto P = d.down(ph, 64);
@@ -163,7 +163,7 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
 }
 
 
-// lartg<lartg_alg::Fast> (float: rsqrt + Newton inside the unscaled range) against the
+// lartg<alg::LartgFast> (float: rsqrt + Newton inside the unscaled range) against the
 // exact rotation within 4 ulp (both use sqrt.approx; Fast's 1/r is rsqrt + Newton), g == 0
 // giving exactly (1, 0, f), and arguments outside the range (|f| ~ 2^120, 2^-140) taking the
 // Exact path bit for bit; other T: Fast is Exact.
@@ -184,8 +184,8 @@ TYPED_TEST(DeviceCoreScalarTest, LartgFastMatchesExact) {
     T* exact = d.template alloc<T>(3 * n, T(0));
     d.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int i = static_cast<int>(it.get_local_linear_id());
-        const auto a = batchlas::device::lartg<batchlas::device::lartg_alg::Fast>(f[i], g[i]);
-        const auto b = batchlas::device::lartg<batchlas::device::lartg_alg::Exact>(f[i], g[i]);
+        const auto a = batchlas::device::lartg<batchlas::device::alg::LartgFast>(f[i], g[i]);
+        const auto b = batchlas::device::lartg<batchlas::device::alg::LartgExact>(f[i], g[i]);
         fast[3 * i] = T(a.c);
         fast[3 * i + 1] = a.s;
         fast[3 * i + 2] = a.r;

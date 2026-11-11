@@ -136,7 +136,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                         pp[4 * kN + 1] = st;
                     });
                 if (bp == nullptr) return;
-                device::sync<device::scope::Group>(all, device::Mem::Global);
+                device::sync<device::Scope::Group>(all, device::Mem::Global);
                 if (pp[4 * kN + 1] != 0) return;
                 const device::detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
                 device::detail::sytrs_cta_run<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
@@ -325,7 +325,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 int* const gp = piv + b * n;
                 const int first = state[2 * b], end = state[2 * b + 1];
                 int st = info[b];
-                device::sync<device::scope::Group>(g, device::Mem::Global);
+                device::sync<device::Scope::Group>(g, device::Mem::Global);
                 device::lasyf_undo(S, first, end, g, [&](int j, bool& two) {
                     const int raw = gp[upper ? n - 1 - j : j];
                     two = raw < 0;

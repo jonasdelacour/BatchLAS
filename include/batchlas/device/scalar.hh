@@ -77,21 +77,21 @@ template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_
 }
 }  // namespace detail
 
-// W: lartg_alg::Exact (= void) or a working precision type of the complex branch (void:
+// W: alg::LartgExact (= void) or a working precision type of the complex branch (void:
 // real_t<T>); the real branch is SLARTG/DLARTG with its unscaled fast path, bit-identical to
-// src/math-helpers.hh lartg. lartg_alg::Fast, float only (other T: Exact): inside the unscaled
+// src/math-helpers.hh lartg. alg::LartgFast, float only (other T: Exact): inside the unscaled
 // range r = sqrt(f^2 + g^2) with 1/r from rsqrt + one fused Newton step (< 0.5 ulp), outside
 // it the Exact path; g == 0 gives (1, 0, f) by a final select, not an early return (an
 // identity rotation does not diverge from its neighbours): steqr_cta's rotation.
-namespace lartg_alg {
-struct Exact {};
-struct Fast {};
-}  // namespace lartg_alg
+namespace alg {
+struct LartgExact {};
+struct LartgFast {};
+}  // namespace alg
 template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const T& g) {
     using R = real_t<T>;
-    if constexpr (std::is_same_v<W, lartg_alg::Exact>) {
+    if constexpr (std::is_same_v<W, alg::LartgExact>) {
         return lartg<void>(f, g);
-    } else if constexpr (std::is_same_v<W, lartg_alg::Fast>) {
+    } else if constexpr (std::is_same_v<W, alg::LartgFast>) {
         if constexpr (std::is_same_v<T, float>) {
             const bool gz = (g == T(0));
             const T f_abs = sycl::fabs(f), g_abs = sycl::fabs(g);
@@ -254,20 +254,20 @@ template <class R> BATCHLAS_DEVICE_INLINE R wilkinson_shift(R dl, R el, R dl1) {
 // ---- xLARFG scalars -----------------------------------------------------------------------------
 // H^H [alpha; x] = [beta; 0], H = I - tau v v^H, v = [1; x * scale] (use_mul) or [1; x / scale]
 // (the reciprocal overflowed or vanished). identity: tau = 0, H = I, x unchanged. Conventions:
-//   conv::Lapack    xLARFG from (alpha, ScaledSsq{s, ssq}) with s = max |component| over alpha
+//   alg::LarfgLapack    xLARFG from (alpha, ScaledSsq{s, ssq}) with s = max |component| over alpha
 //                   and x, ssq = sum |x_i / s|^2 (geqrf's two-pass norm): beta = -sign(alphr) *
 //                   ||[alpha; x]|| real, tau complex; scale is Smith's 1 / (alpha - beta)
 //                   (FmaArith::recip), use_mul unless it is not finite or zero.
-//   conv::Phase     from (alpha, ||x||, len): beta = -sgn(alpha) ||[alpha; x]|| keeps alpha's
+//   alg::Phase     from (alpha, ||x||, len): beta = -sgn(alpha) ||[alpha; x]|| keeps alpha's
 //                   phase (complex beta, real tau); len <= 1, or a real alpha over x == 0 ->
 //                   identity (src detail::larfg).
-//   conv::RealBeta  from (alpha, ||x||, len): LAPACK ZLARFG's beta real / tau complex; a complex
+//   alg::RealBeta  from (alpha, ||x||, len): LAPACK ZLARFG's beta real / tau complex; a complex
 //                   alpha reflects even at len == 1. Real T: identical to Phase.
-namespace conv {
-struct Lapack {};
+namespace alg {
+struct LarfgLapack {};
 struct Phase {};
 struct RealBeta {};
-}  // namespace conv
+}  // namespace alg
 
 template <class T> struct LarfgScalars {
     T tau;
@@ -277,8 +277,8 @@ template <class T> struct LarfgScalars {
     bool identity;
 };
 
-template <class Conv = conv::Lapack, class T> BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg_scalars(const T& alpha, ScaledSsq<real_t<T>> q) {
-    static_assert(std::is_same_v<Conv, conv::Lapack>, "larfg_scalars(alpha, ScaledSsq): conv::Lapack");
+template <class Conv = alg::LarfgLapack, class T> BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg_scalars(const T& alpha, ScaledSsq<real_t<T>> q) {
+    static_assert(std::is_same_v<Conv, alg::LarfgLapack>, "larfg_scalars(alpha, ScaledSsq): alg::LarfgLapack");
     using A = Arith<T>;
     using R = real_t<T>;
     LarfgScalars<T> out{A::zero(), alpha, A::one(), true, true};
@@ -300,11 +300,11 @@ template <class Conv = conv::Lapack, class T> BATCHLAS_DEVICE_INLINE LarfgScalar
 }
 
 template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
-    static_assert(std::is_same_v<Conv, conv::Phase> || std::is_same_v<Conv, conv::RealBeta>,
-                  "larfg_scalars(alpha, xnorm, len): conv::Phase or conv::RealBeta");
+    static_assert(std::is_same_v<Conv, alg::Phase> || std::is_same_v<Conv, alg::RealBeta>,
+                  "larfg_scalars(alpha, xnorm, len): alg::Phase or alg::RealBeta");
     using R = real_t<T>;
     LarfgScalars<T> out{T(0), alpha, T(0), true, true};
-    if constexpr (std::is_same_v<Conv, conv::RealBeta> && Arith<T>::is_complex) {
+    if constexpr (std::is_same_v<Conv, alg::RealBeta> && Arith<T>::is_complex) {
         if (len < 1 || (xnorm == R(0) && alpha.imag() == R(0))) return out;
         const R norm = sycl::hypot(sycl::hypot(alpha.real(), alpha.imag()), xnorm);
         if (norm == R(0)) return out;

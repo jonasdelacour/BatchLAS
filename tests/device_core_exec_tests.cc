@@ -3,7 +3,7 @@
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts through every lane
 // move (bit-identical: a move is exact); executors whose team is a strict slice of a sub-group
 // (Teams P = 8, Partition P = 8) so a move that crosses its block is visible; per-lane (not
-// uniform) shuffle sources; a WG = 1024 sync<scope::Group> exchange where every item reads an
+// uniform) shuffle sources; a WG = 1024 sync<Scope::Group> exchange where every item reads an
 // item of another sub-group; the index-only executors at their guards (n < size, n == size,
 // offsets). Red set (each break made once, 2026-11-04, and this suite failed): Teams::bcast
 // addressing the whole sub-group (block_select<SG>) instead of its P-lane block.
@@ -70,8 +70,8 @@ TYPED_TEST(DeviceCoreExecTest, ThreadMovesAreTheIdentity) {
     EXPECT_TRUE(same_bits(th.shift(v, 1), v));
 }
 
-// sync<scope::Group> on a 1024-item work-group orders a local-memory exchange across sub-groups;
-// sync<scope::Sub> one within a sub-group; sync<scope::Part> one within a Partition.
+// sync<Scope::Group> on a 1024-item work-group orders a local-memory exchange across sub-groups;
+// sync<Scope::Sub> one within a sub-group; sync<Scope::Own> one within a Partition.
 TYPED_TEST(DeviceCoreExecTest, SyncScopesOrderTheirExchange) {
     using T = TypeParam;
     auto& d = this->dev;
@@ -89,12 +89,12 @@ TYPED_TEST(DeviceCoreExecTest, SyncScopesOrderTheirExchange) {
         slm[g] = x[g];
         slm[WG + g] = x[g];
         slm[2 * WG + g] = x[g];
-        batchlas::device::sync<batchlas::device::scope::Group>(wg);
+        batchlas::device::sync<batchlas::device::Scope::Group>(wg);
         g_out[g] = slm[(g + 517) % WG];
-        batchlas::device::sync<batchlas::device::scope::Sub>(wg);
+        batchlas::device::sync<batchlas::device::Scope::Sub>(wg);
         const int sb = g - g % 32;
         s_out[g] = slm[WG + sb + (g % 32 + 13) % 32];
-        batchlas::device::sync<batchlas::device::scope::Part>(part);
+        batchlas::device::sync<batchlas::device::Scope::Own>(part);
         const int pb = g - g % 8;
         p_out[g] = slm[2 * WG + pb + (g % 8 + 3) % 8];
     });
@@ -134,7 +134,7 @@ TEST(DeviceCoreExecIndex, SlotFitGridAndElemVisitTheirIndices) {
     EXPECT_EQ(visits2(batchlas::device::ElemAt{5, 6}.sub(2, 4), 4, 3), (P{{3, 2}}));
     EXPECT_EQ(visits2(batchlas::device::ElemAt{5, 3}.sub(2, 4), 4, 3), (P{}));  // left of the block
     EXPECT_EQ(visits2(batchlas::device::ElemAt{6, 6}.sub(2, 4), 4, 3), (P{}));  // below the block
-    const batchlas::device::bcast_policy::Slm<4, int*> slm{nullptr, 2};
+    const batchlas::device::alg::BcastSlm<4, int*> slm{nullptr, 2};
     EXPECT_EQ(slm.buffer(0, 3), 6);
     EXPECT_EQ(slm.buffer(5, 3), 18);  // odd column: the second buffer half
 }

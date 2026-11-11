@@ -237,7 +237,7 @@ void stedc_merge_step(Queue& ctx,
                 const auto poles = device::vec(eigenvalues.batch_item(bid));
                 const auto Qn = device::mat(Q_bid);
                 device::for_each_owned_2d<device::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
-                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::sync<device::Scope::Group>(ex, device::Mem::Global);
                 device::for_each_owned(ex, n, [&](int k) {
                     auto dview = Q_bid(Slice{}, k);
                     // info_report is an atomic fetch_max: exactly the "did ANY root
@@ -254,7 +254,7 @@ void stedc_merge_step(Queue& ctx,
                                             1);
                     }
                 });
-                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::sync<device::Scope::Group>(ex, device::Mem::Global);
             });
         });
 

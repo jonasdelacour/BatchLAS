@@ -26,7 +26,8 @@ string and character literals are masked), except where a rule names comments. S
   R6  `[<r>_]detail::is_{reg,cta,blocked}_v`, `ormqr_is_blocked_v` -> `tier::is_*_v`; the per-op
       definitions are deleted (tier.hh holds the one copy; sygst's bounded ones were renamed by R5).
   R7  file moves (MOVES), test target renames (TEST_RENAMES), the doc slug and heading renames.
-  R8  tag and enum renames (TAG_RENAMES): plan section 2, C10. The table is the R-d step's to complete.
+  R8  tag and enum renames (TAG_RENAMES, MODE_COMPARE): plan section 2, C10 (WP R-d); the enum
+      definitions and the parameters that change kind (class -> enum) were edited by hand.
 Files that are data about other code (snapshots, results, hash data) are never touched.
 Exit codes: 0 done (dry run or apply), 1 a rule reported a site it cannot rewrite, 2 usage.
 Delete together with scripts/v22_wp2_rewrite.py once #244 has rebased (plan decision 19).
@@ -414,24 +415,70 @@ def r7(rel, text):
     return text, total, []
 
 
-# R8: plan section 2 C10 (decision D2). Code-only, `<old>` -> `<new>`; the R-d step completes it
-# and runs the collision check (a new name already defined in its target namespace) first.
+# R8: plan section 2 C10 (decision D2). Mode tags become enums (Side, Direct, Refl, PackOrder, Axis,
+# Storage, DiagFill, Scope); policy tags move into alg with self-describing names (none of the new
+# alg names was defined before: the collision check of the R-d step); reduction operators move to
+# reduce_op. Applied to code, comments and literals (each pattern is a qualified spelling), and to
+# Markdown. tri_diag stays a policy (alg::UnitDiag, Div, Recip, RealDiv): its Diag-enum form needs
+# the two trsv overload sets merged first (D7). The enum definitions and the template parameters
+# that change kind (class -> enum) are edited by hand; MODE_COMPARE rewrites their is_same_v tests.
 TAG_RENAMES = (
-    (r"\bconv::Phase\b", "alg::Phase"),
-    (r"\brot_conv::Transposed\b", "alg::RotTransposed"),
-    (r"\bbcast_policy::Slm\b", "alg::BcastSlm"),
-    (r"\btie::Lowest\b", "alg::TieLowest"),
-    (r"\btie::Highest\b", "alg::TieHighest"),
+    (r"(?<![\w:])(?:(?:::)?batchlas::)?device::alpha_side::(Left|Right)\b", r"batchlas::Side::\1"),
+    (r"\balpha_side::(Left|Right)\b", r"Side::\1"),
+    (r"\bdir::(Forward|Backward)\b", r"Direct::\1"),
+    (r"\brefl::(QR|QL)\b", r"Refl::\1"),
+    (r"\border::(ByCols|ByRows)\b", r"PackOrder::\1"),
+    (r"\baxis::(Rows|Cols|Both)\b", r"Axis::\1"),
+    (r"\bstorage::(Full|Band)\b", r"Storage::\1"),
+    (r"\b(?:diag|unit)_fill::(Keep|Real|Unit|Zero)\b", r"DiagFill::\1"),
+    (r"\btri_diag::Unit\b", "alg::UnitDiag"),
+    (r"\btri_diag::Real\b", "alg::RealDiv"),
+    (r"\btri_diag::(Div|Recip)\b", r"alg::\1"),
+    (r"\bscope::Part\b", "Scope::Own"),
+    (r"\bscope::(Sub|Group)\b", r"Scope::\1"),
+    (r"\bScope::Auto\b", "Scope::Own"),
+    (r"\bconv::Lapack\b", "alg::LarfgLapack"),
+    (r"\bconv::(Phase|RealBeta)\b", r"alg::\1"),
+    (r"\brot_conv::(Lapack|Transposed|Reflector2)\b", r"alg::Rot\1"),
+    (r"\blartg_alg::(Exact|Fast)\b", r"alg::Lartg\1"),
+    (r"\blarf_form::(ScaleW|ScaleV)\b", r"alg::\1"),
+    (r"\bbcast_policy::(Shuffle|Slm)\b", r"alg::Bcast\1"),
+    (r"\bloads::One\b", "alg::OneLoad"),
+    (r"\bloads::Two\b", "alg::TwoLoads"),
+    (r"\bunroll::(Default|None|Count|Full)\b", r"alg::Unroll\1"),
+    (r"\bloop::(Lockstep|Diverge)\b", r"alg::\1"),
+    (r"\bedge::(None|Guard|ZeroPad)\b", r"alg::Edge\1"),
+    (r"\bkey::(Abs1|Abs|Real)\b", r"alg::Key\1"),
+    (r"\btie::(Lowest|Highest)\b", r"alg::Tie\1"),
+    (r"\bnan::(First|Skip|Propagate)\b", r"alg::Nan\1"),
+    (r"\bbfly::(Down|Asc)\b", r"alg::Bfly\1"),
+    (r"\bbfly::inline_body\b", "detail::butterfly_inline"),
+    (r"\bws::Space\b", "WsSpace"),
+    (r"\bws::Slot\b", "WsSlot"),
+    (r"\bop::(ReduceN|Reduce|FMax|FMin)\b", r"reduce_op::\1"),
+)
+MODE_ENUM = r"((?:(?:::)?batchlas::)?(?:device::)?(?:Side|Direct|Refl|PackOrder|Axis|Storage|DiagFill)::\w+)"
+MODE_COMPARE = (
+    (r"!\s*std::is_same_v<\s*(\w+)\s*,\s*" + MODE_ENUM + r"\s*>", r"\1 != \2"),
+    (r"std::is_same_v<\s*(\w+)\s*,\s*" + MODE_ENUM + r"\s*>", r"\1 == \2"),
 )
 
 
 def r8(rel, text):
-    if not rel.endswith(CXX_EXT):
+    if not rel.endswith(CXX_EXT + (".md",)):
         return text, 0, []
     total = 0
+    kinds = ("code", "comment", "literal")
     for rx, rep in TAG_RENAMES:
-        text, n = sub_kinds(text, re.compile(rx), rep)
+        if rel.endswith(".md"):
+            text, n = re.subn(rx, rep, text)
+        else:
+            text, n = sub_kinds(text, re.compile(rx), rep, kinds)
         total += n
+    if rel.endswith(CXX_EXT):
+        for rx, rep in MODE_COMPARE:
+            text, n = sub_kinds(text, re.compile(rx), rep)
+            total += n
     return text, total, []
 
 

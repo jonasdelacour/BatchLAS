@@ -17,15 +17,13 @@
 
 namespace batchlas::device {
 
-namespace tie {
-struct Lowest {};
-struct Highest {};
-}  // namespace tie
-namespace nan {
-struct First {};
-struct Skip {};
-struct Propagate {};
-}  // namespace nan
+namespace alg {
+struct TieLowest {};
+struct TieHighest {};
+struct NanFirst {};
+struct NanSkip {};
+struct NanPropagate {};
+}  // namespace alg
 
 // {index, value} of a maximum; index < 0 is "no candidate" (an item that owned nothing).
 template <class R> struct ArgMax {
@@ -73,17 +71,17 @@ template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_down(const Part&
 
 // xor butterfly over the masks Lo, 2 Lo, .., Hi / 2 (powers of two): every lane of each aligned
 // Hi-lane block ends with op over the Hi / Lo values whose lane agrees with it outside [Lo, Hi).
-// Order bfly::Down applies masks Hi/2 .. Lo, bfly::Asc Lo .. Hi/2 (another evaluation order,
+// Order alg::BflyDown applies masks Hi/2 .. Lo, alg::BflyAsc Lo .. Hi/2 (another evaluation order,
 // so a strict port names its hand kernel's). Op is called op(mine, theirs) and must be
 // associative; for a commutative op every lane gets the identical value.
-// bfly::inline_body is the same body always_inline, for an op that replaces an always_inline hand
-// butterfly (inline policy, core.hh); butterfly forwards to it.
-namespace bfly {
-template <int Lo, int Hi, class Order = Down, class Part, class T, class Op>
-BATCHLAS_DEVICE_INLINE T inline_body(const Part& part, T v, Op op) {
+// detail::butterfly_inline is the same body always_inline, for an op that replaces an always_inline
+// hand butterfly (inline policy, core.hh); butterfly forwards to it.
+namespace detail {
+template <int Lo, int Hi, class Order = alg::BflyDown, class Part, class T, class Op>
+BATCHLAS_DEVICE_INLINE T butterfly_inline(const Part& part, T v, Op op) {
     static_assert(detail::is_pow2(Lo) && detail::is_pow2(Hi) && Lo <= Hi, "butterfly: Lo <= Hi, powers of two");
-    static_assert(std::is_same_v<Order, bfly::Down> || std::is_same_v<Order, bfly::Asc>, "butterfly: bfly::Down or bfly::Asc");
-    if constexpr (std::is_same_v<Order, bfly::Down>) {
+    static_assert(std::is_same_v<Order, alg::BflyDown> || std::is_same_v<Order, alg::BflyAsc>, "butterfly: alg::BflyDown or alg::BflyAsc");
+    if constexpr (std::is_same_v<Order, alg::BflyDown>) {
 #pragma unroll
         for (int m = Hi / 2; m >= Lo; m >>= 1) v = op(v, shuffle_xor(part, v, static_cast<std::uint32_t>(m)));
     } else {
@@ -92,18 +90,18 @@ BATCHLAS_DEVICE_INLINE T inline_body(const Part& part, T v, Op op) {
     }
     return v;
 }
-}  // namespace bfly
-template <int Lo, int Hi, class Order = bfly::Down, class Part, class T, class Op>
+}  // namespace detail
+template <int Lo, int Hi, class Order = alg::BflyDown, class Part, class T, class Op>
 BATCHLAS_DEVICE_HELPER T butterfly(const Part& part, T v, Op op) {
-    return bfly::inline_body<Lo, Hi, Order>(part, v, op);
+    return detail::butterfly_inline<Lo, Hi, Order>(part, v, op);
 }
 // The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2),
 // lo >= 1. always_inline, unsigned masks: the hand form it replaced (plain inline, cdouble
 // geqr2 resident: +4 REG).
-template <class Order = bfly::Down, class Part, class T, class Op>
+template <class Order = alg::BflyDown, class Part, class T, class Op>
 BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
     const auto ulo = static_cast<std::uint32_t>(lo), uhi = static_cast<std::uint32_t>(hi);
-    if constexpr (std::is_same_v<Order, bfly::Down>) {
+    if constexpr (std::is_same_v<Order, alg::BflyDown>) {
         for (std::uint32_t m = uhi / 2; m >= ulo; m >>= 1) v = op(v, shuffle_xor(part, v, m));
     } else {
         for (std::uint32_t m = ulo; m < uhi; m <<= 1) v = op(v, shuffle_xor(part, v, m));
@@ -166,20 +164,20 @@ template <int K, class Ex, class X> BATCHLAS_DEVICE_INLINE auto reduce_scatter(c
 }
 
 // The better of two ArgMax candidates under one tie and NaN rule (the merge of every argmax
-// reduction): an empty candidate (index < 0) loses; nan::First: a NaN value wins and among
-// NaNs the lower index; nan::Skip: a NaN value never beats a number; otherwise the larger value,
-// equal values by Tie (tie::Lowest: lower index, tie::Highest: higher index). Commutative and
+// reduction): an empty candidate (index < 0) loses; alg::NanFirst: a NaN value wins and among
+// NaNs the lower index; alg::NanSkip: a NaN value never beats a number; otherwise the larger value,
+// equal values by Tie (alg::TieLowest: lower index, alg::TieHighest: higher index). Commutative and
 // associative, so every butterfly order gives the same pair.
-template <class Tie = tie::Lowest, class NaN = nan::First, class R>
+template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class R>
 BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b) {
-    static_assert(std::is_same_v<Tie, tie::Lowest> || std::is_same_v<Tie, tie::Highest>, "argmax_merge: tie::Lowest or tie::Highest");
-    static_assert(std::is_same_v<NaN, nan::First> || std::is_same_v<NaN, nan::Skip>, "argmax_merge: nan::First or nan::Skip");
-    constexpr bool low = std::is_same_v<Tie, tie::Lowest>;
+    static_assert(std::is_same_v<Tie, alg::TieLowest> || std::is_same_v<Tie, alg::TieHighest>, "argmax_merge: alg::TieLowest or alg::TieHighest");
+    static_assert(std::is_same_v<NaN, alg::NanFirst> || std::is_same_v<NaN, alg::NanSkip>, "argmax_merge: alg::NanFirst or alg::NanSkip");
+    constexpr bool low = std::is_same_v<Tie, alg::TieLowest>;
     if (b.index < 0) return a;
     if (a.index < 0) return b;
     const bool an = sycl::isnan(a.value), bn = sycl::isnan(b.value);
     if (an || bn) {
-        if constexpr (std::is_same_v<NaN, nan::First>) {
+        if constexpr (std::is_same_v<NaN, alg::NanFirst>) {
             if (an && bn) return a.index <= b.index ? a : b;
             return an ? a : b;
         } else {
@@ -192,14 +190,14 @@ BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R
     else return a.index >= b.index ? a : b;
 }
 
-template <class Tie = tie::Lowest, class NaN = nan::First> struct ArgMaxMerge {
+template <class Tie = alg::TieLowest, class NaN = alg::NanFirst> struct ArgMaxMerge {
     template <class R> BATCHLAS_DEVICE_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
         return argmax_merge<Tie, NaN>(a, b);
     }
 };
 
 // op over every item of a WorkGroup<WG, SG> (any op, any T), uniform result: a butterfly per
-// sub-group, team leaders write Scratch (scratch_elements<op::Reduce, Ex, T>() slots), one
+// sub-group, team leaders write Scratch (scratch_elements<reduce_op::Reduce, Ex, T>() slots), one
 // barrier, then every item folds the nteams entries in team order. trailing_barrier = false
 // skips the barrier that lets the caller reuse the scratch at once (pass it when the next
 // write to the scratch is behind another barrier anyway). Sub-scope executors (SubGroup,

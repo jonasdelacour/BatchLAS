@@ -65,10 +65,10 @@ template <class Tau> BATCHLAS_DEVICE_INLINE auto larfb_tau_base(const Tau& tau) 
 /// global Mat or device::item.
 /// @param work  larfb_work_elems<SD>(m, n, k) elements of global memory (W1 then W2, packed)
 /// @param smem  the work-group's l3::Smem<Cfg>
-template <Side SD, Transpose TR, class Direct, class Cfg, class Ex, class MV, class MT, class MC, class W>
+template <Side SD, Transpose TR, Direct DR, class Cfg, class Ex, class MV, class MT, class MC, class W>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const MC& C, W* work, l3::Smem<Cfg> smem) {
-    static_assert(std::is_same_v<Direct, dir::Forward>, "larfb: Direct = dir::Forward (larft's only direction)");
+    static_assert(DR == Direct::Forward, "larfb: Direct::Forward (larft's only direction)");
     using T = typename Cfg::value_type;
     static_assert(std::is_same_v<std::remove_cv_t<W>, T>, "larfb: work holds the Cfg's scalar type");
     static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "larfb: complex Trans is not H^H; use ConjTrans");
@@ -100,12 +100,12 @@ BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& 
     const int mv = a.m - i0;
     const auto panel = mat(a.p + i0 + static_cast<std::ptrdiff_t>(i0) * a.ld, mv, ib, a.ld);
     const auto v = mat(vbuf, mv, ib, mv);
-    lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, edge::None, diag_fill::Unit>(ex, panel, v);
+    lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, alg::EdgeNone, DiagFill::Unit>(ex, panel, v);
     laset<Part::StrictUpper>(ex, Zero{}, Zero{}, v);
     ex.barrier(Mem::Global);  // V complete before larft's gemv reads its columns
     larft(ex, v, mat(tbuf, ib, ib, ldt), vec(tau + i0, ib));
     ex.barrier(Mem::Global);  // T complete before the trmm stages it
-    larfb<SD, TR, dir::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, work, smem);
+    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, work, smem);
 }
 
 }  // namespace batchlas::device

@@ -376,18 +376,18 @@ constexpr int leaf_wg(int n) {
 // The Cta tier's local memory: the tile at an ODD ld (the row interchange walks a row at
 // stride ld; an even ld puts the whole walk in one bank), then the pivot-search slots.
 template <class T> struct GetrfCtaPlan {
-    ws::Slot<T> tile;
-    ws::Slot<real_t<T>> vs;
-    ws::Slot<int> is;
+    WsSlot<T> tile;
+    WsSlot<real_t<T>> vs;
+    WsSlot<int> is;
     int ld;
     WorkspaceSize size;
 };
 template <class T> constexpr GetrfCtaPlan<T> getrf_cta_plan(int m, int n) {
     Plan p;
     const int ld = m | 1;
-    const auto tile = p.take<T>(ws::Space::Local, static_cast<std::size_t>(ld) * static_cast<std::size_t>(n));
-    const auto vs = p.take<real_t<T>>(ws::Space::Local, kRedSlots);
-    const auto is = p.take<int>(ws::Space::Local, kRedSlots);
+    const auto tile = p.take<T>(WsSpace::Local, static_cast<std::size_t>(ld) * static_cast<std::size_t>(n));
+    const auto vs = p.take<real_t<T>>(WsSpace::Local, kRedSlots);
+    const auto is = p.take<int>(WsSpace::Local, kRedSlots);
     return {tile, vs, is, ld, p.size()};
 }
 
@@ -412,15 +412,15 @@ using lu_blocked_cfg_t = std::conditional_t<l3::Config<typename Tier::alg_type>,
 // The LU family's Blocked local memory: the L3 stages, then getf2's pivot-search slots. No
 // global workspace (A is factored in place). lu_blocked_take extends a caller's plan (inv's).
 template <class T> struct LuBlockedPlan {
-    ws::Slot<T> smem;
-    ws::Slot<real_t<T>> vs;
-    ws::Slot<int> is;
+    WsSlot<T> smem;
+    WsSlot<real_t<T>> vs;
+    WsSlot<int> is;
     WorkspaceSize size;
 };
 template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_take(Plan& p) {
-    const auto smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(Cfg::smem_elems));
-    const auto vs = p.take<real_t<T>>(ws::Space::Local, kRedSlots);
-    const auto is = p.take<int>(ws::Space::Local, kRedSlots);
+    const auto smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(Cfg::smem_elems));
+    const auto vs = p.take<real_t<T>>(WsSpace::Local, kRedSlots);
+    const auto is = p.take<int>(WsSpace::Local, kRedSlots);
     return {smem, vs, is, p.size()};
 }
 template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_plan() {

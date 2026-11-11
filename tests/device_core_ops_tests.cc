@@ -581,7 +581,7 @@ TYPED_TEST(DeviceCoreOpsTest, LatrdStepComposesOnOneLayout) {
     T* u = this->dev.up(hu);
     T* w = this->dev.up(hw);
     T* o = this->dev.up(ho);
-    constexpr int kScr = device::scratch_elements<device::op::ReduceN<2>, device::WorkGroup<WG>, T>();
+    constexpr int kScr = device::scratch_elements<device::reduce_op::ReduceN<2>, device::WorkGroup<WG>, T>();
     this->dev.template run<WG>(kBatch, sizeof(T) * (2 * n + kScr), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<WG> ex{it};
@@ -860,9 +860,9 @@ template <int WG, class MakeEx> void ownership_case(Dev& dev, MakeEx make_ex, in
         const int me = ex.ex.lid() + 1;
         auto mark = [&](int* p) { sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device>(*p).fetch_add(me); };
         device::for_each_owned(ex.ex, device::Range{lo, hi}, [&](int i) { mark(ob + i); });
-        device::for_each_owned<device::unroll::None>(ex.ex, device::Range{lo, hi}, [&](int i) { mark(ob + n + i); });
-        device::for_each_owned<device::unroll::Count<3>>(ex.ex, device::Range{lo, hi}, [&](int i) { mark(ob + 2 * n + i); });
-        device::for_each_owned<device::unroll::Count<2>>(ex.ex, hi, [&](int i) { mark(ob + 3 * n + i); });  // 0-based
+        device::for_each_owned<device::alg::UnrollNone>(ex.ex, device::Range{lo, hi}, [&](int i) { mark(ob + n + i); });
+        device::for_each_owned<device::alg::UnrollCount<3>>(ex.ex, device::Range{lo, hi}, [&](int i) { mark(ob + 2 * n + i); });
+        device::for_each_owned<device::alg::UnrollCount<2>>(ex.ex, hi, [&](int i) { mark(ob + 3 * n + i); });  // 0-based
         int* o2 = ob + n * kU;
         device::for_each_owned_2d<device::alg::Flat, std::ptrdiff_t>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + r + c * m2); });
         device::for_each_owned_2d<device::alg::DivMod>(ex.ex, m2, n2, [&](int r, int c) { mark(o2 + m2 * n2 + r + c * m2); });
@@ -947,7 +947,7 @@ template <class T, int P, class O> void teams_order_case(Dev& dev) {
                 for (int l = 0; l < P; ++l) r2[l] = re[l] + re[l ^ msk], i2[l] = im[l] + im[l ^ msk];
                 re = r2, im = i2;
             };
-            if constexpr (std::is_same_v<O, device::bfly::Down>)
+            if constexpr (std::is_same_v<O, device::alg::BflyDown>)
                 for (int msk = P / 2; msk >= 1; msk >>= 1) step(msk);
             else
                 for (int msk = 1; msk < P; msk <<= 1) step(msk);
@@ -956,15 +956,15 @@ template <class T, int P, class O> void teams_order_case(Dev& dev) {
             else want = re[0];
             bad += !same_bits(got[std::size_t(g) * teams + t], want);
         }
-    EXPECT_EQ(bad, 0) << "P = " << P << (std::is_same_v<O, device::bfly::Down> ? " Down" : " Asc");
+    EXPECT_EQ(bad, 0) << "P = " << P << (std::is_same_v<O, device::alg::BflyDown> ? " Down" : " Asc");
 }
 
 TYPED_TEST(DeviceCoreOpsTest, TeamsOfPLanesReduceInTheNamedButterflyOrder) {
     using T = TypeParam;
-    teams_order_case<T, 8, device::bfly::Down>(this->dev);
-    teams_order_case<T, 8, device::bfly::Asc>(this->dev);
-    teams_order_case<T, 16, device::bfly::Asc>(this->dev);
-    teams_order_case<T, 32, device::bfly::Asc>(this->dev);
+    teams_order_case<T, 8, device::alg::BflyDown>(this->dev);
+    teams_order_case<T, 8, device::alg::BflyAsc>(this->dev);
+    teams_order_case<T, 16, device::alg::BflyAsc>(this->dev);
+    teams_order_case<T, 32, device::alg::BflyAsc>(this->dev);
 }
 
 // RtGroup: bcast from a runtime source over the work-group and over the sub-group; sync orders
@@ -1376,12 +1376,12 @@ TYPED_TEST(DeviceCoreOpsTest, ScalarLapackMatchesReferenceLapack) {
             if (s > R(0)) ssq += (A::re(xs[k]) / s) * (A::re(xs[k]) / s) + (A::im(xs[k]) / s) * (A::im(xs[k]) / s);
             nrm2 += A::re(xs[k]) * A::re(xs[k]) + A::im(xs[k]) * A::im(xs[k]);
         }
-        const auto hl = device::larfg_scalars<device::conv::Lapack>(f, device::ScaledSsq<R>{s, ssq});
+        const auto hl = device::larfg_scalars<device::alg::LarfgLapack>(f, device::ScaledSsq<R>{s, ssq});
         ob[3] = hl.tau, ob[4] = hl.beta;
         for (int k = 0; k < kx; ++k) ob[5 + k] = hl.identity ? xs[k] : (hl.use_mul ? device::FmaArith<T>::mul(xs[k], hl.scale) : device::FmaArith<T>::div(xs[k], hl.scale));
         const R xn = s * sycl::sqrt(ssq);
-        const auto hr = device::larfg_scalars<device::conv::RealBeta>(f, xn, kx + 1);
-        const auto hp = device::larfg_scalars<device::conv::Phase>(f, xn, kx + 1);
+        const auto hr = device::larfg_scalars<device::alg::RealBeta>(f, xn, kx + 1);
+        const auto hp = device::larfg_scalars<device::alg::Phase>(f, xn, kx + 1);
         ob[10] = hr.tau, ob[11] = hr.beta, ob[12] = hr.scale, ob[13] = hp.tau, ob[14] = hp.beta, ob[15] = hp.scale;
         if constexpr (!is_cplx<T>) {
             const T h3 = A::add(f, g);
@@ -1511,11 +1511,11 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         const R bl = device::nrm2<device::alg::Blue>(ex, xv), un = device::nrm2<device::alg::Unscaled>(ex, yv), sc = device::nrm2<device::alg::Scaled>(ex, xv);
         const int ff = device::find_first(ex, xv, [](const T& v) { return device::abs1(v) > real_of<T>(0.99); });
         const auto alo = device::argmax(ex, xv);
-        const auto ahi = device::argmax<device::tie::Highest, device::nan::Skip>(ex, xv);
-        const auto ask = device::argmax<device::tie::Lowest, device::nan::Skip>(ex, xv);
-        const auto aab = device::argmax<device::tie::Lowest, device::nan::Skip, device::key::Abs>(ex, yv);
-        const auto are = device::argmax<device::tie::Lowest, device::nan::Skip, device::key::Real>(ex, yv);
-        const R ams = device::amax_by<device::nan::Skip>(ex, xv);
+        const auto ahi = device::argmax<device::alg::TieHighest, device::alg::NanSkip>(ex, xv);
+        const auto ask = device::argmax<device::alg::TieLowest, device::alg::NanSkip>(ex, xv);
+        const auto aab = device::argmax<device::alg::TieLowest, device::alg::NanSkip, device::alg::KeyAbs>(ex, yv);
+        const auto are = device::argmax<device::alg::TieLowest, device::alg::NanSkip, device::alg::KeyReal>(ex, yv);
+        const R ams = device::amax_by<device::alg::NanSkip>(ex, xv);
         const auto all = device::allreduce(ex, std::array<R, 2>{R(ex.lid() + 1), R(1)});
         if (ex.leader()) {
             T* ob = o + std::ptrdiff_t(b) * kR2;
@@ -1572,8 +1572,8 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         EXPECT_EQ(int(std::real(r[kArgLo])), alo) << where << " argmax Lowest/First";
         EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " argmax Highest/Skip (the tie of item 1)";
         EXPECT_EQ(int(std::real(r[kArgSkip])), ask) << where << " argmax Skip";
-        EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " argmax key::Abs";
-        EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " argmax key::Real";
+        EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " argmax alg::KeyAbs";
+        EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " argmax alg::KeyReal";
         EXPECT_EQ(std::real(r[kAmaxSkip]), R(amax)) << where << " amax_by<Skip> is exact";
         const int w = make_ex.width;
         EXPECT_EQ(std::real(r[kAll0]), R(w * (w + 1) / 2)) << where << " allreduce[0]";
@@ -1604,7 +1604,7 @@ TYPED_TEST(DeviceCoreOpsTest, PackedExchangeHonoursTheSubGroupContract) {
     T* y = this->dev.up(hy);
     std::vector<T> ho(std::size_t(kBatch) * 5, T(0));
     T* o = this->dev.up(ho);
-    constexpr int slots = device::scratch_elements<device::op::ReduceN<3>, device::WorkGroup<WG>, T>();
+    constexpr int slots = device::scratch_elements<device::reduce_op::ReduceN<3>, device::WorkGroup<WG>, T>();
     this->dev.q()
         .submit([&](sycl::handler& h) {
             sycl::local_accessor<T, 1> lm(sycl::range<1>(slots), h);
@@ -1675,7 +1675,7 @@ TYPED_TEST(DeviceCoreOpsTest, LacpyLasetMirrorLaswpMatchAHostReplay) {
         device::mirror<Uplo::Lower, true>(ex, b3);
         const auto pv = device::vec(piv, 7);
         device::laswp(ex, b4, pv, 0, 7);
-        device::laswp<device::dir::Backward>(ex, b4.sub(0, 0, m, 5), pv, 2, 6);
+        device::laswp<device::Direct::Backward>(ex, b4.sub(0, 0, m, 5), pv, 2, 6);
     });
     const auto got = this->dev.down(bb, hb.size());
     int bad[5] = {0, 0, 0, 0, 0};
@@ -2030,9 +2030,9 @@ template <class T, bool UseSlm> void potf2_case(Dev& dev) {
         std::int32_t r;
         if constexpr (UseSlm) {
             r = device::detail::potf2_reg<D, N, N, device::detail::OrderGuard::Skip>(
-                ex, rA, n, true, device::bcast_policy::Slm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
+                ex, rA, n, true, device::alg::BcastSlm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
         } else {
-            r = device::detail::potf2_reg<D, N, N>(ex, rA, n, true, device::bcast_policy::Shuffle{});
+            r = device::detail::potf2_reg<D, N, N>(ex, rA, n, true, device::alg::BcastShuffle{});
         }
         device::detail::reg_store_lower<D, N>(rA.v, Ab, ld, lane, lane < n);
         if (ex.leader()) info[b] = r;
@@ -2070,8 +2070,8 @@ TYPED_TEST(DeviceCoreOpsTest, Potf2LowerShuffleAndSlmBroadcasts) {
 }
 
 // Compile-time facts: scratch sizes are constexpr; executors carry their sizes as types.
-static_assert(device::scratch_elements<device::op::ReduceN<3>, device::WorkGroup<256>, double>() == 24);
-static_assert(device::scratch_elements<device::op::Reduce, device::SubGroup<32>, float>() == 0);
+static_assert(device::scratch_elements<device::reduce_op::ReduceN<3>, device::WorkGroup<256>, double>() == 24);
+static_assert(device::scratch_elements<device::reduce_op::Reduce, device::SubGroup<32>, float>() == 0);
 static_assert(device::WorkGroup<256>::nteams == 8 && device::Teams<256>::size == 32 && device::Partition<8>::size == 8);
 static_assert(std::is_same_v<device::tag_t<float>, device::Scalar<float>> && std::is_same_v<device::tag_t<device::Zero>, device::Zero>);
 

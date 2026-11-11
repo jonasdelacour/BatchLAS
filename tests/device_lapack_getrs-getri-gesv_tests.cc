@@ -288,9 +288,9 @@ TEST(DeviceLapackLuPerm, LaswpIndexIsLaswpOfTheIdentity) {
         const auto ipiv = device::vec(pv + std::size_t(b) * n, n);
         int* ob = o + std::size_t(b) * kOut;
         device::for_each_owned(ex, n, [&](int i) {
-            ob[i] = device::laswp_index<device::dir::Forward>(ipiv, 0, n, i);
-            ob[n + i] = device::laswp_index<device::dir::Backward>(ipiv, 0, n, i);
-            ob[2 * n + i] = device::laswp_index<device::dir::Forward>(ipiv, k0, k1, i);
+            ob[i] = device::laswp_index<device::Direct::Forward>(ipiv, 0, n, i);
+            ob[n + i] = device::laswp_index<device::Direct::Backward>(ipiv, 0, n, i);
+            ob[2 * n + i] = device::laswp_index<device::Direct::Forward>(ipiv, k0, k1, i);
         });
     });
     const auto h = dev.down(o, ho.size());

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // stedc-private device helpers (detail uniform, lapack/laed4.hh; fold, lapack/laed2.hh) and the core ops that
-// replaced its copies (prod_scaled, sqrt_scaled, the work-group sync<scope::Group>(ex, Mem::Global)
+// replaced its copies (prod_scaled, sqrt_scaled, the work-group sync<Scope::Group>(ex, Mem::Global)
 // stedc uses as its barrier) against host references. The shared ops the stedc kernels use
 // (RtGroup, nrm2<alg::Blue>, rot, allreduce, for_each_owned_2d, ...) are covered by
 // device_core_ops_tests. Executors: RtGroup at a non-power-of-two width (96) and at the 1024
@@ -325,7 +325,7 @@ TEST(DeviceLapackStedcHelpers, UniformAndGroupSync) {
                 const int src = (lid + 33) % L;
                 buf[lid] = lid + 1 + b;
                 gbuf[std::ptrdiff_t(b) * L + lid] = 2 * lid + b;
-                device::sync<device::scope::Group>(ex, device::Mem::Global);
+                device::sync<device::Scope::Group>(ex, device::Mem::Global);
                 syn[std::ptrdiff_t(b) * L + lid] = buf[src];
                 gsyn[std::ptrdiff_t(b) * L + lid] = gbuf[std::ptrdiff_t(b) * L + src];
             }

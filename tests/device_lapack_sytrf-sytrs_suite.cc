@@ -151,7 +151,7 @@ TYPED_TEST(DeviceLapackSytrfTest, RevMatRevVecLowerCopy) {
         const auto G = device::detail::rev_mat(gp + b * std::ptrdiff_t(pg), lg, n, true);
         const auto S = device::detail::rev_mat(sp + b * std::ptrdiff_t(ps), ls, n, false);
         device::lacpy<device::Part::Lower, Transpose::NoTrans, device::alg::DivMod>(g, G, S);
-        device::sync<device::scope::Group>(g, device::Mem::Global);
+        device::sync<device::Scope::Group>(g, device::Mem::Global);
         const device::detail::RevVec<T> v{vp + b * n, n, true};
         device::for_each_owned(g, n, [&](int i) { v(i) = S(i, 0); });
     });

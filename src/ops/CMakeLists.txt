@@ -45,7 +45,7 @@ set(EXTENSIONS_CTA_SOURCES
     geqrf/kernels/geqrf_blocked.cc
     # WP6/P1, the register-resident TINY tier for square n <= 32. HERE because the rule
     # "a source must sit with the sources whose device symbols it calls" places
-    # it: geqrf_tiny.cc reuses geqrf_cta_device.hh's xLARFG (v2::larfg_scalars<conv::Lapack>)
+    # it: geqrf_tiny.cc reuses geqrf_cta_device.hh's xLARFG (device::larfg_scalars<alg::LarfgLapack>)
     # verbatim rather than re-deriving the LAPACK real-beta tau convention, so it shares
     # a device-code cluster with the pair above. It is also GPU-only, which is what this
     # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt) wants.

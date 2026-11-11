@@ -37,7 +37,7 @@ BATCHLAS_DEVICE_INLINE std::int64_t syevx_select(const Ex& ex, const L& lam, boo
     copy(ex, flip(lam.tail(f0).head(write), reverse), w.head(write));
     if (want_v) {
         const int n = q.rows();
-        lacpy<Part::Full, Transpose::NoTrans, alg::Flat>(ex, flip<axis::Cols>(q.sub(0, f0, n, write), reverse),
+        lacpy<Part::Full, Transpose::NoTrans, alg::Flat>(ex, flip<Axis::Cols>(q.sub(0, f0, n, write), reverse),
                                                          v.sub(0, 0, n, write));
         // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
         laset<Part::Full, alg::Flat>(ex, Zero{}, Zero{}, v.sub(0, write, n, v.cols() - write));

@@ -50,23 +50,23 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> con
 // The one workspace plan (buffer_size and the carve). Local: the Level 3 stages, potrf's tile or
 // the Cta coefficients h (k); global: Blocked's H (k x NB, ld k) and h (NB), or the Gram k x k.
 template <class T> struct OrthoLayout {
-    ws::Slot<T> smem, h, hb, gram;
-    ws::Slot<std::byte> chol;
+    WsSlot<T> smem, h, hb, gram;
+    WsSlot<std::byte> chol;
     WorkspaceSize size;
 };
 template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr OrthoLayout<T> ortho_layout(int k) {
     const std::size_t uk = static_cast<std::size_t>(k);
     ::batchlas::device::Plan p;
     OrthoLayout<T> l{};
-    if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
     if constexpr (is_chol_v<Algo>) {
-        l.chol = p.take<std::byte>(ws::Space::Local, potrf_buffer_size<Uplo::Lower, tier::Cta<Tier::n_max>, T>(k).local_bytes);
-        l.gram = p.take<T>(ws::Space::Global, uk * uk);
+        l.chol = p.take<std::byte>(WsSpace::Local, potrf_buffer_size<Uplo::Lower, tier::Cta<Tier::n_max>, T>(k).local_bytes);
+        l.gram = p.take<T>(WsSpace::Global, uk * uk);
     } else if constexpr (tier::is_cta_v<Tier>) {
-        l.h = p.take<T>(ws::Space::Local, uk);
+        l.h = p.take<T>(WsSpace::Local, uk);
     } else {
-        l.hb = p.take<T>(ws::Space::Global, uk * static_cast<std::size_t>(Tier::nb));
-        l.h = p.take<T>(ws::Space::Global, static_cast<std::size_t>(Tier::nb));
+        l.hb = p.take<T>(WsSpace::Global, uk * static_cast<std::size_t>(Tier::nb));
+        l.h = p.take<T>(WsSpace::Global, static_cast<std::size_t>(Tier::nb));
     }
     l.size = p.size();
     return l;

@@ -23,12 +23,12 @@ struct orgqr {
 
 namespace detail {
 template <class T> struct OrgqrSlots {
-    ws::Slot<T> q;
+    WsSlot<T> q;
     detail::OrmqrSlots<T> apply;
 };
 template <int NB, class Cfg, class T> constexpr OrgqrSlots<T> orgqr_take(Plan& p, int m, int n) {
     OrgqrSlots<T> s{};
-    s.q = p.take<T>(ws::Space::Global, static_cast<std::size_t>(m > 0 ? m : 0) * static_cast<std::size_t>(n > 0 ? n : 0));
+    s.q = p.take<T>(WsSpace::Global, static_cast<std::size_t>(m > 0 ? m : 0) * static_cast<std::size_t>(n > 0 ? n : 0));
     s.apply = detail::ormqr_take<Side::Left, NB, Cfg, T>(p, m, n);
     return s;
 }

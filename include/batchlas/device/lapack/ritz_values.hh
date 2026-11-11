@@ -22,17 +22,17 @@ namespace detail {
 // The one workspace plan of the Blocked form (buffer_size and the carve): the Level 3 stages
 // (local) and A V(:, blk), n x min(k, NB) at ld n (global).
 template <class T> struct RitzValuesBlockedPlan {
-    ws::Slot<T> smem;
-    ws::Slot<T> av;
+    WsSlot<T> smem;
+    WsSlot<T> av;
     WorkspaceSize size;
     template <class Tier, class Cfg> static constexpr RitzValuesBlockedPlan make(int n, int k) {
         static_assert(Tier::n_max < 0, "ritz_values: the workspace form takes tier::Blocked<NB> (the tier-free form needs no workspace)");
         static_assert(l3::Config<Cfg>, "ritz_values: tier::Blocked runs on the in-group gemm, Cfg is an l3::cfg preset");
         if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, T>, "ritz_values: Cfg::value_type is A's T");
         ::batchlas::device::Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
         const int nb = k < Tier::nb ? k : Tier::nb;
-        const auto av = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
+        const auto av = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
         return {s, av, p.size()};
     }
 };

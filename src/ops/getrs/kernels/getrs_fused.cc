@@ -252,7 +252,7 @@ Event fused_launch_notrans(Queue& ctx,
 
                 stage(ex, bm, y);
                 ex.barrier();
-                device::laswp<device::dir::Forward>(ex, y, ipiv, 0, n);  // F b: item c walks column c
+                device::laswp<device::Direct::Forward>(ex, y, ipiv, 0, n);  // F b: item c walks column c
                 ex.barrier();
 
                 // L y = F b, unit lower, forward
@@ -377,7 +377,7 @@ Event fused_launch_trans(Queue& ctx,
 
                 // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every transposition is
                 // its own inverse, so only the ORDER changes.
-                device::laswp<device::dir::Backward>(ex, y, ipiv, 0, n);
+                device::laswp<device::Direct::Backward>(ex, y, ipiv, 0, n);
                 ex.barrier();
 
                 stage(ex, y, bm);

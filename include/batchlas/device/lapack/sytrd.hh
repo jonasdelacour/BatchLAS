@@ -36,7 +36,7 @@ template <class Ops, class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE auto dot
     using Ar = arith_t<Ops, T>;
     const int i = ex.lid();
     const T p = (i >= 0 && i < x.size()) ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
-    return detail::scope_reduce<Scope::Auto>(ex, p);
+    return detail::scope_reduce<Scope::Own>(ex, p);
 }
 
 // y(r) := (A x)(r) * alpha with item r computing output row r (core gemv's RowOwner without
@@ -124,7 +124,7 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
         if (is_alpha) alpha = e;
         else x = e;
     }
-    const T taui = larfg<conv::Phase, Ops>(ex, m, ar, alpha, x, x_active);
+    const T taui = larfg<alg::Phase, Ops>(ex, m, ar, alpha, x, x_active);
     if (x_active) {  // both triangles: the block update reads the full block
         col(lane) = x;
         row(lane) = Ar::conj(x);
@@ -136,25 +136,25 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
         on_step(i, alpha, taui);
     }
     if (taui != Ar::zero()) {
-        copy(fx, unit_head<refl::QR, unit_fill::Keep>(col, ar), vm);
-        sync<scope::Part>(ex);
+        copy(fx, unit_head<Refl::QR, DiagFill::Keep>(col, ar), vm);
+        sync<Scope::Own>(ex);
         if (is_alpha) {  // LAPACK's temporary unit; the block ops read v, not the column
             col(ar) = Ar::one();
             row(ar) = Ar::one();
         }
-        sync<scope::Part>(ex);
+        sync<Scope::Own>(ex);
         detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
-        sync<scope::Part>(ex);
+        sync<Scope::Own>(ex);
         const T alpha2 = T(-0.5) * taui * detail::dotc<Ops>(fx, vm, wm);
         axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
-        sync<scope::Part>(ex);
+        sync<Scope::Own>(ex);
         detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
-        sync<scope::Part>(ex);
+        sync<Scope::Own>(ex);
         if (is_alpha) {
             col(ar) = alpha;
             row(ar) = Ar::conj(alpha);
         }
-        sync<scope::Part>(ex);
+        sync<Scope::Own>(ex);
     } else if constexpr (UL == Uplo::Upper) {
         if (is_alpha) row(ar) = Ar::conj(alpha);
     }
@@ -179,7 +179,7 @@ BATCHLAS_DEVICE_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, 
         for (int k = n - 1; k >= 1; --k) {  // annihilate A(0:k-2, k); alpha = A(k-1, k)
             detail::sytd2_step<UL, Ops>(ex, k - 1, k, k - 1, a.sub(0, 0, k, k), a.col(k).head(k), a.row(k).head(k), v, w,
                                               lane < k - 1, tau_lane, on_step);
-            sync<scope::Part>(ex);
+            sync<Scope::Own>(ex);
         }
     } else {
         for (int i = 0; i <= n - 2; ++i) {  // annihilate A(i+2:n-1, i); alpha = A(i+1, i) on item 0
@@ -271,10 +271,10 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
 // The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.
 template <int N, class T> struct sytrd_cta_plan {
     Plan plan{};
-    ws::Slot<T> a{}, v{}, w{};
+    WsSlot<T> a{}, v{}, w{};
     constexpr sytrd_cta_plan()
-        : a(plan.take<T>(ws::Space::Local, static_cast<std::size_t>(N) * N)), v(plan.take<T>(ws::Space::Local, N)),
-          w(plan.take<T>(ws::Space::Local, N)) {}
+        : a(plan.take<T>(WsSpace::Local, static_cast<std::size_t>(N) * N)), v(plan.take<T>(WsSpace::Local, N)),
+          w(plan.take<T>(WsSpace::Local, N)) {}
 };
 
 // ---- xLATRD, Lower: one work-group, A in global memory ------------------------------------------
@@ -434,11 +434,11 @@ template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 // (NB each) and the L3 stage in local memory. O(NB) local bytes, so any n fits.
 template <int NB, class T> struct sytrd_blocked_plan {
     Plan plan{};
-    ws::Slot<T> w{}, v{}, wc{}, vip{}, wip{}, smem{};
+    WsSlot<T> w{}, v{}, wc{}, vip{}, wip{}, smem{};
     constexpr explicit sytrd_blocked_plan(int n)
-        : w(plan.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<T>(ws::Space::Global, n)),
-          wc(plan.take<T>(ws::Space::Global, n)), vip(plan.take<T>(ws::Space::Local, NB)), wip(plan.take<T>(ws::Space::Local, NB)),
-          smem(plan.take<T>(ws::Space::Local, l3::smem_elems<blocked_cfg<T>>())) {}
+        : w(plan.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<T>(WsSpace::Global, n)),
+          wc(plan.take<T>(WsSpace::Global, n)), vip(plan.take<T>(WsSpace::Local, NB)), wip(plan.take<T>(WsSpace::Local, NB)),
+          smem(plan.take<T>(WsSpace::Local, l3::smem_elems<blocked_cfg<T>>())) {}
 };
 
 // xSYTRD UPLO = 'L' on one n x n matrix per work-group (the host sytrd_blocked's panel loop): per

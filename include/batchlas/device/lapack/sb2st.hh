@@ -64,7 +64,7 @@ template <int C, int WG = 32, int SG = 32> struct StridedTeams {
         else sycl::group_barrier(it.get_group());
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T team_reduce(T v, Op op = {}) const {
-        return butterfly<C, SG, bfly::Asc>(it.get_sub_group(), v, op);
+        return butterfly<C, SG, alg::BflyAsc>(it.get_sub_group(), v, op);
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
@@ -173,7 +173,7 @@ BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, cons
     const auto alpha = as_tag(alpha_);
     const auto beta = as_tag(beta_);
     const int m = a.rows(), n = a.cols();
-    for_each_team_owned<loop::Lockstep>(ex, m, [&](int r, bool live) BATCHLAS_DEVICE_BODY {
+    for_each_team_owned<alg::Lockstep>(ex, m, [&](int r, bool live) BATCHLAS_DEVICE_BODY {
         T acc = T(0);
         if (live) {
             for (int j = ex.lid(); j < n; j += Ex::size) acc += static_cast<T>(a(r, j)) * static_cast<T>(x(j));
@@ -192,7 +192,7 @@ template <class Ex, class Tau, class VP, class MC> BATCHLAS_DEVICE_INLINE void l
     detail::require_published<Ex, VP>();
     const auto& v = detail::unpub(vp);
     const int len = c.cols();
-    for_each_team_owned<loop::Lockstep>(ex, c.rows(), [&](int o, bool live) BATCHLAS_DEVICE_BODY {
+    for_each_team_owned<alg::Lockstep>(ex, c.rows(), [&](int o, bool live) BATCHLAS_DEVICE_BODY {
         T w = T(0);
         if (live) {
             for (int k = ex.lid(); k < len; k += Ex::size) w += static_cast<T>(c(o, k)) * static_cast<T>(v(k));
@@ -405,7 +405,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
         detail::hemv_band<Uplo::Lower>(rows, One{}, W, assume_published(v), Zero{}, w);
         sync(ex, Mem::Global);
 
-        const T kappa = dotc<Scope::Auto, arith::Native>(ex, v, w);
+        const T kappa = dotc<Scope::Own, arith::Native>(ex, v, w);
         const T coef = tau * ::batchlas::device::conj(tau) * kappa * T(Real(0.5));
         // The loop is written out: through for_each_owned ptxas unrolls it 4x (latch layout).
         for (int i = ex.lid(); i < m; i += Ex::size)
@@ -428,7 +428,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
     auto left_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
         if (r0 > r1 || c0 > c1) return;
         const auto v = assume_published(vec(vloc, r1 - r0 + 1));
-        larf<Side::Left, arith::Native, larf_form::ScaleW, loop::Lockstep>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
+        larf<Side::Left, arith::Native, alg::ScaleW, alg::Lockstep>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
         sync(ex, Mem::Global);
     };
 
@@ -441,7 +441,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
         const auto x = fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DEVICE_BODY { return A.get(r0 + 1 + k, col); });
         const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x));
         const T alpha = y(0);
-        const auto h = larfg_scalars<conv::Phase>(alpha, xnorm, m);
+        const auto h = larfg_scalars<alg::Phase>(alpha, xnorm, m);
 
         // v = (1; scale x), read before the column is overwritten below.
         if (ex.leader()) v(0) = T(1);
@@ -719,20 +719,20 @@ template <int P, bool M> inline constexpr bool is_sgp_v<Partition<P, M, SubGroup
 // rotation scratch c (real) and work, n + kd + 2 each, then (Cta) the packed band (kd + 1) x n,
 // all local; Blocked: c and work in the caller's global slice, nothing local.
 template <class T> struct Sb2stLayout {
-    ws::Slot<real_t<T>> c;
-    ws::Slot<T> work;
-    ws::Slot<T> ab;
+    WsSlot<real_t<T>> c;
+    WsSlot<T> work;
+    WsSlot<T> ab;
     WorkspaceSize size;
 };
 template <class Tier, class T> constexpr Sb2stLayout<T> band_layout(int n, int kd) {
     static_assert(tier::is_cta_v<Tier> || tier::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
-    constexpr ws::Space sp = tier::is_cta_v<Tier> ? ws::Space::Local : ws::Space::Global;
+    constexpr WsSpace sp = tier::is_cta_v<Tier> ? WsSpace::Local : WsSpace::Global;
     Plan p;
     const std::size_t cw = static_cast<std::size_t>(n + kd + 2);
     const auto c = p.take<real_t<T>>(sp, cw);
     const auto w = p.take<T>(sp, cw);
-    ws::Slot<T> ab{ws::Space::Local, 0, 0};
-    if constexpr (tier::is_cta_v<Tier>) ab = p.take<T>(ws::Space::Local, static_cast<std::size_t>(kd + 1) * static_cast<std::size_t>(n));
+    WsSlot<T> ab{WsSpace::Local, 0, 0};
+    if constexpr (tier::is_cta_v<Tier>) ab = p.take<T>(WsSpace::Local, static_cast<std::size_t>(kd + 1) * static_cast<std::size_t>(n));
     return {c, w, ab, p.size()};
 }
 

@@ -140,8 +140,8 @@ bool getrs_perm_gather_launch(Queue& ctx,
                 if (lid == 0) {
                     const auto idx = device::mat<device::Mem::Local>(idxs, n, 1, n);
                     const auto ipiv1 = [ips](int k) { return ips[k] + 1; };
-                    if (forward) device::laswp<device::dir::Forward>(device::Thread{}, idx, ipiv1, 0, n);
-                    else device::laswp<device::dir::Backward>(device::Thread{}, idx, ipiv1, 0, n);
+                    if (forward) device::laswp<device::Direct::Forward>(device::Thread{}, idx, ipiv1, 0, n);
+                    else device::laswp<device::Direct::Backward>(device::Thread{}, idx, ipiv1, 0, n);
                 }
                 ex.barrier(device::Mem::Global);
 

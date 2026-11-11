@@ -40,12 +40,12 @@ template <class Impl, class R> BATCHLAS_DEVICE_INLINE R xor_shuffle(const Impl& 
     else return permute_group_by_xor(part, v, m);  // ADL: SubGroupPartition (detail/sg_partition/)
 }
 
-// xor butterfly over P lanes; every lane ends with the same value. O = bfly::Down: masks
-// P/2 .. 1; bfly::Asc: 1 .. P/2 (another summation order, geqrf's tiny reductions).
-template <int P, class O = bfly::Down, class Impl, class T, class Op> BATCHLAS_DEVICE_INLINE T xor_butterfly(const Impl& part, T v, Op op) {
+// xor butterfly over P lanes; every lane ends with the same value. O = alg::BflyDown: masks
+// P/2 .. 1; alg::BflyAsc: 1 .. P/2 (another summation order, geqrf's tiny reductions).
+template <int P, class O = alg::BflyDown, class Impl, class T, class Op> BATCHLAS_DEVICE_INLINE T xor_butterfly(const Impl& part, T v, Op op) {
     using A = Arith<T>;
-    static_assert(std::is_same_v<O, bfly::Down> || std::is_same_v<O, bfly::Asc>, "xor_butterfly: the order is bfly::Down or bfly::Asc");
-    constexpr bool down = std::is_same_v<O, bfly::Down>;
+    static_assert(std::is_same_v<O, alg::BflyDown> || std::is_same_v<O, alg::BflyAsc>, "xor_butterfly: the order is alg::BflyDown or alg::BflyAsc");
+    constexpr bool down = std::is_same_v<O, alg::BflyDown>;
     if constexpr (A::is_complex) {
         using R = typename A::real_t;
         R re = A::re(v), im = A::im(v);
@@ -166,10 +166,10 @@ template <int WG, int SG = 32> struct WorkGroup {
 
 // Teams of P lanes working independently inside a WG launch (P == SG: whole sub-groups; P < SG:
 // aligned P-lane chunks of one sub-group, xor butterflies with masks < P). A team is the
-// executor: Cyclic ops stride by P. O names the butterfly order (bfly::Down on whole
+// executor: Cyclic ops stride by P. O names the butterfly order (alg::BflyDown on whole
 // sub-groups is portable::reduce_over_group, the legacy tree). No work-group barrier exists
 // here by construction; sync(ex) is a sub-group barrier that every lane must reach.
-template <int WG, int P = 32, class O = bfly::Down, int SG = 32> struct Teams {
+template <int WG, int P = 32, class O = alg::BflyDown, int SG = 32> struct Teams {
     static_assert(detail::is_pow2(P) && SG % P == 0 && WG % SG == 0, "Teams: P a power of two dividing SG, SG dividing WG");
     static constexpr int size = P, team_size = P, nteams = WG / P, sg_size = SG;
     static constexpr bool sub_whole = true;
@@ -185,7 +185,7 @@ template <int WG, int P = 32, class O = bfly::Down, int SG = 32> struct Teams {
     BATCHLAS_DEVICE_INLINE bool leader() const { return lane() == 0; }
     BATCHLAS_DEVICE_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T team_reduce(T v, Op op = {}) const {
-        if constexpr (P == SG && std::is_same_v<O, bfly::Down>) return detail::sycl_reduce(it.get_sub_group(), v, op);
+        if constexpr (P == SG && std::is_same_v<O, alg::BflyDown>) return detail::sycl_reduce(it.get_sub_group(), v, op);
         else return detail::xor_butterfly<P, O>(it.get_sub_group(), v, op);
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T group_reduce(T v, Op op = {}) const {
@@ -404,27 +404,25 @@ template <class T, int Slots> struct Scratch {
 
 template <class Op, class Ex, class T> constexpr int scratch_elements() {
     if constexpr (is_work_group_v<Ex>) {
-        if constexpr (std::is_same_v<Op, op::ReduceN<1>>) return Ex::nteams;
-        else return []<int K>(op::ReduceN<K>*) { return Ex::nteams * K; }(static_cast<Op*>(nullptr));
+        if constexpr (std::is_same_v<Op, reduce_op::ReduceN<1>>) return Ex::nteams;
+        else return []<int K>(reduce_op::ReduceN<K>*) { return Ex::nteams * K; }(static_cast<Op*>(nullptr));
     } else {
         return 0;
     }
 }
 
-// sync<scope::S>(ex[, mem]) (scope:: in core.hh). Group is sync(ex, m). Sub: the sub-group
-// barrier (nothing on Thread). Part: a Partition's own barrier (SubGroupPartition's masked one,
+// sync<Scope::S>(ex[, mem]) (Scope in core.hh). Group is sync(ex, m). Sub: the sub-group
+// barrier (nothing on Thread). Own: a Partition's own barrier (SubGroupPartition's masked one,
 // else the sub-group's), a work-group barrier on WorkGroup / RtGroup<Group>, the sub-group's on
 // SubGroup / RtGroup<Sub>, nothing on Teams (lockstep slices of one sub-group) and Thread.
-template <class S, class Ex> BATCHLAS_DEVICE_INLINE void sync(const Ex& ex, Mem m = Mem::Local) {
-    static_assert(std::is_same_v<S, scope::Part> || std::is_same_v<S, scope::Sub> || std::is_same_v<S, scope::Group>,
-                  "sync<S>: scope::Part, scope::Sub or scope::Group");
+template <Scope S, class Ex> BATCHLAS_DEVICE_INLINE void sync(const Ex& ex, Mem m = Mem::Local) {
     if constexpr (requires { ex.ex; }) {
         sync<S>(ex.ex, m);  // an adaptor (Fit) syncs its executor
     } else if constexpr (is_thread_v<Ex>) {
         return;
-    } else if constexpr (std::is_same_v<S, scope::Group>) {
+    } else if constexpr (S == Scope::Group) {
         sync(ex, m);
-    } else if constexpr (std::is_same_v<S, scope::Sub>) {
+    } else if constexpr (S == Scope::Sub) {
         sycl::group_barrier(ex.sub());
     } else if constexpr (requires { ex.part; }) {
         if constexpr (sycl::is_group_v<std::remove_cvref_t<decltype(ex.part)>>) sycl::group_barrier(ex.part);
@@ -510,18 +508,18 @@ template <class Ex> inline constexpr bool is_fit_v = false;
 template <class Ex> inline constexpr bool is_fit_v<Fit<Ex>> = true;
 
 // ---- broadcast policies of the unblocked factorizations (potf2, getf2) ------------------------
-// How a pivot column / row reaches the lanes that update with it. Shuffle: one indexed shuffle
-// per element (no memory, no barrier). Slm<Mpw, Acc>: every lane stores its element, one
+// How a pivot column / row reaches the lanes that update with it. BcastShuffle: one indexed
+// shuffle per element (no memory, no barrier). BcastSlm<Mpw, Acc>: every lane stores its element, one
 // sub-group barrier, vector loads; double-buffered by column parity, buffer(j, nv) is the
 // first unit of this partition's buffer for column j (Mpw partitions per sub-group, pidx this one).
-namespace bcast_policy {
-struct Shuffle {};
-template <int Mpw, class Acc> struct Slm {
+namespace alg {
+struct BcastShuffle {};
+template <int Mpw, class Acc> struct BcastSlm {
     static constexpr int mpw = Mpw;
     Acc slm;
     int pidx;
     BATCHLAS_DEVICE_INLINE int buffer(int j, int nv) const { return ((j & 1) * Mpw + pidx) * nv; }
 };
-}  // namespace bcast_policy
+}  // namespace alg
 
 }  // namespace batchlas::device

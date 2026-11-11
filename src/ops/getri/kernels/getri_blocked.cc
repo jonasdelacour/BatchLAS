@@ -101,7 +101,7 @@ Event getri_perm_launch(Queue& ctx,
                 device::for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
                     // F[i, perm[i]] = 1: i walked back through the interchanges from the LAST to
                     // the first; each is its own inverse, so only the ORDER reverses.
-                    c(i, device::laswp_index<device::dir::Backward>(ipiv, 0, n, i)) = device::Arith<D>::one();
+                    c(i, device::laswp_index<device::Direct::Backward>(ipiv, 0, n, i)) = device::Arith<D>::one();
                     // EXACT zero, no epsilon: ?GETRI reports the first U(i,i) that is a true
                     // binary zero, not |u| < eps. 1-BASED, LAPACK info.
                     if (want_info && device::Arith<D>::is_zero(a(i, i))) info.offer(i + 1);

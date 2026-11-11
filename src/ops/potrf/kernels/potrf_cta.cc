@@ -28,14 +28,12 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int NB, int TS, potrf_native::PotrfScope SC>
+template <typename T, int NB, int TS, device::Scope SC>
 class PotrfCtaKernel;
 
 namespace sycl_potrf {
 
 namespace {
-
-using potrf_native::PotrfScope;
 
 // NB / TS are device::potrf's tier::Cta constants (one source). evidence: docs/perf/potrf.md#register-gate
 template <typename T>
@@ -79,7 +77,7 @@ struct PotrfCtaLaunch {
     int Rt0 = 0;
     std::size_t slm_per_matrix = 0;
     std::size_t slm_total = 0;   // G * slm_per_matrix, after the hole pad
-    PotrfScope scope = PotrfScope::SubGroup;
+    device::Scope scope = device::Scope::Sub;
     bool fits = false;
 };
 
@@ -109,14 +107,14 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
 
     p.wg_size = p.G * p.L;
     p.num_wg = (batch + p.G - 1) / p.G;
-    p.scope = (p.L == 32) ? PotrfScope::SubGroup : PotrfScope::WorkGroup;
+    p.scope = (p.L == 32) ? device::Scope::Sub : device::Scope::Group;
     p.slm_total = potrf_hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
     p.fits = (p.slm_total <= slm_budget) && (p.wg_size <= max_wg);
 
-    // Under Scope::WorkGroup the phase barriers are work-group barriers, which is
+    // Under Scope::Group the phase barriers are work-group barriers, which is
     // correct only when the work-group holds exactly one matrix.
-    if (p.scope == PotrfScope::WorkGroup && p.G != 1) {
-        throw batchlas::internal_error("potrf_cta: Scope::WorkGroup with G != 1 is a race by construction");
+    if (p.scope == device::Scope::Group && p.G != 1) {
+        throw batchlas::internal_error("potrf_cta: Scope::Group with G != 1 is a race by construction");
     }
     return p;
 }
@@ -179,7 +177,7 @@ unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch, int min_blocks_per
 
 namespace {
 
-template <typename T, int NB, int TS, PotrfScope SC>
+template <typename T, int NB, int TS, device::Scope SC>
 Event potrf_cta_launch(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        bool upper,
@@ -228,7 +226,7 @@ Event potrf_cta_launch(Queue& ctx,
                 int slot;
                 int tid;
                 bool p1_active;
-                if constexpr (SC == PotrfScope::SubGroup) {
+                if constexpr (SC == device::Scope::Sub) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
                     matrix_id = wg_id * G + sg_id;
                     slot = sg_id;
@@ -256,7 +254,7 @@ Event potrf_cta_launch(Queue& ctx,
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(matrix_id) * stride_a;
 
                 // The public tier::Cta body, the triangle at run time.
-                ::batchlas::device::detail::potrf_cta_run<D, R, NB, TS, potrf_native::potrf_body_scope<SC>>(
+                ::batchlas::device::detail::potrf_cta_run<D, R, NB, TS, SC>(
                     it, sg, p1_active, S, lda, dg, fl, of, Ag, ldg, n, upper);
 
                 // One writer per matrix; `fail` is published by B3 of the last panel.
@@ -335,11 +333,11 @@ Event potrf_cta_dispatch(Queue& ctx,
     const bool upper = (uplo == Uplo::Upper);
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
 
-    if (p.scope == PotrfScope::SubGroup) {
-        return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::SubGroup>(
+    if (p.scope == device::Scope::Sub) {
+        return potrf_cta_launch<T, C::NB, C::TS, device::Scope::Sub>(
             ctx, A, upper, info, p, n, batch, mask);
     }
-    return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::WorkGroup>(
+    return potrf_cta_launch<T, C::NB, C::TS, device::Scope::Group>(
         ctx, A, upper, info, p, n, batch, mask);
 }
 

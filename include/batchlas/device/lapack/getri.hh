@@ -35,7 +35,7 @@ BATCHLAS_DEVICE_INLINE std::int32_t permute_identity(const Ex& ex, const MA& a, 
     const int n = c.rows();
     laset(ex, Zero{}, Zero{}, c);
     ex.barrier(Mem::Global);
-    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { c(i, laswp_index<dir::Backward>(ipiv, 0, n, i)) = Arith<D>::one(); });
+    for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { c(i, laswp_index<Direct::Backward>(ipiv, 0, n, i)) = Arith<D>::one(); });
     ex.barrier(Mem::Global);
     std::int32_t info = 0;
     for (int i = 0; i < n; ++i)

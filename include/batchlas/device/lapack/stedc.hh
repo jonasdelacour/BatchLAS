@@ -46,35 +46,35 @@ template <class R> using gemm_cfg = l3::cfg::RegTiled<R, 64, 64, 16, 4, 4>;
 // |.| scratch, the column maps and deflation scans (n each), the secular vectors Q' and the
 // gathered columns (n x n each), and Z itself when no vectors are wanted.
 template <class R> struct StedcLayout {
-    ws::Slot<R> smem;
-    ws::Slot<std::int32_t> reduced;
-    ws::Slot<R> d_a, z_a, d_b, z_b, lam, absx;
-    ws::Slot<std::int32_t> map_a, map_b, keep, perm, plocal, scan_inc, scan_exc, rank;
-    ws::Slot<R> qp, tmp, z;
+    WsSlot<R> smem;
+    WsSlot<std::int32_t> reduced;
+    WsSlot<R> d_a, z_a, d_b, z_b, lam, absx;
+    WsSlot<std::int32_t> map_a, map_b, keep, perm, plocal, scan_inc, scan_exc, rank;
+    WsSlot<R> qp, tmp, z;
     WorkspaceSize size;
 };
 template <class R> constexpr StedcLayout<R> dc_layout(int n, bool own_z) {
     Plan p;
     const std::size_t un = std::size_t(n), nn = un * un;
-    const auto smem = p.take<R>(ws::Space::Local, std::size_t(l3::smem_elems<gemm_cfg<R>>()));
-    const auto reduced = p.take<std::int32_t>(ws::Space::Local, 1);
-    const auto d_a = p.take<R>(ws::Space::Global, un);
-    const auto z_a = p.take<R>(ws::Space::Global, un);
-    const auto d_b = p.take<R>(ws::Space::Global, un);
-    const auto z_b = p.take<R>(ws::Space::Global, un);
-    const auto lam = p.take<R>(ws::Space::Global, un);
-    const auto absx = p.take<R>(ws::Space::Global, un);
-    const auto map_a = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto map_b = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto keep = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto perm = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto plocal = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto scan_inc = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto scan_exc = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto rank = p.take<std::int32_t>(ws::Space::Global, un);
-    const auto qp = p.take<R>(ws::Space::Global, nn);
-    const auto tmp = p.take<R>(ws::Space::Global, nn);
-    const auto z = p.take<R>(ws::Space::Global, own_z ? nn : 0);
+    const auto smem = p.take<R>(WsSpace::Local, std::size_t(l3::smem_elems<gemm_cfg<R>>()));
+    const auto reduced = p.take<std::int32_t>(WsSpace::Local, 1);
+    const auto d_a = p.take<R>(WsSpace::Global, un);
+    const auto z_a = p.take<R>(WsSpace::Global, un);
+    const auto d_b = p.take<R>(WsSpace::Global, un);
+    const auto z_b = p.take<R>(WsSpace::Global, un);
+    const auto lam = p.take<R>(WsSpace::Global, un);
+    const auto absx = p.take<R>(WsSpace::Global, un);
+    const auto map_a = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto map_b = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto keep = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto perm = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto plocal = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto scan_inc = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto scan_exc = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto rank = p.take<std::int32_t>(WsSpace::Global, un);
+    const auto qp = p.take<R>(WsSpace::Global, nn);
+    const auto tmp = p.take<R>(WsSpace::Global, nn);
+    const auto z = p.take<R>(WsSpace::Global, own_z ? nn : 0);
     return {smem, reduced, d_a, z_a, d_b, z_b, lam, absx, map_a, map_b, keep, perm, plocal, scan_inc, scan_exc, rank, qp, tmp, z, p.size()};
 }
 

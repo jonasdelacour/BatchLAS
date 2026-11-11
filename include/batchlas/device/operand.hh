@@ -214,34 +214,26 @@ template <class V> struct UnitHead {
     BATCHLAS_DEVICE_INLINE UnitHead<decltype(std::declval<V>().tail(0))> tail(int k) const { return {v.tail(k), head - k}; }
 };
 template <class V> BATCHLAS_DEVICE_INLINE UnitHead<V> unit_head(V v, int head) { return {v, head}; }
-// The general form: refl::QR (zero / stored past the head as above) or refl::QL (xORG2L: stored
-// above the head, zero below); unit_fill::Zero (the other side reads 0) or unit_fill::Keep (the
+// The general form: Refl::QR (zero / stored past the head as above) or Refl::QL (xORG2L: stored
+// above the head, zero below); DiagFill::Zero (the other side reads 0) or DiagFill::Keep (the
 // other side reads the stored values: LAPACK's temporary unit of a stored reflector). In every
 // form v(head) is never read.
-namespace refl {
-struct QR {};
-struct QL {};
-}  // namespace refl
-namespace unit_fill {
-struct Zero {};
-struct Keep {};
-}  // namespace unit_fill
-template <class Dir, class Fill, class V> struct UnitHeadOf {
-    static_assert(std::is_same_v<Dir, refl::QR> || std::is_same_v<Dir, refl::QL>, "unit_head: refl::QR or refl::QL");
-    static_assert(std::is_same_v<Fill, unit_fill::Zero> || std::is_same_v<Fill, unit_fill::Keep>, "unit_head: unit_fill::Zero or Keep");
+enum class Refl { QR, QL };
+template <Refl Dir, DiagFill Fill, class V> struct UnitHeadOf {
+    static_assert(Fill == DiagFill::Zero || Fill == DiagFill::Keep, "unit_head: DiagFill::Zero or Keep");
     V v;
     int head;
     using value_type = typename V::value_type;
     BATCHLAS_DEVICE_INLINE value_type operator()(int i) const {
         using A = Arith<value_type>;
         if (i == head) return A::one();
-        if constexpr (std::is_same_v<Fill, unit_fill::Keep>) return static_cast<value_type>(v(i));
-        else if constexpr (std::is_same_v<Dir, refl::QR>) return i > head ? static_cast<value_type>(v(i)) : A::zero();
+        if constexpr (Fill == DiagFill::Keep) return static_cast<value_type>(v(i));
+        else if constexpr (Dir == Refl::QR) return i > head ? static_cast<value_type>(v(i)) : A::zero();
         else return i < head ? static_cast<value_type>(v(i)) : A::zero();
     }
     BATCHLAS_DEVICE_INLINE int size() const { return v.size(); }
 };
-template <class Dir, class Fill = unit_fill::Zero, class V> BATCHLAS_DEVICE_INLINE UnitHeadOf<Dir, Fill, V> unit_head(V v, int head) {
+template <Refl Dir, DiagFill Fill = DiagFill::Zero, class V> BATCHLAS_DEVICE_INLINE UnitHeadOf<Dir, Fill, V> unit_head(V v, int head) {
     return {v, head};
 }
 

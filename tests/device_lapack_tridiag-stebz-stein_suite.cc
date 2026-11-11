@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The tridiagonal eigen kernels' device ops against host references: lapack/stebz.hh
-// (stebz_gershgorin, laebz_count, laebz_bisect), core lanst<Inf> and rot<rot_conv::Reflector2> as
+// (stebz_gershgorin, laebz_count, laebz_bisect), core lanst<Inf> and rot<alg::RotReflector2> as
 // those kernels call them, and house2 (scalar.hh). Other core ops
 // (RtGroup, for_each_owned, allreduce, map, laset, dot, axpy, sumsq, scal) are covered by
 // device_core_ops_tests.
@@ -265,7 +265,7 @@ TYPED_TEST(DeviceLapackTridiag, House2Refl2) {
             for (int p = 0; p < npair; ++p) {
                 T x0 = pr[2 * p], x1 = pr[2 * p + 1];
                 const auto v = device::house2(x0, x1);
-                device::rot<device::rot_conv::Reflector2>(device::Givens<T>{v[0], v[1]}, x0, x1);
+                device::rot<device::alg::RotReflector2>(device::Givens<T>{v[0], v[1]}, x0, x1);
                 ob[4 * p] = v[0], ob[4 * p + 1] = v[1], ob[4 * p + 2] = x0, ob[4 * p + 3] = x1;
             }
             // A 3-stripe: x = pairs 1..3 first halves, y = their second halves.
@@ -274,12 +274,12 @@ TYPED_TEST(DeviceLapackTridiag, House2Refl2) {
             const auto v = device::house2(pr[0], pr[1]);
             const device::Givens<T> g{v[0], v[1]};
             const auto x = device::refs(s[0], s[1], s[2]), y = device::refs(s[3], s[4], s[5]);
-            device::static_for<nstripe>([&](auto i) { device::rot<device::rot_conv::Reflector2>(g, x(i), y(i)); });
+            device::static_for<nstripe>([&](auto i) { device::rot<device::alg::RotReflector2>(g, x(i), y(i)); });
             for (int i = 0; i < 2 * nstripe; ++i) so[std::ptrdiff_t(b) * 2 * nstripe + i] = s[i];
         }
         const auto A = device::mat(a + std::ptrdiff_t(b) * 2 * ld, m, 2, ld);
         const auto v = device::house2(pr[0], pr[1]);
-        device::rot<device::rot_conv::Reflector2>(ex, device::Givens<T>{v[0], v[1]}, A.col(0), A.col(1));
+        device::rot<device::alg::RotReflector2>(ex, device::Givens<T>{v[0], v[1]}, A.col(0), A.col(1));
     });
     const auto gv = this->dev.down(vo, hv.size());
     const auto ga = this->dev.down(a, ha.size());

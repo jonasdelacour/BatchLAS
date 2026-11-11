@@ -202,12 +202,12 @@ template <bool V, int P, class T> struct cta_layout {
 template <bool V, int N, class T> struct syev_cta_plan {
     using L = cta_layout<V, N, T>;
     Plan plan{};
-    ws::Slot<T> a{}, v{}, w{};
-    ws::Slot<real_t<T>> q{};
+    WsSlot<T> a{}, v{}, w{};
+    WsSlot<real_t<T>> q{};
     constexpr syev_cta_plan()
-        : a(plan.take<T>(ws::Space::Local, static_cast<std::size_t>(L::lda) * N)), v(plan.take<T>(ws::Space::Local, N)),
-          w(plan.take<T>(ws::Space::Local, N)),
-          q(plan.take<real_t<T>>(ws::Space::Local, L::separate_q ? static_cast<std::size_t>(L::ldq) * N : 0)) {}
+        : a(plan.take<T>(WsSpace::Local, static_cast<std::size_t>(L::lda) * N)), v(plan.take<T>(WsSpace::Local, N)),
+          w(plan.take<T>(WsSpace::Local, N)),
+          q(plan.take<real_t<T>>(WsSpace::Local, L::separate_q ? static_cast<std::size_t>(L::ldq) * N : 0)) {}
 };
 
 struct cta_opts {  // the host SteqrParams fields of the same meaning
@@ -373,27 +373,27 @@ template <bool V, int NB, class T> struct syev_blocked_plan {
     using R = real_t<T>;
     static constexpr bool kCplx = Arith<T>::is_complex;
     Plan plan{};
-    ws::Slot<T> d{}, e{}, tau{}, s{}, z{};
-    ws::Slot<R> dr{}, er{};
-    ws::Slot<int> rank{};
-    ws::Slot<std::byte> sub_g{}, sub_l{};
+    WsSlot<T> d{}, e{}, tau{}, s{}, z{};
+    WsSlot<R> dr{}, er{};
+    WsSlot<int> rank{};
+    WsSlot<std::byte> sub_g{}, sub_l{};
     static constexpr std::size_t mx(std::size_t a, std::size_t b) { return a > b ? a : b; }
     constexpr explicit syev_blocked_plan(int n) {
         const std::size_t un = static_cast<std::size_t>(n), um = n > 1 ? un - 1 : 1;
-        d = plan.take<T>(ws::Space::Global, un);
-        e = plan.take<T>(ws::Space::Global, um);
-        tau = plan.take<T>(ws::Space::Global, um);
-        dr = plan.take<R>(ws::Space::Global, kCplx ? un : 0);
-        er = plan.take<R>(ws::Space::Global, kCplx ? um : 0);
-        s = plan.take<T>(ws::Space::Global, kCplx && V ? un : 0);
-        z = plan.take<T>(ws::Space::Global, V ? un * un : 0);
-        rank = plan.take<int>(ws::Space::Global, un);
+        d = plan.take<T>(WsSpace::Global, un);
+        e = plan.take<T>(WsSpace::Global, um);
+        tau = plan.take<T>(WsSpace::Global, um);
+        dr = plan.take<R>(WsSpace::Global, kCplx ? un : 0);
+        er = plan.take<R>(WsSpace::Global, kCplx ? um : 0);
+        s = plan.take<T>(WsSpace::Global, kCplx && V ? un : 0);
+        z = plan.take<T>(WsSpace::Global, V ? un * un : 0);
+        rank = plan.take<int>(WsSpace::Global, un);
         constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
         const WorkspaceSize s1 = sytrd_buffer_size<Uplo::Lower, tier::Blocked<NB>, T>(n);
         const WorkspaceSize s2 = steqr_buffer_size<J, tier::Blocked<1>, R>(n);
         const WorkspaceSize s3 = V && n > 1 ? ormqr_buffer_size<Side::Left, Transpose::NoTrans, ormqr_tier<T>, T>(n - 1, n) : WorkspaceSize{};
-        sub_g = plan.take<std::byte>(ws::Space::Global, mx(s1.global_bytes, mx(s2.global_bytes, s3.global_bytes)));
-        sub_l = plan.take<std::byte>(ws::Space::Local, mx(s1.local_bytes, mx(s2.local_bytes, s3.local_bytes)));
+        sub_g = plan.take<std::byte>(WsSpace::Global, mx(s1.global_bytes, mx(s2.global_bytes, s3.global_bytes)));
+        sub_l = plan.take<std::byte>(WsSpace::Local, mx(s1.local_bytes, mx(s2.local_bytes, s3.local_bytes)));
     }
 };
 

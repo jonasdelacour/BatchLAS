@@ -80,7 +80,7 @@ inline void load_local_problem_vectors(const Ex& ex,
                                        const VectorView<T>& z_prob) {
     device::copy(ex, d_prob_global, d_prob);
     device::copy(ex, z_prob_global, z_prob);
-    device::sync<device::scope::Group>(ex, device::Mem::Global);
+    device::sync<device::Scope::Group>(ex, device::Mem::Global);
 }
 
 template <Backend B, typename T, int32_t P>
