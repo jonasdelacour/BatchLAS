@@ -157,8 +157,7 @@ step of the first section ([`:252-300`](https://github.com/jonasdelacour/BatchLA
 
 `sytrd_sb2st` is the Givens chase (`xSBTRD` [11]; Schwarz [12], Kaufman [13]): `lartg`/`largv`
 ([`src/ops/syev/sytrd/sytrd_sb2st.cc:263-275`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L263-L275)) and `lar2v` ([`:348-357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L348-L357)) per sweep. It discards
-\f$Q_2\f$, so `syev` uses it only for eigenvalues, under `BATCHLAS_SYEV_TWO_STAGE_CHASE=givens`
-([`two_stage_common.hh:42-45`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L42-L45)). The public `sytrd_band_reduction` (successive band reduction [14])
+\f$Q_2\f$, so `syev` does not call it: both modes use the Householder chase. The public `sytrd_band_reduction` (successive band reduction [14])
 is not called by `syev`.
 
 ## sytrd: eigenvector back-transformation

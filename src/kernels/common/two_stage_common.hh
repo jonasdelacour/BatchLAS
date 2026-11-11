@@ -35,25 +35,12 @@ inline int32_t choose_two_stage_kd(int32_t n) {
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
 }
 
-// Values-mode stage-2 chase: Householder by default (Givens is ~5x slower here);
-// BATCHLAS_SYEV_TWO_STAGE_CHASE=givens restores Givens (values only). Read in the solve
-// AND its *_buffer_size query: never make it stateful between the two.
-// evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
-inline bool two_stage_use_givens_chase_for_values() {
-    const char* v = batchlas::settings().selection.syev_two_stage_chase.get();
-    return v && (std::string_view(v) == "givens");
-}
-
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
     // Shared by both modes. The literature puts the eigenvector optimum higher; the
     // measurement here did not, so a per-mode split is a tuning question only.
     // evidence: docs/perf/syev.md#syev-the-two-stage-band-width-kd
     (void)jobz;
     return choose_two_stage_kd(n);
-}
-
-inline int32_t choose_two_stage_sb2st_block_size() {
-    return batchlas::settings().geometry.syev_two_stage_sb2st_block;  // default 32
 }
 
 template <typename T>

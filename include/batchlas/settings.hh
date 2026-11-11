@@ -198,11 +198,6 @@ struct SelectionSettings {
     /// or the device lacks sub-group size 32.
     EnvValue sb2st_subgroup{};
 
-    /// `BATCHLAS_SYEV_TWO_STAGE_CHASE`: only the exact value `givens` has an effect.
-    /// @warning Read by both the solve and its `*_buffer_size` query; do not let a ScopedEnvVar
-    ///          straddle a sizing/solve pair.
-    EnvValue syev_two_stage_chase{};
-
     /// `BATCHLAS_SYEVX_ALGORITHM`: overrides an explicit `SyevxParams::method`. An env-supplied
     /// algorithm degrades where an explicit request throws, and an unrecognised value still wins
     /// (it parses to Auto).
@@ -295,10 +290,6 @@ struct GeometrySettings {
     /// `BATCHLAS_SYEV_TWO_STAGE_KD` (env_positive_int_or): the band width, clamped to \f$[1, n-1]\f$
     /// at the call site.
     int syev_two_stage_kd = 32;
-
-    /// `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` (env_positive_int_or). Read by four solve/sizing
-    /// pairs.
-    int syev_two_stage_sb2st_block = 32;
 
     /// `BATCHLAS_SY2SB_ORMQR_NB`: unset, `off` or `0` (never hint), or a positive forced value
     /// (clamped to \f$\mathit{kd}\f$ at the call site). A value that does not parse, is negative or is above 1024

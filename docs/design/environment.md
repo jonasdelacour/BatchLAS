@@ -41,7 +41,6 @@ bespoke parser gets an `EnvValue` holding the raw string, whose `get()` is `null
 | `BATCHLAS_ORMQR_WY` | `gemm`, `trmm`, `measured` (measured gate) | |
 | `BATCHLAS_SB2ST_BACK_WAVE` | on | [Fails open](#environment-sb2st-back-wave-fails-open). |
 | `BATCHLAS_SB2ST_SUBGROUP` | `auto`, `on`, `off` (`auto`) | `on` throws when kd > 32 or no sub-group of 32. |
-| `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `givens` (unset) | Read by the solve and the sizing query. |
 | `BATCHLAS_SYEVX_ALGORITHM` | method name (`SyevxParams::method`) | Overrides the argument; unrecognised parses to `Auto`. |
 | `BATCHLAS_SYEVX_PRECONDITIONER` | name (unset) | Loses to an explicit request and to a configured ILU(k). |
 | `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` | `atoi` nonzero (off) | [evidence](../perf/syevx.md#syevx-automatic-chebyshev-filter-degree) |
@@ -64,7 +63,7 @@ Group `geometry`. A default that depends on \f$n\f$, type, argument or device st
 | `BATCHLAS_SB2ST_BACK_SUBS`, `BATCHLAS_SB2ST_BACK_TILE_W` | positive int (call site) | Force together; instantiated: tile {1, 2, 4, 8}, subs {4, 8, 16}. |
 | `BATCHLAS_SB2ST_BACK_TILE` | int (call site) | `0` selects the streaming kernel. |
 | `BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W` | int (type default) | nb 128/96/96/64, w 128/32/32/16 for s/d/c/z. |
-| `BATCHLAS_SYEV_TWO_STAGE_KD`, `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | positive int (32) | \f$k_d\f$ clamped to \f$[1, n-1]\f$. |
+| `BATCHLAS_SYEV_TWO_STAGE_KD` | positive int (32) | \f$k_d\f$ clamped to \f$[1, n-1]\f$. |
 | `BATCHLAS_SY2SB_ORMQR_NB` | int or `off` (unset) | `off`/`0` disable; positive forced, clamped to \f$k_d\f$; bad, negative or \f$> 1024\f$ is unset. |
 | `BATCHLAS_SYTRD_BLOCK_SIZE` | int (bucketed by n and type) | |
 | `BATCHLAS_TRMM_TILE_M` | int (function of m) | Bucketed to 16, 32, 64, 128. |
