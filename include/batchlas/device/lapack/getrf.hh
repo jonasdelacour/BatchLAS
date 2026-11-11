@@ -404,7 +404,7 @@ struct lu_value<M> {
 template <class M> using lu_value_t = typename lu_value<M>::type;
 
 // The LU family's Blocked Level 3 configuration: the tier's Alg when it is an l3 preset, else
-// 32 x 32 tiles of 2 x 2 per item (256 items, device_api_l3_tests' shape).
+// 32 x 32 tiles of 2 x 2 per item (256 items, device_lapack_l3_tests' shape).
 template <class T, class Tier>
 using lu_blocked_cfg_t = std::conditional_t<l3::Config<typename Tier::alg_type>, typename Tier::alg_type,
                                             l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>>;

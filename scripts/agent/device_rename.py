@@ -363,16 +363,34 @@ MOVES = (
     ("benchmarks/sass_lab/v2_parity.py", "benchmarks/sass_lab/device_parity.py"),
     ("benchmarks/sass_lab/v2_timing.py", "benchmarks/sass_lab/device_timing.py"),
 )
-TEST_RENAMES = (
-    (r"\bdevice_blas_v2_gemm-components_tests\b", "device_core_level3_components_tests"),
+# Binaries and sources. D10 folds seven device_blas_v2_<r> binaries (and elementwise-glue) into the
+# device_lapack_<r> (device_core_lapack_aux) binary as an extra source tests/<...>_suite.cc
+# (tests/CMakeLists.txt BATCHLAS_TEST_SUITE_SOURCES); a source name maps to the suite file, the
+# binary name to its owner. The git mv and the CMake fold of the R-b commit are not replayed here.
+FOLDED = (("getrf", "getrf"), ("potrf-cta-lpanel", "potrf"), ("sb2st-sy2sb", "sb2st"), ("stedc", "stedc"),
+          ("sygst-sygvd-syfn", "sygst"), ("sytrf-sytrs", "sytrf"), ("tridiag-stebz-stein", "stebz-stein"))
+TEST_RENAMES = tuple(
+    (rf"\bdevice_blas_v2_{x}_tests\.cc\b", f"device_lapack_{x}_suite.cc") for x, _ in FOLDED) + tuple(
+    (rf"\bdevice_blas_v2_{x}_tests\b", f"device_lapack_{r}_tests") for x, r in FOLDED) + (
+    (r"\bdevice_blas_v2_elementwise-glue_tests\.cc\b", "device_core_elementwise-glue_suite.cc"),
     (r"\bdevice_blas_v2_elementwise-glue_tests\b", "device_core_lapack_aux_tests"),
+    (r"\bdevice_blas_v2_gemm-components_tests\b", "device_core_level3_components_tests"),
     (r"\bdevice_blas_v2_(gemv-native|trsm|syev-cta-trio|krylov-ortho-ritz)_tests\b", r"\1_kernels_tests"),
     (r"\bdevice_blas_v2_tests\b", "device_core_ops_tests"),
+    (r"\bdevice_blas_v2_([\w-]+?)_tests\b", r"device_lapack_\1_tests"),
     (r"\bdevice_api_(\w[\w-]*)_tests\b", r"device_lapack_\1_tests"),
+    (r"\bdevice_api_(\w+)", r"device_lapack_\1"),
 )
 TEXT_RENAMES = (
     (r"\bdesign_device_la_v2\b", "design_device_la"),
     (r"\bDevice LA v2: ", "Device LA: "),
+    (r"(?<![\w-])device-la-v2-(?=\w)", "device-la-"),   # heading slugs of the renamed page
+)
+# sass_lab identifiers and variant labels ("v2" was the device LA variant).
+LAB_RENAMES = (
+    (r"\bkV2(\w*)", r"kDevice\1"), (r"\breg_v2([ab])(_wg)?\b", r"reg_device_\1\2"),
+    (r"\bregister_v2([ab])\b", r"register_device_\1"), (r"\bops_v2([ab])\b", r"ops_device_\1"),
+    (r"\bops_v2\*", "ops_device_*"), (r"\bdevice LA v2\b", "device LA"), (r"\bv2(_scaled|_blue|_scratch)?\b", r"device\1"),
 )
 
 
@@ -389,6 +407,10 @@ def r7(rel, text):
             continue   # the evidence heading records a historical measurement (plan section 1)
         text, n = re.subn(rx, rep, text)
         total += n
+    if rel.startswith("benchmarks/sass_lab/"):
+        for rx, rep in LAB_RENAMES:
+            text, n = re.subn(rx, rep, text)
+            total += n
     return text, total, []
 
 

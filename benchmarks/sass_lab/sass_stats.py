@@ -13,8 +13,8 @@ import subprocess
 import sys
 
 VARIANTS = {0: "hand", 1: "dblas", 2: "dblas_ws", 3: "lean", 4: "lean_rtwg", 5: "lean_bv",
-            6: "dblas_reqd", 7: "dblas_static", 8: "hand_reqd", 9: "v2", 10: "v2_scaled",
-            11: "v2_blue", 12: "v2_scratch"}
+            6: "dblas_reqd", 7: "dblas_static", 8: "hand_reqd", 9: "device", 10: "device_scaled",
+            11: "device_blue", 12: "device_scratch"}
 
 CLASSES = collections.OrderedDict([
     ("FMA", {"FFMA", "DFMA", "HFMA2", "FFMA32I"}),
@@ -137,7 +137,7 @@ def main():
                                if k.startswith("op:")), key=lambda kv: -kv[1])
                 print("  ops: " + " ".join(f"{k}={v}" for k, v in hist))
         return
-    # lab::K<Op><T, N, V> (ops_l*.cc) and lab::KW<Op><T, N, V, WG> (ops_v2*.cc, keyed "<Op>@<WG>")
+    # lab::K<Op><T, N, V> (ops_l*.cc) and lab::KW<Op><T, N, V, WG> (ops_device_*.cc, keyed "<Op>@<WG>")
     rx = re.compile(r"lab::K(\w+)<(float|double), (-?\d+), (\d+)(?:, (\d+))?>")
     groups = collections.defaultdict(dict)
     for n in names:

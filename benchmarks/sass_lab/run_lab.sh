@@ -25,7 +25,7 @@ CFLAGS=(-O2 -DNDEBUG -std=c++20 -fPIC -gline-tables-only -fno-omit-frame-pointer
 LFLAGS=(-O2 -fsycl -fsycl-targets=nvidia_gpu_sm_89 "--cuda-path=$CUDA"
         -Xsycl-target-backend=nvptx64-nvidia-cuda --ftz=false -mllvm -enable-global-offset=false)
 
-SRCS="main ops_v2a ops_v2b"
+SRCS="main ops_device_a ops_device_b"
 
 build() {
     local pids=() rc=0 src

@@ -177,7 +177,7 @@ Findings and before/after tables: @ref design_build_performance.
   `BATCHLAS_SYCL_LINK_JOBS`, with either runtime (2026.22 often, 2025.20 once seen). Links run with
   `CL_CONFIG_LLVM_OPTIONS=-opt-disable=<that pass>` (RULE_LAUNCH_LINK) when a configure probe shows
   the runtime takes it: 2026.22 does, 2025.20 rejects the option and stays exposed. With 2026.22 a
-  `device_api_sygst_tests` module failed 4/12 runs and single `device_api_chol_tests` kernels
+  `device_lapack_sygst_tests` module failed 4/12 runs and single `device_lapack_chol_tests` kernels
   3/500; with the pass off, 0/12 and 0/1000. Per-kernel splitting does not help; ASLR off hides it.
 - `cmake --build --target A B C` can exit 0 and skip links: `scripts/b` checks (exit 70); by hand
   `test -x build/tests/<name>`.

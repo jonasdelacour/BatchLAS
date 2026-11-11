@@ -98,7 +98,7 @@ Lower-level functions (algorithm-specific variants, workspace queries, validatio
 `<batchlas/device/lapack/<routine>.hh>`, namespace `batchlas::device`.
 
 Executors, tiers (`tier::Reg` / `Cta` / `Blocked`, chosen on the host by `with_tier`), the
-workspace protocol, info values and one example per family: @ref design_device_la_v2.
+workspace protocol, info values and one example per family: @ref design_device_la.
 
 @defgroup api_internal_helpers Kernel helpers (installed, not API)
 @brief Headers installed because public headers include them. Not a stable interface.

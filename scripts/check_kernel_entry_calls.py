@@ -37,7 +37,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-V2_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/(?!detail/)|batchlas/device\.hh[>\"]|"
+DEVICE_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/(?!detail/)|batchlas/device\.hh[>\"]|"
                         r"src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
 BODY_ATTR = "BATCHLAS_DEVICE_BODY"
 PUBLIC_TREE = os.path.join("include", "batchlas", "device") + os.sep
@@ -165,8 +165,8 @@ def violations(text):
     return found
 
 
-def v2_users(root):
-    """Files that include a v2 header directly (no transitive closure)."""
+def device_users(root):
+    """Files that include a device LA header directly (no transitive closure)."""
     files = {}
     for top in ("src", "include"):
         for d, _, names in os.walk(os.path.join(root, top)):
@@ -174,7 +174,7 @@ def v2_users(root):
                 if n.endswith((".cc", ".hh", ".h", ".hpp", ".cpp")):
                     p = os.path.join(d, n)
                     files[os.path.relpath(p, root)] = open(p, errors="replace").read()
-    users = {f for f, t in files.items() if V2_INCLUDE.search(t) or f.startswith(PUBLIC_TREE)}
+    users = {f for f, t in files.items() if DEVICE_INCLUDE.search(t) or f.startswith(PUBLIC_TREE)}
     return {f: files[f] for f in sorted(users) if "/blas/device/v2/" not in f}
 
 
@@ -251,7 +251,7 @@ def self_test():
             os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
             with open(os.path.join(root, rel), "w") as fh:
                 fh.write(text)
-        scope = sorted(v2_users(root))
+        scope = sorted(device_users(root))
     want_scope = ["include/batchlas/device/detail/no_include.hh", "include/batchlas/device/lapack/potrf.hh",
                   "src/x/fam.cc", "src/x/fam_v2.hh", "src/x/helpers.hh", "src/x/public_user.cc", "src/x/quoted.cc",
                   "src/x/umbrella_user.cc"]
@@ -269,14 +269,14 @@ def main():
         return 1
     if a.self_test:
         return 0
-    users = v2_users(a.root)
+    users = device_users(a.root)
     bad = 0
     for f, text in users.items():
         st = strip(text)
         for off, msg in violations(st):
             print(f"{f}:{st.count(chr(10), 0, off) + 1}: {msg}")
             bad += 1
-    print(f"check_kernel_entry_calls: {len(users)} v2 user files, {bad} violations")
+    print(f"check_kernel_entry_calls: {len(users)} device LA user files, {bad} violations")
     return 1 if bad else 0
 
 

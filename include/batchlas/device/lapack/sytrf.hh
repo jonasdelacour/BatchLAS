@@ -15,7 +15,7 @@
 // The executor is a RtGroup<Group> (one work-group per item) or a SubGroup<32> (one sub-group of a
 // wider work-group). Arithmetic is arith::Fma; a complex fma product is not commutative in the last
 // bit, so each op states its operand order. Barriers order global memory too (the global-memory
-// tiers factor in place). Tests: tests/device_blas_v2_sytrf-sytrs_tests.cc.
+// tiers factor in place). Tests: tests/device_lapack_sytrf-sytrs_suite.cc.
 
 #include <cstddef>
 #include <limits>

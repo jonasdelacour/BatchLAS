@@ -283,7 +283,7 @@ template <class Tier> inline constexpr bool sygst_is_blocked_v = false;
 template <int NB, class Alg> inline constexpr bool sygst_is_blocked_v<tier::Blocked<NB, Alg>> = NB >= 1 && NB <= 32;
 template <class Tier> inline constexpr bool is_tier_v = sygst_is_cta_v<Tier> || sygst_is_blocked_v<Tier>;
 
-// The Blocked tier's Level 3 tile: device_api_l3's 32 x 32 x 8 preset, 256 items.
+// The Blocked tier's Level 3 tile: device_lapack_l3's 32 x 32 x 8 preset, 256 items.
 template <class D> using blocked_cfg_t = l3::cfg::RegTiled<D, 32, 32, 8, 2, 2>;
 
 // One Blocked matrix: local, the ?sygs2 block of order min(n, NB) and the L3 staging, both at

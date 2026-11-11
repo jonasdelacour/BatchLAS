@@ -426,7 +426,7 @@ template <class T> struct ColView {
     BATCHLAS_DEVICE_INLINE int ld() const { return ld_; }
 };
 
-// The trailing update's tile: the in-group L3 preset the device_api_l3 tests cover (256 items).
+// The trailing update's tile: the in-group L3 preset the device_lapack_l3 tests cover (256 items).
 template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 
 

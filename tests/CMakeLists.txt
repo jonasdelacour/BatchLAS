@@ -27,64 +27,53 @@ set(TEST_TARGETS
     bdsdc_tests
     bdsqr_tests
     cond_tests
-    device_api_chol_tests
-    device_api_gemv_tests
-    device_api_getrf_tests
-    device_api_l3_tests
-    device_api_lu_tests
-    device_api_potrf_tests
-    device_api_qr_tests
-    device_api_sb2st_tests
-    device_api_sparse_tests
-    device_api_stebz-stein_tests
-    device_api_stedc_tests
-    device_api_steqr_tests
-    device_api_svd_tests
-    device_api_sy2sb_tests
-    device_api_syev_tests
-    device_api_sygst_tests
-    device_api_sytrd_tests
-    device_api_sytrf_tests
-    device_api_util_tests
-    device_blas_v2_bdsqr-bdsdc_tests
-    device_blas_v2_elementwise-glue_tests
-    device_blas_v2_gebrd_tests
-    device_blas_v2_gemm-components_tests
-    device_blas_v2_gemv-native_tests
-    device_blas_v2_geqrf_tests
-    device_blas_v2_gesvd-ormbr_tests
-    device_blas_v2_getrf_tests
-    device_blas_v2_getrs-getri-gesv_tests
-    device_blas_v2_iluk-spmm_tests
-    device_blas_v2_jacobi_tests
-    device_blas_v2_krylov-ortho-ritz_tests
-    device_blas_v2_larft-orgqr-ormqr_tests
-    device_blas_v2_potrf-cta-lpanel_tests
-    device_blas_v2_potri_tests
-    device_blas_v2_sb2st-sy2sb_tests
-    device_blas_v2_stedc_tests
-    device_blas_v2_syev-cta-trio_tests
-    device_blas_v2_syevx_tests
-    device_blas_v2_sygst-sygvd-syfn_tests
-    device_blas_v2_sytrf-sytrs_tests
-    device_blas_v2_tests
-    device_blas_v2_tridiag-stebz-stein_tests
-    device_blas_v2_trsm_tests
     device_core_arith_tests
     device_core_exec_tests
     device_core_lapack_aux_tests
     device_core_level1_tests
     device_core_level2_tests
+    device_core_level3_components_tests
     device_core_level3_tests
     device_core_operand_tests
+    device_core_ops_tests
     device_core_reduce_tests
     device_core_scalar_tests
     device_core_tier_tests
     device_core_view_tests
+    device_lapack_bdsqr-bdsdc_tests
+    device_lapack_chol_tests
+    device_lapack_gebrd_tests
+    device_lapack_gemv_tests
+    device_lapack_geqrf_tests
+    device_lapack_gesvd-ormbr_tests
+    device_lapack_getrf_tests
+    device_lapack_getrs-getri-gesv_tests
+    device_lapack_iluk-spmm_tests
+    device_lapack_jacobi_tests
+    device_lapack_l3_tests
+    device_lapack_larft-orgqr-ormqr_tests
+    device_lapack_lu_tests
+    device_lapack_potrf_tests
+    device_lapack_potri_tests
+    device_lapack_qr_tests
+    device_lapack_sb2st_tests
+    device_lapack_sparse_tests
+    device_lapack_stebz-stein_tests
+    device_lapack_stedc_tests
+    device_lapack_steqr_tests
+    device_lapack_svd_tests
+    device_lapack_sy2sb_tests
+    device_lapack_syev_tests
+    device_lapack_syevx_tests
+    device_lapack_sygst_tests
+    device_lapack_sytrd_tests
+    device_lapack_sytrf_tests
+    device_lapack_util_tests
     error_model_tests
     gemm_candidates_tests
     gemm_mask_tests
     gemm_tests
+    gemv-native_kernels_tests
     gemv_candidates_tests
     gemv_tests
     geqrf_candidates_tests
@@ -110,6 +99,7 @@ set(TEST_TARGETS
     iluk_mask_tests
     iluk_tests
     inverse_tests
+    krylov-ortho-ritz_kernels_tests
     lanczos_tests
     level3_mask_tests
     linalg_layer_tests
@@ -151,6 +141,7 @@ set(TEST_TARGETS
     stein_tests
     steqr_mask_tests
     steqr_tests
+    syev-cta-trio_kernels_tests
     syev_align_tests
     syev_blocked_tests
     syev_candidates_tests
@@ -185,6 +176,7 @@ set(TEST_TARGETS
     trmm_candidates_tests
     trmm_tests
     trsm_candidates_tests
+    trsm_kernels_tests
     trsm_mask_tests
     trsm_tests
     tune_race_gpu_tests
@@ -195,6 +187,19 @@ set(TEST_TARGETS
     util_vector_tests
     vendor_ptr_array_tests
     verify_tests
+)
+
+# Extra translation units of one test binary, <binary>=<source>: the former device-BLAS suites
+# folded into device_lapack_<r> (decision D10 of the #250 cleanup), each in its own namespace.
+set(BATCHLAS_TEST_SUITE_SOURCES
+    device_core_lapack_aux_tests=device_core_elementwise-glue_suite.cc
+    device_lapack_getrf_tests=device_lapack_getrf_suite.cc
+    device_lapack_potrf_tests=device_lapack_potrf-cta-lpanel_suite.cc
+    device_lapack_sb2st_tests=device_lapack_sb2st-sy2sb_suite.cc
+    device_lapack_stebz-stein_tests=device_lapack_tridiag-stebz-stein_suite.cc
+    device_lapack_stedc_tests=device_lapack_stedc_suite.cc
+    device_lapack_sygst_tests=device_lapack_sygst-sygvd-syfn_suite.cc
+    device_lapack_sytrf_tests=device_lapack_sytrf-sytrs_suite.cc
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -270,44 +275,36 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     cond_tests
     group_collectives_tests
-    device_api_chol_tests
-    device_api_gemv_tests
-    device_api_getrf_tests
-    device_api_l3_tests
-    device_api_lu_tests
-    device_api_potrf_tests
-    device_api_qr_tests
-    device_api_sparse_tests
-    device_api_stebz-stein_tests
-    device_api_stedc_tests
-    device_api_svd_tests
-    device_api_sygst_tests
-    device_api_sytrf_tests
-    device_api_util_tests
-    device_blas_v2_bdsqr-bdsdc_tests
-    device_blas_v2_elementwise-glue_tests
-    device_blas_v2_gebrd_tests
-    device_blas_v2_gemm-components_tests
-    device_blas_v2_gemv-native_tests
-    device_blas_v2_geqrf_tests
-    device_blas_v2_gesvd-ormbr_tests
-    device_blas_v2_getrf_tests
-    device_blas_v2_getrs-getri-gesv_tests
-    device_blas_v2_iluk-spmm_tests
-    device_blas_v2_jacobi_tests
-    device_blas_v2_krylov-ortho-ritz_tests
-    device_blas_v2_larft-orgqr-ormqr_tests
-    device_blas_v2_potrf-cta-lpanel_tests
-    device_blas_v2_potri_tests
-    device_blas_v2_sb2st-sy2sb_tests
-    device_blas_v2_stedc_tests
-    device_blas_v2_syev-cta-trio_tests
-    device_blas_v2_syevx_tests
-    device_blas_v2_sygst-sygvd-syfn_tests
-    device_blas_v2_sytrf-sytrs_tests
-    device_blas_v2_tests
-    device_blas_v2_tridiag-stebz-stein_tests
-    device_blas_v2_trsm_tests
+    device_lapack_chol_tests
+    device_lapack_gemv_tests
+    device_lapack_getrf_tests
+    device_lapack_l3_tests
+    device_lapack_lu_tests
+    device_lapack_potrf_tests
+    device_lapack_qr_tests
+    device_lapack_sparse_tests
+    device_lapack_stebz-stein_tests
+    device_lapack_stedc_tests
+    device_lapack_svd_tests
+    device_lapack_sygst_tests
+    device_lapack_sytrf_tests
+    device_lapack_util_tests
+    device_lapack_bdsqr-bdsdc_tests
+    device_lapack_gebrd_tests
+    device_core_level3_components_tests
+    gemv-native_kernels_tests
+    device_lapack_geqrf_tests
+    device_lapack_gesvd-ormbr_tests
+    device_lapack_getrs-getri-gesv_tests
+    device_lapack_iluk-spmm_tests
+    device_lapack_jacobi_tests
+    krylov-ortho-ritz_kernels_tests
+    device_lapack_larft-orgqr-ormqr_tests
+    device_lapack_potri_tests
+    syev-cta-trio_kernels_tests
+    device_lapack_syevx_tests
+    device_core_ops_tests
+    trsm_kernels_tests
     device_core_arith_tests
     device_core_exec_tests
     device_core_lapack_aux_tests
@@ -375,14 +372,14 @@ set(BATCHLAS_TEST_LABELS_ortho
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     steqr_mask_tests stedc_mask_tests tridiag_mask_tests
-    sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests device_api_sb2st_tests
-    device_api_steqr_tests
-    device_api_sytrd_tests
-    device_api_sy2sb_tests
+    sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests device_lapack_sb2st_tests
+    device_lapack_steqr_tests
+    device_lapack_sytrd_tests
+    device_lapack_sy2sb_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
-    syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests device_api_syev_tests
+    syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests device_lapack_syev_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
     gesvd_candidates_tests syev_candidates_tests
     syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests gesvd_mask_tests syevx_mask_tests)
@@ -463,7 +460,7 @@ list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
-list(APPEND BATCHLAS_HEAVY_TESTS device_api_chol_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS device_lapack_chol_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS sygvd_mask_tests syev_mask_tests syevx_mask_tests getrs_mask_tests
     getrf_mask_tests)
 
@@ -481,6 +478,11 @@ endfunction()
 
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
+    foreach(_suite IN LISTS BATCHLAS_TEST_SUITE_SOURCES)
+        if(_suite MATCHES "^${test_name}=(.+)$")
+            target_sources(${test_name} PRIVATE ${CMAKE_MATCH_1})
+        endif()
+    endforeach()
     if(test_name STREQUAL "sg_partition_tests")
         # Header-only: compiles include/batchlas/device/detail/sg_partition/ directly and links
         # no batchlas library, only the SYCL compiler and include paths.
@@ -887,7 +889,7 @@ if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
 
     # sass_parity_tests: the gate's rule self-test, then each committed SASS snapshot of the
-    # device-LA v2 kernels against this build with the algo thresholds. Exit 2 ("A/B": an
+    # device-LA kernels against this build with the algo thresholds. Exit 2 ("A/B": an
     # occupancy step) fails here too. Skips (77) without an NVPTX image of the snapshot's arch.
     file(GLOB _sass_snapshots CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sass_snapshots/*.json")
     set(_sass_parity "\"${Python3_EXECUTABLE}\" \"${PROJECT_SOURCE_DIR}/scripts/sass_parity.py\"")
@@ -904,7 +906,7 @@ if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 900)
 endif()
 
-# kernel_entry_calls_tests: v2-using kernel bodies never call a local lambda or a view's
+# kernel_entry_calls_tests: device-LA kernel bodies never call a local lambda or a view's
 # operator() directly (the DPC++ SemaSYCL kernel-body quirk); see the script's docstring.
 if(Python3_Interpreter_FOUND)
     add_test(NAME kernel_entry_calls_tests
@@ -1006,8 +1008,8 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     endif()
 endif()
 
-# examples/device/: the device API guide's worked examples (docs/design/device-la-v2.md), each a
-# smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_api_* tests.
+# examples/device/: the device API guide's worked examples (docs/design/device-la.md), each a
+# smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_lapack_* tests.
 if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     foreach(_example potrf_any_n)
         add_executable(device_example_${_example} "${PROJECT_SOURCE_DIR}/examples/device/${_example}.cc")

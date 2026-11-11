@@ -11,7 +11,7 @@
 //   tier::Blocked<NB>, NB>1 any n: sytrf Blocked<NB>, then sytrs Blocked<NB> (sysv `compose`
 //                           over sytrf `blocked` and sytrs `blocked`); ex = WorkGroup<256, 32>;
 //                           not in tiers_t; sysv_buffer_size<UL, Tier, T>(n, nrhs)
-// Tests: tests/device_api_sytrf_tests.cc.
+// Tests: tests/device_lapack_sytrf_tests.cc.
 
 #include <cstddef>
 #include <type_traits>

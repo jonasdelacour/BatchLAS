@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The device API guide's worked example (docs/design/device-la-v2.md#device-la-v2-worked-examples):
+// The device API guide's worked example (docs/design/device-la.md#device-la-worked-examples):
 // a user kernel that factors a batch of n x n SPD matrices with device::potrf, for any n.
 // with_tier picks ONE tier on the host from n and the device's limits; each tier is a
 // separate kernel, so no kernel carries the registers of a path it never takes.

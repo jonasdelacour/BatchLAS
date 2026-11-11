@@ -15,8 +15,8 @@ std::vector<Entry>& registry() {
     static std::vector<Entry> r;
     return r;
 }
-void register_v2a();
-void register_v2b();
+void register_device_a();
+void register_device_b();
 }  // namespace lab
 
 using namespace lab;
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
         else if (a.rfind("--filter=", 0) == 0) filter = a.substr(9);
         else if (a == "--check-only") check_only = true;
     }
-    register_v2a(); register_v2b();
+    register_device_a(); register_device_b();
 
     sycl::queue q{sycl::gpu_selector_v, sycl::property::queue::enable_profiling{}};
     std::fprintf(stderr, "device: %s batch=%d warmup=%d iters=%d\n",
