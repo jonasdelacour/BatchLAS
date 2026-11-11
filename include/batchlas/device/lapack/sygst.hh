@@ -24,7 +24,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 /// F's leading dimension at order kb: whole 16-byte packs per line, plus one pack against bank
 /// conflicts; and the local elements of one block (F, then the transpose buffer of ld kb + 1).

@@ -7,7 +7,7 @@
 
 #include <batchlas/device/exec.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <class T>
 BATCHLAS_DLA_HELPER void lagts(const Thread&, const T* dl, const T* dd, const T* du, const T* du2, const unsigned char* swapped,
@@ -28,4 +28,4 @@ BATCHLAS_DLA_HELPER void lagts(const Thread&, const T* dl, const T* dd, const T*
     }
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

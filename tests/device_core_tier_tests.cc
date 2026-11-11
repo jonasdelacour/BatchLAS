@@ -25,7 +25,7 @@ struct mock {
 };
 }  // namespace mockdev
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 template <class T> struct tiers<mockdev::mock, T> {
     using type = tier::list<tier::Reg<16>, tier::Cta<64>, tier::Blocked<32>>;
 };

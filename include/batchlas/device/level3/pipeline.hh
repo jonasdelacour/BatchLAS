@@ -14,7 +14,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level3/copy_async.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 // load(kk0, stage) fills local stage `stage` with k slab kk0; compute(stage, kk0) consumes it.
 // Stages 1: load, barrier, compute, barrier per slab. Stages 2: slab t + 1 loads while slab t
@@ -136,4 +136,4 @@ BATCHLAS_UNROLL_FULL
     copy_async_wait<0>();
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

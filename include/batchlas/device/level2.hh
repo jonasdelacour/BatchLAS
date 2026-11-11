@@ -16,7 +16,7 @@
 
 #include <batchlas/device/level1.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace detail {
 template <class Ex, Transpose TR> constexpr auto default_gemv_alg() {

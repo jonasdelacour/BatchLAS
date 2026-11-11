@@ -27,7 +27,7 @@
 #include <batchlas/device/workspace.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace getf2_detail {
 

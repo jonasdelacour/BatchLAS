@@ -36,7 +36,7 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/util/group-invoke.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace sb2st_detail {
 
@@ -835,4 +835,4 @@ BATCHLAS_DLA_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& 
     return 0;
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

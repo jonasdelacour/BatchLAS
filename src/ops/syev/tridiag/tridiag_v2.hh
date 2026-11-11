@@ -6,7 +6,7 @@
 
 #include <batchlas/device.hh>
 
-namespace batchlas::device::inline v2::tridiag {
+namespace batchlas::device::tridiag {
 
 // v with (I - 2 v v^T) (a0, a1)^T = (-sign(a0) ||a||, 0)^T; unscaled norms (inputs are O(||T||)).
 template <class R> BATCHLAS_DLA_INLINE std::array<R, 2> house2(R a0, R a1) {

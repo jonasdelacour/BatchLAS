@@ -29,7 +29,7 @@
 #define BATCHLAS_DLA_BODY __attribute__((always_inline))
 #endif
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // The unroll policy of a v2-owned loop, emitted as loop metadata: Default adds none (LLVM and
 // ptxas decide, the hand loop's behaviour); None is llvm.loop.unroll.disable (PTX .pragma

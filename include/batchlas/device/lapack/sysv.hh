@@ -20,7 +20,7 @@
 #include <batchlas/device/lapack/sytrf.hh>
 #include <batchlas/device/lapack/sytrs.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 template <Uplo UL> struct sysv {

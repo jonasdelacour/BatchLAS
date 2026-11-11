@@ -13,7 +13,7 @@
 #include <batchlas/device/level3/pipeline.hh>
 #include <batchlas/device/operand.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 namespace detail {
 // ceil(value / divisor) as the tuned kernel spelled it (a call, run-time divisor): an inline
@@ -57,4 +57,4 @@ template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_tile(const Ex& ex
     }
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

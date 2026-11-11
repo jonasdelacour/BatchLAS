@@ -11,7 +11,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // A plain aggregate complex for device code: layout-compatible with std::complex<R> (a launcher
 // may reinterpret_cast at the pointer boundary) and free of Annex-G operators.

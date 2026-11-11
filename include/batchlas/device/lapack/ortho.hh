@@ -24,7 +24,7 @@
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace ortho_detail {
 template <class Tier> inline constexpr bool is_cta_v = false;

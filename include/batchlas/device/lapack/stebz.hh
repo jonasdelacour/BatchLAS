@@ -21,7 +21,7 @@
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace stebz_detail {
 template <class R> struct Interval {
@@ -197,4 +197,4 @@ BATCHLAS_DLA_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, 
     return 0;
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

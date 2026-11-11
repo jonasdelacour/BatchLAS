@@ -13,7 +13,7 @@
 #include <batchlas/device/lapack/getrf.hh>
 #include <batchlas/device/lapack/getrs.hh>
 
-namespace batchlas::device::inline v2::gesv_detail {
+namespace batchlas::device::gesv_detail {
 
 // x[k] -= m * x[k]@src, k0 <= k < min(N, kend), where act; collective: every lane reaches every k.
 template <int N, class Px, class T>
@@ -30,7 +30,7 @@ BATCHLAS_UNROLL_FULL
 }  // namespace batchlas::device::gesv_detail
 
 // ==== the public op: gesv<Tier>(ex, A, B, ipiv, ws [, live]) (v22 design C.2-C.7) ================
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 struct gesv {

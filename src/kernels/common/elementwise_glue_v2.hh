@@ -12,7 +12,7 @@
 
 #include <batchlas/device.hh>
 
-namespace batchlas::device::inline v2::glue {
+namespace batchlas::device::glue {
 
 // Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
 // (the legacy spelling, so a 1:1 port stays 1:1).

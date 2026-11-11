@@ -5,7 +5,7 @@
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <int P, bool Masked = sgp::kMaskedByDefault>
 using SgpPartition = Partition<P, Masked, SubGroupPartition<static_cast<size_t>(P), Masked>>;

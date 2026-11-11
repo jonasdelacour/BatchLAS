@@ -28,7 +28,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace sytrf_detail {
 

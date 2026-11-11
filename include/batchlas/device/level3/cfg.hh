@@ -15,7 +15,7 @@
 #include <batchlas/device/arith.hh>
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 /// TM x TN output tile, TK-deep k slabs, each item a TR x TC register tile; Stages local stages
 /// (1, or 2 double-buffered), UnrollK k steps per inner iteration. op(A) slab slot (r, c) at
@@ -86,4 +86,4 @@ template <class C, class Acc> BATCHLAS_DLA_INLINE Smem<C> smem_of(const Acc& acc
     return {acc.template get_multi_ptr<sycl::access::decorated::no>().get()};
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

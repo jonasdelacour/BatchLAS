@@ -10,7 +10,7 @@
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // ---- address bases ------------------------------------------------------------------------
 // How an operand reaches element k. B = T* (default); Aligned<T, A>: a pointer whose alignment

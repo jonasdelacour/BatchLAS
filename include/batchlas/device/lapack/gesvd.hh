@@ -20,7 +20,7 @@
 #include <batchlas/device/lapack/ormbr.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2::gesvd_detail {
+namespace batchlas::device::gesvd_detail {
 
 // The symmetric tridiagonal Gram matrix of the real upper bidiagonal B = (d, e), k = d.size():
 // Side::Right is B^T B (order k), Side::Left is B B^T padded with zero rows to order td.size().
@@ -96,7 +96,7 @@ template <class Ex, class E, class S> BATCHLAS_DLA_INLINE void tridiag_abs_offdi
 
 }  // namespace batchlas::device::gesvd_detail
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 template <SvdVectors JU, SvdVectors JVT> struct gesvd {

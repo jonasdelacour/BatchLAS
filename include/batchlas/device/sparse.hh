@@ -34,7 +34,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/blas/matrix.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // One scalar access, or a complex as one 2-wide vector access (needs 2 * sizeof(real) alignment).
 template <bool Pair> struct PairAccess {

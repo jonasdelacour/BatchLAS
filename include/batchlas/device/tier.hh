@@ -24,7 +24,7 @@
 #include <batchlas/device/workspace.hh>
 #include <batchlas/error.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace tier {
 template <int N, bool Exact = false> struct Reg {

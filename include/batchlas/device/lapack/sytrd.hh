@@ -18,7 +18,7 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace sytrd_detail {
 
@@ -124,7 +124,7 @@ BATCHLAS_DLA_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const Bl
         if (is_alpha) alpha = e;
         else x = e;
     }
-    const T taui = v2::larfg<conv::Phase, Ops>(ex, m, ar, alpha, x, x_active);
+    const T taui = larfg<conv::Phase, Ops>(ex, m, ar, alpha, x, x_active);
     if (x_active) {  // both triangles: the block update reads the full block
         col(lane) = x;
         row(lane) = Ar::conj(x);
@@ -136,25 +136,25 @@ BATCHLAS_DLA_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const Bl
         on_step(i, alpha, taui);
     }
     if (taui != Ar::zero()) {
-        v2::copy(fx, v2::unit_head<refl::QR, unit_fill::Keep>(col, ar), vm);
-        v2::sync<scope::Part>(ex);
+        copy(fx, unit_head<refl::QR, unit_fill::Keep>(col, ar), vm);
+        sync<scope::Part>(ex);
         if (is_alpha) {  // LAPACK's temporary unit; the block ops read v, not the column
             col(ar) = Ar::one();
             row(ar) = Ar::one();
         }
-        v2::sync<scope::Part>(ex);
+        sync<scope::Part>(ex);
         sytrd_detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
-        v2::sync<scope::Part>(ex);
+        sync<scope::Part>(ex);
         const T alpha2 = T(-0.5) * taui * sytrd_detail::dotc<Ops>(fx, vm, wm);
-        v2::axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
-        v2::sync<scope::Part>(ex);
+        axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
+        sync<scope::Part>(ex);
         sytrd_detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
-        v2::sync<scope::Part>(ex);
+        sync<scope::Part>(ex);
         if (is_alpha) {
             col(ar) = alpha;
             row(ar) = Ar::conj(alpha);
         }
-        v2::sync<scope::Part>(ex);
+        sync<scope::Part>(ex);
     } else if constexpr (UL == Uplo::Upper) {
         if (is_alpha) row(ar) = Ar::conj(alpha);
     }
@@ -179,7 +179,7 @@ BATCHLAS_DLA_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, con
         for (int k = n - 1; k >= 1; --k) {  // annihilate A(0:k-2, k); alpha = A(k-1, k)
             sytrd_detail::sytd2_step<UL, Ops>(ex, k - 1, k, k - 1, a.sub(0, 0, k, k), a.col(k).head(k), a.row(k).head(k), v, w,
                                               lane < k - 1, tau_lane, on_step);
-            v2::sync<scope::Part>(ex);
+            sync<scope::Part>(ex);
         }
     } else {
         for (int i = 0; i <= n - 2; ++i) {  // annihilate A(i+2:n-1, i); alpha = A(i+1, i) on item 0
@@ -289,13 +289,13 @@ template <int WG, Mem VM = Mem::Local, class T, class AB, class WB, class Loc, c
 BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, T* v_ptr, T* wcol_ptr,
                                          const Loc& vip_local, const Loc& wip_local, F&& on_reflector) {
     using Real = real_t<T>;
-    using v2::arith::Native;
+    using arith::Native;
     const int lid = ex.lid();
     const sycl::group<1> g = ex.it.get_group();
-    const auto A = v2::mat(Ab.data(), n, n, Ab.ld());
-    const auto W = v2::mat(Wb.data(), n, ib, Wb.ld());
-    const auto vfull = v2::vec<VM>(v_ptr, n);
-    const auto wfull = v2::vec<VM>(wcol_ptr, n);
+    const auto A = mat(Ab.data(), n, n, Ab.ld());
+    const auto W = mat(Wb.data(), n, ib, Wb.ld());
+    const auto vfull = vec<VM>(v_ptr, n);
+    const auto wfull = vec<VM>(wcol_ptr, n);
 
     for (int i = 0; i < ib; ++i) {
         if (i >= n - 1) break;
@@ -323,7 +323,7 @@ BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, 
             for (int p = 0; p < i; ++p) {
                 const T wip = wip_local[p];
                 const T vip = vip_local[p];
-                const T vrp = v2::unit_head(A.col(p), p + 1)(r);
+                const T vrp = unit_head(A.col(p), p + 1)(r);
                 const T wrp = Wb(r, p);
                 val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
             }
@@ -333,7 +333,7 @@ BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, 
 
         // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.
         const auto x = A.col(i).tail(i + 2);
-        const Real sumsq = v2::reduce<Scope::Group>(ex, x.size(), [&](int k) {
+        const Real sumsq = reduce<Scope::Group>(ex, x.size(), [&](int k) {
             const T& xk = x(k);
             if constexpr (Arith<T>::is_complex) {
                 const Real re = xk.real();
@@ -388,7 +388,7 @@ BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, 
         tau_i = ::batchlas::portable::group_broadcast(g, tau_i);
         scale = ::batchlas::portable::group_broadcast(g, scale);
 
-        if (tau_i != T(0)) v2::scal<Native>(ex, scale, x);
+        if (tau_i != T(0)) scal<Native>(ex, scale, x);
         ex.barrier(Mem::Global);
 
         // w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
@@ -396,22 +396,22 @@ BATCHLAS_DLA_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, 
         const auto w = wfull.tail(i + 1);
         // i by value: on AdaptiveCpp (Metal and its CPU device) a by-reference capture of this
         // barrier loop's counter gives NaN eigenvalues (syev_blocked Upper n = 96).
-        v2::for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
-        v2::hemv<Uplo::Lower, v2::alg::RowOwnerSplitStoredDiag, v2::arith::ExplicitInline>(
-            ex, v2::One{}, v2::trailing(Ab, i + 1, n), ex.publish(v2::trailing(vfull, i + 1)), v2::Zero{}, v2::trailing(wfull, i + 1));
+        for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
+        hemv<Uplo::Lower, alg::RowOwnerSplitStoredDiag, arith::ExplicitInline>(
+            ex, One{}, trailing(Ab, i + 1, n), ex.publish(trailing(vfull, i + 1)), Zero{}, trailing(wfull, i + 1));
 
         for (int p = 0; p < i; ++p) {
-            const auto vcol = v2::unit_head(A.col(p), p + 1).tail(i + 1);
+            const auto vcol = unit_head(A.col(p), p + 1).tail(i + 1);
             const auto wcol = W.col(p).tail(i + 1);
-            const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
+            const auto gd = dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
             const T gamma = gd[0], delta = gd[1];
-            v2::map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
+            map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
         }
 
-        v2::scal<Native>(ex, tau_i, w);
-        const T dot = v2::dotc<Scope::Group, Native>(ex, v, w);
-        v2::axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
-        v2::copy(ex, w, W.col(i).tail(i + 1));
+        scal<Native>(ex, tau_i, w);
+        const T dot = dotc<Scope::Group, Native>(ex, v, w);
+        axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
+        copy(ex, w, W.col(i).tail(i + 1));
         ex.barrier(Mem::Global);
     }
 }

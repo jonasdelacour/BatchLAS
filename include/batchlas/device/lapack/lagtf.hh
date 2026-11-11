@@ -10,7 +10,7 @@
 
 #include <batchlas/device/exec.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <class T>
 BATCHLAS_DLA_HELPER void lagtf(const Thread&, T* dl, T* dd, T* du, T* du2, unsigned char* swapped, std::int64_t n, T tol) {
@@ -39,4 +39,4 @@ BATCHLAS_DLA_HELPER void lagtf(const Thread&, T* dl, T* dd, T* du, T* du2, unsig
     if (sycl::fabs(dd[n - 1]) < tol) dd[n - 1] = (dd[n - 1] < T(0)) ? -tol : tol;
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

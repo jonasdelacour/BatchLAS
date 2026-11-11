@@ -12,7 +12,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/laed4.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace laed3_detail {
 
@@ -123,4 +123,4 @@ BATCHLAS_DLA_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t firs
     laed3_detail::form_vectors<T>(pex, first, stride, dd, Q, v, bid);
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

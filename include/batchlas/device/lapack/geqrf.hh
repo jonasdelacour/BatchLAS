@@ -17,7 +17,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/lapack/larfb.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace geqrf_detail {
 

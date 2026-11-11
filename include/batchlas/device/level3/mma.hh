@@ -13,7 +13,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/operand.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 // acc += a b^T on a TR x TC register tile. Full: the full-unroll pragmas; otherwise none (the
 // register-tiled kernel's own loops, unrolled as the compiler decides).
@@ -85,4 +85,4 @@ BATCHLAS_DLA_INLINE void gemv_t_frag(Frag<T, NC>& acc, const Frag<T, NA>& a, FB&
     }
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

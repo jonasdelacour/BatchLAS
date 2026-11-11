@@ -15,7 +15,7 @@
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/operand.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace detail {
 // op(A)(i, j) of a register tile.

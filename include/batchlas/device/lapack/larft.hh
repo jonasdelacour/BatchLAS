@@ -7,7 +7,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace larft_detail {
 

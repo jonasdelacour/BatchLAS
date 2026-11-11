@@ -25,7 +25,7 @@
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace stein_detail {
 /// The start vector's generator (dstein uses dlarnv): a 32-bit LCG, so a fixed per-(item,
@@ -247,4 +247,4 @@ BATCHLAS_DLA_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, 
     return 0;
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

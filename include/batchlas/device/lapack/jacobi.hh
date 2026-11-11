@@ -17,7 +17,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2::jacobi_detail {
+namespace batchlas::device::jacobi_detail {
 
 template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, arith::Native>;
 

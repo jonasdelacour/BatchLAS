@@ -12,7 +12,7 @@
 
 #include <batchlas/backend_config.h>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 #if BATCHLAS_DEVICE_NO_VECTOR_TYPES
 
@@ -67,4 +67,4 @@ inline sycl::vec<T, Width> packet_load_aligned(const T* ptr, int offset) {
     return *reinterpret_cast<const sycl::vec<T, Width>*>(ptr + offset);
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

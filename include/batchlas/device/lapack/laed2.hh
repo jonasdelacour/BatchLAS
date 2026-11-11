@@ -23,7 +23,7 @@
 #include <batchlas/device/lapack/laed4.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace laed2_detail {
 // portable::joint_reduce over a contiguous x (core allreduce folds in another order); empty: T{}.
@@ -139,4 +139,4 @@ BATCHLAS_DLA_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, const Z
     }
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

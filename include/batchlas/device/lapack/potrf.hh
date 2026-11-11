@@ -47,7 +47,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace potrf_detail {
 struct Potf2Result {

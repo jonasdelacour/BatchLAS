@@ -33,7 +33,7 @@
 #include <batchlas/device/level3/stage.hh>
 #include <batchlas/device/operand.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace l3 {
 

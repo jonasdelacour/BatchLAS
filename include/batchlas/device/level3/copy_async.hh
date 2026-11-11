@@ -12,7 +12,7 @@
 #define BATCHLAS_GEMM_CP_ASYNC 0
 #endif
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 // One Bytes-wide copy (4, 8 or 16; src and dst aligned to Bytes): the first src_bytes are read and
 // the rest zero-filled (0: nothing is read, src may be out of bounds). cp.async on sm_80+
@@ -52,4 +52,4 @@ inline void copy_async_wait() {
 #endif
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

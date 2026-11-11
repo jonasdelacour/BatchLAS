@@ -21,7 +21,7 @@
 #include <batchlas/device/lapack/larft.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace sy2sb_detail {
 
@@ -201,4 +201,4 @@ BATCHLAS_DLA_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau
     return 0;
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

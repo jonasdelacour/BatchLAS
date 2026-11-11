@@ -24,7 +24,7 @@
 #include <batchlas/device/view.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace gebd2_detail {
 // larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.

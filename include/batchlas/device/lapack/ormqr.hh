@@ -13,7 +13,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/larfb.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 template <Side SD, Transpose TR> struct ormqr {

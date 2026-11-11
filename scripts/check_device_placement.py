@@ -3,6 +3,7 @@
 """Placement guard for the public device LA layer (v22 design A.0).
 
     scripts/check_device_placement.py [--root DIR] [--allowlist FILE] [--write-allowlist] [--self-test]
+                                       [--layout] [--enforce-layout]
 
 Rules, each a (rule, file, name) finding:
   src-device     src/ defines a name in namespace batchlas::device (any sub-namespace): src/ops/<op>/
@@ -25,6 +26,8 @@ names each namespace-scope declaration (function, class, enum, alias, variable).
 a body (`void f(int);`, `struct S;`), using-declarations and class template specializations
 (`struct tier_info<routine::potrf<UL>, ...> {...}`: a routine's facts for a core template) are not
 definitions.
+Layout rules (#250 cleanup plan section 1; layout_findings lists them): warnings only, counted on every
+run, listed with --layout, failing with --enforce-layout (WP R-d turns that on).
 Exit codes: 0 clean, 1 findings or stale entries (or a failed self-test).
 """
 import argparse
@@ -287,6 +290,139 @@ def findings(root):
     return found
 
 
+DEV = "batchlas::device"
+LAYOUT_NS = frozenset({DEV} | {f"{DEV}::{s}" for s in (
+    "detail", "detail::nvptx", "detail::amdgcn", "detail::spirv", "detail::sscp", "tier", "routine", "l3", "l3::cfg",
+    "alg", "arith", "epi", "reduce_op")})
+SRC_DEVICE_NS = ("potrf_native", "getrf_native", "geqrf_native", "tiny_native", "sycl_device", "syev_v2", "stedc_v2",
+                 "krylov_v2", "sycl_trsm::dla", "sycl_gemv::dla")
+V2_FILE = re.compile(r"(?:^|[_\-/])v2(?:[_\-.]|$)|^v2")
+V2_KEEP = re.compile(r"wide_v2|kernel_hash_v2|nvml")
+INLINE_NS = re.compile(r"\binline\s+namespace\b|\bnamespace\s+[\w:]*::inline\s")
+DEVICE_ALIAS = re.compile(r"\bnamespace\s+(\w+)\s*=\s*((?:::)?(?:batchlas::)?device\b(?:::\w+)*)\s*;")
+TIER_TRAIT = re.compile(r"^is_(?:reg|cta|blocked)_v$")
+
+
+def layout_findings(root):
+    """{(rule, file, name): first line} for the plan section-1 layout (warn mode until WP R-d).
+
+    layout-ns         a definition in a batchlas::device namespace outside LAYOUT_NS, or any inline
+                      namespace, in a device file
+    layout-alias      src/ or examples/: `namespace X = batchlas::device...`
+    layout-src-ns     src/: a definition in a src device namespace (SRC_DEVICE_NS)
+    layout-detail-use src/ or examples/: a device detail name other than `detail::<routine>_run`
+    layout-detail-dup one name defined in two device detail namespaces (the merge would collide)
+    layout-tier-trait is_{reg,cta,blocked}_v defined outside batchlas::device::tier
+    layout-v2         a v2 file name or a BATCHLAS_DLA_* macro in the device layer
+    """
+    found, dets, detail_ns = {}, collections.defaultdict(set), set()
+
+    def add(rule, rel, name, line):
+        found.setdefault((rule, rel, name), line)
+
+    texts = {}
+    for rel, path in sources(root).items():
+        text = strip(open(path, errors="replace").read())
+        texts[rel] = text
+        decls = declarations(text)
+        dev = [d for d in decls if in_device(d.ns)]
+        device_file = is_public_device(rel) or bool(dev)
+        for d in dev:
+            leaf = d.ns.split("::")[-1]
+            if leaf.endswith("_detail") or leaf == "detail":
+                detail_ns.add(leaf)
+                if not re.search(r"::(?:nvptx|amdgcn|spirv|sscp)(?:_detail)?\b", d.ns):
+                    dets[d.name].add(d.ns)
+            if device_file and d.ns not in LAYOUT_NS:
+                add("layout-ns", rel, d.ns, d.line)
+            if TIER_TRAIT.match(d.name) and d.ns != f"{DEV}::tier":
+                add("layout-tier-trait", rel, f"{d.ns}::{d.name}", d.line)
+        if device_file:
+            for m in INLINE_NS.finditer(text):
+                add("layout-ns", rel, "inline namespace", text.count("\n", 0, m.start()) + 1)
+        if rel.startswith("src/"):
+            for d in decls:
+                rest = d.ns[len("batchlas::"):] if d.ns.startswith("batchlas::") else ""
+                if any(rest == s or rest.startswith(s + "::") for s in SRC_DEVICE_NS):
+                    add("layout-src-ns", rel, f"{d.ns}::{d.name}", d.line)
+        if (is_public_device(rel) or rel.startswith("src/")) and V2_FILE.search(os.path.basename(rel)) \
+                and not V2_KEEP.search(rel):
+            add("layout-v2", rel, "file name", 1)
+    for top in ("src", "include", "examples"):
+        for d, _, names in os.walk(os.path.join(root, top)):
+            for name in names:
+                if not name.endswith(EXTS):
+                    continue
+                rel = os.path.relpath(os.path.join(d, name), root).replace(os.sep, "/")
+                text = texts.get(rel) or strip(open(os.path.join(d, name), errors="replace").read())
+                raw = open(os.path.join(d, name), errors="replace").read()
+                m = re.search(r"\bBATCHLAS_DLA_(?:INLINE|HELPER|BODY)\b", raw)
+                if m:
+                    add("layout-v2", rel, "BATCHLAS_DLA_* macro", raw.count("\n", 0, m.start()) + 1)
+                if not rel.startswith(("src/", "examples/")):
+                    continue
+                for m in DEVICE_ALIAS.finditer(text):
+                    add("layout-alias", rel, f"{m.group(1)} = {m.group(2)}", text.count("\n", 0, m.start()) + 1)
+                if detail_ns:
+                    rx = re.compile(r"(?<![\w])(?:(?:::)?batchlas::)?(?:device::)?(" + "|".join(
+                        sorted(n for n in detail_ns if n != "detail")) + r"|device::detail)::(\w+)")
+                    for m in rx.finditer(text):
+                        if not m.group(2).endswith("_run"):
+                            add("layout-detail-use", rel, f"{m.group(1)}::{m.group(2)}",
+                                text.count("\n", 0, m.start()) + 1)
+    for name, spaces in dets.items():
+        if len(spaces) > 1:
+            add("layout-detail-dup", "-", f"{name}: {' '.join(sorted(spaces))}", 0)
+    return found
+
+
+LAYOUT_TREE = {
+    "include/batchlas/device/core.hh": """
+        namespace batchlas::device::inline v2 { struct Ok {}; }                    // BREAK L1 (inline)
+        namespace batchlas::device::scope { struct Part {}; }                     // BREAK L2 (mode namespace)
+        namespace batchlas::device::tier { template <class T> constexpr bool is_cta_v = true; }
+        namespace batchlas::device::potrf_detail { template <class T> constexpr bool is_cta_v = true;  // BREAK L3, L4
+            struct Layout {}; }
+        namespace batchlas::device::stein_detail { struct Layout {}; }            // BREAK L5 (dup)
+        #define X BATCHLAS_DLA_INLINE                                              // BREAK L6
+        """,
+    "src/ops/foo/foo.cc": """
+        namespace v2 = batchlas::device;                                         // BREAK L7
+        namespace batchlas::tiny_native { inline int f(int k) { return k; } }    // BREAK L8
+        namespace batchlas { int g() { return device::potrf_detail::Layout{}, device::detail::potrf_run<int>(); } }
+        """,
+}
+LAYOUT_WANT = {
+    ("layout-ns", "include/batchlas/device/core.hh", "inline namespace"),
+    ("layout-ns", "include/batchlas/device/core.hh", "batchlas::device::v2"),
+    ("layout-ns", "include/batchlas/device/core.hh", "batchlas::device::scope"),
+    ("layout-ns", "include/batchlas/device/core.hh", "batchlas::device::potrf_detail"),
+    ("layout-ns", "include/batchlas/device/core.hh", "batchlas::device::stein_detail"),
+    ("layout-tier-trait", "include/batchlas/device/core.hh", "batchlas::device::potrf_detail::is_cta_v"),
+    ("layout-detail-dup", "-", "Layout: batchlas::device::potrf_detail batchlas::device::stein_detail"),
+    ("layout-v2", "include/batchlas/device/core.hh", "BATCHLAS_DLA_* macro"),
+    ("layout-alias", "src/ops/foo/foo.cc", "v2 = batchlas::device"),
+    ("layout-src-ns", "src/ops/foo/foo.cc", "batchlas::tiny_native::f"),
+    ("layout-detail-use", "src/ops/foo/foo.cc", "potrf_detail::Layout"),
+}
+
+
+def layout_self_test():
+    with tempfile.TemporaryDirectory() as root:
+        for rel, text in LAYOUT_TREE.items():
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            with open(os.path.join(root, rel), "w") as fh:
+                fh.write(text)
+        got = set(layout_findings(root))
+    for f in sorted(got - LAYOUT_WANT):
+        print(f"  unexpected: {f}")
+    for f in sorted(LAYOUT_WANT - got):
+        print(f"  missed: {f}")
+    ok = got == LAYOUT_WANT
+    print(f"check_device_placement: layout self-test {'passed' if ok else 'FAILED'} ({len(got)} findings, 7 rules)")
+    return 0 if ok else 1
+
+
 def read_allowlist(path):
     if not os.path.isfile(path):
         return set()
@@ -398,8 +534,10 @@ def main():
     ap.add_argument("--allowlist", default=DEFAULT_ALLOWLIST)
     ap.add_argument("--write-allowlist", action="store_true", help="replace the allowlist with today's findings")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--layout", action="store_true", help="list every layout warning (default: counts only)")
+    ap.add_argument("--enforce-layout", action="store_true", help="layout warnings fail (WP R-d turns this on)")
     a = ap.parse_args()
-    if self_test() != 0:
+    if self_test() != 0 or layout_self_test() != 0:
         return 1
     if a.self_test:
         return 0
@@ -418,7 +556,14 @@ def main():
     count = collections.Counter(r for r, _, _ in found)
     print(f"check_device_placement: {len(found)} findings ({', '.join(f'{k} {v}' for k, v in sorted(count.items()))}), "
           f"{len(new)} not allowlisted, {len(stale)} stale")
-    return 1 if new or stale else 0
+    layout = layout_findings(a.root)
+    if a.layout or a.enforce_layout:
+        for rule, rel, name in sorted(layout):
+            print(f"{rel}:{layout[(rule, rel, name)]}: {rule}: {name}")
+    lcount = collections.Counter(r for r, _, _ in layout)
+    print(f"check_device_placement: layout {'errors' if a.enforce_layout else 'warnings'} {len(layout)} "
+          f"({', '.join(f'{k} {v}' for k, v in sorted(lcount.items()))}){'' if a.layout else '; --layout lists them'}")
+    return 1 if new or stale or (a.enforce_layout and layout) else 0
 
 
 if __name__ == "__main__":

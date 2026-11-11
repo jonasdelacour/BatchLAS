@@ -14,7 +14,7 @@
 #include <batchlas/device/lapack/larft.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace larfb_detail {
 // The L3 configuration of a QR tier::Blocked<NB, Alg>: Alg itself when it is an l3::cfg preset,

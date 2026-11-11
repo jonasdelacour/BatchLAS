@@ -16,7 +16,7 @@
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 struct getri {

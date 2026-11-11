@@ -17,7 +17,7 @@
 #include <batchlas/device/scalar.hh>
 #include <batchlas/device/sg_partition.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // ---- Cyclic rows of a static extent N (N % size == 0): item l owns rows l + k*size ----------
 // f(k, row) for the item's N / size rows, k a compile-time Frag slot; no bound check.

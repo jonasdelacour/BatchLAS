@@ -14,7 +14,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace detail {
 template <class V> inline constexpr bool is_vec_like_v = requires(const V& v) { v.size(); v(0); };

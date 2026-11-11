@@ -13,7 +13,7 @@
 #include <batchlas/device/lapack/larfb.hh>
 #include <batchlas/device/lapack/ormqr.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 struct orgqr {

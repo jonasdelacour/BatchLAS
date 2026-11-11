@@ -16,7 +16,7 @@
 #include <batchlas/device/view.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace ritz_values_detail {
 // The one workspace plan of the Blocked form (buffer_size and the carve): the Level 3 stages

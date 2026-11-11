@@ -16,7 +16,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level3/packet.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 // op(X)(row, col) of a column-major X: the conjugate (core conj: std::conj, by reference) only
 // for a complex ConjTrans.
@@ -151,4 +151,4 @@ BATCHLAS_DLA_INLINE void stage_storage(int start, S0 s0n, S1 s1n, bool live, con
     }
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

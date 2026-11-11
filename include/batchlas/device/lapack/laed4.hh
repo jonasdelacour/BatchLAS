@@ -22,7 +22,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 /// Root of xLAED4: x = origin + tau; converged = the iteration met its error bound (false: it
 /// ran out of max_iter, the merge reports info > 0).
@@ -401,4 +401,4 @@ BATCHLAS_DLA_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, 
     return laed4_detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
 }
 
-}  // namespace batchlas::device::inline v2
+}  // namespace batchlas::device

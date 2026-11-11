@@ -20,6 +20,7 @@ Single plain commands the worktree Bash guard accepts. The skills in `.claude/sk
 | `vendor_gaps.py` | where the vendor still beats native, from the tuned tables |
 | `dispatch.sh` | worktree + unattended session on jrhnbr, tr02 (CPU/build only, GPUs hidden) or the Mac, in `screen` with Remote Control on (shows as `dispatch-NAME` in claude.ai/code); `hosts`/`list`/`logs`/`report`/`attach`/`stop`/`rm` |
 | `prune_worktrees.sh` | remove clean, merged worktrees (`--apply`) |
+| `device_rename.py` | device LA rename map R1-R8 (#250 cleanup): dry run with per-rule counts, `--steps R1,R2 --apply`; delete once #244 has rebased |
 | `claude-settings.json` | template for `.claude/settings.json`: `session_start.sh`, `scripts/agent_build_guard.py`, `scripts/agent_tier_guard.py`, read-only allow rules |
 | `../agent_tier_guard.py` | blocks an Agent call or Workflow `agent()` that picks no tier from `.claude/agents/` |
 

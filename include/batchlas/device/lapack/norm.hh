@@ -5,7 +5,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/device/lapack_aux.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 /// @brief \f$\lVert A \rVert\f$ of one m x n matrix per executor, the host norm() inside a kernel.
 /// @tparam NT   Max, One, Inf or Frobenius; compile-time, so one kernel holds one reduction

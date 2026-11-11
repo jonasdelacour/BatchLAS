@@ -11,7 +11,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // Local range (LB, GC, GR), dimension 2 fastest, so consecutive items walk a column and both
 // sides of a copy coalesce. Item (row(), col()) of batch items batch() + k * global_range(0).

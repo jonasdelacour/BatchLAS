@@ -19,7 +19,7 @@
 #include <batchlas/device/lapack/getrf.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::inline v2::getrs_detail {
+namespace batchlas::device::getrs_detail {
 
 // Y(:, c) := op(A)^{-1} Y(:, c) for c = c0, c0 + cs, ... < Y.cols(), lane i owning row i (rows
 // >= A.rows() idle). Lower runs forward, Upper backward; Unit skips the last pivot, which
@@ -117,7 +117,7 @@ BATCHLAS_DLA_INLINE void lapmr_copy(const Ex& ex, const MA& a, const P& perm, co
 }  // namespace batchlas::device::getrs_detail
 
 // ==== the public op: getrs<TR, Tier>(ex, A, B, ipiv, ws [, live]) (v22 design C.2-C.7) ===========
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace routine {
 struct getrs {

@@ -15,7 +15,7 @@
 #include <batchlas/device/reduce.hh>
 #include <batchlas/device/scalar.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
 

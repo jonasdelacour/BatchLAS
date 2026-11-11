@@ -19,7 +19,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <class R> constexpr R safmin() {
     constexpr R eps = std::numeric_limits<R>::epsilon();

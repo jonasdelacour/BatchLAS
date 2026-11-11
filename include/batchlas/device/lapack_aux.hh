@@ -12,7 +12,7 @@
 #include <batchlas/device/scalar.hh>
 #include <batchlas/device/view.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // B := op(A) on part P of B (LAPACK lacpy; OP = Trans / ConjTrans reads A(j, i)). B outside P
 // is not written; A outside the mirrored part is not read. B must not alias A for OP != NoTrans.

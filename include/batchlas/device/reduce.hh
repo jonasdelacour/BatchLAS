@@ -15,7 +15,7 @@
 #include <batchlas/device/core.hh>
 #include <batchlas/device/exec.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace tie {
 struct Lowest {};

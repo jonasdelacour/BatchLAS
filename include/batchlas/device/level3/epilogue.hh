@@ -15,7 +15,7 @@
 #include <batchlas/device/core.hh>
 #include <batchlas/device/operand.hh>
 
-namespace batchlas::device::inline v2::l3 {
+namespace batchlas::device::l3 {
 
 // \f$\beta = 0\f$ is \f$\alpha \cdot \mathrm{accum}\f$ alone and never reads C: \f$0 \cdot \mathrm{NaN}\f$ is NaN, and \f$-0 + 0 \cdot 0 = +0\f$.
 // evidence: docs/design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero
@@ -118,4 +118,4 @@ BATCHLAS_DLA_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row,
     }
 }
 
-}  // namespace batchlas::device::inline v2::l3
+}  // namespace batchlas::device::l3

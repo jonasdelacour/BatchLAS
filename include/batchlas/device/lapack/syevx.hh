@@ -9,7 +9,7 @@
 #include <batchlas/device/level1.hh>
 #include <batchlas/device/view.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 // lam: n ascending eigenvalues, q: their vectors. Block [first, first + count), or for a value
 // range (vl, vu] the leader's Sturm counts (stebz's `<=`) published in block[0..1] (int64 SLM).

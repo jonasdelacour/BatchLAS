@@ -22,7 +22,7 @@
 #include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/device/sg_partition.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace syev_detail {
 

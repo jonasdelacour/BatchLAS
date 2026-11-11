@@ -17,7 +17,7 @@
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace posv_detail {
 template <Uplo UL, int NB, class Alg, int WG, int SG, class MA, class MB>

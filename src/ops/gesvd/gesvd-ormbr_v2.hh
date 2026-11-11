@@ -9,7 +9,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/gesvd.hh>
 
-namespace batchlas::device::inline v2::gesvd_glue {
+namespace batchlas::device::gesvd_glue {
 
 // ---- operand adaptors ---------------------------------------------------------------------------
 // v2::item(VectorView, b) with n elements (the view's own size may be larger).

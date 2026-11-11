@@ -9,7 +9,7 @@
 #include <batchlas/device/operand.hh>
 #include <batchlas/blas/matrix.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE Vec<T, Dyn, Dyn, M> vec(const VectorView<T>& v) {
     return {v.data_ptr(), Dyn{v.size()}, Dyn{v.inc()}};

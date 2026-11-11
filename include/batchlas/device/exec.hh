@@ -17,7 +17,7 @@
 #include <batchlas/device/core.hh>
 #include <batchlas/util/group-collectives.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 template <class V> struct Published;
 

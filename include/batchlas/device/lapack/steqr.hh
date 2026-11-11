@@ -20,7 +20,7 @@
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 namespace steqr_detail {
 
@@ -186,12 +186,12 @@ BATCHLAS_DLA_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, 
     const R anorm = lanst_max(th, d_, e_);
     if (anorm > ssfmax<R>()) {
         const R s = ssfmax<R>() / anorm;
-        v2::scal(th, s, d_);
-        v2::scal(th, s, e_);
+        scal(th, s, d_);
+        scal(th, s, e_);
     } else if (anorm < ssfmin<R>() && anorm != R(0)) {
         const R s = ssfmin<R>() / anorm;
-        v2::scal(th, s, d_);
-        v2::scal(th, s, e_);
+        scal(th, s, d_);
+        scal(th, s, e_);
     }
 
     const auto shift = eig2x2_closest(virt_get<R, 1>(d_, QR, n_local, n_local - 2), virt_get<R, 2>(e_, QR, n_local, n_local - 2),
@@ -210,12 +210,12 @@ BATCHLAS_DLA_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, 
 
     if (anorm > ssfmax<R>()) {
         const R s = anorm / ssfmax<R>();
-        v2::scal(th, s, d_);
-        v2::scal(th, s, e_);
+        scal(th, s, d_);
+        scal(th, s, e_);
     } else if (anorm < ssfmin<R>() && anorm != R(0)) {
         const R s = anorm / ssfmin<R>();
-        v2::scal(th, s, d_);
-        v2::scal(th, s, e_);
+        scal(th, s, d_);
+        scal(th, s, e_);
     }
     return deflatable;
 }

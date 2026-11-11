@@ -15,7 +15,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::inline v2 {
+namespace batchlas::device {
 
 struct WorkspaceSize {
     std::size_t local_bytes = 0;
