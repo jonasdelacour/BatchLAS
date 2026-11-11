@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_sygst {
+namespace batchlas::ops::sygst {
 
 /// The largest diagonal block the kernel reduces: one work-item per column, the column in registers.
 inline constexpr int kDiagMaxOrder = 32;
@@ -57,7 +57,7 @@ BATCHLAS_INTERNAL_API Event sygst_mirror(Queue& ctx, const T* a, int lda, std::p
                                          Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f,
                                          const std::uint8_t* mask);
 
-}  // namespace batchlas::sycl_sygst
+}  // namespace batchlas::ops::sygst
 
 namespace batchlas::ops::sygst {
 

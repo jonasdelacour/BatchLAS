@@ -42,20 +42,20 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && n <= sycl_potrf::potrf_tiny_max_n<T>() &&
-                   d.max_wg >= sycl_potrf::kPotrfTinyWgSize;
+            return native && n <= ops::potrf::potrf_tiny_max_n<T>() &&
+                   d.max_wg >= resident::kTinyWgSize;
         },
-        [&](Cta) { return native && n <= sycl_potrf::potrf_cta_max_n_for_slm<T>(budget); },
+        [&](Cta) { return native && n <= ops::potrf::potrf_cta_max_n_for_slm<T>(budget); },
         [&](const Lpanel& l) {
             // 0 for a panel width this scalar type does not instantiate.
             return native && uplo == Uplo::Lower &&
-                   n <= sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, d.max_wg,
+                   n <= ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget, d.max_wg,
                                                                   resident::kMinBlocksPerSm, l.panel);
         },
         [&](Blocked) {
             // Either triangle; its leaf is the CTA kernel, so CTA must hold at least order 1.
-            return native && sycl_potrf::potrf_blocked_available<T>() &&
-                   sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
+            return native &&
+                   ops::potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
         [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !masked; },
     }, c);
@@ -66,15 +66,15 @@ Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::D
              Span<std::byte> ws, Span<int32_t> info) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_potrf::potrf_tiny_dispatch<T>(q, A, uplo, ws, info); },
-        [&](Cta) { return sycl_potrf::potrf_cta_dispatch<T>(q, A, uplo, ws, info); },
+        [&](Tiny) { return ops::potrf::potrf_tiny_dispatch<T>(q, A, uplo, ws, info); },
+        [&](Cta) { return ops::potrf::potrf_cta_dispatch<T>(q, A, uplo, ws, info); },
         [&](const Lpanel& l) {
-            return sycl_potrf::potrf_lpanel_dispatch<T>(q, A, uplo, ws, info, resident::kMinBlocksPerSm,
+            return ops::potrf::potrf_lpanel_dispatch<T>(q, A, uplo, ws, info, resident::kMinBlocksPerSm,
                                                         l.panel);
         },
         [&](Blocked) {
             // The public gemm and trsm: each child decides its own kernel.
-            return sycl_potrf::potrf_blocked_dispatch<T>(
+            return ops::potrf::potrf_blocked_dispatch<T>(
                 q, A, uplo, ws, info,
                 [](Queue& c, const MV& a, const MV& b, const MV& r, T alpha, T beta, Transpose ta,
                    Transpose tb, ComputePrecision p) { return gemm<B, T>(c, a, b, r, alpha, beta, ta, tb, p); },
@@ -94,10 +94,10 @@ Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::D
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_potrf::potrf_tiny_buffer_size<T>(q, A); },
-        [&](Cta) { return sycl_potrf::potrf_cta_buffer_size<T>(q, A); },
-        [&](const Lpanel&) { return sycl_potrf::potrf_lpanel_buffer_size<T>(q, A); },
-        [&](Blocked) { return sycl_potrf::potrf_blocked_buffer_size<T>(q, A, uplo); },
+        [&](Tiny) { return ops::potrf::potrf_tiny_buffer_size<T>(q, A); },
+        [&](Cta) { return ops::potrf::potrf_cta_buffer_size<T>(q, A); },
+        [&](const Lpanel&) { return ops::potrf::potrf_lpanel_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::potrf::potrf_blocked_buffer_size<T>(q, A, uplo); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::potrf_vendor_buffer_size<B, T>(q, A, uplo);

@@ -212,7 +212,7 @@ protected:
         return static_cast<int>(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     }
     int blocked_nb() const {
-        return static_cast<int>(sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, 1 << 20) & 0xffffu);
+        return static_cast<int>(ops::potrf::potrf_blocked_debug_params<T>(*this->ctx, 1 << 20) & 0xffffu);
     }
 
     // The largest order a candidate claims for `uplo`: 0 for none, kUnbounded for no ceiling.
@@ -220,14 +220,13 @@ protected:
     int limit(const C& c, Uplo uplo) const {
         const bool lower = uplo == Uplo::Lower;
         if (std::holds_alternative<pc::Tiny>(c))
-            return max_wg() >= sycl_potrf::kPotrfTinyWgSize ? sycl_potrf::potrf_tiny_max_n<T>() : 0;
-        if (std::holds_alternative<pc::Cta>(c)) return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget());
+            return max_wg() >= resident::kTinyWgSize ? ops::potrf::potrf_tiny_max_n<T>() : 0;
+        if (std::holds_alternative<pc::Cta>(c)) return ops::potrf::potrf_cta_max_n_for_slm<T>(budget());
         if (const auto* l = std::get_if<pc::Lpanel>(&c))
-            return lower ? sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget(), max_wg(),
+            return lower ? ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget(), max_wg(),
                                                                      resident::kMinBlocksPerSm, l->panel)
                          : 0;
-        if (std::holds_alternative<pc::Blocked>(c))
-            return sycl_potrf::potrf_blocked_available<T>() ? kUnbounded : 0;
+        if (std::holds_alternative<pc::Blocked>(c)) return kUnbounded;
         return batchlas::select::solver_vendor_available<B> ? kUnbounded : 0;
     }
 
@@ -285,19 +284,19 @@ protected:
         std::visit([&](const auto& f) {
             using F = std::decay_t<decltype(f)>;
             if constexpr (std::is_same_v<F, pc::Tiny>) {
-                go(sycl_potrf::potrf_tiny_buffer_size<T>(q, A),
-                   [&](Span<std::byte> w) { return sycl_potrf::potrf_tiny_dispatch<T>(q, A, uplo, w, info); });
+                go(ops::potrf::potrf_tiny_buffer_size<T>(q, A),
+                   [&](Span<std::byte> w) { return ops::potrf::potrf_tiny_dispatch<T>(q, A, uplo, w, info); });
             } else if constexpr (std::is_same_v<F, pc::Cta>) {
-                go(sycl_potrf::potrf_cta_buffer_size<T>(q, A),
-                   [&](Span<std::byte> w) { return sycl_potrf::potrf_cta_dispatch<T>(q, A, uplo, w, info); });
+                go(ops::potrf::potrf_cta_buffer_size<T>(q, A),
+                   [&](Span<std::byte> w) { return ops::potrf::potrf_cta_dispatch<T>(q, A, uplo, w, info); });
             } else if constexpr (std::is_same_v<F, pc::Lpanel>) {
-                go(sycl_potrf::potrf_lpanel_buffer_size<T>(q, A), [&](Span<std::byte> w) {
-                    return sycl_potrf::potrf_lpanel_dispatch<T>(q, A, uplo, w, info, resident::kMinBlocksPerSm,
+                go(ops::potrf::potrf_lpanel_buffer_size<T>(q, A), [&](Span<std::byte> w) {
+                    return ops::potrf::potrf_lpanel_dispatch<T>(q, A, uplo, w, info, resident::kMinBlocksPerSm,
                                                                 f.panel);
                 });
             } else if constexpr (std::is_same_v<F, pc::Blocked>) {
-                go(sycl_potrf::potrf_blocked_buffer_size<T>(q, A, uplo), [&](Span<std::byte> w) {
-                    return sycl_potrf::potrf_blocked_dispatch<T>(
+                go(ops::potrf::potrf_blocked_buffer_size<T>(q, A, uplo), [&](Span<std::byte> w) {
+                    return ops::potrf::potrf_blocked_dispatch<T>(
                         q, A, uplo, w, info,
                         [](Queue& c2, const MV& a, const MV& b, const MV& r, T al, T be, Transpose ta, Transpose tb,
                            ComputePrecision pr) { return gemm<B, T>(c2, a, b, r, al, be, ta, tb, pr); },

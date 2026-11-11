@@ -96,7 +96,7 @@ original obstacle: `gemm<Backend::CUDA, float>` lived in `cublas.cc`).
 - **An op moves together with its `*_buffer_size` query**, or the two choose differently (the
   `ormqr` sizing defect: a query returned 2560 bytes, the call needed 276480).
 - **A native driver calls the public op**, passed in as a lambda, never a native kernel directly:
-  calling `sycl_gemm::gemm_custom` bypassed gemm's selection and pinned it on shapes it loses.
+  calling `ops::gemm::gemm_custom` bypassed gemm's selection and pinned it on shapes it loses.
 
 `scripts/facade_symbol_check.sh` verifies this by symbol: a forwarder left behind still compiles.
 

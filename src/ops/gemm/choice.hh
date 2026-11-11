@@ -200,7 +200,7 @@ constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
     return std::int64_t(wide_stages<T>(c)) * c.k * ((c.m + c.n) * std::int64_t(sizeof(T)) + pad);
 }
 
-// sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.
+// The small kernels' limits, sycl-free; small_batched.hh uses these.
 inline constexpr int kSmallMaxDim = 64;
 inline constexpr int kSmallWg = 128;
 inline constexpr int kSmallTiledMaxDim = 56;  // float NN above 32: one matrix per (NB/4)^2 lanes

@@ -6,6 +6,7 @@
 // See docs/perf/potrf.md#the-blocked-driver and #the-blocked-upper-driver
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/potrf/kernels/symmetric_product_fold.hh>
 
 #include <src/ops/trsm/trsm_native.hh>
@@ -31,7 +32,7 @@
 #include <batchlas/tuning_params.hh>
 
 namespace batchlas {
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
 
@@ -92,7 +93,7 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     if (n > 0) nb = std::min(nb, n);
 
     // Rounded to whole trsm_cta_max_n<T>() blocks, so a hand-set BATCHLAS_POTRF_NB stays measured.
-    const int leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
+    const int leaf_trsm = ops::trsm::trsm_cta_max_n<T>();
     if (leaf_trsm > 0 && nb >= leaf_trsm) {
         nb = (nb / leaf_trsm) * leaf_trsm;
     }
@@ -270,20 +271,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_blocked: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_blocked: degenerate extents");
-    }
+    const auto dev = native::require_launchable(ctx, "potrf_blocked", A, {.square = true, .sub_group = 0});
     const bool upper = (uplo == Uplo::Upper);
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_blocked: GPU queues only");
-    }
 
     const auto p = potrf_blocked_params<T>(ctx, n);
     const int nb = p.nb;
@@ -424,10 +413,6 @@ Event potrf_blocked_dispatch(Queue& ctx,
     return ctx.get_event();
 }
 
-template <> bool potrf_blocked_available<float>()                { return true; }
-template <> bool potrf_blocked_available<double>()               { return true; }
-template <> bool potrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool potrf_blocked_available<std::complex<double>>() { return true; }
 
 #define BATCHLAS_POTRF_BLOCKED_INSTANTIATE(T)                                                 \
     template unsigned potrf_blocked_debug_params<T>(Queue&, int);                              \
@@ -444,5 +429,5 @@ BATCHLAS_POTRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

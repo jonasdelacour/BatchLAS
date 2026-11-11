@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share. The device
-// body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
+// body lives in lapack/geqrf.hh because geqrf_blocked.cc's panel step runs the SAME code
 // against a global accessor -- correctness fixes belong there. Whether Auto picks THIS arm is
 // the tuned/geqrf.* table's call; a pin (BATCHLAS_GEQRF_ROUTE=cta) reaches it on any build.
 // evidence: docs/perf/qr.md#qr-route-arms
 
 #include <src/ops/geqrf/geqrf_native.hh>
-#include <src/ops/geqrf/geqrf_cta_device.hh>
+#include <src/kernels/common/launch.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 #include <src/ops/geqrf/geqrf_panel_reg_device.hh>
 
 #include <src/queue.hh>
@@ -25,7 +27,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_geqrf {
+namespace ops::geqrf {
 
 namespace {
 
@@ -37,26 +39,19 @@ constexpr std::size_t geqrf_slm_bytes(int64_t m, int64_t n) {
     return static_cast<std::size_t>(m) * static_cast<std::size_t>(n) * sizeof(T);
 }
 
-// Allocations in (kGeqrfHoleLo, kGeqrfHoleHi] fail to launch once device::geqr2's
-// reduce_over_group calls add static shared, so such a request is padded past the band.
-// The attribute is sticky per CUfunction, so a suite can be green by launch order alone.
-// evidence: docs/perf/qr.md#the-48-kib-launch-hole
-constexpr std::size_t kGeqrfHoleLo = 47104;
-constexpr std::size_t kGeqrfHoleHi = 49664;
-constexpr std::size_t kGeqrfHolePadTo = 49920;
-
-constexpr std::size_t geqrf_hole_padded(std::size_t bytes) {
-    return (bytes > kGeqrfHoleLo && bytes <= kGeqrfHoleHi) ? kGeqrfHolePadTo : bytes;
-}
+// device::geqr2's reduce_over_group calls add static shared, which arms the 48 KB launch hole
+// (resident::hole_padded). The attribute is sticky per CUfunction, so a suite can be green by
+// launch order alone. evidence: docs/perf/qr.md#the-48-kib-launch-hole
 
 // A budget inside the band cannot host a tile inside it, so clamp to just below: the
 // table's `m*n <= cta_max_elems` gate and geqrf_cta_fits must not disagree.
 constexpr std::size_t geqrf_hole_safe_budget(std::size_t budget) {
-    return (budget > kGeqrfHoleLo && budget < kGeqrfHolePadTo) ? kGeqrfHoleLo : budget;
+    return (budget > resident::kLaunchHoleLo && budget < resident::kLaunchHolePadTo) ? resident::kLaunchHoleLo
+                                                                                    : budget;
 }
 
 // One work-group per matrix, 32 * teams work-items; teams track COLUMNS and lanes track
-// ROWS, matching the apply in geqrf_cta_device.hh.
+// ROWS, matching the apply in lapack/geqrf.hh.
 inline int geqrf_panel_wg(int n, int max_wg) {
     int teams = 1;
     while (teams < 8 && teams < n) teams *= 2;
@@ -121,7 +116,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
     // The allocation steps over the launch hole; the body indexes only tile_elems per
     // panel, G panels side by side.
     const std::size_t tile_alloc_elems =
-        geqrf_hole_padded(static_cast<std::size_t>(G) * tile_elems * sizeof(D)) / sizeof(D);
+        resident::hole_padded(static_cast<std::size_t>(G) * tile_elems * sizeof(D)) / sizeof(D);
     const int num_wg = (batch + G - 1) / G;
 
     ctx->submit([&](sycl::handler& h) {
@@ -304,7 +299,7 @@ constexpr std::size_t geqrf_panel_reg_worst_slm() {
 // GATE 1: the slot arrays stay clear of the launch hole. GATE 2: no probe row describes a width
 // the plan has since changed. Both fail to COMPILE rather than at a launch nobody re-ran.
 #define BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(D)                                               \
-    static_assert(geqrf_panel_reg_worst_slm<D>() < kGeqrfHoleLo,                              \
+    static_assert(geqrf_panel_reg_worst_slm<D>() < resident::kLaunchHoleLo,                   \
                   "the register leaf's slot arrays have grown into the 48 KiB launch hole");  \
     static_assert(geqrf_native::geqrf_panel_reg_row_is_current<D>(),                                    \
                   "the register panel leaf's probe row was measured at a different width "    \
@@ -331,11 +326,16 @@ int64_t geqrf_cta_max_elems_for_slm(std::size_t slm_budget_bytes, int min_blocks
     return static_cast<int64_t>(wg_budget / sizeof(T));
 }
 
+namespace {
+
+// The WHOLE budget (0 = tier absent); min_blocks_per_sm cuts the slice the tier ADVERTISES.
 template <typename T>
 int geqrf_cta_max_m_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
     const int64_t e = geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes, min_blocks_per_sm);
     return static_cast<int>(std::min<int64_t>(e, 0x7fffffff));
 }
+
+}  // namespace
 
 // The TIER's fit predicate, occupancy-scaled by default: the table's capacity, the CTA
 // entry point's gate and this must be one predicate, or a routed shape fails at enqueue.
@@ -350,7 +350,7 @@ bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes, int min_blocks_p
                static_cast<int64_t>(geqrf_cta_max_m_for_slm<T>(slm_budget_bytes,
                                                                min_blocks_per_sm)) &&
            elems <= geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes, min_blocks_per_sm) &&
-           geqrf_hole_padded(geqrf_slm_bytes<T>(m, n)) <= wg_budget;
+           resident::hole_padded(geqrf_slm_bytes<T>(m, n)) <= wg_budget;
 }
 
 // The RESIDENCY predicate, at the whole budget: "can this panel be held in local memory
@@ -490,24 +490,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("geqrf_cta: degenerate extents");
-    }
     // m < n is the whole wide ?GEQR2: m reflectors, each applied across all n columns.
-    if (A.is_heterogeneous()) {
-        // One launch covers the batch with a single (m, n, ld, stride) tuple.
-        throw batchlas::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("geqrf_cta: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, not MAX_SUB_GROUP_SIZE >= 32: that returns the FIRST supported
-        // size, so the weak test accepts a {64} device and the launch aborts.
-        throw batchlas::unsupported(
-            "geqrf_cta: device does not offer sub-group size 32, which the kernel requires");
-    }
+    const auto dev = native::require_launchable(ctx, "geqrf_cta", A, {});
 
     const std::size_t k = static_cast<std::size_t>(std::min(m, n));
     if (tau.size() < k * static_cast<std::size_t>(batch)) {
@@ -547,7 +531,6 @@ Event geqrf_cta_dispatch(Queue& ctx,
 
 // Per scalar type only, no Backend cross-product: the kernel has no vendor dependency.
 #define BATCHLAS_GEQRF_CTA_INSTANTIATE(T)                                                     \
-    template int geqrf_cta_max_m_for_slm<T>(std::size_t, int);                                \
     template int64_t geqrf_cta_max_elems_for_slm<T>(std::size_t, int);                        \
     template bool geqrf_cta_fits<T>(int, int, std::size_t, int);                              \
     template bool geqrf_leaf_fits<T>(int, int, std::size_t);                                  \
@@ -571,5 +554,5 @@ BATCHLAS_GEQRF_CTA_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GEQRF_CTA_INSTANTIATE
 
-}  // namespace sycl_geqrf
+}  // namespace ops::geqrf
 }  // namespace batchlas

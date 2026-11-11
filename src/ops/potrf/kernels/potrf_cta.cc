@@ -6,9 +6,11 @@
 // evidence: docs/perf/potrf.md
 
 #include <src/ops/potrf/potrf_native.hh>
-#include <src/ops/potrf/kernels/potrf_cta_device.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
+#include <batchlas/device/core.hh>
+#include <batchlas/device/lapack/potrf.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/ops/potrf/potrf_slm_hole.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
@@ -31,7 +33,7 @@ namespace batchlas {
 template <typename T, int NB, int TS, device::Scope SC>
 class PotrfCtaKernel;
 
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
 
@@ -63,9 +65,8 @@ constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
          + 4 * static_cast<std::size_t>(Rt0 + 1);
 }
 
-// The 48 KB launch hole is spelled ONCE, in potrf_slm_hole.hh, because the LPanel leaf pads
-// against the same band. Inert only while these kernels have zero static shared.
-using potrf_native::potrf_hole_padded;
+// The 48 KB launch hole (resident::hole_padded) is inert only while these kernels have zero
+// static shared.
 
 // Scope is derived here and nowhere else, so no caller can assert one the L ladder disagrees with.
 struct PotrfCtaLaunch {
@@ -108,7 +109,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     p.wg_size = p.G * p.L;
     p.num_wg = (batch + p.G - 1) / p.G;
     p.scope = (p.L == 32) ? device::Scope::Sub : device::Scope::Group;
-    p.slm_total = potrf_hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
+    p.slm_total = resident::hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
     p.fits = (p.slm_total <= slm_budget) && (p.wg_size <= max_wg);
 
     // Under Scope::Group the phase barriers are work-group barriers, which is
@@ -130,7 +131,7 @@ int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
         [](int n) {
             using C = PotrfCtaConst<T>;
             using DM = sycl_device::DevMap<T>;
-            return potrf_hole_padded(potrf_slm_per_matrix(n, C::NB, C::TS,
+            return resident::hole_padded(potrf_slm_per_matrix(n, C::NB, C::TS,
                                                           sizeof(typename DM::type),
                                                           sizeof(typename DM::real)));
         },
@@ -142,21 +143,10 @@ int potrf_cta_max_n() {
     return potrf_cta_max_n_for_slm<T>(kPotrfReferenceSlmBudget);
 }
 
-namespace {
-
-template <typename T>
-Span<int32_t> potrf_cta_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
-}  // namespace
-
 template <typename T>
 std::size_t potrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int batch = A.batch_size();
-    return workspace_bytes([&](BumpAllocator& p) {
-        return potrf_cta_layout<T>(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The launch geometry, for tests; see potrf_native.hh.
@@ -283,26 +273,7 @@ Event potrf_cta_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_cta: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_cta: degenerate extents");
-    }
-    if (A.is_heterogeneous()) {
-        // One launch, one (order, ld, stride) tuple read from the capacity extents.
-        throw batchlas::invalid_argument("potrf_cta: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_cta: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the first
-        // supported size, so it accepts a {64} device -- a launch abort under reqd_sub_group_size(32).
-        throw batchlas::unsupported(
-            "potrf_cta: device does not offer sub-group size 32, which the kernel requires");
-    }
+    const auto dev = native::require_launchable(ctx, "potrf_cta", A, {.square = true});
 
     // The OCCUPANCY slice, not the whole budget: at the default target this gate is the
     // same predicate can_run() advertises, so a chosen order cannot fail at enqueue. The
@@ -324,11 +295,7 @@ Event potrf_cta_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an empty
-    // or short caller span means "not requested" and draws pool scratch instead.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : potrf_cta_layout<T>(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const bool upper = (uplo == Uplo::Upper);
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
@@ -358,5 +325,5 @@ BATCHLAS_POTRF_CTA_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_CTA_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

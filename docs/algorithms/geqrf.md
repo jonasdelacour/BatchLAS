@@ -123,7 +123,7 @@ correct ones. No route takes a heterogeneous batch; native routes need a GPU and
 | --- | --- | --- |
 | `tiny` | \f$m = n \le\f$ `geqrf_tiny_max_n_for_slm` (\f$\le 32\f$) | one matrix per partition of \f$N \in \{8, 16, 32\}\f$ lanes; lane \f$i\f$ holds row \f$i\f$ in registers |
 | `cta` | `geqrf_cta_fits`: \f$mn\f$ scalars fit the occupancy-scaled local memory | `geqr2_panel_device` on the matrix in local memory; a work-group per matrix, or a sub-group when \f$m, n \le 32\f$ and two or more fit a work-group ([`geqrf_cta.cc:83-97`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L83-L97)) |
-| `blocked` | `geqrf_blocked_available`, CTA tier present | panel leaf, `larft`, three routed GEMMs |
+| `blocked` | CTA tier present | panel leaf, `larft`, three routed GEMMs |
 | `vendor` | a vendor library; masked batches only on NETLIB | `backend::geqrf_vendor` |
 
 - **`tiny`** reduces with XOR butterflies ([`src/ops/geqrf/kernels/geqrf_tiny_device.hh:23-39`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_tiny_device.hh#L23-L39)) and

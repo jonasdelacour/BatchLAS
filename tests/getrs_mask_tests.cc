@@ -16,7 +16,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/ops/gesv/choice.hh>
 #include <src/ops/getri/choice.hh>
@@ -240,7 +240,7 @@ TYPED_TEST(LuSolveMask, GesvEveryFamilyLeavesInactiveItemsUntouched) {
     if (!this->device() && !this->host_loop()) GTEST_SKIP() << "no masked gesv family here";
     if (this->device()) {
         for (int n : {5, 13, 27}) {
-            if (n > sycl_gesv::gesv_tiny_max_n<T>()) continue;
+            if (n > ops::gesv::gesv_tiny_max_n<T>()) continue;
             this->gesv_check({"tiny", n, n == 13 ? 4 : 2, 24, Transpose::NoTrans, TestFixture::tiny_items(n)});
         }
     }
@@ -284,7 +284,7 @@ TYPED_TEST(LuSolveMask, SaturatingBatchIsBitIdentical) {
     if (!this->device()) GTEST_SKIP() << "tiny and cta are device families";
     this->gesv_check({"tiny", 8, 2, 1024, Transpose::NoTrans, 8, true});
     using T = typename TestFixture::T;
-    if (20 <= sycl_gesv::gesv_tiny_max_n<T>()) this->gesv_check({"tiny", 20, 1, 1024, Transpose::NoTrans, 2, true});
+    if (20 <= ops::gesv::gesv_tiny_max_n<T>()) this->gesv_check({"tiny", 20, 1, 1024, Transpose::NoTrans, 2, true});
     this->getrs_check({"cta", 24, 2, 1024, Transpose::NoTrans, 0, true});
     this->getrs_check({"cta", 24, 2, 1024, Transpose::ConjTrans, 0, true});
 }

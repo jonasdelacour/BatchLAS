@@ -21,7 +21,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
 #include <src/ops/gesv/choice.hh>
 
 #include <algorithm>
@@ -212,10 +212,10 @@ protected:
     // ---- the limit oracle: the driver's own capacity query, not gesv.cc's can_run ----
     int tiny_n() const {
         const int wg = static_cast<int>(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-        return wg >= sycl_gesv::kGesvTinyWgSize ? sycl_gesv::gesv_tiny_max_n<T>() : 0;
+        return wg >= resident::kTinyWgSize ? ops::gesv::gesv_tiny_max_n<T>() : 0;
     }
     bool expect_runs(const C& c, int n, int nrhs) const {
-        if (std::holds_alternative<gs::Tiny>(c)) return n <= tiny_n() && nrhs <= sycl_gesv::kGesvTinyMaxRhs;
+        if (std::holds_alternative<gs::Tiny>(c)) return n <= tiny_n() && nrhs <= ops::gesv::kGesvTinyMaxRhs;
         return true;
     }
 
@@ -264,9 +264,9 @@ protected:
     void run_direct(const C& c, Sys<T>& p, Span<int32_t> info) {
         Queue& q = *this->ctx;
         if (std::holds_alternative<gs::Tiny>(c)) {
-            const std::size_t bytes = sycl_gesv::gesv_tiny_buffer_size<T>(q, p.A(), p.B());
+            const std::size_t bytes = ops::gesv::gesv_tiny_buffer_size<T>(q, p.A(), p.B());
             UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-            (void)sycl_gesv::gesv_tiny_dispatch<T>(q, p.A(), p.B(), p.piv.to_span(), Span<std::byte>(ws.data(), bytes),
+            (void)ops::gesv::gesv_tiny_dispatch<T>(q, p.A(), p.B(), p.piv.to_span(), Span<std::byte>(ws.data(), bytes),
                                                    info);
         } else {
             const std::size_t fb = getrf_buffer_size<B, T>(q, p.A());
@@ -286,9 +286,9 @@ protected:
         UnifiedVector<int32_t> info(std::max<int>(A.batch_size(), 1), int32_t(0));
         UnifiedVector<int64_t> piv(std::max<std::size_t>(std::size_t(A.rows()) * A.batch_size(), 1));
         try {
-            const std::size_t bytes = sycl_gesv::gesv_tiny_buffer_size<T>(q, A, Bm);
+            const std::size_t bytes = ops::gesv::gesv_tiny_buffer_size<T>(q, A, Bm);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-            (void)sycl_gesv::gesv_tiny_dispatch<T>(q, A, Bm, piv.to_span(), Span<std::byte>(ws.data(), bytes),
+            (void)ops::gesv::gesv_tiny_dispatch<T>(q, A, Bm, piv.to_span(), Span<std::byte>(ws.data(), bytes),
                                                    info.to_span());
             q.wait();
             return true;

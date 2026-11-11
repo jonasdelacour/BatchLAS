@@ -117,9 +117,9 @@ protected:
         mc::check<og::GeqrfChoice>(*this->ctx, "geqrf", s.spelling, p.make_case());
     }
     // Items per tiny work-group at order n (0: the tier does not take n here).
-    int tiny_items(int n) { return int(sycl_geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) & 0xffffu); }
+    int tiny_items(int n) { return int(ops::geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) & 0xffffu); }
     // The blocked panel leaf at m x n: 1 resident, 2 global, 3 register.
-    int blocked_leaf(int m, int n) { return int(sycl_geqrf::geqrf_blocked_debug_params<T>(*this->ctx, m, n) >> 16); }
+    int blocked_leaf(int m, int n) { return int(ops::geqrf::geqrf_blocked_debug_params<T>(*this->ctx, m, n) >> 16); }
 
     std::vector<Shape> tiny_shapes(int batch, bool identical) {
         std::vector<Shape> v;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <src/linalg-impl.hh>
+#include <src/kernels/common/info_target.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/math-helpers.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -230,11 +231,9 @@ Event tridiagonal_solver(Queue& ctx,
     });
 
     ctx.wait();
-    for (size_t b = 0; b < batch_size; ++b) {
-        if (status_ptr[b] != 0) {
-            throw batchlas::convergence_error("tridiagonal_solver: an eigenvalue did not converge within " +
-                                              std::to_string(kTridiagMaxIterations) + " QR steps");
-        }
+    if (detail::any_nonzero(status_ptr, static_cast<int64_t>(batch_size))) {
+        throw batchlas::convergence_error("tridiagonal_solver: an eigenvalue did not converge within " +
+                                          std::to_string(kTridiagMaxIterations) + " QR steps");
     }
     return ctx.get_event();
 }

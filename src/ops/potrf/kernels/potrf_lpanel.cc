@@ -6,8 +6,9 @@
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/potrf/kernels/potrf_lpanel_device.hh>
-#include <src/ops/potrf/potrf_slm_hole.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
@@ -30,11 +31,9 @@ namespace batchlas {
 template <typename T, int NB, bool Masked>
 class PotrfLpanelKernel;
 
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
-
-using potrf_native::potrf_hole_padded;
 
 // The panel width, and the length of the rp[]/rS[]/rA[] register arrays: 3 * NB scalars
 // per lane before addressing. evidence: docs/perf/potrf.md#lpanel-register-gate
@@ -94,13 +93,13 @@ PotrfLpanelLaunch potrf_lpanel_launch_params(int n, int nb, int batch, std::size
     p.G = resident::pack_matrices_per_wg(p.slm_per_matrix, p.L, slm_budget, max_wg);
     // The pad is applied to the TOTAL, so a G the byte test passed can still overflow it.
     while (p.G > 1 &&
-           potrf_hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix) > slm_budget) {
+           resident::hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix) > slm_budget) {
         p.G >>= 1;
     }
 
     p.wg_size = p.G * p.L;
     p.num_wg = (batch + p.G - 1) / p.G;
-    p.slm_total = potrf_hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
+    p.slm_total = resident::hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
     p.fits = (p.L >= n) && (p.slm_total <= slm_budget) && (p.wg_size <= max_wg);
     return p;
 }
@@ -118,28 +117,17 @@ int potrf_lpanel_max_n_for_slm(std::size_t slm_budget_bytes, int max_wg_size,
     const int by_slm = resident::resident_max_n(
         [nb](int n) {
             using DM = sycl_device::DevMap<T>;
-            return potrf_hole_padded(
+            return resident::hole_padded(
                 potrf_lpanel_slm_per_matrix(n, nb, sizeof(typename DM::type)));
         },
         slm_budget_bytes, min_blocks_per_sm);
     return std::min(by_wg, by_slm);
 }
 
-namespace {
-
-template <typename T>
-Span<int32_t> potrf_lpanel_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
-}  // namespace
-
 template <typename T>
 std::size_t potrf_lpanel_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int batch = A.batch_size();
-    return workspace_bytes([&](BumpAllocator& p) {
-        return potrf_lpanel_layout<T>(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The launch geometry, for tests; see potrf_native.hh for the encoding.
@@ -265,12 +253,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_lpanel: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_lpanel: degenerate extents");
-    }
+    const auto dev = native::require_launchable(ctx, "potrf_lpanel", A, {.square = true});
     if (uplo != Uplo::Lower) {
         // The left-looking recurrence reads A(j+i, k) with k < j -- the LOWER triangle --
         // so Upper would need the transformed-tile trick potrf_cta.cc uses. No in-tree
@@ -279,19 +262,6 @@ Event potrf_lpanel_dispatch(Queue& ctx,
         throw batchlas::invalid_argument(
             "potrf_lpanel: Uplo::Upper is not implemented; see "
             "can_run in src/ops/potrf/potrf.cc");
-    }
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrf_lpanel: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_lpanel: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the first
-        // supported size, so it accepts a {64} device -- a launch abort under reqd_sub_group_size(32).
-        throw batchlas::unsupported(
-            "potrf_lpanel: device does not offer sub-group size 32, which the kernel requires");
     }
 
     const int nb = potrf_lpanel_nb_for<T>(nb_hint);
@@ -317,11 +287,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an empty
-    // or short caller span means "not requested" and draws pool scratch instead.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : potrf_lpanel_layout<T>(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
     if constexpr (std::is_same_v<T, float>) {
@@ -351,5 +317,5 @@ BATCHLAS_POTRF_LPANEL_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_LPANEL_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

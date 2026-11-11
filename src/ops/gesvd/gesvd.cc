@@ -80,20 +80,20 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
     const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
     const bool vendor_binds = B == Backend::CUDA
-        ? md <= sycl_gesvd::kGesvdVendorCudaMaxDim && packed(A) && !j.thin() && (j.vectors() || square) &&
+        ? md <= ops::gesvd::kGesvdVendorCudaMaxDim && packed(A) && !j.thin() && (j.vectors() || square) &&
               (j.jobu == SvdVectors::None || packed(U))
         : B != Backend::ROCM;
     return std::visit(overloaded{
         [&](Jacobi) {
             const auto budget = static_cast<std::size_t>(std::max<std::int64_t>(0, d.slm_budget));
-            return native && d.has_sg32 && !j.herm && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(j.vectors(), budget);
+            return native && d.has_sg32 && !j.herm && md <= ops::gesvd::gesvd_jacobi_max_dim<T>(j.vectors(), budget);
         },
         [&](Cta) {
             const bool form = j.herm ? square : kReal;
-            return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
+            return native && d.has_sg32 && md <= ops::gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) {
-            const bool mask_ok = !masked || sycl_gesvd::gesvd_blocked_honours_mask<B, T>(
+            const bool mask_ok = !masked || ops::gesvd::gesvd_blocked_honours_mask<B, T>(
                                                 m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None);
             return native && mask_ok && (!j.herm || square);
         },

@@ -8,6 +8,7 @@
 #include <batchlas/util/mempool.hh>
 
 #include <src/math-helpers.hh>
+#include <src/kernels/common/info_target.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
 #include <src/ops/gesvd/gesvd-ormbr_v2.hh>
@@ -50,8 +51,8 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
 
-using sycl_gesvd::GesvdBidiagSolver;
-using sycl_gesvd::gesvd_bidiag_solver;
+using ops::gesvd::GesvdBidiagSolver;
+using ops::gesvd::gesvd_bidiag_solver;
 
 // True when the Blocked path solves the bidiagonal problem DIRECTLY (bdsdc or
 // bdsqr) rather than through the tridiagonal of B^T B. Both direct solvers write
@@ -645,10 +646,7 @@ bool has_tiny_singular_values(Queue& ctx,
         });
     });
     ctx.wait_and_throw();
-    for (int32_t b = 0; b < batch; ++b) {
-        if (flags[static_cast<size_t>(b)] != 0) return true;
-    }
-    return false;
+    return detail::any_nonzero(flags.data(), batch);
 }
 
 template <typename T>
@@ -1445,7 +1443,7 @@ Event gesvd_blocked(Queue& ctx,
     const int64_t k = std::min(a_in.rows(), a_in.cols());
     const bool want_u = canonical_jobu(jobu, a_in.rows(), k) != SvdVectors::None;
     const bool want_vh = canonical_jobvh(jobvh, a_in.cols(), k) != SvdVectors::None;
-    if (!sycl_gesvd::gesvd_blocked_honours_mask<B, T>(a_in.rows(), a_in.cols(), want_u, want_vh))
+    if (!ops::gesvd::gesvd_blocked_honours_mask<B, T>(a_in.rows(), a_in.cols(), want_u, want_vh))
         ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_blocked");
     // A and every wanted factor carry the call's mask whichever brought it; batch_range slices it.
@@ -1562,7 +1560,7 @@ Event gesvd_cta(Queue& ctx,
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     // Its normal-equations branch is real-only; complex general is the blocked family's.
     if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
-    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
+    if (std::max(a_in.rows(), a_in.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
@@ -1607,7 +1605,7 @@ Event gesvd_cta(Queue& ctx,
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
     }
-    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
+    if (std::max(a_in.rows(), a_in.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
@@ -1648,7 +1646,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
     if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
-    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
+    if (std::max(a.rows(), a.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {
@@ -1683,7 +1681,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
     if (a.rows() != a.cols()) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: Hermitian path requires square matrices");
     }
-    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
+    if (std::max(a.rows(), a.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {

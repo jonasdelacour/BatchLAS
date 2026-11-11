@@ -9,6 +9,7 @@
 // from here fails the device link with `ptxas fatal`.
 
 #include <src/ops/getrs/getrs_native.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
@@ -30,7 +31,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_getrs {
+namespace ops::getrs {
 
 namespace {
 
@@ -170,21 +171,11 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
     return wg;
 }
 
-// The 48 KB launch hole, carried verbatim from potrf_cta.cc so the two agree: a dynamic
-// local-memory request in (49152 - static_shared, 49152] fails at enqueue with
-// CUDA_ERROR_INVALID_VALUE, and is STICKY PER CUfunction, so a larger earlier launch
-// hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kGetrsHoleLo    = 47104;
-constexpr std::size_t kGetrsHoleHi    = 49664;
-constexpr std::size_t kGetrsHolePadTo = 49920;
-
-constexpr std::size_t getrs_hole_padded(std::size_t bytes) {
-    return (bytes > kGetrsHoleLo && bytes <= kGetrsHoleHi) ? kGetrsHolePadTo : bytes;
-}
-
+// The 48 KB launch hole (resident::hole_padded) is STICKY PER CUfunction, so a larger earlier
+// launch hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                                       std::size_t scalar_bytes) {
-    return getrs_hole_padded(
+    return resident::hole_padded(
         (rhs_elems + static_cast<std::size_t>(nb) *
                      static_cast<std::size_t>(getrs_fused_blk_ld(nb))) * scalar_bytes);
 }
@@ -639,22 +630,18 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
 
 }  // namespace
 
-template <> bool getrs_fused_available<float>()                { return true; }
-template <> bool getrs_fused_available<double>()               { return true; }
-template <> bool getrs_fused_available<std::complex<float>>()  { return true; }
-template <> bool getrs_fused_available<std::complex<double>>() { return true; }
 
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
 // HARD launch ceiling -- a can_run question and not a table one. The budget is
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
-// call's. getrs_hole_padded is NOT monotone, so the largest admissible request is the
-// budget when it exceeds kGetrsHoleHi and min(budget, kGetrsHoleLo) otherwise.
+// call's. resident::hole_padded is NOT monotone, so the largest admissible request is the
+// budget when it exceeds resident::kLaunchHoleHi and min(budget, resident::kLaunchHoleLo) otherwise.
 template <typename T>
 std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
     using D = typename sycl_device::DevMap<T>::type;
     const std::size_t admissible =
-        (slm_budget_bytes > kGetrsHoleHi) ? slm_budget_bytes
-                                          : std::min(slm_budget_bytes, kGetrsHoleLo);
+        (slm_budget_bytes > resident::kLaunchHoleHi) ? slm_budget_bytes
+                                          : std::min(slm_budget_bytes, resident::kLaunchHoleLo);
     const std::size_t blk_bytes =
         static_cast<std::size_t>(kGetrsFusedNbMax) *
         static_cast<std::size_t>(getrs_fused_blk_ld(kGetrsFusedNbMax)) * sizeof(D);
@@ -663,10 +650,10 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
 
     // The floor division above can round the implied request BACK DOWN INTO the band,
     // where the pad raises it again and the launch is refused; the exact repair is the
-    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
+    // request that ends AT resident::kLaunchHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
     if (getrs_fused_slm(elems, kGetrsFusedNbMax, sizeof(D)) > slm_budget_bytes) {
-        if (kGetrsHoleLo <= blk_bytes) return 0;
-        return (kGetrsHoleLo - blk_bytes) / sizeof(D);
+        if (resident::kLaunchHoleLo <= blk_bytes) return 0;
+        return (resident::kLaunchHoleLo - blk_bytes) / sizeof(D);
     }
     return elems;
 }
@@ -696,11 +683,8 @@ Event getrs_fused_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("getrs_fused: degenerate extents");
-    }
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("getrs_fused: A must be square");
     }
     if (A.rows() != B.rows()) {
         throw batchlas::invalid_argument("getrs_fused: B must have A.rows() rows");
@@ -708,21 +692,7 @@ Event getrs_fused_dispatch(Queue& ctx,
     if (A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("getrs_fused: A and B must agree on batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getrs_fused: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrs_fused: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that property
-        // returns sub_group_sizes()[0], so the weak test refuses a {8,16,32} device
-        // and ACCEPTS a {64} one -- where this kernel's reqd_sub_group_size(32)
-        // block solve is a launch abort.
-        throw batchlas::unsupported(
-            "getrs_fused: device does not offer sub-group size 32");
-    }
+    const auto dev = native::require_launchable(ctx, "getrs_fused", A, {.square = true}, B);
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("getrs_fused: pivot span is shorter than n * batch");
     }
@@ -778,22 +748,13 @@ Event potrs_fused_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("potrs_fused: degenerate extents");
     }
-    if (A.rows() != A.cols() || A.rows() != B.rows() || A.batch_size() != B.batch_size()) {
+    if (A.rows() != B.rows() || A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("potrs_fused: A must be square and match B");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrs_fused: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrs_fused: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported("potrs_fused: device does not offer sub-group size 32");
-    }
+    const auto dev = native::require_launchable(ctx, "potrs_fused", A, {.square = true}, B);
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const std::size_t need = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
@@ -846,5 +807,5 @@ BATCHLAS_GETRS_FUSED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRS_FUSED_INSTANTIATE
 
-}  // namespace sycl_getrs
+}  // namespace ops::getrs
 }  // namespace batchlas

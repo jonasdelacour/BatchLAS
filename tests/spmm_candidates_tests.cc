@@ -323,7 +323,7 @@ protected:
     void direct(const C& c, Problem<T>& p) {
         Queue& q = *this->ctx;
         if (std::holds_alternative<sp::Direct>(c)) {
-            (void)sycl_spmm::spmm_native_csr<T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);
+            (void)ops::spmm::spmm_native_csr<T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);
         } else if constexpr (kVendor) {
             const std::size_t need =
                 backend::spmm_vendor_buffer_size<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);

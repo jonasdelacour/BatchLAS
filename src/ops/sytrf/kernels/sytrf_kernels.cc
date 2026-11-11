@@ -30,7 +30,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_sytrf {
+namespace ops::sytrf {
 
 template <typename T> class SytrfCtaKernel;
 template <typename T> class SytrfWgKernel;
@@ -496,5 +496,5 @@ BATCHLAS_SYTRF_NATIVE_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SYTRF_NATIVE_INSTANTIATE
 
-}  // namespace sycl_sytrf
+}  // namespace ops::sytrf
 }  // namespace batchlas

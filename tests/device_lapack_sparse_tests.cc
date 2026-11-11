@@ -576,7 +576,7 @@ template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, c
     const IlukA<T> d = make_iluk_a<T>(/*pad=*/5);
     const auto A = d.view(kBatch);
     const auto host = iluk_factorize(*dev.ctx, A, params);
-    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const auto storage = ops::iluk::iluk_plan(A, params);
     const batchlas::device::IlukPlan plan = storage.plan();
     ASSERT_GT(plan.nnz, d.nnz) << what << ": the symbolic pattern has no fill";
     ASSERT_GT(plan.levels, 2) << what;
@@ -660,7 +660,7 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeMatchesTheCpuPathAndSolvesInOneKernel) 
     params.levels_of_fill = 1;
     const IlukA<T> d = make_iluk_a<T>(/*pad=*/0);
     const auto A = d.view(kBatch);
-    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const auto storage = ops::iluk::iluk_plan(A, params);
     const batchlas::device::IlukPlan plan = storage.plan();
     const auto opts = batchlas::device::iluk_options(params);
     const int mst = plan.nnz + 3;
@@ -736,7 +736,7 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeInfoIsTheFirstUnusablePivot) {
     const IlukA<T> d = make_iluk_a<T>(/*pad=*/5, bad_row);
     const auto A = d.view(kBatch);
     EXPECT_THROW((void)iluk_factorize(*this->dev.ctx, A, params), batchlas::convergence_error);
-    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const auto storage = ops::iluk::iluk_plan(A, params);
     const batchlas::device::IlukPlan plan = storage.plan();
     const int mst = plan.nnz;
     UnifiedVector<T> m(std::size_t(mst) * kBatch);
@@ -761,7 +761,7 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeBreakIsSeenByBothComparators) {
     const IlukA<T> d = make_iluk_a<T>(/*pad=*/5);
     const auto A = d.view(kBatch);
     const auto host = iluk_factorize(*this->dev.ctx, A, params);
-    const auto storage = sycl_iluk::iluk_plan(A, params);
+    const auto storage = ops::iluk::iluk_plan(A, params);
     batchlas::device::IlukPlan plan = storage.plan();
     plan.levels = 0;  // the break: A scattered into the pattern, nothing eliminated
     const int mst = plan.nnz + 3;

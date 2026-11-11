@@ -33,7 +33,7 @@
 
 #include <sycl/sycl.hpp>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::copy_async_commit;
 using batchlas::device::l3::copy_async_wait;
@@ -628,4 +628,4 @@ Event launch_register_128x128_k8(Queue& ctx,
     }
 }
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

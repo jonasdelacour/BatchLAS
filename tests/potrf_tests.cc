@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Native batched POTRF: the CTA leaf kernel and the blocked driver above it.
 //
-// Tests call sycl_potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
+// Tests call ops::potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
 // multiply-back residual computed here: a vendor reference is inert in a vendor-free
 // build. Pinned-facade cases use ScopedPin; potrf_candidates_tests covers every pin.
 // evidence: docs/perf/potrf.md#potrf-correctness-findings
@@ -200,7 +200,7 @@ protected:
         const std::size_t local_mem =
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-        return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
+        return ops::potrf::potrf_cta_max_n_for_slm<T>(budget);
     }
 
     // The order a work-group can hold AT ALL, ignoring the occupancy target. Strictly
@@ -211,7 +211,7 @@ protected:
         const std::size_t local_mem =
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-        return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget, 1);
+        return ops::potrf::potrf_cta_max_n_for_slm<T>(budget, 1);
     }
 
     // Load the `uplo` triangle of `src` into item `b` and POISON the other: the contract
@@ -230,13 +230,13 @@ protected:
     std::vector<int32_t> run_cta(Matrix<T, MatrixFormat::Dense>& A, Uplo uplo,
                                  bool pass_info_span = true) {
         const int batch = A.batch_size();
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
         if (pass_info_span) {
-            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
                                               info.to_span());
         } else {
-            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
                                               Span<int32_t>{});
         }
         this->ctx->wait();
@@ -354,9 +354,9 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
                      std::invalid_argument);
     }
 
-    UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
+    UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
     UnifiedVector<int32_t> info(1, int32_t(0));
-    EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, Uplo::Lower,
+    EXPECT_THROW((void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, Uplo::Lower,
                                                    ws.to_span(), info.to_span()),
                  std::invalid_argument);
 }
@@ -439,7 +439,7 @@ TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
         if (n > this->ceiling()) continue;
         const int batch = 8;
 
-        const unsigned geom = sycl_potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch);
+        const unsigned geom = ops::potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch);
         ASSERT_NE(geom, 0u) << "n=" << n << " does not fit, which the ceiling check missed";
         const int G = static_cast<int>(geom & 0xffffu);
         if (G <= 1) continue;   // this type does not pack at this n
@@ -727,9 +727,9 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
             }
         }
 
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, V));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
-        (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
+        (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) {
@@ -759,18 +759,18 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
                             : std::is_same_v<T, std::complex<float>> ? 109
                                                                      : 77;
 
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280), advertised);
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1), resident_only);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(97280), advertised);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1), resident_only);
 
     // The occupancy target really divides the budget rather than being decorative.
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1));
 
     // And each ceiling really is a ceiling of the formula: a bigger budget admits more.
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376));
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376, 1));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(101376));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(101376, 1));
 }
 
 // ===========================================================================
@@ -795,12 +795,12 @@ protected:
     struct Blocking { int nb; int W; };
 
     // Both driver seams are required: the public gemm and trsm, as the potrf facade passes them.
-    static sycl_potrf::PotrfTrailingGemm<T> gemm_seam() {
+    static ops::potrf::PotrfTrailingGemm<T> gemm_seam() {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
                   const MatrixView<T, MatrixFormat::Dense>& r, T al, T be, Transpose ta, Transpose tb,
                   ComputePrecision p) { return gemm<BackendType, T>(c, a, b, r, al, be, ta, tb, p); };
     }
-    static sycl_potrf::PotrfPanelSolve<T> panel_solve() {
+    static ops::potrf::PotrfPanelSolve<T> panel_solve() {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
                   T alpha, Side s, Uplo u, Transpose t, Diag d) {
             return trsm<BackendType, T>(c, a, b, alpha, s, u, t, d);
@@ -809,7 +809,7 @@ protected:
 
     // The blocking the driver WOULD use; `n` is passed because nb is clamped by it.
     Blocking blocking(int n) const {
-        const unsigned p = sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
+        const unsigned p = ops::potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
         return Blocking{static_cast<int>(p & 0xffffu), static_cast<int>(p >> 16)};
     }
 
@@ -835,15 +835,15 @@ protected:
         Queue& q = queue ? *queue : *this->ctx;
         const int batch = static_cast<int>(V.batch_size());
         UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_blocked_buffer_size<T>(q, V, uplo));
+            ops::potrf::potrf_blocked_buffer_size<T>(q, V, uplo));
         const int len = (info_len < 0) ? batch : info_len;
         UnifiedVector<int32_t> info(static_cast<size_t>(std::max(len, 1)), int32_t(-12345));
         if (len > 0) {
-            (void)sycl_potrf::potrf_blocked_dispatch<T>(
+            (void)ops::potrf::potrf_blocked_dispatch<T>(
                 q, V, uplo, ws.to_span(),
                 Span<int32_t>(info.data(), static_cast<size_t>(len)), gemm_seam(), panel_solve());
         } else {
-            (void)sycl_potrf::potrf_blocked_dispatch<T>(q, V, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_blocked_dispatch<T>(q, V, uplo, ws.to_span(),
                                                   Span<int32_t>{}, gemm_seam(), panel_solve());
         }
         q.wait();
@@ -1275,9 +1275,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     Matrix<T, MatrixFormat::Dense> One(nb, nb, 8);
     Matrix<T, MatrixFormat::Dense> Two(nb + 1, nb + 1, 8);
     const std::size_t s1 =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, One, Uplo::Lower);
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, One, Uplo::Lower);
     const std::size_t s2 =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, Two, Uplo::Lower);
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, Two, Uplo::Lower);
     EXPECT_LT(s1, s2)
         << "the n <= nb single-block case draws the same workspace as the multi-block "
            "case, so the W x W x batch trailing scratch is being allocated for callers "
@@ -1333,9 +1333,9 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     for (int b = 0; b < batch; ++b)
         this->load_triangle(direct, b, n, ref[b], Uplo::Lower, MV<T>::make(R(0), R(0)));
     UnifiedVector<std::byte> dws(
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct, Uplo::Lower));
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct, Uplo::Lower));
     UnifiedVector<int32_t> dinfo(batch, int32_t(-7));
-    (void)sycl_potrf::potrf_blocked_dispatch<T>(
+    (void)ops::potrf::potrf_blocked_dispatch<T>(
         *this->ctx, direct, Uplo::Lower, dws.to_span(), dinfo.to_span(),
         [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
            const MatrixView<T, MatrixFormat::Dense>& gb,
@@ -1392,13 +1392,13 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
         }
 
         const std::size_t bytes =
-            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower);
+            ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower);
         ASSERT_GT(bytes, 0u);
         UnifiedVector<std::byte> ws(bytes);
         std::memset(ws.data(), 0xFF, bytes);
 
         UnifiedVector<int32_t> info(batch, int32_t(-12345));
-        (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower,
+        (void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower,
                                               ws.to_span(), info.to_span(), TestFixture::gemm_seam(),
                                               TestFixture::panel_solve());
         this->ctx->wait();
@@ -1420,15 +1420,15 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
     const int n = 64, batch = 2;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
-        1, sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower)));
+        1, ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower)));
     UnifiedVector<int32_t> info(batch, 0);
-    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
-                                                             info.to_span(), sycl_potrf::PotrfTrailingGemm<T>{},
+    EXPECT_THROW((void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
+                                                             info.to_span(), ops::potrf::PotrfTrailingGemm<T>{},
                                                              TestFixture::panel_solve()),
                  std::invalid_argument);
-    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
+    EXPECT_THROW((void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
                                                              info.to_span(), TestFixture::gemm_seam(),
-                                                             sycl_potrf::PotrfPanelSolve<T>{}),
+                                                             ops::potrf::PotrfPanelSolve<T>{}),
                  std::invalid_argument);
 }
 
@@ -1576,17 +1576,17 @@ TEST(PotrfBlocked, NbFollowsScopedEnv) {
     ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);
     ScopedEnvVar clear_w("BATCHLAS_POTRF_W", nullptr);
     ScopedEnvVar pin("BATCHLAS_POTRF_ROUTE", "blocked");
-    const unsigned before = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+    const unsigned before = ops::potrf::potrf_blocked_debug_params<float>(q, n);
     const size_t bytes_before = potrf_buffer_size(q, A, Uplo::Lower);
     {
         ScopedEnvVar nb("BATCHLAS_POTRF_NB", "16");
         ScopedEnvVar w("BATCHLAS_POTRF_W", "8");
-        const unsigned p = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+        const unsigned p = ops::potrf::potrf_blocked_debug_params<float>(q, n);
         EXPECT_EQ(p & 0xffffu, 16u) << "nb";
         EXPECT_EQ(p >> 16, 8u) << "W";
         EXPECT_NE(potrf_buffer_size(q, A, Uplo::Lower), bytes_before) << "the product scratch is W x W";
     }
-    EXPECT_EQ(sycl_potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
+    EXPECT_EQ(ops::potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
     EXPECT_EQ(potrf_buffer_size(q, A, Uplo::Lower), bytes_before);
 }
 

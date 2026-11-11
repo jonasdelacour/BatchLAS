@@ -5,6 +5,7 @@
 // same packing getrf uses (getrf_native.hh). evidence: docs/perf/sytrf.md
 
 #include <src/util/internal-api.hh>
+#include <src/util/resident_capacity.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -14,7 +15,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_sytrf {
+namespace batchlas::ops::sytrf {
 
 inline constexpr int kSytrfCtaMaxN = 32;  // one sub-group per matrix: the sub-group width is the ceiling
 inline constexpr int kSytrfCtaWg = 32;
@@ -70,7 +71,7 @@ template <typename T>
 constexpr std::size_t sytrs_cta_slm_bytes(int n) {
     const auto un = static_cast<std::size_t>(n);
     const std::size_t bytes = (un * static_cast<std::size_t>(n | 1) + un) * sizeof(T) + (3 * un + 1) * sizeof(int);
-    return bytes > 47104 && bytes <= 49664 ? std::size_t(49920) : bytes;
+    return resident::hole_padded(bytes);
 }
 
 template <typename T>
@@ -99,4 +100,4 @@ BATCHLAS_INTERNAL_API Event sysv_cta_dispatch(Queue& ctx, const MatrixView<T, Ma
                                               const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
                                               Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info);
 
-}  // namespace batchlas::sycl_sytrf
+}  // namespace batchlas::ops::sytrf

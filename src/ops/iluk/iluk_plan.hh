@@ -9,7 +9,7 @@
 
 #include <array>
 
-namespace batchlas::sycl_iluk {
+namespace batchlas::ops::iluk {
 
 // One shared-USM allocation; plan() points into it: it must outlive kernels that captured a plan.
 struct IlukPlanStorage {
@@ -30,4 +30,4 @@ struct IlukPlanStorage {
 template <typename T>
 BATCHLAS_INTERNAL_API IlukPlanStorage iluk_plan(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params);
 
-}  // namespace batchlas::sycl_iluk
+}  // namespace batchlas::ops::iluk

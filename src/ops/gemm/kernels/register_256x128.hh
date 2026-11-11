@@ -18,7 +18,7 @@
 
 #include <sycl/sycl.hpp>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::copy_async_commit;
 using batchlas::device::l3::copy_async_wait;
@@ -307,4 +307,4 @@ Event launch_register_k8_s4_large(Queue& ctx, const MatrixView<float, MatrixForm
     return launch_register_k8_s4_large_leg<TM, TN, OpA, OpB, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

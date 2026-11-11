@@ -793,12 +793,12 @@ TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
         want = {{1,8},{16,8},{32,8},{33,4},{48,4},{64,4},{65,1},{96,1},{128,1}};
     }
     for (const auto& [rl, w] : want) {
-        const int got = batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
+        const int got = batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
         EXPECT_EQ(got, sg32 ? w : 1) << "red_len " << rl << " sg32 " << sg32;
     }
     // Degenerate reduction lengths take body 3.
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 0, kItems), 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, -1, kItems), 1);
+    EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 0, kItems), 1);
+    EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, -1, kItems), 1);
 }
 
 // And the shapes below really do reach body 5 -- asserted, so a gate edit that sends them
@@ -826,15 +826,15 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
 
     // Every m used by a body-5 case below; 40 and 44 are inside the double gates only.
     for (int m : {1, 3, 5, 16}) {
-        EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
+        EXPECT_GT(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
             << "body 5 must serve red_len " << m << " for every scalar type";
     }
     const bool wide = std::is_same_v<S, double> || std::is_same_v<S, std::complex<double>>;
     for (int m : {40, 44}) {
-        EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4) > 1, wide)
+        EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4) > 1, wide)
             << "red_len " << m << " is inside the double gates only";
         if (wide) {
-            EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4), 4)
+            EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4), 4)
                 << "red_len " << m << " is in the W = 4 band";
         }
     }
@@ -958,7 +958,7 @@ TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
     const int cu = static_cast<int>(
         this->ctx->device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     auto w = [&](int red_len, int64_t items) {
-        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+        return batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
     };
     // The W = 8 row, floor 16*CU, at a red_len every type puts in that band.
     const int64_t f8 = static_cast<int64_t>(16) * cu;
@@ -988,7 +988,7 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     const int64_t kBig = 1 << 20;
     const int kFar = 100000;     // far above every per-type red_len gate
     auto width = [&](int red_len, int64_t items) {
-        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+        return batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
     };
     // Every arm below is a ScopedEnvVar, never a bare ::setenv. What the route
     // reads is settings().selection.gemv_segt, and only this guard's constructor

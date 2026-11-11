@@ -29,7 +29,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_sytrf {
+namespace ops::sytrf {
 
 template <typename T, int R> class SytrsCtaKernel;
 template <typename T> class SytrsPrepKernel;
@@ -378,5 +378,5 @@ BATCHLAS_SYTRS_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SYTRS_INSTANTIATE
 
-}  // namespace sycl_sytrf
+}  // namespace ops::sytrf
 }  // namespace batchlas

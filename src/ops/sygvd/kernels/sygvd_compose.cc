@@ -83,7 +83,7 @@ Event compose(Queue& q, const Args<T>& a_in, Span<std::byte> ws, Span<int32_t> i
     if (!a.factored) {
         (void)::batchlas::potrf<B, T>(q, a.B, a.uplo, l.child, l.finfo);
         // A failed item would carry a partial (possibly NaN) factor into every later child.
-        (void)sycl_sygvd::sygvd_identity_failed<T>(q, a.B, a.uplo, Span<const int32_t>(l.finfo.data(), l.finfo.size()),
+        (void)ops::sygvd::sygvd_identity_failed<T>(q, a.B, a.uplo, Span<const int32_t>(l.finfo.data(), l.finfo.size()),
                                                    mask);
     }
     (void)::batchlas::sygst<B, T>(q, a.A, a.B, a.itype, a.uplo, l.child);
@@ -100,7 +100,7 @@ Event compose(Queue& q, const Args<T>& a_in, Span<std::byte> ws, Span<int32_t> i
         }
     }
     if (!a.factored && info.size() >= static_cast<std::size_t>(a.A.batch_size()))
-        ev = sycl_sygvd::sygvd_merge_info(q, a.A.rows(), Span<const int32_t>(l.finfo.data(), l.finfo.size()),
+        ev = ops::sygvd::sygvd_merge_info(q, a.A.rows(), Span<const int32_t>(l.finfo.data(), l.finfo.size()),
                                           Span<int32_t>(info.data(), static_cast<std::size_t>(a.A.batch_size())), mask);
     return ev;
 }

@@ -11,7 +11,7 @@ DRAM roof), in-order SYCL queue.
 
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
-| `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch \f$\ge 1\f$ |
+| `direct` | `ops::spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch \f$\ge 1\f$ |
 | `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, no heterogeneous B or C, not netlib with any transpose, not CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)) |
 
 Both refuse a masked batch. Selection takes the first runnable entry of the nearest row of

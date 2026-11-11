@@ -62,8 +62,8 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
                         X.size() == red_len<T>(A, transA) && Y.size() == out_len<T>(A, transA);
     if (!device_allows(c, d, transA != Transpose::NoTrans)) return false;
     return std::visit(overloaded{
-        [&](Cta) { return native && sycl_gemv::gemv_cta_available<T>(); },
-        [&](Direct) { return native && sycl_gemv::gemv_direct_available<T>(); },
+        [&](Cta) { return native; },
+        [&](Direct) { return native; },
         [&](Vendor) { return !A.is_heterogeneous(); },
     }, c);
 }
@@ -72,8 +72,8 @@ template <Backend B, typename T>
 Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
              T alpha, T beta, Transpose transA) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_gemv::gemv_native_cta<T>(q, A, X, Y, alpha, beta, transA); },
-        [&](Direct) { return sycl_gemv::gemv_native_direct<T>(q, A, X, Y, alpha, beta, transA); },
+        [&](Cta) { return ops::gemv::gemv_native_cta<T>(q, A, X, Y, alpha, beta, transA); },
+        [&](Direct) { return ops::gemv::gemv_native_direct<T>(q, A, X, Y, alpha, beta, transA); },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gemv_vendor<B, T>(q, A, X, Y, alpha, beta, transA);

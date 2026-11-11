@@ -575,7 +575,7 @@ BATCHLAS_UNROLL_FULL
 template <typename T>
 int32_t gesvdj_cta_max_dim(Queue& ctx, bool want_vectors) {
     const std::size_t budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device()));
-    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors, budget));
+    return static_cast<int32_t>(ops::gesvd::gesvd_jacobi_max_dim<T>(want_vectors, budget));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {

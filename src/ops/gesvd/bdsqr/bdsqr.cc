@@ -7,6 +7,7 @@
 #include <batchlas/device/interop.hh>
 #include <batchlas/device/lapack/bdsqr.hh>
 #include <src/math-helpers.hh>
+#include <src/kernels/common/info_target.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
@@ -68,14 +69,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
     });
 
     ctx.wait();
-    bool ok = true;
-    for (int32_t b = 0; b < batch; ++b) {
-        if (fail_flags[static_cast<size_t>(b)] != 0) {
-            ok = false;
-            break;
-        }
-    }
-    return ok;
+    return !detail::any_nonzero(fail_flags.data(), batch);
 }
 
 } // namespace

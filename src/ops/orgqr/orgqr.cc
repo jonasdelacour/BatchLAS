@@ -45,7 +45,7 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
         // Masked: the identity and copy-back kernels skip an inactive item, and the apply is the
         // routed ormqr (Left, NoTrans).
         [&](Blocked) {
-            return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
+            return d.is_gpu && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
         // NETLIB's host loop skips an inactive item; a strided vendor call cannot.
@@ -70,7 +70,7 @@ template <Backend B, typename T>
 Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
         [&](Blocked) {
-            return sycl_orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws, apply_q<B, T>, apply_q_size<B, T>);
+            return ops::orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws, apply_q<B, T>, apply_q_size<B, T>);
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -86,7 +86,7 @@ Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<s
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau) {
     return std::visit(overloaded{
-        [&](Blocked) { return sycl_orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_q_size<B, T>); },
+        [&](Blocked) { return ops::orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_q_size<B, T>); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::orgqr_vendor_buffer_size<B, T>(q, A, tau);

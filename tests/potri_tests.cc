@@ -109,7 +109,7 @@ using PotriTestTypes = typename test_utils::backend_types<ts::Config>::type;
 
 TYPED_TEST_SUITE(PotriTest, PotriTestTypes);
 
-// Families: cta (sycl_potri::potri_cta, trtri + lauum in one local-memory launch) and blocked:nb
+// Families: cta (ops::potri::potri_cta, trtri + lauum in one local-memory launch) and blocked:nb
 // (LAPACK's blocked trtri and lauum: the CTA kernel on nb x nb diagonal blocks, public trmm, gemm,
 // herk/syrk). Every test pins each family; Auto is exercised beside them. The deliberate breaks and
 // their red sets are in docs/perf/potri.md#potri-what-the-tests-pin.
@@ -131,7 +131,7 @@ std::string pin_name(const PotriChoice& c) { return select::to_string(c); }
 template <Backend B, typename T>
 int cta_ceiling(Queue& q) {
     const auto& d = select::device_of<B>(q);
-    return sycl_potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
+    return ops::potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
 }
 
 }  // namespace

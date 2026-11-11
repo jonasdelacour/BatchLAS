@@ -98,7 +98,7 @@
 128 ::SygstDiagKernel<.+, (?:true|false), (?:16|8)>$
 
 # src/ops/sytrs/kernels/sytrs_kernels.cc diag_launch, scatter_launch: sycl::range<1>(kWg), kWg = 256
-256  ^batchlas::sycl_sytrf::Sytrs(?:Diag|Scatter)Kernel<
+256  ^batchlas::ops::sytrf::Sytrs(?:Diag|Scatter)Kernel<
 
 # src/ops/syev/tridiag/tridiag_solver.cc tridiagonal_solver: sycl::nd_range<1>(batch_size*32, 32)
 32  batchlas::tridiagonal_solver<

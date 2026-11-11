@@ -80,9 +80,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
             if constexpr (MF != MatrixFormat::CSR) {
                 return false;
             } else {
-                const bool built = transA == Transpose::NoTrans ? sycl_spmm::spmm_gather_available<T>()
-                                                                : sycl_spmm::spmm_scatter_available<T>();
-                return built && one_spmm(A, Bm, C, transA, transB) && !Bm.is_heterogeneous() &&
+                return one_spmm(A, Bm, C, transA, transB) && !Bm.is_heterogeneous() &&
                        !C.is_heterogeneous() && C.cols() >= 0 && A.batch_size() >= 1;
             }
         },
@@ -102,7 +100,7 @@ Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const De
     return std::visit(overloaded{
         [&](Direct) -> Event {
             if constexpr (MF == MatrixFormat::CSR)
-                return sycl_spmm::spmm_native_csr<T>(q, A, Bm, C, alpha, beta, transA, transB);
+                return ops::spmm::spmm_native_csr<T>(q, A, Bm, C, alpha, beta, transA, transB);
             else
                 throw batchlas::internal_error("spmm: direct chosen for a non-CSR view");  // can_run refuses
         },

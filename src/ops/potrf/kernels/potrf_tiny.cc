@@ -12,6 +12,8 @@
 // on masked SPIR-V, so a publish/read pair ordered only by it is not ordered everywhere.
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <batchlas/device/lapack/potrf.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <src/kernels/common/tiny_device.hh>
@@ -36,15 +38,13 @@ namespace batchlas {
 template <typename T, int N, bool Masked>
 class PotrfTinyKernel;
 
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
 
 
 using tiny_native::kTinySubGroupSize;
-using tiny_native::kTinySubGroups;
-using tiny_native::kTinyWgSize;
-static_assert(kTinyWgSize == kPotrfTinyWgSize, "potrf.cc's can_run reads kPotrfTinyWgSize");
+using resident::kTinyWgSize;
 
 // A flat compile-time constant, not a budget walk: the tier owns no local memory.
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
@@ -157,11 +157,6 @@ Event potrf_tiny_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, bo
     return potrf_tiny_launch<T, N, false>(ctx, A, upper, info, n, batch, per_wg, nullptr);
 }
 
-template <typename T>
-Span<int32_t> potrf_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
 }  // namespace
 
 template <typename T>
@@ -173,9 +168,7 @@ template <typename T>
 std::size_t potrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     // NOT zero: an empty or short caller `info` span draws `batch` int32s of pool scratch.
     const int batch = A.batch_size();
-    return workspace_bytes([&](BumpAllocator& p) {
-        return potrf_tiny_layout<T>(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 template <typename T>
@@ -203,24 +196,7 @@ Event potrf_tiny_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_tiny: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_tiny: degenerate extents");
-    }
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrf_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
-        throw batchlas::unsupported(
-            "potrf_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
+    const auto dev = native::require_launchable(ctx, "potrf_tiny", A, {.square = true});
     const int cap = potrf_tiny_max_n<T>();
     if (n > cap) {
         throw batchlas::invalid_argument(
@@ -235,11 +211,7 @@ Event potrf_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an
-    // empty or short caller span means "not requested" and draws pool scratch instead.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : potrf_tiny_layout<T>(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const bool upper = (uplo == Uplo::Upper);
     const int N = tiny_native::tiny_bucket_ge(n);
@@ -283,5 +255,5 @@ BATCHLAS_POTRF_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_TINY_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

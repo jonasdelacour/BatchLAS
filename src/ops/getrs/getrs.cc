@@ -48,12 +48,12 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
     return std::visit(overloaded{
         [&](Cta) {
             // The fused work-group never drops below 32 lanes (getrs_fused_wg).
-            const auto cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(static_cast<std::size_t>(d.slm_budget));
-            return native && sycl_getrs::getrs_fused_available<T>() && d.max_wg >= 32 &&
-                   nrhs <= sycl_getrs::kGetrsFusedMaxRhs &&
+            const auto cap = ops::getrs::getrs_fused_max_rhs_elems<T>(static_cast<std::size_t>(d.slm_budget));
+            return native && d.max_wg >= 32 &&
+                   nrhs <= ops::getrs::kGetrsFusedMaxRhs &&
                    static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
         },
-        [&](Blocked) { return native && sycl_getrs::getrs_blocked_available<T>(); },
+        [&](Blocked) { return native; },
         [&](Vendor) {
             return d.has_vendor && !A.is_heterogeneous() && !Bm.is_heterogeneous() && (!masked || B == Backend::NETLIB);
         },
@@ -64,9 +64,9 @@ template <Backend B, typename T>
 Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA,
              Span<std::int64_t> pivots, Span<std::byte> ws) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_getrs::getrs_fused_dispatch<T>(q, A, Bm, transA, pivots, ws); },
+        [&](Cta) { return ops::getrs::getrs_fused_dispatch<T>(q, A, Bm, transA, pivots, ws); },
         [&](Blocked) {
-            return sycl_getrs::getrs_blocked_dispatch<T>(
+            return ops::getrs::getrs_blocked_dispatch<T>(
                 q, A, Bm, transA, pivots, ws,
                 [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
                    Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
@@ -84,8 +84,8 @@ Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Tr
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_getrs::getrs_fused_buffer_size<T>(q, A, Bm, transA); },
-        [&](Blocked) { return sycl_getrs::getrs_blocked_buffer_size<T>(q, A, Bm, transA); },
+        [&](Cta) { return ops::getrs::getrs_fused_buffer_size<T>(q, A, Bm, transA); },
+        [&](Blocked) { return ops::getrs::getrs_blocked_buffer_size<T>(q, A, Bm, transA); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::getrs_vendor_buffer_size<B, T>(q, A, Bm, transA);

@@ -46,7 +46,7 @@ one masked `fill_zeros` of `B`, so no route runs and neither operand is read; a 
 still refuses. Guard: `TrsmOperationsTest.AlphaZeroIgnoresNanUnderEveryRoute` pins each route a
 strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN `A` and `B`, padded
 `ld` and stride, batch 3). The kernels themselves still read `B` when called directly
-(`backend::trsm_vendor`, `sycl_trsm::*`); only the driver calls them.
+(`backend::trsm_vendor`, `ops::trsm::*`); only the driver calls them.
 
 ## Defect 11: native gemm reads C at beta zero
 

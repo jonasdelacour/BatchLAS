@@ -28,7 +28,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/settings.hh>
 
-namespace batchlas::sycl_trsm {
+namespace batchlas::ops::trsm {
 
 
 namespace {
@@ -421,9 +421,5 @@ template Event trsm_native_blocked<std::complex<double>>(
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
     Side, Uplo, Transpose, Diag, TrsmTrailingGemm<std::complex<double>>);
 
-template <> bool trsm_blocked_available<float>()                { return true; }
-template <> bool trsm_blocked_available<double>()               { return true; }
-template <> bool trsm_blocked_available<std::complex<float>>()  { return true; }
-template <> bool trsm_blocked_available<std::complex<double>>() { return true; }
 
-}  // namespace batchlas::sycl_trsm
+}  // namespace batchlas::ops::trsm

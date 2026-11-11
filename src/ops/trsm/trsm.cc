@@ -50,16 +50,16 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const
     const std::int64_t order = A.rows(), q = rhs_count<T>(B, side);
     const bool native = d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 &&
                         A.batch_size() >= 1;
-    const int cta_max = sycl_trsm::trsm_cta_max_n<T>();
+    const int cta_max = ops::trsm::trsm_cta_max_n<T>();
     // V1's work-group ladder bottoms out at 32 lanes whatever max_wg is (trsm_v1_ladder_wg).
     const bool v1_fits = d.max_wg >= 32;
     return std::visit(overloaded{
         [&](Cta) { return native && v1_fits && order <= cta_max; },
         [&](SgLeft) {
-            return native && side == Side::Left && d.has_sg32 && order <= sycl_trsm::kTrsmSgLeftMaxN &&
-                   d.max_wg >= sycl_trsm::kTrsmSgLeftWgSize;
+            return native && side == Side::Left && d.has_sg32 && order <= ops::trsm::kTrsmSgLeftMaxN &&
+                   d.max_wg >= ops::trsm::kTrsmSgLeftWgSize;
         },
-        [&](Blocked) { return native && v1_fits && sycl_trsm::trsm_blocked_available<T>() && cta_max >= 1; },
+        [&](Blocked) { return native && v1_fits && cta_max >= 1; },
         [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous() && !masked; },
     }, c);
 }
@@ -68,13 +68,13 @@ template <Backend B, typename T>
 Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T alpha, Side side, Uplo uplo,
              Transpose transA, Diag diag) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_trsm::trsm_native_v1_dispatch<T>(q, A, Bm, alpha, side, uplo, transA, diag); },
-        [&](SgLeft) { return sycl_trsm::trsm_native_sg_left_dispatch<T>(q, A, Bm, alpha, uplo, transA, diag); },
+        [&](Cta) { return ops::trsm::trsm_native_v1_dispatch<T>(q, A, Bm, alpha, side, uplo, transA, diag); },
+        [&](SgLeft) { return ops::trsm::trsm_native_sg_left_dispatch<T>(q, A, Bm, alpha, uplo, transA, diag); },
         [&](Blocked) {
             // The public gemm (table-routed): trsm's operands are sub-views carrying the
             // parent's ld, where the native GEMM collapses.
             // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-            return sycl_trsm::trsm_native_blocked<T>(
+            return ops::trsm::trsm_native_blocked<T>(
                 q, A, Bm, alpha, side, uplo, transA, diag,
                 [](Queue& c2, const MV<T>& ga, const MV<T>& gb, const MV<T>& gc, T galpha, T gbeta, Transpose gta,
                    Transpose gtb, ComputePrecision gp) {

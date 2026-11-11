@@ -430,8 +430,8 @@ static int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>(), n <= sycl_trsm::trsm_cta_max_n<T>(),
-                                       n <= sycl_getrf::getrf_tiny_max_n<T>());
+            a.sub_pins = composed_pins(c.op, pin, n <= ops::potrf::potrf_tiny_max_n<T>(), n <= ops::trsm::trsm_cta_max_n<T>(),
+                                       n <= ops::getrf::getrf_tiny_max_n<T>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);

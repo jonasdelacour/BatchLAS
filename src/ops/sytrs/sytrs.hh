@@ -45,8 +45,8 @@ bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, cons
                         A.batch_size() >= 1 && d.max_wg >= 32;
     return std::visit(overloaded{
         [&](Cta) {
-            return native && n <= sycl_sytrf::kSytrsCtaMaxN &&
-                   static_cast<std::int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(static_cast<int>(n))) <= d.slm_budget;
+            return native && n <= ops::sytrf::kSytrsCtaMaxN &&
+                   static_cast<std::int64_t>(ops::sytrf::sytrs_cta_slm_bytes<T>(static_cast<int>(n))) <= d.slm_budget;
         },
         // Its trsm selects for itself; the public trsm has a last resort.
         [&](Blocked) { return native; },
@@ -59,14 +59,14 @@ template <Backend B, class T>
 Event launch(Queue& q, const SytrsChoice& c, const MV<T>& A, const MV<T>& Bm, Uplo uplo, Span<int64_t> pivots,
              Span<std::byte> ws, const int32_t* skip) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_sytrf::sytrs_cta_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
+        [&](Cta) { return ops::sytrf::sytrs_cta_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
         [&](Blocked) {
-            return sycl_sytrf::sytrs_blocked_dispatch<T>(
+            return ops::sytrf::sytrs_blocked_dispatch<T>(
                 q, A, Bm, uplo, pivots, ws, skip,
                 [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
                    Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
-        [&](Wg) { return sycl_sytrf::sytrs_native_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
+        [&](Wg) { return ops::sytrf::sytrs_native_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
         [&](Vendor) -> Event {
             if constexpr (vendor_linked<B>) return backend::sytrs_vendor<B, T>(q, A, Bm, uplo, pivots, skip);
             else select::no_vendor<B, T>(spec);
@@ -78,7 +78,7 @@ Event launch(Queue& q, const SytrsChoice& c, const MV<T>& A, const MV<T>& Bm, Up
 template <Backend B, class T>
 std::size_t workspace(Queue& q, const SytrsChoice& c, const MV<T>& A, const MV<T>& Bm) {
     return std::visit(overloaded{
-        [&](Blocked) { return sycl_sytrf::sytrs_blocked_buffer_size<T>(q, A, Bm); },
+        [&](Blocked) { return ops::sytrf::sytrs_blocked_buffer_size<T>(q, A, Bm); },
         [&](const auto&) { return std::size_t(0); },
     }, c);
 }

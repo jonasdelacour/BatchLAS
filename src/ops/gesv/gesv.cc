@@ -13,7 +13,7 @@
 #include <src/ops/gesv/choice.hh>
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -47,8 +47,8 @@ bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const
     return std::visit(overloaded{
         [&](Tiny) {
             return Bk != Backend::NETLIB && d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 &&
-                   A.batch_size() >= 1 && n <= sycl_gesv::gesv_tiny_max_n<T>() &&
-                   nrhs <= sycl_gesv::kGesvTinyMaxRhs && d.max_wg >= sycl_gesv::kGesvTinyWgSize;
+                   A.batch_size() >= 1 && n <= ops::gesv::gesv_tiny_max_n<T>() &&
+                   nrhs <= ops::gesv::kGesvTinyMaxRhs && d.max_wg >= resident::kTinyWgSize;
         },
         [&](Blocked) { return homogeneous; },
     }, c);
@@ -60,7 +60,7 @@ template <Backend B, typename T>
 Event launch(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_gesv::gesv_tiny_dispatch<T>(q, A, Bm, pivots, ws, info); },
+        [&](Tiny) { return ops::gesv::gesv_tiny_dispatch<T>(q, A, Bm, pivots, ws, info); },
         [&](Blocked) {
             const std::size_t split = getrf_buffer_size<B, T>(q, A);
             if (ws.size() < split)
@@ -75,7 +75,7 @@ Event launch(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm, Spa
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_gesv::gesv_tiny_buffer_size<T>(q, A, Bm); },
+        [&](Tiny) { return ops::gesv::gesv_tiny_buffer_size<T>(q, A, Bm); },
         [&](Blocked) {
             return getrf_buffer_size<B, T>(q, A) + getrs_buffer_size<B, T>(q, A, Bm, Transpose::NoTrans);
         },

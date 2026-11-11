@@ -19,14 +19,14 @@ protected:
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
         const int max_wg = static_cast<int>(
             this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-        return sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, max_wg,
+        return ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget, max_wg,
                                                          resident::kMinBlocksPerSm, nb_hint);
     }
 
     struct LpGeom { int nb; int L; int G; };
 
     LpGeom geom(int n, int batch, int nb_hint = 0) const {
-        const unsigned g = sycl_potrf::potrf_lpanel_debug_launch<T>(
+        const unsigned g = ops::potrf::potrf_lpanel_debug_launch<T>(
             *this->ctx, n, batch, resident::kMinBlocksPerSm, nb_hint);
         return LpGeom{static_cast<int>(g >> 16),
                       static_cast<int>((g >> 4) & 0xfffu),
@@ -37,9 +37,9 @@ protected:
                                     Uplo uplo = Uplo::Lower, int nb_hint = 0,
                                     bool pass_info_span = true) {
         const int batch = static_cast<int>(V.batch_size());
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, V));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(static_cast<size_t>(batch), int32_t(-7));
-        (void)sycl_potrf::potrf_lpanel_dispatch<T>(
+        (void)ops::potrf::potrf_lpanel_dispatch<T>(
             *this->ctx, V, uplo, ws.to_span(),
             pass_info_span ? info.to_span() : Span<int32_t>{},
             resident::kMinBlocksPerSm, nb_hint);
@@ -422,7 +422,7 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
     }
 
     const std::size_t bytes = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_GE(bytes, sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()))
+    ASSERT_GE(bytes, ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()))
         << "potrf_buffer_size does not cover the LPanel tier the pin chose";
     UnifiedVector<std::byte> ws(bytes);
     UnifiedVector<int32_t> info(batch, int32_t(-7));
@@ -479,8 +479,8 @@ TYPED_TEST(PotrfLpanelTest, NbSixteenIsInstantiatedForFloatOnly) {
         A.fill(T{});
         for (int i = 0; i < n; ++i) A(i, i, 0) = MV<T>::make(R(2), R(0));
         UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(
+            ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
+        EXPECT_THROW((void)ops::potrf::potrf_lpanel_dispatch<T>(
                          *this->ctx, A.view(), Uplo::Lower, ws.to_span(), probe.to_span(),
                          resident::kMinBlocksPerSm, /*nb_hint=*/16),
                      std::exception);
@@ -499,7 +499,7 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     EXPECT_LE(cap, (max_wg / 32) * 32);
 
     // A budget so large that only the work-group cap can bind.
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(std::size_t(1) << 40, max_wg)),
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(std::size_t(1) << 40, max_wg)),
               (max_wg / 32) * 32);
 
     // ... and a work-group cap so large that only memory can bind; that answer must be
@@ -507,8 +507,8 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     const std::size_t local_mem =
         this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-    EXPECT_GT((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, 1 << 20)),
-              (sycl_potrf::potrf_cta_max_n_for_slm<T>(budget)))
+    EXPECT_GT((ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget, 1 << 20)),
+              (ops::potrf::potrf_cta_max_n_for_slm<T>(budget)))
         << "the LPanel tier holds one n x NB panel and the CTA tier the whole matrix; a "
            "ceiling that is not larger means the footprint formula is wrong";
 
@@ -521,8 +521,8 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     else if constexpr (std::is_same_v<T, double>)                { adv = 368; res = 1024; }
     else if constexpr (std::is_same_v<T, std::complex<float>>)   { adv = 368; res = 1024; }
     else                                                         { adv = 180; res = 750; }
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024)), adv);
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024, 1)), res);
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024)), adv);
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024, 1)), res);
 
     // L is a whole number of sub-groups and never below n.
     for (int n : {33, 64, 65, std::min(192, cap)}) {

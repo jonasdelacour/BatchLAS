@@ -259,9 +259,9 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         const int md = std::max(s.m, s.n);
         if (std::holds_alternative<gs::Jacobi>(c))
-            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
+            return s.herm == 'N' && md <= ops::gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
         if (std::holds_alternative<gs::Cta>(c))
-            return md <= sycl_gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
+            return md <= ops::gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
         if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' || s.m == s.n;
         return kVendor && (B != Backend::CUDA || vendor_accepts(s)) && B != Backend::ROCM;
     }
@@ -754,7 +754,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
     const Spec big_s{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None};
     auto big = make_svd<T>(big_s);
-    const bool fits = 64 <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
+    const bool fits = 64 <= ops::gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
     EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), fits);
     if (!test_utils::kSlmCappedAt48KiB) EXPECT_TRUE(fits);
 }

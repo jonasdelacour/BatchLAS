@@ -21,12 +21,12 @@ The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a ho
 |---|---|---|---|
 | `getrf` | `tiny` | `getrf_tiny.cc`, register-resident | square, `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` |
 | `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | square: `n <= getrf_cta_max_n_for_slm<T>(budget)`; \f$m \times n\f$: `getrf_cta_fits_rect`; both occupancy-scaled |
-| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf | `getrf_blocked_available<T>()`, `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`; any \f$m \times n\f$ |
+| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf | `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`; any \f$m \times n\f$ |
 | `getrf` | `vendor` | cuBLAS, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous; on CUDA square only (cuBLAS `getrfBatched`) |
 | `getrs` | `cta` | `getrs_fused.cc` | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(budget)`, `max_wg >= 32` |
-| `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` |
+| `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | the native term |
 | `getrs` | `vendor` | cuBLAS, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B |
-| `getri` | `blocked` | `getri_blocked.cc`, P into C, two public `trsm`, no workspace | `getri_blocked_available<T>()` |
+| `getri` | `blocked` | `getri_blocked.cc`, P into C, two public `trsm`, no workspace | the native term |
 | `getri` | `vendor` | cuBLAS, rocSOLVER, LAPACKE | `factorization_vendor_available<B>`, homogeneous |
 | `gesv` | `tiny` | `gesv_tiny.cc`, fused factor and solve | `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4`, `max_wg >= 64` |
 | `gesv` | `blocked` | public `getrf` then public `getrs` | homogeneous A and B |

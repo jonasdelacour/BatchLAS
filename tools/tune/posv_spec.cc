@@ -98,7 +98,7 @@ public:
             "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: tiny
             "src/ops/posv/kernels/posv_tiny.cc",
-            "src/kernels/common/solve_native.hh",
+            "src/ops/posv/posv_native.hh",
             // family: cta
             "src/ops/getrs/kernels/getrs_fused.cc",
             "src/ops/getrs/getrs_native.hh",
@@ -110,10 +110,10 @@ public:
         // common "src/ops/posv/posv.cc"
         // family: tiny "src/kernels/common/tiny_device.hh" "src/ops/potrf/potrf_native.hh"
         // posv cta and blocked call the public potrf and trsm: their native kernels count too.
-        // family: cta "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: cta "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "include/batchlas/device/lapack/potrf.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/util/resident_capacity.hh" "src/ops/potrf/choice.hh"
         // family: cta "include/batchlas/device/arith.hh"
         // family: cta "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // family: blocked "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: blocked "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "include/batchlas/device/lapack/potrf.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/util/resident_capacity.hh" "src/ops/potrf/choice.hh"
         // family: blocked "include/batchlas/device/arith.hh"
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // The include/batchlas/device/ headers each family's kernels include.

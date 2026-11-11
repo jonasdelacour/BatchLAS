@@ -6,7 +6,7 @@
 
 #include <src/ops/gemm/kernels/gemm_launch.hh>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 namespace {
 
@@ -96,13 +96,13 @@ Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     static_cast<void>(k_b);
-    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDimFor<T>)
-        refuse("small serves max(m, n, k) <= " + std::to_string(sycl_gemm_small::kSmallMaxDimFor<T>));
+    if (std::max({m, n, k}) > ops::gemm::kSmallMaxDimFor<T>)
+        refuse("small serves max(m, n, k) <= " + std::to_string(ops::gemm::kSmallMaxDimFor<T>));
     const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
     const int mx = static_cast<int>(std::max({m, n, k}));
     refuse_over_budget(ctx, "small", og::small_slm_bytes<T>(nn, mx), og::small_wg<T>(nn, mx));
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
-    return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+    return ops::gemm::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
 }
 
 Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float, MatrixFormat::Dense>& A,
@@ -229,4 +229,4 @@ template Event gemm_small<std::complex<double>>(Queue&, const MatrixView<std::co
                                                 const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
                                                 std::complex<double>, std::complex<double>, Transpose, Transpose);
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

@@ -51,18 +51,18 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && m == n && n <= sycl_getrf::getrf_tiny_max_n<T>() &&
-                   d.max_wg >= sycl_getrf::kGetrfTinyWgSize;
+            return native && m == n && n <= ops::getrf::getrf_tiny_max_n<T>() &&
+                   d.max_wg >= resident::kTinyWgSize;
         },
         [&](Cta) {
-            return native && (m == n ? n <= sycl_getrf::getrf_cta_max_n_for_slm<T>(budget)
-                                     : sycl_getrf::getrf_cta_fits_rect<T>(static_cast<int>(m), static_cast<int>(n),
+            return native && (m == n ? n <= ops::getrf::getrf_cta_max_n_for_slm<T>(budget)
+                                     : ops::getrf::getrf_cta_fits_rect<T>(static_cast<int>(m), static_cast<int>(n),
                                                                           budget));
         },
         [&](Blocked) {
             // min_blocks 1: the driver asks whether the panel leaf's argmax slots fit at all.
-            return native && sycl_getrf::getrf_blocked_available<T>() &&
-                   sycl_getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
+            return native &&
+                   ops::getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
         },
         // cuBLAS getrfBatched is square-only (it would factor rows() x rows()); LAPACKE and rocSOLVER take m x n.
         [&](Vendor) {
@@ -76,13 +76,13 @@ template <Backend B, typename T>
 Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivots, Span<std::byte> ws,
              Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_getrf::getrf_tiny_dispatch<T>(q, A, pivots, ws, info); },
-        [&](Cta) { return sycl_getrf::getrf_cta_dispatch<T>(q, A, pivots, ws, info); },
+        [&](Tiny) { return ops::getrf::getrf_tiny_dispatch<T>(q, A, pivots, ws, info); },
+        [&](Cta) { return ops::getrf::getrf_cta_dispatch<T>(q, A, pivots, ws, info); },
         [&](Blocked) {
             // The public gemm and trsm (table-routed): the operands are sub-views carrying the
             // parent's ld, where the native GEMM collapses.
             // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-            return sycl_getrf::getrf_blocked_dispatch<T>(
+            return ops::getrf::getrf_blocked_dispatch<T>(
                 q, A, pivots, ws, info,
                 [](Queue& c2, const MV<T>& ga, const MV<T>& gb, const MV<T>& gc, T galpha, T gbeta, Transpose gta,
                    Transpose gtb, ComputePrecision gp) {
@@ -104,9 +104,9 @@ Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivot
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_getrf::getrf_tiny_buffer_size<T>(q, A); },
-        [&](Cta) { return sycl_getrf::getrf_cta_buffer_size<T>(q, A); },
-        [&](Blocked) { return sycl_getrf::getrf_blocked_buffer_size<T>(q, A); },
+        [&](Tiny) { return ops::getrf::getrf_tiny_buffer_size<T>(q, A); },
+        [&](Cta) { return ops::getrf::getrf_cta_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::getrf::getrf_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::getrf_vendor_buffer_size<B, T>(q, A);

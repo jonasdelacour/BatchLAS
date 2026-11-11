@@ -14,7 +14,7 @@ Native QR families (`geqrf`: `tiny`, `cta`, `blocked`; `orgqr` and `ormqr`: `blo
 
 | op | families (`choice.hh`, tie-break order) | `can_run` (correctness only) |
 |---|---|---|
-| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` | native: no batch mask, `d.is_gpu && d.has_sg32`, homogeneous, `m, n, batch >= 1`; `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)`; `cta` is `geqrf_cta_fits<T>(m, n, budget)`; `blocked` needs `geqrf_blocked_available<T>()` and `geqrf_cta_max_elems_for_slm<T>(budget) >= 1`; `vendor` is `d.has_vendor` and homogeneous (`src/ops/geqrf/can_run.hh`) |
+| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` | native: no batch mask, `d.is_gpu && d.has_sg32`, homogeneous, `m, n, batch >= 1`; `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)`; `cta` is `geqrf_cta_fits<T>(m, n, budget)`; `blocked` needs `geqrf_cta_max_elems_for_slm<T>(budget) >= 1`; `vendor` is `d.has_vendor` and homogeneous (`src/ops/geqrf/can_run.hh`) |
 | `orgqr` | `blocked`, `vendor` | `blocked`: GPU, homogeneous, `n <= m`; `vendor`: `d.has_vendor`, homogeneous (`src/ops/orgqr/orgqr.cc`) |
 | `ormqr` | `blocked`, `vendor` | not complex `Trans` (thrown earlier by `throw_if_undefined`), homogeneous A and C, GPU / vendor; no batch term ([defect 16](../design/known-defects.md#defect-16-blocked-qr-past-the-grid)) |
 

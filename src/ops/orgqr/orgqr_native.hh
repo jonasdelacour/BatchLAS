@@ -15,10 +15,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_orgqr {
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool orgqr_blocked_available();
+namespace batchlas::ops::orgqr {
 
 // Must be the SELECTED ormqr: a native entry point called from a driver TU bypasses
 // ormqr's choose(). Positional argument order; absent injection throws.
@@ -58,4 +55,4 @@ BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
                                                    OrgqrApplyQ<T> apply_q = {},
                                                    OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
-}  // namespace batchlas::sycl_orgqr
+}  // namespace batchlas::ops::orgqr

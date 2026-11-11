@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // device_lapack_potrf_tests: device::potrf called from a user-style kernel (v22 design C.10) for
 // tier::Reg<N> on Partition<N> and tier::Cta<N> on WorkGroup<WG, 32>, against the host tiny / cta
-// routes (sycl_potrf::potrf_{tiny,cta}_dispatch, the routes themselves, no selector) on the same
+// routes (ops::potrf::potrf_{tiny,cta}_dispatch, the routes themselves, no selector) on the same
 // data: bit for bit, info included. Both are thin launchers over one body, so the residual against
 // the input through batchlas::verify is the independent check.
 // Guards (agent-guide section 8): ld = n + 3 and a padded batch stride; complex data with Im(diag)
@@ -137,11 +137,11 @@ enum class Route { Tiny, Cta };
 template <class T> std::vector<std::int32_t> run_host(Dev& dev, Route route, T* d, const Prob<T>& p) {
     MatrixView<T, MatrixFormat::Dense> V(d, p.n, p.n, p.ld, p.stride, kBatch);
     Queue& ctx = *dev.ctx;
-    const std::size_t bytes = route == Route::Tiny ? sycl_potrf::potrf_tiny_buffer_size<T>(ctx, V) : sycl_potrf::potrf_cta_buffer_size<T>(ctx, V);
+    const std::size_t bytes = route == Route::Tiny ? ops::potrf::potrf_tiny_buffer_size<T>(ctx, V) : ops::potrf::potrf_cta_buffer_size<T>(ctx, V);
     std::byte* ws = dev.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    if (route == Route::Tiny) (void)sycl_potrf::potrf_tiny_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
-    else (void)sycl_potrf::potrf_cta_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
+    if (route == Route::Tiny) (void)ops::potrf::potrf_tiny_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
+    else (void)ops::potrf::potrf_cta_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
     ctx.wait();
     return dev.down(info, kBatch);
 }
@@ -266,7 +266,7 @@ TYPED_TEST(DeviceApiPotrfTest, RegMatchesHostRoute) {
 TYPED_TEST(DeviceApiPotrfTest, CtaMatchesHostRoute) {
     using T = TypeParam;
     const std::size_t local = this->dev.ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const int ceil = sycl_potrf::potrf_cta_max_n_for_slm<T>(resident::device_slm_budget(local));
+    const int ceil = ops::potrf::potrf_cta_max_n_for_slm<T>(resident::device_slm_budget(local));
     ASSERT_GE(ceil, 17) << "the host cta route must reach the multi-panel orders";
     for (int n : {1, 7, 8, 9, 37, 64, ceil}) {
         if (n > ceil || n > 64) continue;

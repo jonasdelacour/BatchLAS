@@ -14,10 +14,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_getri {
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool getri_blocked_available();
+namespace batchlas::ops::getri {
 
 // Zero is the expected answer. Runs under BumpAllocator::measuring(): no workspace
 // access, no kernel launch, no A.data_ptr() dereference -- metadata only.
@@ -47,4 +44,4 @@ BATCHLAS_INTERNAL_API Event getri_blocked_dispatch(Queue& ctx,
                                                    Span<int32_t> info,
                                                    GetriSolveTrsm<T> solve_trsm = {});
 
-}  // namespace batchlas::sycl_getri
+}  // namespace batchlas::ops::getri

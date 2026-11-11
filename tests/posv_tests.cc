@@ -19,7 +19,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
@@ -202,14 +202,14 @@ protected:
         return this->ctx->device().type == DeviceType::GPU && this->ctx->device().supports_sub_group_size(32);
     }
 
-    int cap() const { return sycl_posv::posv_tiny_max_n<T>(); }
+    int cap() const { return ops::posv::posv_tiny_max_n<T>(); }
 
     void run_tiny(Sys<T>& p, Uplo uplo) {
         auto A = a_view(p);
         auto B = b_view(p);
-        const size_t need = sycl_posv::posv_tiny_buffer_size<T>(*this->ctx, A, B);
+        const size_t need = ops::posv::posv_tiny_buffer_size<T>(*this->ctx, A, B);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_posv::posv_tiny_dispatch<T>(*this->ctx, A, B, uplo,
+        (void)ops::posv::posv_tiny_dispatch<T>(*this->ctx, A, B, uplo,
                                          Span<std::byte>(ws.data(), need), p.info.to_span());
         this->ctx->wait();
     }
@@ -264,16 +264,16 @@ TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         for (int n : {4, 8, 9, 16, 17, 32}) {
-            if (n > cap || n > sycl_potrf::potrf_tiny_max_n<T>()) continue;
+            if (n > cap || n > ops::potrf::potrf_tiny_max_n<T>()) continue;
             auto p = make_spd<T>(n, 2, 5, uplo, 888u + unsigned(n));
             auto q = make_spd<T>(n, 2, 5, uplo, 888u + unsigned(n));
 
             this->run_tiny(p, uplo);
 
             auto Aq = a_view(q);
-            const size_t need = sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, Aq);
+            const size_t need = ops::potrf::potrf_tiny_buffer_size<T>(*this->ctx, Aq);
             UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, Aq, uplo,
+            (void)ops::potrf::potrf_tiny_dispatch<T>(*this->ctx, Aq, uplo,
                                                Span<std::byte>(ws.data(), need),
                                                q.info.to_span());
             this->ctx->wait();
@@ -315,7 +315,7 @@ TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
 // P4. THE OTHER TRIANGLE IS NEITHER READ NOR WRITTEN (ortho.cc's contract), plus the
 // ld and stride pads; the unreferenced triangle is poisoned, so a read of it would
 // also destroy P1's residual.
-// ARMED BREAK (R9): in tiny_device.hh's tiny_store_lower change `c <= lane` to `c < N`.
+// ARMED BREAK (R9): in lapack/potrf.hh's device::detail::reg_store_lower change `c <= lane` to `c < N`.
 // EXPECTED: RED for Uplo::Lower at every n.
 TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
     if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";

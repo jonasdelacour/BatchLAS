@@ -44,9 +44,9 @@ template <Backend B, class T>
 bool can_run(const SytrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 &&
-                        A.batch_size() >= 1 && d.max_wg >= sycl_sytrf::kSytrfCtaWg;
+                        A.batch_size() >= 1 && d.max_wg >= ops::sytrf::kSytrfCtaWg;
     return std::visit(overloaded{
-        [&](Cta) { return native && n <= sycl_sytrf::kSytrfCtaMaxN; },
+        [&](Cta) { return native && n <= ops::sytrf::kSytrfCtaMaxN; },
         [&](Wg) { return native; },
         [&](Blocked) { return native; },  // its gemm selects for itself (and honours the mask, W1a)
         [&](Vendor) {
@@ -60,11 +60,11 @@ template <Backend B, class T>
 Event launch(Queue& q, const SytrfChoice& c, const MV<T>& A, Uplo uplo, Span<int64_t> pivots, Span<std::byte> ws,
              Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_sytrf::sytrf_cta_dispatch<T>(q, A, uplo, pivots, ws, info); },
-        [&](Wg) { return sycl_sytrf::sytrf_wg_dispatch<T>(q, A, uplo, pivots, ws, info); },
+        [&](Cta) { return ops::sytrf::sytrf_cta_dispatch<T>(q, A, uplo, pivots, ws, info); },
+        [&](Wg) { return ops::sytrf::sytrf_wg_dispatch<T>(q, A, uplo, pivots, ws, info); },
         [&](Blocked) {
             // The public gemm (table-routed): its operands are sub-views carrying the parent's ld.
-            return sycl_sytrf::sytrf_blocked_dispatch<T>(
+            return ops::sytrf::sytrf_blocked_dispatch<T>(
                 q, A, uplo, pivots, ws, info,
                 [](Queue& c2, const MV<T>& ga, const MV<T>& gb, const MV<T>& gc, T galpha, T gbeta, Transpose gta,
                    Transpose gtb, ComputePrecision gp) { return gemm<B, T>(c2, ga, gb, gc, galpha, gbeta, gta, gtb, gp); });
@@ -79,9 +79,9 @@ Event launch(Queue& q, const SytrfChoice& c, const MV<T>& A, Uplo uplo, Span<int
 template <Backend B, class T>
 std::size_t workspace(Queue& q, const SytrfChoice& c, const MV<T>& A, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_sytrf::sytrf_native_buffer_size<T>(q, A); },
-        [&](Wg) { return sycl_sytrf::sytrf_native_buffer_size<T>(q, A); },
-        [&](Blocked) { return sycl_sytrf::sytrf_blocked_buffer_size<T>(q, A); },
+        [&](Cta) { return ops::sytrf::sytrf_native_buffer_size<T>(q, A); },
+        [&](Wg) { return ops::sytrf::sytrf_native_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::sytrf::sytrf_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (vendor_linked<B>) return backend::sytrf_vendor_buffer_size<B, T>(q, A, uplo);
             else select::no_vendor<B, T>(spec);

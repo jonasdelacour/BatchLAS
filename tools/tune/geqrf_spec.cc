@@ -157,7 +157,6 @@ public:
             "src/kernels/common/larft_wy.hh",
             // common
             "src/ops/geqrf/geqrf_native.hh",
-            "src/ops/geqrf/geqrf_cta_device.hh",
             "src/ops/geqrf/geqrf_panel_reg_device.hh",
             "src/ops/geqrf/can_run.hh",
             "src/ops/geqrf/choice.hh",

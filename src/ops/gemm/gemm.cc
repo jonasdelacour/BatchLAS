@@ -191,32 +191,32 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Direct) {
             return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return sycl_gemm::gemm_direct<T>(q, a, b, cc, alpha, beta, ta, tb);
+                return ops::gemm::gemm_direct<T>(q, a, b, cc, alpha, beta, ta, tb);
             });
         },
         [&](Tiled) {
             return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return sycl_gemm::gemm_tiled<T>(q, a, b, cc, alpha, beta, ta, tb);
+                return ops::gemm::gemm_tiled<T>(q, a, b, cc, alpha, beta, ta, tb);
             });
         },
-        [&](Small) { return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
+        [&](Small) { return ops::gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](const Reg& r) -> Event {
             if constexpr (std::is_same_v<T, float>)
                 return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                    return sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, a, b, cc, alpha, beta, ta, tb);
+                    return ops::gemm::gemm_reg(q, r.m, r.n, r.k, r.u, a, b, cc, alpha, beta, ta, tb);
                 });
             else throw batchlas::unsupported("gemm: reg is float only");
         },
         [&](const Wide& w) {
             return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, a, b, cc, alpha, beta, ta, tb);
+                return ops::gemm::gemm_wide<T>(q, w.m, w.n, w.k, a, b, cc, alpha, beta, ta, tb);
             });
         },
         [&](const SplitK& sk) {
             // batch * s groups in grid z: the chunk is what keeps that product under the cap.
             return for_batch_chunks<T>(q, A, Bm, C, std::max<std::int64_t>(1, grid / sk.s),
                                        [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, a, b, cc, alpha, beta, ta, tb);
+                return ops::gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, a, b, cc, alpha, beta, ta, tb);
             });
         },
         [&](Vendor) -> Event {

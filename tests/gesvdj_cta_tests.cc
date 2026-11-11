@@ -76,7 +76,7 @@ protected:
     int max_dim_with_vectors() const {
         const std::size_t budget =
             resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-        const int cap = static_cast<int>(sycl_gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
+        const int cap = static_cast<int>(ops::gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
         if (!test_utils::kSlmCappedAt48KiB) {
             EXPECT_EQ(cap, (std::is_same_v<Scalar, std::complex<double>> ? 32 : 64)) << "budget " << budget;
         }
@@ -316,7 +316,7 @@ TYPED_TEST(GesvdjCtaTest, RankDeficientAboveThirtyTwo) {
 // reports (97,280 B: DPC++ or acpp with the opt-in; 45,056 B: acpp without), from the bytes each
 // rung's smallest work-group asks the driver for (71,752 B double C=64, 71,488 B cfloat C=64).
 TEST(GesvdjCtaCap, JacobiCapAtBothBudgets) {
-    using sycl_gesvd::gesvd_jacobi_max_dim;
+    using ops::gesvd::gesvd_jacobi_max_dim;
     using cf = std::complex<float>;
     using cd = std::complex<double>;
     for (bool v : {true, false}) {
@@ -332,10 +332,10 @@ TEST(GesvdjCtaCap, JacobiCapAtBothBudgets) {
     EXPECT_EQ(gesvd_jacobi_max_dim<double>(false, 45056), 64);
     EXPECT_EQ(gesvd_jacobi_max_dim<cf>(true, 45056), 32);
     EXPECT_EQ(gesvd_jacobi_max_dim<cf>(false, 45056), 64);
-    EXPECT_LE(sycl_gesvd::gesvdj_slm_bytes<double>(64, true), 71752u);
-    EXPECT_GT(sycl_gesvd::gesvdj_slm_bytes<double>(64, true) + 64, 71752u);
-    EXPECT_LE(sycl_gesvd::gesvdj_slm_bytes<cf>(64, true), 71488u);
-    EXPECT_GT(sycl_gesvd::gesvdj_slm_bytes<cf>(64, true) + 64, 71488u);
+    EXPECT_LE(ops::gesvd::gesvdj_slm_bytes<double>(64, true), 71752u);
+    EXPECT_GT(ops::gesvd::gesvdj_slm_bytes<double>(64, true) + 64, 71752u);
+    EXPECT_LE(ops::gesvd::gesvdj_slm_bytes<cf>(64, true), 71488u);
+    EXPECT_GT(ops::gesvd::gesvdj_slm_bytes<cf>(64, true) + 64, 71488u);
 }
 
 // One past the device cap is refused with invalid_argument (not a failed launch, R2), and the

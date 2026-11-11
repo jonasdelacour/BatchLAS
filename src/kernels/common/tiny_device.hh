@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Shared device helpers for the register-resident "tiny" factorization tier
-// (potrf_tiny.cc, getrf_tiny.cc, geqrf_tiny.cc): one matrix per SubGroupPartition<N>,
-// lane r owning row r of a compile-time `D rA[N]`, every cross-lane value a sub-group
-// shuffle. THREE INVARIANTS, each breaking SILENTLY: rA[] is never dynamically indexed
-// nor a by-reference parameter; N must divide the 32-lane sub-group; every lane of a
-// partition must reach every partition collective, so no kernel here returns early.
+// The register-resident tiny tier's helpers: lane r of a SubGroupPartition<N> owns row r of `D rA[N]`.
+// THREE INVARIANTS, each breaking SILENTLY: rA[] is never dynamically indexed nor a by-reference
+// parameter; N divides the 32-lane sub-group; no kernel returns early before a partition collective.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
@@ -14,6 +11,7 @@
 #include <batchlas/device/arith.hh>
 
 #include <src/sycl/device_scalar.hh>
+#include <src/util/resident_capacity.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/backend_config.h>
@@ -26,8 +24,6 @@
 namespace batchlas::tiny_native {
 
 inline constexpr int kTinySubGroupSize = 32;  // every tiny kernel: reqd_sub_group_size(32)
-inline constexpr int kTinySubGroups = 2;      // a tuning constant, not a contract
-inline constexpr int kTinyWgSize = kTinySubGroups * kTinySubGroupSize;
 
 constexpr bool tiny_n_is_legal(int N) {  // invariant 2: N must divide the sub-group
     return N == 8 || N == 16 || N == 32;
@@ -41,87 +37,26 @@ constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the ti
     return 0;
 }
 
-// COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
-// lane guard belongs INSIDE it. Device LA Partition::bcast: complex shuffles as two
-// reals (permute/select reject an aggregate, gesvdj_cta.cc:95).
+// COLLECTIVE: `src` partition-uniform, every lane reaches it, a lane guard goes INSIDE it.
 template <typename D, std::size_t P>
 inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
     return ::batchlas::device::wrap(part).bcast(v, src);
 }
 
-// COMPONENT BY COMPONENT, never a plain `?:` on a complex scalar: LLVM will not build a
-// `select` of a 16-byte aggregate, SROA then declines to promote rA[] and the array leaves
-// the register file. Core select is that rule; this name stays until posv_tiny.cc calls it.
-// evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
+// Component by component, never `?:` on a complex aggregate (SROA would demote rA[]): core select.
 template <typename D>
 BATCHLAS_DEVICE_INLINE D tiny_select(bool cond, D a, D b) {
     return ::batchlas::device::select(cond, a, b);
 }
 
 // A row that is not `row_live`, and every row of a dead partition, carries the IDENTITY,
-// which is what lets these unrolled bodies run with no lane guard. `c <= lane` is
-// ortho.cc's OtherTriangleIsNeitherReadNorWritten contract; `c < N` writes into the ld pad.
+// which is what lets these unrolled bodies run with no lane guard.
 template <typename D, int N>
 inline void tiny_pad_identity(D* rA, int lane) {
     const D one = sycl_device::dev_one<D>();
     const D zero = D{};
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) rA[c] = tiny_select(c == lane, one, zero);
-}
-
-template <typename D, int N>
-inline void tiny_load_lower(D* rA, const D* __restrict a, int ld,
-                            int lane, bool row_live,
-                            bool real_diag) {  // as LAPACK and cuSOLVER, diag is real
-    tiny_pad_identity<D, N>(rA, lane);
-BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < N; ++c) {
-        if (row_live && c <= lane) {
-            D v = a[lane + static_cast<std::ptrdiff_t>(c) * ld];
-            if (real_diag && c == lane) {
-                v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
-            }
-            rA[c] = v;
-        }
-    }
-}
-
-// Upper as a LOAD TRANSFORM, not a second algorithm: A = U^H U is the same recurrence on
-// S(i,c) = conj(A(c,i)). "Lane r owns a row of U" would need rA[lane] -- invariant 1.
-template <typename D, int N>
-inline void tiny_load_upper(D* rA, const D* __restrict a, int ld,
-                            int lane, bool row_live, bool real_diag) {
-    tiny_pad_identity<D, N>(rA, lane);
-BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < N; ++c) {
-        if (row_live && c <= lane) {
-            D v = sycl_device::dev_conj(a[c + static_cast<std::ptrdiff_t>(lane) * ld]);
-            if (real_diag && c == lane) {
-                v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
-            }
-            rA[c] = v;
-        }
-    }
-}
-
-template <typename D, int N>
-inline void tiny_store_lower(const D* rA, D* __restrict a, int ld,
-                             int lane, bool row_live) {
-BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < N; ++c) {
-        if (row_live && c <= lane) a[lane + static_cast<std::ptrdiff_t>(c) * ld] = rA[c];
-    }
-}
-
-template <typename D, int N>
-inline void tiny_store_upper(const D* rA, D* __restrict a, int ld,
-                             int lane, bool row_live) {
-BATCHLAS_UNROLL_FULL
-    for (int c = 0; c < N; ++c) {
-        if (row_live && c <= lane) {
-            a[c + static_cast<std::ptrdiff_t>(lane) * ld] = sycl_device::dev_conj(rA[c]);
-        }
-    }
 }
 
 template <typename D, int N>  // the full square, for the non-triangular tiers (LU, QR)

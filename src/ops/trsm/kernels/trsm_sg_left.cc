@@ -24,7 +24,7 @@
 
 #include <batchlas/device.hh>
 
-namespace batchlas::sycl_trsm {
+namespace batchlas::ops::trsm {
 
 
 namespace {
@@ -191,4 +191,4 @@ BATCHLAS_TRSM_SG_INST(std::complex<float>)
 BATCHLAS_TRSM_SG_INST(std::complex<double>)
 #undef BATCHLAS_TRSM_SG_INST
 
-}  // namespace batchlas::sycl_trsm
+}  // namespace batchlas::ops::trsm

@@ -221,7 +221,7 @@ protected:
     // ---- the limit oracle: orgqr_blocked_dispatch's own checks, not orgqr.cc's can_run ----
     static bool expect_runs(const C& c, int m, int n, int batch, bool het = false) {
         if (std::holds_alternative<oq::Blocked>(c))
-            return sycl_orgqr::orgqr_blocked_available<T>() && m >= 1 && n >= 1 && batch >= 1 && n <= m && !het;
+            return m >= 1 && n >= 1 && batch >= 1 && n <= m && !het;
         return kVendor;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<oq::Vendor>(c) && !kVendor; }
@@ -267,9 +267,9 @@ protected:
         Queue& q = *this->ctx;
         try {
             if (std::holds_alternative<oq::Blocked>(c)) {
-                const std::size_t bytes = sycl_orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_size);
+                const std::size_t bytes = ops::orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_size);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(1, bytes));
-                (void)sycl_orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws.to_span(), apply, apply_size);
+                (void)ops::orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws.to_span(), apply, apply_size);
             } else {
                 if constexpr (kVendor) {
                     UnifiedVector<std::byte> ws(
@@ -391,7 +391,7 @@ TYPED_TEST(OrgqrCandidates, ExactWorkspaceInAPoisonedArena) {
             const Pin pin("orgqr", c);
             const std::size_t bytes = orgqr_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span());
             if (std::holds_alternative<oq::Blocked>(c)) {
-                const std::size_t own = sycl_orgqr::orgqr_blocked_buffer_size<T>(
+                const std::size_t own = ops::orgqr::orgqr_blocked_buffer_size<T>(
                     *this->ctx, p.A(), p.tau.to_span(), TestFixture::apply_size);
                 EXPECT_EQ(bytes, own) << name(c, m, n, 5) << ": not the native driver's own size";
             }

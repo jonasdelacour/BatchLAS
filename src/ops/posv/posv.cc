@@ -15,7 +15,7 @@
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
 #include <src/ops/getrs/getrs_native.hh>
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -49,8 +49,8 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
     const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && n <= sycl_posv::posv_tiny_max_n<T>() && nrhs <= sycl_posv::kPosvTinyMaxRhs &&
-                   d.max_wg >= sycl_posv::kPosvTinyWgSize;
+            return native && n <= ops::posv::posv_tiny_max_n<T>() && nrhs <= ops::posv::kPosvTinyMaxRhs &&
+                   d.max_wg >= resident::kTinyWgSize;
         },
         [&](Cta) { return native && ops::potrs::fused_fits<T>(d, n, nrhs); },
         [&](Blocked) { return homogeneous; },
@@ -64,7 +64,7 @@ Event launch(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::De
     const Span<const std::uint8_t> mask = detail::call_mask("posv", A, Bm);
     const auto Am = A.with_batch_mask(mask), Bx = Bm.with_batch_mask(mask);
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, ws, info); },
+        [&](Tiny) { return ops::posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, ws, info); },
         [&](Cta) {
             // The public potrf, then BOTH triangular solves in one kernel: two nrhs = 1 trsm
             // launches stream L twice at a fraction of the bandwidth one fused pass gets.
@@ -84,7 +84,7 @@ template <Backend B, typename T>
 std::size_t workspace(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_posv::posv_tiny_buffer_size<T>(q, A, Bm); },
+        [&](Tiny) { return ops::posv::posv_tiny_buffer_size<T>(q, A, Bm); },
         [&](Cta) { return potrf_buffer_size<B, T>(q, A, uplo); },
         [&](Blocked) { return potrf_buffer_size<B, T>(q, A, uplo); },
     }, c);

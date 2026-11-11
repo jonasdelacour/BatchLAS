@@ -32,7 +32,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 using namespace batchlas;
-using batchlas::sycl_trsm::Canonical;
+using batchlas::ops::trsm::Canonical;
 using batchlas::verify::Check;
 
 namespace {
@@ -214,7 +214,7 @@ template <class T> void check_solution(const Problem<T>& P, const std::vector<T>
 template <class D, int N, int TR, bool Staged, int WG, class T>
 std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* flags = nullptr) {
     static_assert(sizeof(D) == sizeof(T));
-    const Canonical can = sycl_trsm::canonicalise(P.c.side, P.c.uplo, P.c.trans, P.c.diag);
+    const Canonical can = ops::trsm::canonicalise(P.c.side, P.c.uplo, P.c.trans, P.c.diag);
     const D* a = reinterpret_cast<const D*>(dev.up(P.a));
     T* bt = dev.up(P.b);
     D* b = reinterpret_cast<D*>(bt);
@@ -237,24 +237,24 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
         D* sTile = sRd + N;
         int* sDiv = reinterpret_cast<int*>(sTile + (Staged ? (TR + 1) * ex.width() : 0));
         D* Bb = b + std::ptrdiff_t(item) * sb;
-        const sycl_trsm::dla::CanonTri<const D, kLeft> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
+        const ops::trsm::dla::CanonTri<const D, kLeft> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
         if (lane == 0) sDiv[0] = 0;
-        sycl_trsm::dla::tp_pack_lower<N>(ex, L, n, sLc);
+        ops::trsm::dla::tp_pack_lower<N>(ex, L, n, sLc);
         ex.barrier(device::Mem::Global);
-        sycl_trsm::dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
+        ops::trsm::dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
         ex.barrier(device::Mem::Global);
-        const sycl_trsm::dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
+        const ops::trsm::dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
         if (lane == 0) fl[item] = sDiv[0];
         device::Frag<D, N> x;
         if constexpr (Staged) {
-            const sycl_trsm::dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
+            const ops::trsm::dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
             D* my = sTile + lane * (TR + 1);
             BATCHLAS_UNROLL_FULL
             for (int k = 0; k < (N + TR - 1) / TR; ++k) {
                 ex.barrier(device::Mem::Global);
-                sycl_trsm::dla::lacpy_tile_in<TR, TR + 1>(ex, Bc, k * TR, 0, sTile);
+                ops::trsm::dla::lacpy_tile_in<TR, TR + 1>(ex, Bc, k * TR, 0, sTile);
                 ex.barrier(device::Mem::Global);
-                sycl_trsm::dla::trsv_lower_rows<N, TR, Ar>(x, k * TR, sLc, dg, [&](int s) {
+                ops::trsm::dla::trsv_lower_rows<N, TR, Ar>(x, k * TR, sLc, dg, [&](int s) {
                     D r = Ar::zero();
                     if (live && s < n) r = Ar::mul(alpha, my[s - k * TR]);
                     return r;
@@ -263,13 +263,13 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
             BATCHLAS_UNROLL_FULL
             for (int k = 0; k < (N + TR - 1) / TR; ++k) {
                 ex.barrier(device::Mem::Global);
-                sycl_trsm::dla::frag_copy_out<TR>(x, k * TR, my);
+                ops::trsm::dla::frag_copy_out<TR>(x, k * TR, my);
                 ex.barrier(device::Mem::Global);
-                sycl_trsm::dla::lacpy_tile_out<TR, TR + 1>(ex, sTile, Bc, k * TR, 0);
+                ops::trsm::dla::lacpy_tile_out<TR, TR + 1>(ex, sTile, Bc, k * TR, 0);
             }
         } else {
-            const auto bu = sycl_trsm::dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(lane);
-            sycl_trsm::dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+            const auto bu = ops::trsm::dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(lane);
+            ops::trsm::dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
                 D r = Ar::zero();
                 if (live && s < n) r = Ar::mul(alpha, bu(s));
                 return r;
@@ -293,7 +293,7 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
 template <class D, int P, int QC, int Unroll, class T>
 std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* flags = nullptr) {
     constexpr int kWg = 128, kMpw = 32 / P;
-    const Canonical can = sycl_trsm::canonicalise(Side::Left, Pb.c.uplo, Pb.c.trans, Pb.c.diag);
+    const Canonical can = ops::trsm::canonicalise(Side::Left, Pb.c.uplo, Pb.c.trans, Pb.c.diag);
     const D* a = reinterpret_cast<const D*>(dev.up(Pb.a));
     T* bt = dev.up(Pb.b);
     D* b = reinterpret_cast<D*>(bt);
@@ -314,22 +314,22 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
         const int chunk = gsg % chunks;
         const int item = (gsg / chunks) * kMpw + static_cast<int>(sg.get_local_linear_id()) / P;
         const bool okr = r < n;
-        const sycl_trsm::dla::CanonTri<const D, true, std::int64_t> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
-        const sycl_trsm::dla::FlipRows<D, std::int64_t> Bc{b + std::ptrdiff_t(item) * sb, ldb, n, q, fwd};
+        const ops::trsm::dla::CanonTri<const D, true, std::int64_t> L{a + std::ptrdiff_t(item) * sa, lda, n, fwd, trans, conj};
+        const ops::trsm::dla::FlipRows<D, std::int64_t> Bc{b + std::ptrdiff_t(item) * sb, ldb, n, q, fwd};
         const auto neg = [](const D& v) { return device::Arith<D>::neg(v); };
         device::Frag<D, P> nL;
-        device::load_row(nL, sycl_trsm::dla::MapCols{L, 0, neg}, r, okr ? r : 0);
+        device::load_row(nL, ops::trsm::dla::MapCols{L, 0, neg}, r, okr ? r : 0);
         D dd = Ar::one();
         if (okr && !unit) dd = L.diag(r);
-        const auto dg = sycl_trsm::dla::guarded_recip<Ar>(ex, dd);
+        const auto dg = ops::trsm::dla::guarded_recip<Ar>(ex, dd);
         if (r == 0 && chunk == 0) fl[item] = dg.divide ? 1 : 0;
         const int c0 = chunk * QC;
         const int live_c = okr ? q - c0 : 0;
         const auto scale = [=](const D& v) { return Ar::mul(alpha, v); };
         device::Frag<D, QC> x;
-        device::load_row(x, sycl_trsm::dla::MapCols{Bc, c0, scale}, r, live_c);
-        sycl_trsm::dla::trsm_lower_rowfrag<Unroll, Ar>(ex, nL, dg, n, unit, x);
-        device::store_row(x, sycl_trsm::dla::ColsFrom{Bc, c0}, r, live_c);
+        device::load_row(x, ops::trsm::dla::MapCols{Bc, c0, scale}, r, live_c);
+        ops::trsm::dla::trsm_lower_rowfrag<Unroll, Ar>(ex, nL, dg, n, unit, x);
+        device::store_row(x, ops::trsm::dla::ColsFrom{Bc, c0}, r, live_c);
     });
     if (flags) *flags = dev.down(fl, kBatch);
     return dev.down(bt, Pb.b.size());

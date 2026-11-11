@@ -278,8 +278,8 @@ protected:
     // Whether sytrs `cta` can take order n here: the register tile and this device's local memory.
     bool cta_fits(int n) const {
         const auto& d = select::describe(this->ctx->device(), Bk, false);
-        return Bk != Backend::NETLIB && n <= sycl_sytrf::kSytrsCtaMaxN &&
-               static_cast<int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
+        return Bk != Backend::NETLIB && n <= ops::sytrf::kSytrsCtaMaxN &&
+               static_cast<int64_t>(ops::sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
     }
 
     std::vector<ops::sytrs::SytrsChoice> solve_routes(int n) const {
@@ -429,7 +429,7 @@ TYPED_TEST(SytrfTest, CtaAndWgAgreeBitForBit) {
             this->solve(p, ops::sytrs::Cta{});
             const ops::sysv::SysvChoice cta = ops::sysv::Cta{};
             this->sysv_run(f, &cta);
-            const bool one_panel = n <= sycl_sytrf::kSytrfBlockedNb;
+            const bool one_panel = n <= ops::sytrf::kSytrfBlockedNb;
             const std::string what = std::string(" n=") + std::to_string(n) + " " + ts::uplo_name(uplo);
             ASSERT_TRUE(ts::items_bit_identical_to<T>(p.a, q.a)) << "factor" << what;
             ASSERT_TRUE(ts::items_bit_identical_to<T>(p.a, f.a)) << "sysv factor" << what;
@@ -557,7 +557,7 @@ TYPED_TEST(SytrfTest, BlockedMatchesWgAndVendor) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
     const bool vendor = TestFixture::Bk == Backend::CUDA && select::kHasCudaVendor;
-    constexpr int nb = sycl_sytrf::kSytrfBlockedNb;
+    constexpr int nb = ops::sytrf::kSytrfBlockedNb;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         int straddles = 0;
         for (Gen gen : {Gen::random, Gen::kkt})
@@ -806,7 +806,7 @@ TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
 TYPED_TEST(SytrfTest, SytrsCtaCeilingStraddled) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
-    for (int n : {sycl_sytrf::kSytrsCtaMaxN, sycl_sytrf::kSytrsCtaMaxN + 1}) {
+    for (int n : {ops::sytrf::kSytrsCtaMaxN, ops::sytrf::kSytrsCtaMaxN + 1}) {
         auto p = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
         this->factor_auto(p);
         if (this->cta_fits(n)) {

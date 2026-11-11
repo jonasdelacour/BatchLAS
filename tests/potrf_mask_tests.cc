@@ -17,7 +17,7 @@
 #include <batchlas/error.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
 #include <src/ops/potrf/potrf_native.hh>
@@ -215,19 +215,19 @@ protected:
 
     // potrf tiny's matrices per work-group (G | S << 16), cta's and lpanel's G.
     int tiny_wg(int n) {
-        const unsigned v = sycl_potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
+        const unsigned v = ops::potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
         return int(v & 0xffffu) * int(v >> 16);
     }
-    int cta_wg(int n, int batch) { return int(sycl_potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch) & 0xffffu); }
+    int cta_wg(int n, int batch) { return int(ops::potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch) & 0xffffu); }
     int lpanel_wg(int n, int batch, int nb) {
-        return int(sycl_potrf::potrf_lpanel_debug_launch<T>(*this->ctx, n, batch, resident::kMinBlocksPerSm, nb) & 0xfu);
+        return int(ops::potrf::potrf_lpanel_debug_launch<T>(*this->ctx, n, batch, resident::kMinBlocksPerSm, nb) & 0xfu);
     }
-    static int posv_wg(int n) { return sycl_posv::kPosvTinyWgSize / (n <= 8 ? 8 : n <= 16 ? 16 : 32); }
+    static int posv_wg(int n) { return resident::kTinyWgSize / (n <= 8 ? 8 : n <= 16 ? 16 : 32); }
 
     std::vector<Shape> potrf_shapes(int batch, bool identical) {
         std::vector<Shape> v;
         for (const auto& [n, u] : {std::pair{5, Uplo::Lower}, {13, Uplo::Upper}, {27, Uplo::Lower}})
-            if (n <= sycl_potrf::potrf_tiny_max_n<T>())
+            if (n <= ops::potrf::potrf_tiny_max_n<T>())
                 v.push_back({Op::potrf, "tiny", n, 0, batch, u, tiny_wg(n), identical});
         v.push_back({Op::potrf, "cta", 11, 0, batch, Uplo::Lower, cta_wg(11, batch), identical});
         const int big = cta_wg(45, batch) ? 45 : 30;  // complex<double>'s local-memory ceiling is lower
@@ -240,7 +240,7 @@ protected:
     std::vector<Shape> posv_shapes(int batch, bool identical) {
         std::vector<Shape> v;
         for (const auto& [n, r, u] : {std::tuple{6, 1, Uplo::Lower}, {14, 3, Uplo::Upper}, {30, 4, Uplo::Lower}})
-            if (n <= sycl_posv::posv_tiny_max_n<T>()) v.push_back({Op::posv, "tiny", n, r, batch, u, posv_wg(n), identical});
+            if (n <= ops::posv::posv_tiny_max_n<T>()) v.push_back({Op::posv, "tiny", n, r, batch, u, posv_wg(n), identical});
         return v;
     }
 };

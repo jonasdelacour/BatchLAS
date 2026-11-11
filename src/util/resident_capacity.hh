@@ -17,6 +17,21 @@ constexpr std::size_t device_slm_budget(std::size_t local_mem_bytes,
 
 inline constexpr int kMinBlocksPerSm = 4;  // design rule R1's occupancy target
 
+// The 48 KB launch hole: a dynamic local-memory request in (kLaunchHoleLo, kLaunchHoleHi] bytes
+// fails at enqueue once the body holds a group collective (sticky per CUfunction), so every
+// resident launcher pads such a request past the band. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
+inline constexpr std::size_t kLaunchHoleLo = 47104;
+inline constexpr std::size_t kLaunchHoleHi = 49664;
+inline constexpr std::size_t kLaunchHolePadTo = 49920;
+
+constexpr std::size_t hole_padded(std::size_t bytes) {
+    return (bytes > kLaunchHoleLo && bytes <= kLaunchHoleHi) ? kLaunchHolePadTo : bytes;
+}
+
+// The tiny tier's work-group: two 32-lane sub-groups. A tuning constant, not a contract; sycl-free
+// so can_run's capacity and the launchers read one spelling.
+inline constexpr int kTinyWgSize = 64;
+
 // The slice ONE work-group may own, hence the ADVERTISED capacity; min_blocks_per_sm = 1 asks
 // the other question, "can it be held at all". evidence: docs/perf/lu.md#lu-the-panel-leaf-is-not-the-tier-ceiling
 constexpr std::size_t occupancy_budget(std::size_t slm_budget_bytes,

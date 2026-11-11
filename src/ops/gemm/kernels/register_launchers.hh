@@ -5,7 +5,7 @@
 
 #include <stdexcept>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 // One row of the register-tiled GEMM dispatch table: launch_register_tiled<>'s
 // template parameters as a structural NTTP. The rows are ops::gemm::reg_configs
@@ -59,4 +59,4 @@ Event launch_reg(Queue& ctx,
                                  false, P.OpA, P.OpB>(ctx, A, B, C, alpha, beta, trace);
 }
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

@@ -12,8 +12,8 @@
 
 namespace batchlas::ops::gemv {
 
-struct Cta : select::NoFields<"cta"> {};        ///< sycl_gemv::gemv_native_cta, sub-group per output; Trans/ConjTrans
-struct Direct : select::NoFields<"direct"> {};  ///< sycl_gemv::gemv_native_direct, item per output; every device
+struct Cta : select::NoFields<"cta"> {};        ///< ops::gemv::gemv_native_cta, sub-group per output; Trans/ConjTrans
+struct Direct : select::NoFields<"direct"> {};  ///< ops::gemv::gemv_native_direct, item per output; every device
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemv_vendor; any shape, needs the library
 
 using GemvChoice = std::variant<Cta, Direct, Vendor>;  ///< fieldless: body and segment width W derived in the drivers

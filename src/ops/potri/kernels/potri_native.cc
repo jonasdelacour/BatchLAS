@@ -5,6 +5,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
+#include <src/sycl/impl.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -15,7 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_potri {
+namespace batchlas::ops::potri {
 
 namespace {
 
@@ -38,7 +39,7 @@ Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potri", A));
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<PotriFinishKernel<T>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        impl::parallel_for<PotriFinishKernel<T>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
             for (std::size_t f = it.get_global_id(0); f < total; f += it.get_global_range(0)) {
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(f / elems);
                 if ((skip && skip[b] != 0) || (mask && mask[b] == 0)) continue;
@@ -69,4 +70,4 @@ BATCHLAS_POTRI_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRI_INSTANTIATE
 
-}  // namespace batchlas::sycl_potri
+}  // namespace batchlas::ops::potri

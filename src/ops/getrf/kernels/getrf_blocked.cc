@@ -5,6 +5,8 @@
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <src/ops/getrf/getrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/kernels/common/lu_laswp.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/batch_mask.hh>
@@ -27,16 +29,15 @@
 #include <batchlas/tuning_params.hh>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 namespace {
 
 // Per-TU tag: gives this cluster its own instantiation of the shared LASWP kernel.
 struct GetrfBlockedLaswpTag {};
 
-// Block width, shared by the driver, the workspace query and the debug query. It
-// IS the trailing GEMM's k: a multiple of 16, and never below 32 (the wide-scalar
-// complex gemm kernel is gated on min_dim >= 32).
+// Block width of the driver and both queries: the trailing GEMM's k, a multiple of 16 and >= 32
+// (the wide-scalar complex gemm kernel is gated on min_dim >= 32).
 template <typename T>
 constexpr int getrf_nb_for_type() {
     return 32;
@@ -55,9 +56,7 @@ inline int getrf_blocked_nb(int n) {
     return std::max(1, std::min(getrf_nb_for_type<T>(), n));
 }
 
-// Three spellings of one left-hand interchange; DeferGather ships. The knob's
-// presence latches in a static, but its value is re-read per call, so a harness
-// can swap arms mid-run.
+// Three spellings of one left-hand interchange; DeferGather ships. The knob's value is re-read per call.
 enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
 
 inline LeftLaswp getrf_left_laswp_mode() {
@@ -150,12 +149,6 @@ GetrfBlockedWs<T> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batc
 
 }  // namespace
 
-// Every type has the tier; tuned/getrf.*.txt decides where it runs.
-template <> bool getrf_blocked_available<float>()                { return true; }
-template <> bool getrf_blocked_available<double>()               { return true; }
-template <> bool getrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool getrf_blocked_available<std::complex<double>>() { return true; }
-
 template <typename T>
 std::size_t getrf_blocked_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -207,24 +200,10 @@ Event getrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // The driver's own gates; src/ops/getrf/getrf.cc's can_run mirrors them (R3).
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
-    }
     // m x n is ?GETRF's own loop: min(m, n) panels of full remaining height, every
     // interchange and update spanning all n columns. The pivot list's stride is min(m, n).
     const int mn = std::min(m, n);
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrf_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported(
-            "getrf_blocked: device does not offer sub-group size 32, which the panel leaf "
-            "requires");
-    }
+    const auto dev = native::require_launchable(ctx, "getrf_blocked", A, {});  // sg 32: the panel leaf
     if (pivots.size() < static_cast<std::size_t>(mn) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument(
             "getrf_blocked: pivot span is shorter than min(m, n) * batch");
@@ -423,5 +402,5 @@ BATCHLAS_GETRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

@@ -42,8 +42,8 @@ bool can_run(const SysvChoice& c, const select::Device& d, const MV<T>& A, const
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
         [&](Cta) {
-            return d.is_gpu && d.has_sg32 && homogeneous && d.max_wg >= sycl_sytrf::kSytrfCtaWg && A.rows() >= 1 &&
-                   A.rows() <= sycl_sytrf::kSytrfCtaMaxN;
+            return d.is_gpu && d.has_sg32 && homogeneous && d.max_wg >= ops::sytrf::kSytrfCtaWg && A.rows() >= 1 &&
+                   A.rows() <= ops::sytrf::kSytrfCtaMaxN;
         },
         [&](Compose) { return homogeneous; },
     }, c);
@@ -69,12 +69,12 @@ template <Backend Back, class T>
 Event launch(Queue& q, const SysvChoice& c, const MV<T>& A, const MV<T>& Bm, Uplo uplo, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_sytrf::sysv_cta_dispatch<T>(q, A, Bm, uplo, pivots, ws, info); },
+        [&](Cta) { return ops::sytrf::sysv_cta_dispatch<T>(q, A, Bm, uplo, pivots, ws, info); },
         [&](Compose) {
             BumpAllocator pool(ws);
             Span<std::byte> fws, sws;
             const Span<int32_t> st = compose_layout<Back, T>(q, pool, A, Bm, uplo, info, &fws, &sws);
-            Event e = sytrf<Back, T>(q, A, uplo, pivots, fws, st);
+            Event e = batchlas::sytrf<Back, T>(q, A, uplo, pivots, fws, st);
             if (Bm.cols() == 0) return e;
             return ops::sytrs::run<Back, T>(q, A, Bm, uplo, pivots, sws, st.data());
         },
@@ -84,7 +84,7 @@ Event launch(Queue& q, const SysvChoice& c, const MV<T>& A, const MV<T>& Bm, Upl
 template <Backend Back, class T>
 std::size_t workspace(Queue& q, const SysvChoice& c, const MV<T>& A, const MV<T>& Bm, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Cta) { return sycl_sytrf::sytrf_native_buffer_size<T>(q, A); },
+        [&](Cta) { return ops::sytrf::sytrf_native_buffer_size<T>(q, A); },
         [&](Compose) {
             return workspace_bytes([&](BumpAllocator& p) {
                 return compose_layout<Back, T>(q, p, A, Bm, uplo, Span<int32_t>{}, nullptr, nullptr);

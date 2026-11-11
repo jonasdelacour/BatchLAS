@@ -19,7 +19,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/ops/gesv/choice.hh>
 
@@ -173,15 +173,15 @@ protected:
             GTEST_SKIP() << "device does not offer sub-group size 32";
     }
 
-    int cap() const { return sycl_gesv::gesv_tiny_max_n<T>(); }
+    int cap() const { return ops::gesv::gesv_tiny_max_n<T>(); }
 
     // Run the tiny tier on one prepared system, waiting for it.
     void run_tiny(Sys<T>& p) {
         auto A = a_view(p);
         auto B = b_view(p);
-        const size_t need = sycl_gesv::gesv_tiny_buffer_size<T>(*this->ctx, A, B);
+        const size_t need = ops::gesv::gesv_tiny_buffer_size<T>(*this->ctx, A, B);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, A, B, p.piv.to_span(),
+        (void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, A, B, p.piv.to_span(),
                                          Span<std::byte>(ws.data(), need),
                                          p.info.to_span());
         this->ctx->wait();
@@ -223,7 +223,7 @@ TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
     }
 }
 
-// G2. THE CONTRACT solve_native.hh states: gesv leaves behind exactly what getrf
+// G2. THE CONTRACT gesv_native.hh states: gesv leaves behind exactly what getrf
 // would, bit-for-bit, because both run the same recurrence in the same order.
 // ARMED BREAK (R9): in gesv_tiny.cc step 5 drop the `if (act)` guard so the pivot
 // lane updates its own RHS. EXPECTED: G1 RED, THIS test GREEN -- the pair is what
@@ -232,16 +232,16 @@ TYPED_TEST(GesvTest, TinyFactorAndPivotsAreBitIdenticalToGetrf) {
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int n : {4, 8, 9, 16, 17, 32}) {
-        if (n > sycl_getrf::getrf_tiny_max_n<T>() || n > cap) continue;
+        if (n > ops::getrf::getrf_tiny_max_n<T>() || n > cap) continue;
         auto p = make_system<T>(n, 2, 5, 777u + unsigned(n));
         auto q = make_system<T>(n, 2, 5, 777u + unsigned(n));   // same seed, same data
 
         this->run_tiny(p);
 
         auto Aq = a_view(q);
-        const size_t need = sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Aq);
+        const size_t need = ops::getrf::getrf_tiny_buffer_size<T>(*this->ctx, Aq);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, Aq, q.piv.to_span(),
+        (void)ops::getrf::getrf_tiny_dispatch<T>(*this->ctx, Aq, q.piv.to_span(),
                                            Span<std::byte>(ws.data(), need),
                                            q.info.to_span());
         this->ctx->wait();
@@ -337,14 +337,14 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
     auto Aw = a_view(wide);
     auto Bw = b_view(wide);
     UnifiedVector<std::byte> ws(size_t(1024));
-    EXPECT_THROW((void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, Aw, Bw, wide.piv.to_span(),
+    EXPECT_THROW((void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, Aw, Bw, wide.piv.to_span(),
                                                   ws.to_span(), wide.info.to_span()),
                  batchlas::unsupported);
 
     auto big = make_system<T>(cap + 1, 1, 2, 4u);
     auto Ab = a_view(big);
     auto Bb = b_view(big);
-    EXPECT_THROW((void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, Ab, Bb, big.piv.to_span(),
+    EXPECT_THROW((void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, Ab, Bb, big.piv.to_span(),
                                                   ws.to_span(), big.info.to_span()),
                  batchlas::unsupported);
 }

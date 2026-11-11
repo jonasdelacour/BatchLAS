@@ -211,8 +211,8 @@ protected:
         const auto lm = std::size_t(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
         return lm > 4096 ? lm - 4096 : 0;
     }
-    int tiny_max() const { return sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget()); }
-    bool cta_fits(int m, int n) const { return sycl_geqrf::geqrf_cta_fits<T>(m, n, budget()); }
+    int tiny_max() const { return ops::geqrf::geqrf_tiny_max_n_for_slm<T>(budget()); }
+    bool cta_fits(int m, int n) const { return ops::geqrf::geqrf_cta_fits<T>(m, n, budget()); }
     int cta_max_square() const {
         int best = 0;
         for (int n = 1; n <= 4096 && cta_fits(n, n); ++n) best = n;
@@ -225,13 +225,13 @@ protected:
         if (m < 1 || n < 1) return false;
         if (std::holds_alternative<gq::Tiny>(c)) return m == n && n <= tiny_max();
         if (std::holds_alternative<gq::Cta>(c)) return cta_fits(m, n);
-        return sycl_geqrf::geqrf_blocked_available<T>() && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
+        return ops::geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run, instead of throwing (§5.3).
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<gq::Vendor>(c) && !kVendor; }
 
-    sycl_geqrf::GeqrfTrailingGemm<T> seam() const {
+    ops::geqrf::GeqrfTrailingGemm<T> seam() const {
         return [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T a, T b, Transpose ta, Transpose tb,
                   ComputePrecision pr) { return gemm<B, T>(c, ga, gb, gc, a, b, ta, tb, pr); };
     }
@@ -279,16 +279,16 @@ protected:
         const MV A = p.A();
         try {
             std::size_t ws = 0;
-            if (std::holds_alternative<gq::Tiny>(c)) ws = sycl_geqrf::geqrf_tiny_buffer_size<T>(q, A);
-            else if (std::holds_alternative<gq::Cta>(c)) ws = sycl_geqrf::geqrf_cta_buffer_size<T>(q, A);
-            else if (std::holds_alternative<gq::Blocked>(c)) ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(q, A);
+            if (std::holds_alternative<gq::Tiny>(c)) ws = ops::geqrf::geqrf_tiny_buffer_size<T>(q, A);
+            else if (std::holds_alternative<gq::Cta>(c)) ws = ops::geqrf::geqrf_cta_buffer_size<T>(q, A);
+            else if (std::holds_alternative<gq::Blocked>(c)) ws = ops::geqrf::geqrf_blocked_buffer_size<T>(q, A);
             UnifiedVector<std::byte> w(std::max<std::size_t>(1, ws));
             if (std::holds_alternative<gq::Tiny>(c)) {
-                (void)sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
+                (void)ops::geqrf::geqrf_tiny_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
             } else if (std::holds_alternative<gq::Cta>(c)) {
-                (void)sycl_geqrf::geqrf_cta_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
+                (void)ops::geqrf::geqrf_cta_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
             } else if (std::holds_alternative<gq::Blocked>(c)) {
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(q, A, p.tau.to_span(), w.to_span(), seam());
+                (void)ops::geqrf::geqrf_blocked_dispatch<T>(q, A, p.tau.to_span(), w.to_span(), seam());
             } else {
                 if constexpr (kVendor) {
                     UnifiedVector<std::byte> vw(std::max<std::size_t>(
@@ -827,7 +827,6 @@ TYPED_TEST_SUITE(GeqrfCanRunDevice, ScalarTypes);
 
 TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     using T = TypeParam;
-    if (!sycl_geqrf::geqrf_blocked_available<T>()) GTEST_SKIP() << "no blocked tier compiled";
     select::Device ok;
     ok.is_gpu = ok.has_sg32 = true;
     ok.slm_budget = 97280;
@@ -846,7 +845,7 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
 
     // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.
     std::int64_t lo = 0;
-    while (lo < 97280 && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(std::size_t(lo)) < 1) ++lo;
+    while (lo < 97280 && ops::geqrf::geqrf_cta_max_elems_for_slm<T>(std::size_t(lo)) < 1) ++lo;
     ASSERT_GT(lo, 0) << "a zero budget already holds a CTA element";
     ASSERT_LT(lo, 97280);
     auto starved = ok;  starved.slm_budget = lo - 1;

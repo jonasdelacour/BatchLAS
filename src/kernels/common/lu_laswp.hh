@@ -10,6 +10,7 @@
 #include <src/sycl/device_scalar.hh>
 // ../queue.hh: the public header only forward-declares QueueImpl; ctx->submit needs it defined.
 #include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
 
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/device/lapack_aux.hh>
@@ -72,16 +73,6 @@ Event lu_laswp_launch(Queue& ctx,
 
 template <typename Tag, typename T> class LuLaswpGatherKernel;
 
-// The 48 KB launch hole: static shared-memory sizes in this band fail to launch
-// on this box, so pad past it. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kLuLaswpHoleLo = 47104;
-constexpr std::size_t kLuLaswpHoleHi = 49664;
-constexpr std::size_t kLuLaswpHolePadTo = 49920;
-
-constexpr std::size_t lu_laswp_hole_padded(std::size_t bytes) {
-    return (bytes > kLuLaswpHoleLo && bytes <= kLuLaswpHoleHi) ? kLuLaswpHolePadTo : bytes;
-}
-
 // The tile's share of local memory: bigger buys nothing and costs occupancy.
 constexpr std::size_t kLuLaswpTileCap = 24576;
 
@@ -127,7 +118,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
 
     std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
     const std::size_t raw = int_bytes + tile_elems * sizeof(D);
-    const std::size_t padded = lu_laswp_hole_padded(raw);
+    const std::size_t padded = resident::hole_padded(raw);  // the 48 KB launch hole
     // Only pad if the padded size still FITS. Unguarded, a device whose budget
     // lands just above the hole grows the tile past its own local-memory limit and
     // the local_accessor throws at enqueue, instead of taking the `return false`

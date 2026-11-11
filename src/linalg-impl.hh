@@ -5,6 +5,7 @@
 #include <src/util/internal-api.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/util/mempool.hh>
+#include <src/kernels/common/info_target.hh>
 #include <execution>
 #include <type_traits>
 #include <memory>
@@ -662,15 +663,6 @@ namespace batchlas{
     }
 
     namespace detail {
-
-    // Per-item status target: the caller's span, else pool scratch (short spans silently ignored).
-    // A span only REMOVES a pool draw, so *_buffer_size stays correct in both modes.
-    // evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract
-    inline Span<int32_t> info_target(Queue& ctx, BumpAllocator& pool,
-                                     Span<int32_t> info_out, size_t count) {
-        if (info_out.size() >= count) return info_out;
-        return pool.allocate<int32_t>(ctx, count);
-    }
 
     }  // namespace detail
 

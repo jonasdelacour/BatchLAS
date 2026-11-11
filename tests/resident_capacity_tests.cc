@@ -208,14 +208,14 @@ TYPED_TEST(CapacityCeilingTest, ShippedCeilingsAtTheReferenceBudget) {
     using C = Ceilings<T>;
     constexpr std::size_t kRef = 97280;   // 101,376 B of local memory less the reserve
 
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(kRef), C::potrf_advertised);
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(kRef, 1), C::potrf_resident);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(kRef), C::potrf_advertised);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(kRef, 1), C::potrf_resident);
 
-    EXPECT_EQ(sycl_getrf::getrf_cta_max_n_for_slm<T>(kRef), C::getrf_advertised);
-    EXPECT_EQ(sycl_getrf::getrf_cta_max_n_for_slm<T>(kRef, 1), C::getrf_resident);
+    EXPECT_EQ(ops::getrf::getrf_cta_max_n_for_slm<T>(kRef), C::getrf_advertised);
+    EXPECT_EQ(ops::getrf::getrf_cta_max_n_for_slm<T>(kRef, 1), C::getrf_resident);
 
-    EXPECT_EQ(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef), C::geqrf_advertised);
-    EXPECT_EQ(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1), C::geqrf_resident);
+    EXPECT_EQ(ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef), C::geqrf_advertised);
+    EXPECT_EQ(ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1), C::geqrf_resident);
 }
 
 // The advertised capacity must be a strict subset of what a work-group can hold, or the
@@ -225,51 +225,51 @@ TYPED_TEST(CapacityCeilingTest, AdvertisedIsStrictlyInsideResident) {
     using T = TypeParam;
     constexpr std::size_t kRef = 97280;
 
-    const int potrf_a = sycl_potrf::potrf_cta_max_n_for_slm<T>(kRef);
-    const int getrf_a = sycl_getrf::getrf_cta_max_n_for_slm<T>(kRef);
-    EXPECT_LT(potrf_a, sycl_potrf::potrf_cta_max_n_for_slm<T>(kRef, 1));
-    EXPECT_LT(getrf_a, sycl_getrf::getrf_cta_max_n_for_slm<T>(kRef, 1));
-    EXPECT_LT(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef),
-              sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1));
+    const int potrf_a = ops::potrf::potrf_cta_max_n_for_slm<T>(kRef);
+    const int getrf_a = ops::getrf::getrf_cta_max_n_for_slm<T>(kRef);
+    EXPECT_LT(potrf_a, ops::potrf::potrf_cta_max_n_for_slm<T>(kRef, 1));
+    EXPECT_LT(getrf_a, ops::getrf::getrf_cta_max_n_for_slm<T>(kRef, 1));
+    EXPECT_LT(ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef),
+              ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1));
 
     // getrf: the ceiling and the predicate are one statement.
-    EXPECT_TRUE(sycl_getrf::getrf_cta_fits<T>(getrf_a, kRef));
-    EXPECT_FALSE(sycl_getrf::getrf_cta_fits<T>(getrf_a + 1, kRef));
+    EXPECT_TRUE(ops::getrf::getrf_cta_fits<T>(getrf_a, kRef));
+    EXPECT_FALSE(ops::getrf::getrf_cta_fits<T>(getrf_a + 1, kRef));
     // ... and the residency predicate is strictly wider.
-    EXPECT_TRUE(sycl_getrf::getrf_leaf_fits<T>(getrf_a + 1, getrf_a + 1, kRef));
+    EXPECT_TRUE(ops::getrf::getrf_leaf_fits<T>(getrf_a + 1, getrf_a + 1, kRef));
 
     // The residency ceiling needs its OWN tight pair. Probing one order above the
     // ADVERTISED ceiling passes with the whole occupancy factor as slack.
-    const int getrf_r = sycl_getrf::getrf_cta_max_n_for_slm<T>(kRef, 1);
-    EXPECT_TRUE(sycl_getrf::getrf_leaf_fits<T>(getrf_r, getrf_r, kRef))
+    const int getrf_r = ops::getrf::getrf_cta_max_n_for_slm<T>(kRef, 1);
+    EXPECT_TRUE(ops::getrf::getrf_leaf_fits<T>(getrf_r, getrf_r, kRef))
         << "the residency ceiling names an order the residency predicate refuses";
-    EXPECT_FALSE(sycl_getrf::getrf_leaf_fits<T>(getrf_r + 1, getrf_r + 1, kRef))
+    EXPECT_FALSE(ops::getrf::getrf_leaf_fits<T>(getrf_r + 1, getrf_r + 1, kRef))
         << "one order past the residency ceiling still fits: the ceiling is not the "
            "predicate's own boundary";
 
     // geqrf: an AREA, so both a square at the ceiling and a tall panel of the same area.
-    const int64_t area = sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef);
-    EXPECT_TRUE(sycl_geqrf::geqrf_cta_fits<T>(static_cast<int>(area / 8), 8, kRef));
-    EXPECT_FALSE(sycl_geqrf::geqrf_cta_fits<T>(static_cast<int>(area / 8) + 1, 8, kRef));
-    EXPECT_TRUE(sycl_geqrf::geqrf_leaf_fits<T>(static_cast<int>(area / 8) + 1, 8, kRef));
+    const int64_t area = ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef);
+    EXPECT_TRUE(ops::geqrf::geqrf_cta_fits<T>(static_cast<int>(area / 8), 8, kRef));
+    EXPECT_FALSE(ops::geqrf::geqrf_cta_fits<T>(static_cast<int>(area / 8) + 1, 8, kRef));
+    EXPECT_TRUE(ops::geqrf::geqrf_leaf_fits<T>(static_cast<int>(area / 8) + 1, 8, kRef));
 
     // ... and the same tight pair at geqrf's residency ceiling, same 8-column panel shape.
-    const int64_t area_r = sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1);
-    EXPECT_TRUE(sycl_geqrf::geqrf_leaf_fits<T>(static_cast<int>(area_r / 8), 8, kRef))
+    const int64_t area_r = ops::geqrf::geqrf_cta_max_elems_for_slm<T>(kRef, 1);
+    EXPECT_TRUE(ops::geqrf::geqrf_leaf_fits<T>(static_cast<int>(area_r / 8), 8, kRef))
         << "the residency area ceiling names a panel the residency predicate refuses";
-    EXPECT_FALSE(sycl_geqrf::geqrf_leaf_fits<T>(static_cast<int>(area_r / 8) + 1, 8, kRef))
+    EXPECT_FALSE(ops::geqrf::geqrf_leaf_fits<T>(static_cast<int>(area_r / 8) + 1, 8, kRef))
         << "a panel one row past the residency area ceiling still fits";
 }
 
 // A bigger budget must admit more of everything: the scaling is a division, not a table.
 TYPED_TEST(CapacityCeilingTest, CeilingsRiseWithTheBudget) {
     using T = TypeParam;
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376));
-    EXPECT_LT(sycl_getrf::getrf_cta_max_n_for_slm<T>(97280),
-              sycl_getrf::getrf_cta_max_n_for_slm<T>(101376));
-    EXPECT_LT(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(97280),
-              sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(101376));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(101376));
+    EXPECT_LT(ops::getrf::getrf_cta_max_n_for_slm<T>(97280),
+              ops::getrf::getrf_cta_max_n_for_slm<T>(101376));
+    EXPECT_LT(ops::geqrf::geqrf_cta_max_elems_for_slm<T>(97280),
+              ops::geqrf::geqrf_cta_max_elems_for_slm<T>(101376));
 }
 
 // 4. PACKED VS SOLO, BIT FOR BIT -- getrf_cta's resident leaf
@@ -310,7 +310,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
 
     int packed_ns = 0;
     for (int n : {8, 12, 16, 24, 32}) {
-        const unsigned geom = sycl_getrf::getrf_cta_debug_launch<T>(*this->ctx, n, n);
+        const unsigned geom = ops::getrf::getrf_cta_debug_launch<T>(*this->ctx, n, n);
         ASSERT_NE(geom, 0u) << "n=" << n << " is not resident, which no device should hit";
         const int G = static_cast<int>(geom & 0xffffu);
         if (G <= 1) continue;      // this type does not pack at this order
@@ -340,7 +340,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
         UnifiedVector<int> piv_p(static_cast<size_t>(n) * batch, -12345);
         UnifiedVector<int32_t> info_p(static_cast<size_t>(batch), 0);
         bool resident = false;
-        ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)ops::getrf::getrf_panel_factorize<T>(
             *this->ctx, packed.data(), ld, stride, n, n, batch, piv_p.data(), n, 0,
             info_p.data(), &resident));
         this->ctx->wait();
@@ -382,7 +382,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
             UnifiedVector<int> piv_s(static_cast<size_t>(n), -12345);
             UnifiedVector<int32_t> info_s(1, 0);
             bool res_s = false;
-            ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_factorize<T>(
+            ASSERT_NO_THROW((void)ops::getrf::getrf_panel_factorize<T>(
                 *this->ctx, solo.data(), ld, stride, n, n, 1, piv_s.data(), n, 0,
                 info_s.data(), &res_s));
             this->ctx->wait();

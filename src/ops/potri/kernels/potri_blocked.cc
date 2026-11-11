@@ -3,7 +3,7 @@
 // kernel on the diagonal block and herk/syrk per block row). Only the uplo triangle is read or
 // written; W holds one off-diagonal panel per item (trmm is out of place). An item with an exactly
 // zero diagonal entry is left unchanged, as ?potri leaves it: the first CTA launch copies it to its
-// slot, the last one copies it back (sycl_potri::Stash). The batch runs in L2-sized parts, so W and
+// slot, the last one copies it back (ops::potri::Stash). The batch runs in L2-sized parts, so W and
 // the slots are one part's. evidence: docs/perf/potri.md#potri-the-algorithm
 
 #include <batchlas/backend_config.h>
@@ -103,9 +103,9 @@ Event rank_k(Queue& q, const MV<T>& A, const MV<T>& C, Uplo uplo, Transpose tran
 }
 
 template <Backend B, class T>
-void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb, const sycl_potri::Stash<T>& st) {
+void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb, const ops::potri::Stash<T>& st) {
     const int n = p.n, nblk = (n + nb - 1) / nb;
-    (void)sycl_potri::potri_cta<T>(q, Ap, uplo, sycl_potri::CtaMode::Trtri, nb, false, {}, st);
+    (void)ops::potri::potri_cta<T>(q, Ap, uplo, ops::potri::CtaMode::Trtri, nb, false, {}, st);
     if (uplo == Uplo::Lower) {
         // X21 = -X22 L21 X11, last block column first: X22 is already inverted.
         for (int blk = nblk - 2; blk >= 0; --blk) {
@@ -129,7 +129,7 @@ void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb, const
 
 // The last diagonal block's Lauum is the part's last launch: it restores the flagged items.
 template <Backend B, class T>
-void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb, sycl_potri::Stash<T> st) {
+void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb, ops::potri::Stash<T> st) {
     const int n = p.n;
     const bool lower = uplo == Uplo::Lower;
     for (int i = 0; i < n; i += nb) {
@@ -151,8 +151,8 @@ void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb, sycl_potri::Stash<T> s
             (void)MV<T>::copy(q, panel, W);
         }
         st.origin = i;
-        (void)sycl_potri::potri_cta<T>(q, Xii, uplo, sycl_potri::CtaMode::Lauum, ib, false, {},
-                                       rest > 0 ? sycl_potri::Stash<T>{} : st);
+        (void)ops::potri::potri_cta<T>(q, Xii, uplo, ops::potri::CtaMode::Lauum, ib, false, {},
+                                       rest > 0 ? ops::potri::Stash<T>{} : st);
         if (rest > 0) {
             const MV<T> Cii = p.sub(i, ib, i, ib, 2);
             if (lower) (void)rank_k<B, T>(q, p.sub(i + ib, rest, i, ib, 0), Cii, uplo, kAdj<T>);
@@ -167,7 +167,7 @@ Event run(Queue& q, const MV<T>& A, Uplo uplo, int nb, bool full, Span<std::byte
     const int n = A.rows(), batch = A.batch_size();
     constexpr bool kCx = !std::is_same_v<T, typename base_type<T>::type>;
     // One block is the cta family's launch: info, the untouched failed item and full in one kernel.
-    if (n <= nb) return sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Potri, n, full, info);
+    if (n <= nb) return ops::potri::potri_cta<T>(q, A, uplo, ops::potri::CtaMode::Potri, n, full, info);
     // The Trtri launch writes flags[0, batch) unguarded: refuse a short span here, not only at the entry point.
     if (!info.empty() && info.size() < static_cast<std::size_t>(batch))
         throw batchlas::internal_error("potri: info span shorter than the batch reached the blocked driver");
@@ -188,12 +188,12 @@ Event run(Queue& q, const MV<T>& A, Uplo uplo, int nb, bool full, Span<std::byte
         const Part<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(), A.ld(), A.stride(), cb, &ws, n, n * nb,
                         part_mask};
         const MV<T> Ap = MV<T>(p.a, n, n, p.ld, p.stride, cb, ws.ptrs[0].data()).with_batch_mask(part_mask);
-        const sycl_potri::Stash<T> st{ws.slots.data(), flags + b0, n, 0};
+        const ops::potri::Stash<T> st{ws.slots.data(), flags + b0, n, 0};
         trtri<B, T>(q, Ap, p, uplo, nb, st);
         lauum<B, T>(q, p, uplo, nb, st);
     }
     // herk leaves the diagonal's imaginary part to the kernel it picks: the finish zeroes it.
-    if (kCx || full) return sycl_potri::potri_finish<T>(q, A, uplo, full, flags);
+    if (kCx || full) return ops::potri::potri_finish<T>(q, A, uplo, full, flags);
     return q.get_event();
 }
 

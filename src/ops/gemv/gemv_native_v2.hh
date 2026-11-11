@@ -8,7 +8,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
 
-namespace batchlas::sycl_gemv::dla {
+namespace batchlas::ops::gemv::dla {
 
 
 // Every lane of g must call (lockstep). Closed when Count * stride <= the sub-group size; lanes
@@ -34,4 +34,4 @@ BATCHLAS_DEVICE_INLINE T fold_down(const G& g, T v, Stride stride = {}) {
     }
 }
 
-}  // namespace batchlas::sycl_gemv::dla
+}  // namespace batchlas::ops::gemv::dla
