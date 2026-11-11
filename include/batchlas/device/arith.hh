@@ -57,114 +57,160 @@ template <class T> struct Arith {
     BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a); }
 };
 
-template <class R> struct Arith<std::complex<R>> {
-    using T = std::complex<R>;
+namespace detail {
+// The field access of a complex kind, by reference (one part loaded at a time): std::complex
+// (.real() / .imag(), T(r, i)) and a POD {re, im} (.re / .im, T{r, i}).
+template <class T> struct StdComplexParts {
+    using R = typename T::value_type;
+    static constexpr bool pod = false;
+    BATCHLAS_DEVICE_INLINE static R re(const T& a) { return a.real(); }
+    BATCHLAS_DEVICE_INLINE static R im(const T& a) { return a.imag(); }
+    BATCHLAS_DEVICE_INLINE static T make(R r, R i) { return T(r, i); }
+};
+template <class C> struct PodComplexParts {
+    using R = decltype(C::re);
+    static constexpr bool pod = true;
+    BATCHLAS_DEVICE_INLINE static R re(const C& a) { return a.re; }
+    BATCHLAS_DEVICE_INLINE static R im(const C& a) { return a.im; }
+    BATCHLAS_DEVICE_INLINE static C make(R r, R i) { return C{r, i}; }
+};
+}  // namespace detail
+
+// The complex Arith, written once over a Parts accessor. Where the two kinds' legacy kernels
+// spelled a member differently (mac / mac_conj: split temporaries vs compound updates; msub, div
+// and recip: parts read into locals first vs in place; scale_real: s * x vs x * s) each keeps its
+// form: under -ffp-contract=on and the register allocator these are not the same code.
+template <class T_, class P> struct ComplexArith {
+    using T = T_;
+    using R = typename P::R;
     using real_t = R;
+    using parts = P;
     static constexpr bool is_complex = true;
     BATCHLAS_DEVICE_INLINE static T mul(T a, T b) {
-        return T(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+        return P::make(P::re(a) * P::re(b) - P::im(a) * P::im(b), P::re(a) * P::im(b) + P::im(a) * P::re(b));
     }
-    // The latrd split-loop form: bit-identical to the legacy kernel's mac().
+    // std::complex: the latrd split-loop form, bit-identical to the legacy kernel's mac().
     BATCHLAS_DEVICE_INLINE static void mac(T& acc, T a, T b) {
-        const R pr = a.real() * b.real() - a.imag() * b.imag();
-        const R pi = a.real() * b.imag() + a.imag() * b.real();
-        acc = T(acc.real() + pr, acc.imag() + pi);
+        if constexpr (P::pod) {
+            acc.re += a.re * b.re - a.im * b.im;
+            acc.im += a.re * b.im + a.im * b.re;
+        } else {
+            const R pr = a.real() * b.real() - a.imag() * b.imag();
+            const R pi = a.real() * b.imag() + a.imag() * b.real();
+            acc = T(acc.real() + pr, acc.imag() + pi);
+        }
     }
     BATCHLAS_DEVICE_INLINE static void mac_conj(T& acc, T a, T b) {
-        const R pr = a.real() * b.real() + a.imag() * b.imag();
-        const R pi = a.real() * b.imag() - a.imag() * b.real();
-        acc = T(acc.real() + pr, acc.imag() + pi);
+        if constexpr (P::pod) {
+            acc.re += a.re * b.re + a.im * b.im;
+            acc.im += a.re * b.im - a.im * b.re;
+        } else {
+            const R pr = a.real() * b.real() + a.imag() * b.imag();
+            const R pi = a.real() * b.imag() - a.imag() * b.real();
+            acc = T(acc.real() + pr, acc.imag() + pi);
+        }
     }
-    BATCHLAS_DEVICE_INLINE static T conj(T a) { return T(a.real(), -a.imag()); }
-    BATCHLAS_DEVICE_INLINE static R re(T a) { return a.real(); }
-    BATCHLAS_DEVICE_INLINE static R im(T a) { return a.imag(); }
-    BATCHLAS_DEVICE_INLINE static T make(R r, R i) { return T(r, i); }
-    BATCHLAS_DEVICE_INLINE static T add(T a, T b) { return T(a.real() + b.real(), a.imag() + b.imag()); }
-    BATCHLAS_DEVICE_INLINE static T sub(T a, T b) { return T(a.real() - b.real(), a.imag() - b.imag()); }
-    BATCHLAS_DEVICE_INLINE static T neg(T a) { return T(-a.real(), -a.imag()); }
-    BATCHLAS_DEVICE_INLINE static T zero() { return T(R(0), R(0)); }
-    BATCHLAS_DEVICE_INLINE static T one() { return T(R(1), R(0)); }
+    BATCHLAS_DEVICE_INLINE static T conj(T a) { return P::make(P::re(a), -P::im(a)); }
+    BATCHLAS_DEVICE_INLINE static R re(T a) { return P::re(a); }
+    BATCHLAS_DEVICE_INLINE static R im(T a) { return P::im(a); }
+    BATCHLAS_DEVICE_INLINE static T make(R r, R i) { return P::make(r, i); }
+    BATCHLAS_DEVICE_INLINE static T add(T a, T b) { return P::make(P::re(a) + P::re(b), P::im(a) + P::im(b)); }
+    BATCHLAS_DEVICE_INLINE static T sub(T a, T b) { return P::make(P::re(a) - P::re(b), P::im(a) - P::im(b)); }
+    BATCHLAS_DEVICE_INLINE static T neg(T a) { return P::make(-P::re(a), -P::im(a)); }
+    BATCHLAS_DEVICE_INLINE static T zero() { return P::make(R(0), R(0)); }
+    BATCHLAS_DEVICE_INLINE static T one() { return P::make(R(1), R(0)); }
+    // FmaArith<C> overrides msub / div / recip with the fma forms. On sycl_device::Cx, div_real /
+    // scale_real / is_zero / isfinite are bit for bit dev_div_real / dev_mul_real / dev_is_zero /
+    // dev_isfinite (src/sycl/device_scalar.hh).
     BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) {
-        const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
-        c = T(c.real() - (ar * br - ai * bi), c.imag() - (ar * bi + ai * br));
+        if constexpr (P::pod) {
+            c = T{c.re - (a.re * b.re - a.im * b.im), c.im - (a.re * b.im + a.im * b.re)};
+        } else {
+            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            c = T(c.real() - (ar * br - ai * bi), c.imag() - (ar * bi + ai * br));
+        }
     }
     // Smith's algorithm (no Annex-G, no (c - di) / (c^2 + d^2) overflow past ~1e19 / ~1e154).
     BATCHLAS_DEVICE_INLINE static T div(const T& a, const T& b) {
-        const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
-        if (sycl::fabs(br) >= sycl::fabs(bi)) {
-            const R r = bi / br, den = br + bi * r;
-            return T((ar + ai * r) / den, (ai - ar * r) / den);
+        if constexpr (P::pod) {
+            if (sycl::fabs(b.re) >= sycl::fabs(b.im)) {
+                const R r = b.im / b.re, den = b.re + b.im * r;
+                return T{(a.re + a.im * r) / den, (a.im - a.re * r) / den};
+            }
+            const R r = b.re / b.im, den = b.im + b.re * r;
+            return T{(a.re * r + a.im) / den, (a.im * r - a.re) / den};
+        } else {
+            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            if (sycl::fabs(br) >= sycl::fabs(bi)) {
+                const R r = bi / br, den = br + bi * r;
+                return T((ar + ai * r) / den, (ai - ar * r) / den);
+            }
+            const R r = br / bi, den = bi + br * r;
+            return T((ar * r + ai) / den, (ai * r - ar) / den);
         }
-        const R r = br / bi, den = bi + br * r;
-        return T((ar * r + ai) / den, (ai * r - ar) / den);
     }
     BATCHLAS_DEVICE_INLINE static T recip(const T& d) {
-        const R dr = d.real(), di = d.imag();
-        if (sycl::fabs(dr) >= sycl::fabs(di)) {
-            const R r = di / dr, den = dr + di * r;
-            return T(R(1) / den, -r / den);
+        if constexpr (P::pod) {
+            if (sycl::fabs(d.re) >= sycl::fabs(d.im)) {
+                const R r = d.im / d.re, den = d.re + d.im * r;
+                return T{R(1) / den, -r / den};
+            }
+            const R r = d.re / d.im, den = d.im + d.re * r;
+            return T{r / den, R(-1) / den};
+        } else {
+            const R dr = d.real(), di = d.imag();
+            if (sycl::fabs(dr) >= sycl::fabs(di)) {
+                const R r = di / dr, den = dr + di * r;
+                return T(R(1) / den, -r / den);
+            }
+            const R r = dr / di, den = di + dr * r;
+            return T(r / den, R(-1) / den);
         }
-        const R r = dr / di, den = di + dr * r;
-        return T(r / den, R(-1) / den);
     }
-    BATCHLAS_DEVICE_INLINE static T div_real(const T& a, const R& s) { return T(a.real() / s, a.imag() / s); }
-    BATCHLAS_DEVICE_INLINE static T scale_real(const R& s, const T& a) { return T(s * a.real(), s * a.imag()); }
-    BATCHLAS_DEVICE_INLINE static bool is_zero(const T& a) { return a.real() == R(0) && a.imag() == R(0); }
-    BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.real()) && sycl::isfinite(a.imag()); }
+    BATCHLAS_DEVICE_INLINE static T div_real(const T& a, const R& s) { return P::make(P::re(a) / s, P::im(a) / s); }
+    BATCHLAS_DEVICE_INLINE static T scale_real(const R& s, const T& a) {
+        if constexpr (P::pod) return P::make(P::re(a) * s, P::im(a) * s);
+        else return P::make(s * P::re(a), s * P::im(a));
+    }
+    // The && pair reads its fields directly: through an accessor the second load is not
+    // speculated and lands behind a branch (getri's Cx perm kernel, +1 BRA).
+    BATCHLAS_DEVICE_INLINE static bool is_zero(const T& a) {
+        if constexpr (P::pod) return a.re == R(0) && a.im == R(0);
+        else return a.real() == R(0) && a.imag() == R(0);
+    }
+    BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) {
+        if constexpr (P::pod) return sycl::isfinite(a.re) && sycl::isfinite(a.im);
+        else return sycl::isfinite(a.real()) && sycl::isfinite(a.imag());
+    }
 };
 
-template <class C> requires detail::PodComplex<C> struct Arith<C> {
-    using T = C;
-    using R = decltype(C::re);
-    using real_t = R;
-    static constexpr bool is_complex = true;
-    BATCHLAS_DEVICE_INLINE static T mul(T a, T b) { return T{a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re}; }
-    BATCHLAS_DEVICE_INLINE static void mac(T& acc, T a, T b) {
-        acc.re += a.re * b.re - a.im * b.im;
-        acc.im += a.re * b.im + a.im * b.re;
-    }
-    BATCHLAS_DEVICE_INLINE static void mac_conj(T& acc, T a, T b) {
-        acc.re += a.re * b.re + a.im * b.im;
-        acc.im += a.re * b.im - a.im * b.re;
-    }
-    BATCHLAS_DEVICE_INLINE static T conj(T a) { return T{a.re, -a.im}; }
-    BATCHLAS_DEVICE_INLINE static R re(T a) { return a.re; }
-    BATCHLAS_DEVICE_INLINE static R im(T a) { return a.im; }
-    BATCHLAS_DEVICE_INLINE static T make(R r, R i) { return T{r, i}; }
-    BATCHLAS_DEVICE_INLINE static T add(T a, T b) { return T{a.re + b.re, a.im + b.im}; }
-    BATCHLAS_DEVICE_INLINE static T sub(T a, T b) { return T{a.re - b.re, a.im - b.im}; }
-    BATCHLAS_DEVICE_INLINE static T neg(T a) { return T{-a.re, -a.im}; }
-    BATCHLAS_DEVICE_INLINE static T zero() { return T{R(0), R(0)}; }
-    BATCHLAS_DEVICE_INLINE static T one() { return T{R(1), R(0)}; }
-    // The rest mirrors Arith<std::complex<R>>; FmaArith<C> overrides msub/div/recip with the fma
-    // forms. On sycl_device::Cx, div_real / scale_real / is_zero / isfinite are bit for bit
-    // dev_div_real / dev_mul_real / dev_is_zero / dev_isfinite (src/sycl/device_scalar.hh).
-    BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) {
-        c = T{c.re - (a.re * b.re - a.im * b.im), c.im - (a.re * b.im + a.im * b.re)};
-    }
-    BATCHLAS_DEVICE_INLINE static T div(const T& a, const T& b) {
-        if (sycl::fabs(b.re) >= sycl::fabs(b.im)) {
-            const R r = b.im / b.re, den = b.re + b.im * r;
-            return T{(a.re + a.im * r) / den, (a.im - a.re * r) / den};
-        }
-        const R r = b.re / b.im, den = b.im + b.re * r;
-        return T{(a.re * r + a.im) / den, (a.im * r - a.re) / den};
-    }
-    BATCHLAS_DEVICE_INLINE static T recip(const T& d) {
-        if (sycl::fabs(d.re) >= sycl::fabs(d.im)) {
-            const R r = d.im / d.re, den = d.re + d.im * r;
-            return T{R(1) / den, -r / den};
-        }
-        const R r = d.re / d.im, den = d.im + d.re * r;
-        return T{r / den, R(-1) / den};
-    }
-    BATCHLAS_DEVICE_INLINE static T div_real(const T& a, const R& s) { return T{a.re / s, a.im / s}; }
-    BATCHLAS_DEVICE_INLINE static T scale_real(const R& s, const T& a) { return T{a.re * s, a.im * s}; }
-    BATCHLAS_DEVICE_INLINE static bool is_zero(const T& a) { return a.re == R(0) && a.im == R(0); }
-    BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a.re) && sycl::isfinite(a.im); }
-};
+template <class R> struct Arith<std::complex<R>> : ComplexArith<std::complex<R>, detail::StdComplexParts<std::complex<R>>> {};
+template <class C> requires detail::PodComplex<C> struct Arith<C> : ComplexArith<C, detail::PodComplexParts<C>> {};
 
 template <class T> using real_t = typename Arith<std::remove_cv_t<T>>::real_t;
+
+// Is T complex (std::complex or a POD {re, im})? The device-side question; host code asks
+// batchlas::is_std_complex_v.
+template <class T> inline constexpr bool is_complex_v = Arith<std::remove_cv_t<T>>::is_complex;
+
+// The device scalar of a host scalar: std::complex<R> -> Cx<R> (launchers re-type operands at
+// the pointer boundary, no Annex-G operator* reaches the kernel); every other T is itself.
+namespace detail {
+template <class T> struct dev_scalar_of {
+    using type = T;
+};
+template <class R> struct dev_scalar_of<std::complex<R>> {
+    using type = Cx<R>;
+};
+}  // namespace detail
+template <class T> using dev_scalar_t = typename detail::dev_scalar_of<std::remove_cv_t<T>>::type;
+
+// Re(a) read through the reference (no copy of the imaginary part); a itself for a real T.
+template <class T> BATCHLAS_DEVICE_INLINE real_t<T> re(const T& a) {
+    using A = Arith<std::remove_cv_t<T>>;
+    if constexpr (A::is_complex) return A::parts::re(a);
+    else return a;
+}
 
 // The arithmetic an op's loop uses. arith::Explicit (default) is Arith<T>. arith::Native is
 // T's own operators (std::complex keeps its Annex-G multiply): setup code outside inner loops,
@@ -189,26 +235,29 @@ template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, ari
 }  // namespace detail
 
 // Operands by reference and complex parts read one at a time, as in the hand helper: the loads
-// sit inside the call, and a by-value std::complex is one 8/16-byte load (other unrolling).
+// sit inside the call, and a by-value std::complex is one 8/16-byte load (other unrolling). Any
+// complex kind (std::complex, Cx) through its Parts.
 template <class T> struct ArithInline : Arith<T> {
     static inline void mac(T& acc, const T& a, const T& b) {
         if constexpr (Arith<T>::is_complex) {
+            using P = typename Arith<T>::parts;
             using R = typename Arith<T>::real_t;
-            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            const R ar = P::re(a), ai = P::im(a), br = P::re(b), bi = P::im(b);
             const R pr = ar * br - ai * bi;
             const R pi = ar * bi + ai * br;
-            acc = T(acc.real() + pr, acc.imag() + pi);
+            acc = P::make(P::re(acc) + pr, P::im(acc) + pi);
         } else {
             acc += a * b;
         }
     }
     static inline void mac_conj(T& acc, const T& a, const T& b) {
         if constexpr (Arith<T>::is_complex) {
+            using P = typename Arith<T>::parts;
             using R = typename Arith<T>::real_t;
-            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            const R ar = P::re(a), ai = P::im(a), br = P::re(b), bi = P::im(b);
             const R pr = ar * br + ai * bi;
             const R pi = ar * bi - ai * br;
-            acc = T(acc.real() + pr, acc.imag() + pi);
+            acc = P::make(P::re(acc) + pr, P::im(acc) + pi);
         } else {
             acc += a * b;
         }

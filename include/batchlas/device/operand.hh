@@ -232,6 +232,9 @@ template <Refl Dir, DiagFill Fill, class V> struct UnitHeadOf {
         else return i < head ? static_cast<value_type>(v(i)) : A::zero();
     }
     BATCHLAS_DEVICE_INLINE int size() const { return v.size(); }
+    // The same reflector on v(k:) (head - k may fall outside the tail: then every element is on
+    // one side of it).
+    BATCHLAS_DEVICE_INLINE auto tail(int k) const { return UnitHeadOf<Dir, Fill, decltype(v.tail(k))>{v.tail(k), head - k}; }
 };
 template <Refl Dir, DiagFill Fill = DiagFill::Zero, class V> BATCHLAS_DEVICE_INLINE UnitHeadOf<Dir, Fill, V> unit_head(V v, int head) {
     return {v, head};

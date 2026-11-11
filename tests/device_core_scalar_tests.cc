@@ -10,6 +10,9 @@
 // itself.
 // Red set (each break was made once, 2026-11-04, and this suite failed): SafeRecip with use_mul
 // for an infinite reciprocal; lartg Fast: s = g * inv without f's sign.
+// M0 (2026-11-11, each break seen red, sm_89): lartg<Promote> computing in float (complex<float>
+// only); eig2x2_nearest<TieHighest> with <= (real types); block_scale without its anorm != 0 guard
+// (real types). (> vs >= at ssfmax is not observable: s = ssfmax / anorm = 1 there.)
 #include <tests/device_core_common.hh>
 
 #include <cmath>
@@ -209,6 +212,129 @@ TYPED_TEST(DeviceCoreScalarTest, LartgFastMatchesExact) {
             EXPECT_TRUE(same_bits(fa[0 + 9], T(1)));
             EXPECT_TRUE(same_bits(fa[1 + 9], T(0)));
             EXPECT_TRUE(same_bits(fa[2 + 9], f_h[3]));
+        }
+    }
+}
+
+// lartg<alg::Promote>: complex<float> is lartg<double>'s rotation bit for bit (not on Metal), every
+// other T is lartg<void>'s; both satisfy [c s; -conj(s) c] [f; g] = [r; 0] with c^2 + |s|^2 = 1
+// against the long-double host.
+// Inputs: ordinary, g = 0, f = 0, and a pair past the unscaled range (the scaled branch).
+TYPED_TEST(DeviceCoreScalarTest, LartgPromoteWorksComplexFloatInDouble) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    using batchlas::verify::Check;
+    auto& d = this->dev;
+    constexpr int n = 64;
+    auto f_h = vals<T>(n, 31), g_h = vals<T>(n, 32);
+    g_h[1] = T(0);
+    f_h[2] = T(0);
+    f_h[3] = f_h[3] * R(std::ldexp(R(1), std::numeric_limits<R>::max_exponent - 4));
+    g_h[4] = g_h[4] * R(std::ldexp(R(1), std::numeric_limits<R>::min_exponent + 4));
+    T* f = d.up(f_h);
+    T* g = d.up(g_h);
+    T* out = d.template alloc<T>(std::size_t(n) * 6, T(0));
+    d.template run<1>(n, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int i = static_cast<int>(it.get_group_linear_id());
+        const auto p = batchlas::device::lartg<batchlas::device::alg::Promote>(f[i], g[i]);
+        auto q = batchlas::device::lartg<void>(f[i], g[i]);
+        if constexpr (is_cplx<T> && std::is_same_v<R, float>) q = batchlas::device::lartg<double>(f[i], g[i]);
+        T* o = out + std::size_t(i) * 6;
+        o[0] = T(p.c);
+        o[1] = p.s;
+        o[2] = p.r;
+        o[3] = T(q.c);
+        o[4] = q.s;
+        o[5] = q.r;
+    });
+    const auto got = d.down(out, std::size_t(n) * 6);
+    double worst = 0;
+    for (int i = 0; i < n; ++i) {
+        const T* o = &got[std::size_t(i) * 6];
+        for (int k = 0; k < 3; ++k) EXPECT_TRUE(same_bits(o[k], o[k + 3])) << "Promote is not its working-precision lartg, item " << i << " part " << k;
+        const LD<T> c = wide(o[0]), s = wide(o[1]), r = wide(o[2]), F = wide(f_h[i]), G = wide(g_h[i]);
+        LD<T> cs = s;
+        if constexpr (is_cplx<T>) cs = std::conj(s);
+        const long double nrm = std::sqrt(std::norm(F) + std::norm(G));
+        if (nrm == 0) continue;
+        worst = std::max(worst, static_cast<double>(std::abs(c * F + s * G - r) / nrm));
+        worst = std::max(worst, static_cast<double>(std::abs(c * G - cs * F) / nrm));
+        worst = std::max(worst, static_cast<double>(std::abs(std::norm(c) + std::norm(s) - 1.0L)));
+    }
+    EXPECT_VERIFY(T, Check::orthogonality_rotations, 2, worst);
+}
+
+// eig2x2_nearest<Tie>: on a == c = 0, b = 1 the roots are +1 and -1, both at distance 1 from c:
+// TieLowest gives rt1 (+1), TieHighest rt2 (-1); off the tie both give the nearer root (host lae2
+// formula in long double for the graded cases).
+TYPED_TEST(DeviceCoreScalarTest, Eig2x2NearestTieRules) {
+    using T = TypeParam;
+    if constexpr (is_cplx<T>) {
+        GTEST_SKIP() << "a real 2 x 2";
+    } else {
+        auto& d = this->dev;
+        const std::vector<T> p{T(0), T(1), T(0), T(3), T(1e-3), T(1), T(-2), T(0.75), T(5), T(1), T(1e-6), T(2)};
+        T* in = d.up(p);
+        T* out = d.template alloc<T>(8, T(0));
+        d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
+            for (int k = 0; k < 4; ++k) {
+                out[2 * k] = batchlas::device::eig2x2_nearest<batchlas::device::alg::TieLowest>(in[3 * k], in[3 * k + 1], in[3 * k + 2]);
+                out[2 * k + 1] = batchlas::device::eig2x2_nearest<batchlas::device::alg::TieHighest>(in[3 * k], in[3 * k + 1], in[3 * k + 2]);
+            }
+        });
+        const auto got = d.down(out, 8);
+        EXPECT_EQ(got[0], T(1)) << "TieLowest: rt1";
+        EXPECT_EQ(got[1], T(-1)) << "TieHighest: rt2";
+        for (int k = 1; k < 4; ++k) {
+            const long double a = p[3 * k], b = p[3 * k + 1], c = p[3 * k + 2];
+            const long double h = std::sqrt((a - c) * (a - c) / 4 + b * b), m = (a + c) / 2;
+            const long double ref = std::abs(m + h - c) < std::abs(m - h - c) ? m + h : m - h;
+            EXPECT_EQ(got[2 * k], got[2 * k + 1]) << "off the tie the rules agree, case " << k;
+            EXPECT_LE(std::abs(got[2 * k] - ref), tol<T>(4) * std::max(1.0L, std::abs(ref))) << "case " << k;
+        }
+    }
+}
+
+// block_scale straddles both thresholds: anorm just above ssfmax and just below ssfmin scale,
+// anorm == ssfmax, == ssfmin and 0 (the guarded branch) do not (s = inv = 1); UnscaleRecip's inv is 1 / s,
+// UnscaleRatio's anorm / bound (dlascl), both against host arithmetic in T (2 ulp: the device
+// division need not be correctly rounded); inside the range s and inv are exactly 1.
+TYPED_TEST(DeviceCoreScalarTest, BlockScaleStraddlesTheSafeRange) {
+    using T = TypeParam;
+    if constexpr (is_cplx<T>) {
+        GTEST_SKIP() << "a real norm";
+    } else {
+        auto& d = this->dev;
+        const T hi = batchlas::device::detail::ssfmax<T>(), lo = batchlas::device::detail::ssfmin<T>();
+        const std::vector<T> an{std::nextafter(hi, std::numeric_limits<T>::infinity()), hi, T(1), lo, std::nextafter(lo, T(0)), T(0),
+                                std::numeric_limits<T>::max()};
+        const int n = static_cast<int>(an.size());
+        T* in = d.up(an);
+        T* out = d.template alloc<T>(std::size_t(n) * 4, T(0));
+        d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
+            for (int k = 0; k < n; ++k) {
+                const auto a = batchlas::device::detail::block_scale<batchlas::device::alg::UnscaleRecip>(in[k]);
+                const auto b = batchlas::device::detail::block_scale<batchlas::device::alg::UnscaleRatio>(in[k]);
+                out[4 * k] = a.s;
+                out[4 * k + 1] = a.inv;
+                out[4 * k + 2] = b.s;
+                out[4 * k + 3] = b.inv;
+            }
+        });
+        const auto got = d.down(out, std::size_t(n) * 4);
+        for (int k = 0; k < n; ++k) {
+            const T x = an[k];
+            const bool up = x > hi, dn = x < lo && x != T(0);
+            const T s = up ? hi / x : dn ? lo / x : T(1);
+            const T ratio = up ? x / hi : dn ? x / lo : T(1);
+            const T ulp2 = T(2) * std::numeric_limits<T>::epsilon();
+            const T want[4] = {s, T(1) / s, s, ratio};
+            for (int q = 0; q < 4; ++q) {
+                if (up || dn) EXPECT_LE(std::abs(got[4 * k + q] - want[q]), ulp2 * std::abs(want[q])) << "case " << k << " field " << q;
+                else EXPECT_EQ(got[4 * k + q], T(1)) << "inside the range: case " << k << " field " << q;
+            }
+            EXPECT_EQ(up || dn, k == 0 || k == 4 || k == 6) << "threshold, case " << k;
+            EXPECT_EQ(got[4 * k] != T(1), up || dn) << "scaled iff outside, case " << k;
         }
     }
 }

@@ -8,6 +8,7 @@
 // straddles the triangle's diagonal; a local-memory tile through a decorated pointer. Red set
 // (each break made once, 2026-11-04, and this suite failed): unit_head Refl::QL returning v(i)
 // below the head instead of zero.
+// M0 (2026-11-11, seen red, sm_89): UnitHeadOf::tail with head - k + 1 (UnitHeadOfTail...).
 #include <tests/device_core_common.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/level1.hh>
@@ -148,6 +149,32 @@ TYPED_TEST(DeviceCoreOperandTest, RowMovesOnATrianglePlusLaneVecAndStridedAndLoc
         }
     for (int l = 0; l < 32; ++l) EXPECT_TRUE(same_bits(gl[l], (l >= 3 && l < 20) ? lane_h[3 + 19 - l] : lane_h[l])) << "LaneVec reverse " << l;
     for (int r = 0; r < 12; ++r) EXPECT_TRUE(same_bits(gt[(r % 3) * 4 + r / 3], lane_h[r])) << "local tile / strided " << r;
+}
+
+// UnitHeadOf::tail(k): the same reflector on v(k:), for k below, at and above the head, every
+// Refl x DiagFill form, read at every index of the tail (the head's stored value is NaN).
+TYPED_TEST(DeviceCoreOperandTest, UnitHeadOfTailKeepsTheReflector) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    constexpr int n = 11, head = 5;
+    auto v_h = vals<T>(n, 7);
+    v_h[head] = T(std::numeric_limits<R>::quiet_NaN());
+    const auto v = batchlas::device::vec(v_h.data(), n);
+    const auto qr = batchlas::device::unit_head<batchlas::device::Refl::QR>(v, head);
+    const auto ql = batchlas::device::unit_head<batchlas::device::Refl::QL>(v, head);
+    const auto qk = batchlas::device::unit_head<batchlas::device::Refl::QR, batchlas::device::DiagFill::Keep>(v, head);
+    for (int k : {0, 3, head, head + 2}) {
+        const auto tr = qr.tail(k);
+        const auto tl = ql.tail(k);
+        const auto tk = qk.tail(k);
+        EXPECT_EQ(tr.size(), n - k);
+        for (int i = 0; i < n - k; ++i) {
+            EXPECT_TRUE(same_bits(tr(i), qr(i + k))) << "QR tail " << k << " at " << i;
+            EXPECT_TRUE(same_bits(tl(i), ql(i + k))) << "QL tail " << k << " at " << i;
+            EXPECT_TRUE(same_bits(tk(i), qk(i + k))) << "Keep tail " << k << " at " << i;
+        }
+        EXPECT_TRUE(same_bits(tl.tail(1)(0), ql(k + 1))) << "tail of a tail " << k;
+    }
 }
 
 }  // namespace

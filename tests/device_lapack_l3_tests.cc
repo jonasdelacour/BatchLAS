@@ -14,6 +14,8 @@
 // backward block order reversed (trsm); run_tile's second pass dropped (syr2k/her2k); sym_at's
 // Hermitian diagonal kept complex (hemm); trmm's lower k range ending at m0 (trmm). A Left upper
 // k range from 0 stays green: tri_at is zero off the triangle, so it only costs work.
+// M0 (2026-11-11): l3::rank_k without the herk conj seen red (SyrkHerk, complex); a real T runs
+// herk / her2k with Trans too.
 #include <tests/device_core_common.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
@@ -340,6 +342,7 @@ TYPED_TEST(DeviceApiL3Test, SyrkHerkEveryUploTrans) {
     check_rank<T, 0, Uplo::Upper, kTr>(this->dev);
     check_rank<T, 1, Uplo::Upper, kNT>(this->dev);
     check_rank<T, 1, Uplo::Lower, kCT>(this->dev);
+    if constexpr (!is_cplx<T>) check_rank<T, 1, Uplo::Lower, kTr>(this->dev);  // herk on a real T: Trans is ConjTrans
 }
 
 TYPED_TEST(DeviceApiL3Test, Syr2kHer2kEveryUploTrans) {
@@ -348,6 +351,7 @@ TYPED_TEST(DeviceApiL3Test, Syr2kHer2kEveryUploTrans) {
     check_rank<T, 2, Uplo::Lower, kTr>(this->dev);
     check_rank<T, 3, Uplo::Lower, kNT>(this->dev);
     check_rank<T, 3, Uplo::Upper, kCT>(this->dev);
+    if constexpr (!is_cplx<T>) check_rank<T, 3, Uplo::Upper, kTr>(this->dev);  // her2k on a real T
 }
 
 // ---- trmm, trsm ---------------------------------------------------------------------------

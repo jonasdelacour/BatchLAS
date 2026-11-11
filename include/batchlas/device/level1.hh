@@ -119,6 +119,8 @@ template <int TR, int TC, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_eac
 //   DivMod   (e % m, e / m) per step
 //   Stepped  one division per item; r += size, then subtract m while r >= m
 //   Walk     one division per item; (r, c) += (size % m, size / m) with one carry per step
+//   RowOwner rows owned as for_each_owned (row i by lid == i mod size), each walked serially
+//            over its columns (the hand kernels' row-copy form; on Fit, one guarded row)
 // On Thread every Alg is the column-major double loop; on a Grid2D, the item's one element.
 template <class Alg = alg::Walk, class Idx = int, class Ex, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
@@ -128,6 +130,10 @@ BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f)
     } else if constexpr (is_thread_v<Ex>) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) f(i, j);
+    } else if constexpr (std::is_same_v<Alg, alg::RowOwner>) {
+        for_each_owned(ex, m, [&](int i) {
+            for (int j = 0; j < n; ++j) f(i, j);
+        });
     } else if constexpr (std::is_same_v<Alg, alg::Flat>) {
         const Idx total = static_cast<Idx>(m) * static_cast<Idx>(n);
         const Idx w = static_cast<Idx>(detail::size_of(ex));
@@ -154,7 +160,7 @@ BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f)
             }
         }
     } else {
-        static_assert(std::is_same_v<Alg, alg::Walk>, "for_each_owned_2d: alg::Flat, DivMod, Stepped or Walk");
+        static_assert(std::is_same_v<Alg, alg::Walk>, "for_each_owned_2d: alg::Flat, DivMod, Stepped, Walk or RowOwner");
         if (m <= 0) return;
         const int w = detail::size_of(ex);
         const int dc = w / m, dr = w - dc * m;
@@ -958,6 +964,17 @@ template <class Ex, class T, int K> BATCHLAS_DEVICE_INLINE real_t<T> sumsq_owned
         if (r < n) acc += abs2(x[k]);
     });
     return acc;
+}
+// sumsq of a Cyclic register vector: x[k] is row l + k*size of the item's share, rows >= n
+// skipped (read nothing); Alg as sumsq (alg::Unfused: each abs2 its own rounding), reduced
+// over scope S.
+template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class T, int N>
+BATCHLAS_DEVICE_INLINE real_t<T> sumsq(const Ex& ex, const Frag<T, N, Cyclic>& x, int n) {
+    real_t<T> acc = real_t<T>(0);
+    for_each_owned_frag<N * Ex::size>(ex, [&](int k, int r) {
+        if (r < n) detail::acc_abs2<Alg>(acc, x[k]);
+    });
+    return allreduce<S>(ex, acc);
 }
 
 // Lane l returns ||a(:, l)||^2 for the P = Ex::size columns of a, whose static row count (a.m,

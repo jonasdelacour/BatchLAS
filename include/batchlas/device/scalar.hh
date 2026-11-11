@@ -7,6 +7,8 @@
 //   lae2 / laev2             eigenvalues (and eigenvector) of [[a, b], [b, c]]
 //   las2                     singular values of [[f, g], [0, h]]
 //   wilkinson_shift          dsteqr's shift from the leading 2x2 of a tridiagonal window
+//   eig2x2_nearest<Tie>      the eigenvalue of [[a, b], [b, c]] nearer to c
+//   block_scale<Unscale>     dsteqr's dlascl decision for a block of norm anorm
 //   larfg_scalars<Conv>      the reflector scalars of xLARFG under three conventions
 //   Givens<R, S>             a rotation (c real, s real or complex)
 //   inv_sqrt<Edge>           1 / sqrt(a): rsqrt.approx + one Newton step on NVPTX float
@@ -18,6 +20,7 @@
 #include <type_traits>
 
 #include <batchlas/device/core.hh>
+#include <batchlas/device/detail/sscp_target.hh>
 
 namespace batchlas::device {
 
@@ -77,8 +80,10 @@ template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_
 }
 }  // namespace detail
 
-// W: alg::LartgExact (= void) or a working precision type of the complex branch (void:
-// real_t<T>); the real branch is SLARTG/DLARTG with its unscaled fast path, bit-identical to
+// W: alg::LartgExact (= void), alg::Promote (complex<float> works in double except on Metal,
+// which has no fp64, chosen at JIT time: less rounding noise in a downstream bulge chase; every
+// other T is Exact), or a working precision type of the complex branch (void: real_t<T>); the
+// real branch is SLARTG/DLARTG with its unscaled fast path, bit-identical to
 // src/math-helpers.hh lartg. alg::LartgFast, float only (other T: Exact): inside the unscaled
 // range r = sqrt(f^2 + g^2) with 1/r from rsqrt + one fused Newton step (< 0.5 ulp), outside
 // it the Exact path; g == 0 gives (1, 0, f) by a final select, not an early return (an
@@ -86,11 +91,19 @@ template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_
 namespace alg {
 struct LartgExact {};
 struct LartgFast {};
+struct Promote {};
 }  // namespace alg
 template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const T& g) {
     using R = real_t<T>;
     if constexpr (std::is_same_v<W, alg::LartgExact>) {
         return lartg<void>(f, g);
+    } else if constexpr (std::is_same_v<W, alg::Promote>) {
+        if constexpr (Arith<T>::is_complex && std::is_same_v<R, float>) {
+            if (::batchlas::sycl_impl::on_metal()) return lartg<float>(f, g);
+            return lartg<double>(f, g);
+        } else {
+            return lartg<void>(f, g);
+        }
     } else if constexpr (std::is_same_v<W, alg::LartgFast>) {
         if constexpr (std::is_same_v<T, float>) {
             const bool gz = (g == T(0));
@@ -349,6 +362,44 @@ template <char C, class R> constexpr R lamch() {
     }
 }
 
+namespace detail {
+// dsteqr's SSFMIN / SSFMAX (the range dlascl scales a block into) and EPS2 = eps^2.
+template <class R> inline constexpr R ssfmin() {
+    return std::sqrt(safmin<R>()) / (lamch<'P', R>() * lamch<'P', R>());
+}
+template <class R> inline constexpr R ssfmax() { return std::sqrt(safmax<R>()) / R(3.0); }
+template <class R> inline constexpr R eps2() { return lamch<'E', R>() * lamch<'E', R>(); }
+}  // namespace detail
+
+// dsteqr's dlascl decision for a block of max-norm anorm: s brings it into [ssfmin, ssfmax]
+// (ssfmax / anorm above, ssfmin / anorm below, 1 inside or at anorm == 0) and inv undoes it.
+// Unscale: alg::UnscaleRecip (inv = 1 / s, the CTA solvers) or alg::UnscaleRatio (inv =
+// anorm / bound, dsteqr's own dlascl(bound, anorm)); inside the range both are exactly 1.
+namespace alg {
+struct UnscaleRecip {};
+struct UnscaleRatio {};
+}  // namespace alg
+template <class R> struct BlockScale {
+    R s;
+    R inv;
+};
+namespace detail {
+template <class Unscale = alg::UnscaleRecip, class R> BATCHLAS_DEVICE_INLINE BlockScale<R> block_scale(R anorm) {
+    static_assert(std::is_same_v<Unscale, alg::UnscaleRecip> || std::is_same_v<Unscale, alg::UnscaleRatio>,
+                  "block_scale: alg::UnscaleRecip or alg::UnscaleRatio");
+    R s = R(1), inv = R(1);
+    if (anorm > ssfmax<R>()) {
+        s = ssfmax<R>() / anorm;
+        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmax<R>();
+    } else if (anorm < ssfmin<R>() && anorm != R(0)) {
+        s = ssfmin<R>() / anorm;
+        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmin<R>();
+    }
+    if constexpr (std::is_same_v<Unscale, alg::UnscaleRecip>) inv = R(1) / s;
+    return {s, inv};
+}
+}  // namespace detail
+
 // A quiet NaN of T's real type (both parts NaN for complex T).
 template <class T> BATCHLAS_DEVICE_INLINE T qnan() {
     using A = Arith<T>;
@@ -377,10 +428,15 @@ template <class T> BATCHLAS_DEVICE_INLINE real_t<T> sign_nonzero_real(T x) {
 }
 
 // The eigenvalue of [[a, b], [b, c]] nearer to c (dsteqr's shift target): rt1 or rt2 of lae2,
-// whichever is closer to c (ties: rt1). The open-coded steqr form.
-template <class R> BATCHLAS_DEVICE_INLINE R eig2x2_nearest(R a, R b, R c) {
+// whichever is closer to c. Tie: alg::TieLowest (rt1, the open-coded steqr form) or
+// alg::TieHighest (rt2: the CTA Wilkinson strategy). Plain inline, operands by reference (the
+// forms it replaces).
+template <class Tie = alg::TieLowest, class R> inline R eig2x2_nearest(const R& a, const R& b, const R& c) {
+    static_assert(std::is_same_v<Tie, alg::TieLowest> || std::is_same_v<Tie, alg::TieHighest>,
+                  "eig2x2_nearest: alg::TieLowest or alg::TieHighest");
     const auto [rt1, rt2] = lae2(a, b, c);
-    return sycl::fabs(rt1 - c) <= sycl::fabs(rt2 - c) ? rt1 : rt2;
+    if constexpr (std::is_same_v<Tie, alg::TieLowest>) return sycl::fabs(rt1 - c) <= sycl::fabs(rt2 - c) ? rt1 : rt2;
+    else return sycl::fabs(rt1 - c) < sycl::fabs(rt2 - c) ? rt1 : rt2;
 }
 
 // The tridiagonal solver's 2-vector Householder (apply it with rot<Reflector2>).

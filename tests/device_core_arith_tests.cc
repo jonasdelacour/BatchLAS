@@ -8,6 +8,8 @@
 // Red set (each break was made once, 2026-11-04, and this suite failed): MacChain started from acc
 // instead of 0. During bring-up the MaybeZero case also caught a real defect (tag_mac read the
 // flag through a const type and ignored it).
+// M0 (2026-11-11, each break seen red, sm_89): ComplexArith Pod scale_real reading im twice and re()
+// returning Im (ComplexArithIsOneBodyOverStdAndPod, complex types only).
 #include <tests/device_core_common.hh>
 
 #include <cmath>
@@ -193,6 +195,102 @@ TYPED_TEST(DeviceCoreArithTest, FmaSplitRoundsTwiceFmaOnce) {
         ASSERT_NE(split, fused) << "inputs do not separate the two forms";
         EXPECT_EQ(got[0], split) << "FmaSplit: c - round(a b)";
         EXPECT_EQ(got[1], fused) << "Fma: one rounding";
+    }
+}
+
+// ---- one complex Arith over two Parts (std::complex, Cx) --------------------------------------
+using batchlas::verify::Check;
+static_assert(batchlas::device::is_complex_v<std::complex<float>> && batchlas::device::is_complex_v<const batchlas::device::Cx<double>>);
+static_assert(!batchlas::device::is_complex_v<double> && !batchlas::device::is_complex_v<const float>);
+static_assert(std::is_same_v<batchlas::device::dev_scalar_t<std::complex<double>>, batchlas::device::Cx<double>>);
+static_assert(std::is_same_v<batchlas::device::dev_scalar_t<const std::complex<float>>, batchlas::device::Cx<float>>);
+static_assert(std::is_same_v<batchlas::device::dev_scalar_t<float>, float>);
+static_assert(std::is_same_v<batchlas::device::real_t<batchlas::device::Cx<float>>, float>);
+
+// Every member on std::complex and on the POD Cx of the same bits: the members both kinds spell
+// alike are bit-identical, mac / msub / div / recip (their own forms) match the long-double host
+// value; ArithInline (formerly std::complex only) runs on Cx; re() reads the real part; an Inf
+// part gives isfinite false and a NaN that mul carries (explicit arithmetic, no Annex-G recovery).
+TYPED_TEST(DeviceCoreArithTest, ComplexArithIsOneBodyOverStdAndPod) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    auto& d = this->dev;
+    constexpr int n = 1024, kOut = 16;
+    auto a_h = vals<T>(n, 21), b_h = vals<T>(n, 22), c_h = vals<T>(n, 23);
+    if constexpr (is_cplx<T>) {
+        b_h[5] = T(R(0), R(0));                                       // is_zero
+        a_h[7] = T(std::numeric_limits<R>::infinity(), R(0.5));       // isfinite false, mul -> NaN part
+        b_h[9] = T(R(0.25), uval<R>(9) * R(8));                       // |im| > |re|: Smith's second arm
+    }
+    T* a = d.up(a_h);
+    T* b = d.up(b_h);
+    T* c = d.up(c_h);
+    T* os = d.template alloc<T>(std::size_t(n) * kOut, T(0));  // std::complex results
+    T* op = d.template alloc<T>(std::size_t(n) * kOut, T(0));  // Cx results, same layout
+    R* rr = d.template alloc<R>(std::size_t(n) * 2, R(0));
+    d.template run<1>(n, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        const int i = static_cast<int>(it.get_group_linear_id());
+        rr[2 * i] = batchlas::device::re(a[i]);
+        if constexpr (is_cplx<T>) {
+            using C = batchlas::device::Cx<R>;
+            auto run = [&](auto tag, auto* out) {
+                using U = decltype(tag);
+                using A = batchlas::device::Arith<U>;
+                using AI = batchlas::device::ArithInline<U>;
+                const U x = reinterpret_cast<const U*>(a)[i], y = reinterpret_cast<const U*>(b)[i], z = reinterpret_cast<const U*>(c)[i];
+                U* o = reinterpret_cast<U*>(out) + std::size_t(i) * kOut;
+                o[0] = A::mul(x, y);
+                o[1] = A::conj(x);
+                o[2] = A::add(x, y);
+                o[3] = A::sub(x, y);
+                o[4] = A::neg(x);
+                o[5] = A::div_real(x, A::re(y));
+                o[6] = A::scale_real(A::im(y), x);
+                o[7] = A::make(A::im(x), A::re(x));
+                U m = z, mc = z, s = z, ai = z, aic = z;
+                A::mac(m, x, y);
+                A::mac_conj(mc, x, y);
+                A::msub(s, x, y);
+                AI::mac(ai, x, y);
+                AI::mac_conj(aic, x, y);
+                o[8] = m;
+                o[9] = mc;
+                o[10] = s;
+                o[11] = A::div(x, y);
+                o[12] = A::recip(y);
+                o[13] = ai;
+                o[14] = aic;
+                o[15] = A::make(R(A::is_zero(y)) + R(2) * R(A::isfinite(x)), batchlas::device::re(x));
+            };
+            run(T{}, os);
+            run(C{}, op);
+        }
+    });
+    const auto gr = d.down(rr, std::size_t(n) * 2);
+    for (int i = 0; i < n; ++i) EXPECT_EQ(gr[2 * i], std::real(a_h[i])) << "re " << i;
+    if constexpr (is_cplx<T>) {
+        const auto gs = d.down(os, std::size_t(n) * kOut), gp = d.down(op, std::size_t(n) * kOut);
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            const T* s = &gs[std::size_t(i) * kOut];
+            const T* p = &gp[std::size_t(i) * kOut];
+            for (int k : {0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15}) EXPECT_TRUE(same_bits(s[k], p[k])) << "member " << k << " item " << i;
+            const LD<T> x = wide(a_h[i]), y = wide(b_h[i]), z = wide(c_h[i]);
+            EXPECT_EQ(std::real(s[15]), R(b_h[i] == T(0)) + R(2) * R(std::isfinite(std::real(a_h[i])) && std::isfinite(std::imag(a_h[i])))) << i;
+            if (i == 7) {
+                EXPECT_TRUE(std::isnan(std::imag(s[0])) || std::isinf(std::imag(s[0]))) << "Inf part: explicit mul";
+                continue;
+            }
+            if (i == 5) continue;  // b = 0: div / recip are not finite
+            const LD<T> ref[] = {z + x * y, z + std::conj(x) * y, z - x * y, x / y, LD<T>(1) / y, z + x * y, z + std::conj(x) * y};
+            const long double scale[] = {std::abs(z) + std::abs(x) * std::abs(y), std::abs(z) + std::abs(x) * std::abs(y),
+                                         std::abs(z) + std::abs(x) * std::abs(y), std::abs(x / y), std::abs(LD<T>(1) / y),
+                                         std::abs(z) + std::abs(x) * std::abs(y), std::abs(z) + std::abs(x) * std::abs(y)};
+            const int ks[] = {8, 9, 10, 11, 12, 13, 14};
+            for (int q = 0; q < 7; ++q)
+                for (const T* g : {s, p}) worst = std::max(worst, err(g[ks[q]], ref[q]) / static_cast<double>(scale[q]));
+        }
+        EXPECT_VERIFY(T, Check::blas, 2, worst) << "mac / mac_conj / msub / div / recip / ArithInline";
     }
 }
 

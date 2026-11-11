@@ -116,6 +116,8 @@ struct Default {};             // a tier's own default algorithm (tier::Cta / Bl
 namespace alg {
 struct BflyDown {};
 struct BflyAsc {};
+struct TieLowest {};   // among equal keys: the lower index (root)
+struct TieHighest {};  // the higher index (root)
 }  // namespace alg
 
 // Op tags for scratch_elements.

@@ -128,12 +128,7 @@ BATCHLAS_DEVICE_INLINE T tridiag_rot(const Thread&, const D& d, const E& e, cons
     return -ej * s;
 }
 
-// dsteqr's SSFMIN / SSFMAX (the range dlascl scales a block into) and EPS2 = eps^2.
-template <class R> inline constexpr R ssfmin() {
-    return std::sqrt(safmin<R>()) / (lamch<'P', R>() * lamch<'P', R>());
-}
-template <class R> inline constexpr R ssfmax() { return std::sqrt(safmax<R>()) / R(3.0); }
-template <class R> inline constexpr R eps2() { return lamch<'E', R>() * lamch<'E', R>(); }
+// ssfmin / ssfmax / eps2 and block_scale: scalar.hh.
 
 // The eigenvalue of [[a, b], [b, c]] closest to c, a tie going to the second root (the CTA
 // Wilkinson strategy; core eig2x2_nearest ties to the first). Plain inline, as the form it replaced.
@@ -266,7 +261,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
 
     inline void apply(int32_t col0, int32_t col1, T c, T s) {
         const int32_t pN = static_cast<int32_t>(LDQ);
-        device::rot<device::alg::RotTransposed, T, T, T>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
+        device::rot<device::alg::RotTransposed, device::arith::Explicit, T, T, T>(device::Givens<T>{c, s}, Q_local[base_q + lane + col0 * pN],
                         Q_local[base_q + lane + col1 * pN]);
     }
 

@@ -9,6 +9,7 @@
 // lockstep team loops whose trip count must equal on every team. Red set (each break made once,
 // 2026-11-04, and this suite failed): for_each_team_owned's lockstep trip count nout / nteams
 // (no ceiling: the last outputs lost).
+// M0 (2026-11-11, seen red, sm_89): sumsq on a Cyclic Frag reading row n (SumsqOnACyclicFrag).
 #include <tests/device_core_common.hh>
 #include <batchlas/device/level1.hh>
 
@@ -221,6 +222,48 @@ TYPED_TEST(DeviceCoreLevel1Test, TeamLoopsAndTilesCoverTheirOutputsOnce) {
     for (int g = 0; g < WG; ++g) EXPECT_EQ(tr[g], 3) << "lockstep trips, item " << g;  // ceil(21 / 8)
     for (int e = 0; e < m * nn; ++e) EXPECT_EQ(tl[e], 1) << e;
     (void)sizeof(T);
+}
+
+// sumsq over a Cyclic register vector (Frag<T, 3, Cyclic> on 64 items: rows lid + 64 k), rows
+// n .. 191 poisoned with NaN and skipped, n = 150 and 191 (inside item 22's and item 63's third
+// slot), Fused and Unfused, against the long-double host sum.
+TYPED_TEST(DeviceCoreLevel1Test, SumsqOnACyclicFrag) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    using batchlas::verify::Check;
+    auto& d = this->dev;
+    constexpr int WG = 64, K = 3, rows = K * WG;
+    const auto x_h = vals<T>(rows, 81);
+    T* x = d.up(x_h);
+    R* out = d.template alloc<R>(4 * WG, R(-1));
+    d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+        namespace dv = batchlas::device;
+        const dv::WorkGroup<WG, 32> ex{it};
+        int q = 0;
+        for (int n : {150, 191}) {
+            dv::Frag<T, K, dv::Cyclic> f;
+            for (int k = 0; k < K; ++k) {
+                const int r = ex.lid() + k * WG;
+                f[k] = r < n ? x[r] : dv::qnan<T>();
+            }
+            out[(q++) * WG + ex.lid()] = dv::sumsq<dv::alg::Fused, dv::Scope::Group>(ex, f, n);
+            out[(q++) * WG + ex.lid()] = dv::sumsq<dv::alg::Unfused, dv::Scope::Group>(ex, f, n);
+        }
+    });
+    const auto got = d.down(out, 4 * WG);
+    double worst = 0;
+    int q = 0;
+    for (int n : {150, 191}) {
+        long double ref = 0;
+        for (int r = 0; r < n; ++r) ref += std::norm(wide(x_h[r]));
+        for (int a = 0; a < 2; ++a, ++q)
+            for (int g = 0; g < WG; ++g) {
+                EXPECT_TRUE(std::isfinite(got[q * WG + g])) << "a poisoned row was read: n " << n << " item " << g;
+                worst = std::max(worst, static_cast<double>(std::abs(got[q * WG + g] - ref) / ref));
+                EXPECT_EQ(got[q * WG + g], got[q * WG]) << "uniform over the group, item " << g;
+            }
+    }
+    EXPECT_VERIFY(T, Check::blas, rows, worst);
 }
 
 }  // namespace

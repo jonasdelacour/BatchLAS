@@ -18,8 +18,6 @@
 namespace batchlas::device {
 
 namespace alg {
-struct TieLowest {};
-struct TieHighest {};
 struct NanFirst {};
 struct NanSkip {};
 struct NanPropagate {};

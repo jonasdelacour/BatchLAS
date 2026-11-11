@@ -21,6 +21,8 @@ namespace batchlas::device {
 // elements outside op(A) are not written), alg::EdgeZeroPad (B is written everywhere: outside op(A)
 // or outside P it gets 0; a tile load with padding). DiagFill (what B's diagonal gets inside P):
 // DiagFill::Keep (copied), Real ((re, 0): a Hermitian diagonal), Unit (1, A not read).
+// Alg: for_each_owned_2d's walk (alg::RowOwner: item r copies whole rows r mod size, the
+// row-copy form). A conjugated source without a transpose is conj_view(A) (view.hh).
 namespace alg {
 struct EdgeNone {};
 struct EdgeGuard {};
@@ -101,6 +103,14 @@ template <class T, int N, class L, class AS, class BS> BATCHLAS_DEVICE_INLINE vo
 #pragma unroll
     for (int r = 0; r < N; ++r) f[r] = select(r == j, d, o);
 }
+// The Cyclic register form: the item's share of a column of N * ex.size rows (f[k] is row
+// lid + k * size) := beta at row j, alpha elsewhere.
+template <class Ex, class T, int N, class AS, class BS>
+BATCHLAS_DEVICE_INLINE void laset(const Ex& ex, AS alpha_, BS beta_, Frag<T, N, Cyclic>& f, int j) {
+    const T o = tag_mul(as_tag(alpha_), Arith<T>::one());
+    const T d = tag_mul(as_tag(beta_), Arith<T>::one());
+    for_each_owned_frag<N * Ex::size>(ex, [&](int k, int r) { f[k] = select(r == j, d, o); });
+}
 template <class T, int R, int C, class AS, class BS> BATCHLAS_DEVICE_INLINE void laset(Tile<T, R, C>& t, AS alpha_, BS beta_, int off = 0) {
     const T o = tag_mul(as_tag(alpha_), Arith<T>::one());
     const T d = tag_mul(as_tag(beta_), Arith<T>::one());
@@ -171,14 +181,19 @@ BATCHLAS_DEVICE_INLINE void laswp_gather(const Ex& ex, const MA& a, const P& ipi
     constexpr Direct Inv = Dir == Direct::Forward ? Direct::Backward : Direct::Forward;
     for_each_owned_2d(ex, b.rows(), b.cols(), [&](int i, int j) { b(i, j) = a(laswp_index<Inv>(ipiv, k1, k2, i), j); });
 }
-// LAPACK xLAPMR out of place with a 1-based permutation k: Forward B(i, :) = A(k(i) - 1, :);
-// Backward B(k(i) - 1, :) = A(i, :).
-template <Direct Dir = Direct::Forward, class Ex, class MA, class K, class MB>
+// LAPACK xLAPMR out of place with a permutation k of index base Base (1: LAPACK's; 0: a 0-based
+// row map): Forward B(i, :) = A(k(i) - Base, :); Backward B(k(i) - Base, :) = A(i, :). Alg:
+// for_each_owned_2d's walk over B.
+template <Direct Dir = Direct::Forward, class Alg = alg::Walk, int Base = 1, class Ex, class MA, class K, class MB>
 BATCHLAS_DEVICE_INLINE void lapmr(const Ex& ex, const MA& a, const K& k, const MB& b) {
-    for_each_owned_2d(ex, b.rows(), b.cols(), [&](int i, int j) {
-        const int p = static_cast<int>(k(i)) - 1;
-        if constexpr (Dir == Direct::Forward) b(i, j) = a(p, j);
-        else b(p, j) = a(i, j);
+    static_assert(Base == 0 || Base == 1, "lapmr: Base is 0 or 1");
+    for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int j) BATCHLAS_DEVICE_BODY {
+        if constexpr (Dir == Direct::Forward) {
+            if constexpr (Base == 0) b(i, j) = a(k(i), j);
+            else b(i, j) = a(static_cast<int>(k(i)) - Base, j);
+        } else {
+            b(static_cast<int>(k(i)) - Base, j) = a(i, j);
+        }
     });
 }
 // The pivot sink of a panel factorization: step k's 0-based row is stored 1-based plus base
@@ -201,52 +216,100 @@ struct RotReflector2 {};
 }  // namespace alg
 template <class C> inline constexpr bool is_rot_conv_v =
     std::is_same_v<C, alg::RotLapack> || std::is_same_v<C, alg::RotTransposed> || std::is_same_v<C, alg::RotReflector2>;
-template <class Conv = alg::RotLapack, class R, class S, class T> BATCHLAS_DEVICE_INLINE void rot(const Givens<R, S>& g, T& x, T& y) {
-    using A = Arith<T>;
-    const T a = x, b = y;
-    if constexpr (std::is_same_v<Conv, alg::RotLapack>) {
-        if constexpr (A::is_complex) {
-            const T sb = Arith<T>::mul(static_cast<T>(g.s), b), sa = Arith<T>::mul(Arith<T>::conj(static_cast<T>(g.s)), a);
-            x = A::make(g.c * A::re(a) + A::re(sb), g.c * A::im(a) + A::im(sb));
-            y = A::make(g.c * A::re(b) - A::re(sa), g.c * A::im(b) - A::im(sa));
-        } else {
-            x = g.c * a + g.s * b;
-            y = g.c * b - g.s * a;
-        }
-    } else if constexpr (std::is_same_v<Conv, alg::RotReflector2>) {
-        static_assert(std::is_same_v<R, S>, "rot: alg::RotReflector2 takes a real (v0, v1)");
-        const T t = x * g.c + y * g.s;
-        x -= R(2) * g.c * t;
-        y -= R(2) * g.s * t;
+namespace detail {
+// zrot / drot in T's own operators (std::complex keeps its Annex-G multiply), plain inline: the
+// band-reduction chase's scalar kernel (arith::Native).
+template <class T, class R, class S> inline void rot_native(T& x, T& y, R c, const S& s_in) {
+    if constexpr (Arith<T>::is_complex) {
+        const T xt = x;
+        const T yt = y;
+        x = T(c) * xt + s_in * yt;
+        y = T(c) * yt - ::batchlas::device::conj(s_in) * xt;
     } else {
-        static_assert(std::is_same_v<Conv, alg::RotTransposed> && std::is_same_v<R, S>, "rot: alg::RotTransposed takes a real s");
-        if constexpr (A::is_complex) {
-            x = A::make(g.c * A::re(a) - g.s * A::re(b), g.c * A::im(a) - g.s * A::im(b));
-            y = A::make(g.s * A::re(a) + g.c * A::re(b), g.s * A::im(a) + g.c * A::im(b));
+        const R s = static_cast<R>(s_in);
+        const R xt = static_cast<R>(x);
+        const R yt = static_cast<R>(y);
+        x = T(c * xt + s * yt);
+        y = T(c * yt - s * xt);
+    }
+}
+}  // namespace detail
+// Ops: the arithmetic of the complex products (arith::Explicit: Arith<T>; arith::Native: T's
+// own operators, alg::RotLapack only).
+template <class Conv = alg::RotLapack, class Ops = arith::Explicit, class R, class S, class T>
+BATCHLAS_DEVICE_INLINE void rot(const Givens<R, S>& g, T& x, T& y) {
+    if constexpr (detail::is_native_v<Ops>) {
+        static_assert(std::is_same_v<Conv, alg::RotLapack>, "rot: arith::Native is alg::RotLapack");
+        detail::rot_native(x, y, g.c, g.s);
+    } else {
+        using A = arith_t<Ops, T>;
+        const T a = x, b = y;
+        if constexpr (std::is_same_v<Conv, alg::RotLapack>) {
+            if constexpr (A::is_complex) {
+                const T sb = A::mul(static_cast<T>(g.s), b), sa = A::mul(A::conj(static_cast<T>(g.s)), a);
+                x = A::make(g.c * A::re(a) + A::re(sb), g.c * A::im(a) + A::im(sb));
+                y = A::make(g.c * A::re(b) - A::re(sa), g.c * A::im(b) - A::im(sa));
+            } else {
+                x = g.c * a + g.s * b;
+                y = g.c * b - g.s * a;
+            }
+        } else if constexpr (std::is_same_v<Conv, alg::RotReflector2>) {
+            static_assert(std::is_same_v<R, S>, "rot: alg::RotReflector2 takes a real (v0, v1)");
+            const T t = x * g.c + y * g.s;
+            x -= R(2) * g.c * t;
+            y -= R(2) * g.s * t;
         } else {
-            x = g.c * a - g.s * b;
-            y = g.s * a + g.c * b;
+            static_assert(std::is_same_v<Conv, alg::RotTransposed> && std::is_same_v<R, S>, "rot: alg::RotTransposed takes a real s");
+            if constexpr (A::is_complex) {
+                x = A::make(g.c * A::re(a) - g.s * A::re(b), g.c * A::im(a) - g.s * A::im(b));
+                y = A::make(g.s * A::re(a) + g.c * A::re(b), g.s * A::im(a) + g.c * A::im(b));
+            } else {
+                x = g.c * a - g.s * b;
+                y = g.s * a + g.c * b;
+            }
         }
     }
 }
 // (x(i), y(i)) := G (x(i), y(i)) for every owned i; elementwise, no barrier.
-template <class Conv = alg::RotLapack, class Ex, class R, class S, class X, class Y>
+template <class Conv = alg::RotLapack, class Ops = arith::Explicit, class Ex, class R, class S, class X, class Y>
 BATCHLAS_DEVICE_INLINE void rot(const Ex& ex, const Givens<R, S>& g, const X& x, const Y& y) {
-    for_each_owned(ex, x.size(), [&](int i) {
-        auto& xi = x(i);
-        auto& yi = y(i);
-        rot<Conv>(g, xi, yi);
-    });
-}
-// x := x G(0) G(1) ... G(n-2) (dlasr SIDE = R, PIVOT = V, DIRECT = F on one row): rotation j
-// acts on (x(j), x(j+1)) with Conv's convention. One vector is one dependence chain: Thread.
-template <class Conv = alg::RotTransposed, class Rots, class X> BATCHLAS_DEVICE_INLINE void lasr(const Thread&, int n, const Rots& rots, const X& x) {
-    for (int j = 0; j < n - 1; ++j) {
-        const auto g = rots(j);  // a copy: the table is not re-read after a store
-        auto& p = x(j);
-        auto& q = x(j + 1);
-        rot<Conv>(g, p, q);
+    if constexpr (detail::is_native_v<Ops>) {
+        for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DEVICE_BODY { rot<Conv, Ops>(g, x(i), y(i)); });
+    } else {
+        for_each_owned(ex, x.size(), [&](int i) {
+            auto& xi = x(i);
+            auto& yi = y(i);
+            rot<Conv, Ops>(g, xi, yi);
+        });
     }
+}
+// dlasr on one vector x of length n (SIDE = R on a row, SIDE = L on a column): rotation k of
+// rots(0 .. n-2) acts on the pair (x(lo), x(hi)), lo < hi, with Conv's convention. PIVOT:
+// Pivot::Variable (lo, hi) = (k, k+1); Top (0, k+1); Bottom (k, n-1). DIRECT: Direct::Forward
+// applies k = 0, 1, .., n-2, Backward n-2, .., 0. One vector is one dependence chain: Thread.
+enum class Pivot { Variable, Top, Bottom };
+template <Pivot PV, Direct Dir = Direct::Forward, class Conv = alg::RotTransposed, class Rots, class X>
+BATCHLAS_DEVICE_INLINE void lasr(const Thread&, int n, const Rots& rots, const X& x) {
+    // One loop per direction, no step lambda: Forward is the pre-existing Variable loop verbatim.
+    if constexpr (Dir == Direct::Forward) {
+        for (int k = 0; k < n - 1; ++k) {
+            const auto g = rots(k);  // a copy: the table is not re-read after a store
+            auto& p = x(PV == Pivot::Top ? 0 : k);
+            auto& q = x(PV == Pivot::Bottom ? n - 1 : k + 1);
+            rot<Conv>(g, p, q);
+        }
+    } else {
+        for (int k = n - 2; k >= 0; --k) {
+            const auto g = rots(k);
+            auto& p = x(PV == Pivot::Top ? 0 : k);
+            auto& q = x(PV == Pivot::Bottom ? n - 1 : k + 1);
+            rot<Conv>(g, p, q);
+        }
+    }
+}
+// x := x G(0) G(1) ... G(n-2): lasr<Pivot::Variable, Direct::Forward, Conv>.
+template <class Conv = alg::RotTransposed, class Rots, class X> BATCHLAS_DEVICE_INLINE void lasr(const Thread& th, int n, const Rots& rots, const X& x) {
+    lasr<Pivot::Variable, Direct::Forward, Conv>(th, n, rots, x);
 }
 // A := A G(0) ... G(n-2) on every owned row (dlasr SIDE = R): each row runs the serial chain.
 template <class Conv = alg::RotTransposed, class Ex, class Rots, class MA>
@@ -310,8 +373,9 @@ BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg(const Ex& ex, T& alpha, const X& x)
 // UnitHead<V> (v(head) = 1 implied, zero above) or any Published vector; every item reads all
 // of it. Left on a team executor (alg::SgPerCol): team t owns columns t mod nteams, its lanes
 // stride the rows, Scope::Sub only (no work-group barrier). Right (alg::RowOwner): each item
-// owns rows, serial over the columns. Thread: both serial. C is updated in place; the caller
-// owns any barrier before another owner reads C.
+// owns rows, serial over the columns; Right with Loop = alg::Lockstep: team t owns rows t mod
+// nteams, its lanes stride the columns (team_reduce, every team the same trip count). Thread:
+// both serial. C is updated in place; the caller owns any barrier before another owner reads C.
 //
 // Ops: the arithmetic; Form: alg::ScaleW (C -= v (tau w), LAPACK) or ScaleV (C -= (tau v) w,
 // Left only); Loop (Left): alg::Diverge (team t walks j = t, t + nteams, .. to its own bound) or
@@ -363,6 +427,21 @@ BATCHLAS_DEVICE_INLINE void larf(const Ex& ex, T tau, const V& vp, const MC& c) 
                 c(r, j) = cij;
             }
         }
+    } else if constexpr (std::is_same_v<Loop, alg::Lockstep>) {
+        const int lane = is_thread_v<Ex> ? 0 : ex.lane();
+        const int tsize = detail::team_size_of(ex);
+        for_each_team_owned<alg::Lockstep>(ex, m, [&](int r, bool live) BATCHLAS_DEVICE_BODY {
+            T w = A::zero();
+            if (live)
+                for (int j = lane; j < n; j += tsize) A::mac(w, static_cast<T>(c(r, j)), static_cast<T>(v(j)));
+            const T tw = A::mul(tau, ex.team_reduce(w));
+            if (live)
+                for (int j = lane; j < n; j += tsize) {
+                    T crj = c(r, j);
+                    A::msub(crj, tw, A::conj(static_cast<T>(v(j))));
+                    c(r, j) = crj;
+                }
+        });
     } else {
         for_each_owned(ex, m, [&](int r) {
             T w = A::zero();
@@ -413,13 +492,22 @@ BATCHLAS_DEVICE_INLINE T larfg(const Ex& ex, int n, int alpha_item, T& alpha, T&
 }
 
 // ---- vectors of plane rotations (LAPACK xLARGV / xLARTV / xLAR2V), elementwise over ex ----------
-// The first template argument is either core's (largv: lartg<W>'s W; lartv / lar2v:
-// alg::RotLapack) or a rotation kernel class Rot supplying the scalar steps with its own
-// arithmetic, c real: Rot::lartg(f, g, c&, s&, r&), Rot::rot_pair(x&, y&, c, s),
-// Rot::lar2v_pair(x&, y&, z&, c, s) (the band-reduction kernels' btrd_givens_ops).
+// The first template argument is either core's (largv: lartg<W>'s W, e.g. alg::Promote; lartv /
+// lar2v: alg::RotLapack, with Ops = arith::Native for T's own operators) or a rotation kernel
+// class Rot supplying the scalar steps with its own arithmetic, c real: Rot::lartg(f, g, c&, s&,
+// r&), Rot::rot_pair(x&, y&, c, s), Rot::lar2v_pair(x&, y&, z&, c, s) (the band-reduction
+// kernels' btrd_givens_ops).
 namespace detail {
 template <class W> inline constexpr bool is_rot_kernel_v = !std::is_void_v<W> && !std::is_floating_point_v<W> && !is_rot_conv_v<W> &&
-                                                           !std::is_same_v<W, alg::LartgExact> && !std::is_same_v<W, alg::LartgFast>;
+                                                           !std::is_same_v<W, alg::LartgExact> && !std::is_same_v<W, alg::LartgFast> &&
+                                                           !std::is_same_v<W, alg::Promote>;
+// lartg<W> into out-parameters, plain inline (the rotation kernels' adaptor form).
+template <class W, class T, class R> inline void lartg_out(const T& f, const T& g, R& c, T& s, T& r) {
+    auto [ct, st, rt] = lartg<W>(f, g);
+    c = ct;
+    s = st;
+    r = rt;
+}
 }  // namespace detail
 // largv: rotation i from (x(i), y(i)) by lartg<W>: x(i) := r, y(i) := s, c(i) := c.
 template <class W = void, class Ex, class X, class Y, class C> BATCHLAS_DEVICE_INLINE void largv(const Ex& ex, const X& x, const Y& y, const C& c) {
@@ -438,25 +526,35 @@ template <class W = void, class Ex, class X, class Y, class C> BATCHLAS_DEVICE_I
             x(t) = rt;
         });
     } else {
-        for_each_owned(ex, x.size(), [&](int i) {
-            const auto g = lartg<W>(static_cast<elem_t<X>>(x(i)), static_cast<elem_t<X>>(y(i)));
-            c(i) = g.c;
-            y(i) = g.s;
-            x(i) = g.r;
+        using T = elem_t<X>;
+        using R = real_t<T>;
+        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY {
+            const T f = x(t);
+            const T g = y(t);
+            R ct = R(0);
+            T st = T(0);
+            T rt = T(0);
+            detail::lartg_out<W>(f, g, ct, st, rt);
+            c(t) = ct;
+            y(t) = st;
+            x(t) = rt;
         });
     }
 }
 // lartv: (x(i), y(i)) := rotation i applied (alg::RotLapack: x := c x + s y, y := c y - conj(s) x).
-template <class Rot = alg::RotLapack, class Ex, class X, class Y, class C, class S>
+template <class Rot = alg::RotLapack, class Ops = arith::Explicit, class Ex, class X, class Y, class C, class S>
 BATCHLAS_DEVICE_INLINE void lartv(const Ex& ex, const X& x, const Y& y, const C& c, const S& s) {
     if constexpr (detail::is_rot_kernel_v<Rot>) {
         for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { Rot::rot_pair(x(t), y(t), c(t), s(t)); });
+    } else if constexpr (detail::is_native_v<Ops>) {
+        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lartv: arith::Native is alg::RotLapack");
+        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { detail::rot_native(x(t), y(t), c(t), s(t)); });
     } else {
         static_assert(std::is_same_v<Rot, alg::RotLapack>, "lartv: alg::RotLapack or a rotation kernel class");
         for_each_owned(ex, x.size(), [&](int i) {
             using T = elem_t<X>;
             T xi = x(i), yi = y(i);
-            rot<alg::RotLapack>(Givens<real_t<T>, std::remove_cvref_t<decltype(s(0))>>{c(i), s(i)}, xi, yi);
+            rot<alg::RotLapack, Ops>(Givens<real_t<T>, std::remove_cvref_t<decltype(s(0))>>{c(i), s(i)}, xi, yi);
             x(i) = xi;
             y(i) = yi;
         });
@@ -491,13 +589,57 @@ BATCHLAS_DEVICE_INLINE void lar2v_lapack(const Ex& ex, const X& x, const Y& y, c
         }
     });
 }
+// Netlib CLAR2V / ZLAR2V (DLAR2V for real T) on one element, expression for expression in T's
+// own operators, plain inline (arith::Native: the band-reduction chase's scalar kernel).
+template <class T, class R> inline void lar2v_native(T& x, T& y, T& z, R ci, const T& si) {
+    if constexpr (Arith<T>::is_complex) {
+        const R xi = static_cast<R>(x.real());
+        const R yi = static_cast<R>(y.real());
+        const T zi = z;
+        const R zir = static_cast<R>(zi.real());
+        const R zii = static_cast<R>(zi.imag());
+        const R sir = static_cast<R>(si.real());
+        const R sii = static_cast<R>(si.imag());
+        const R t1r = sir * zir - sii * zii;
+        const R t1i = sir * zii + sii * zir;
+        const T t2 = T(ci * zir, ci * zii);
+        const T t3 = t2 - ::batchlas::device::conj(si) * T(xi, R(0));
+        const T t4 = ::batchlas::device::conj(t2) + si * T(yi, R(0));
+        const R t5 = ci * xi + t1r;
+        const R t6 = ci * yi - t1r;
+        const R xnew = ci * t5 + (sir * static_cast<R>(t4.real()) + sii * static_cast<R>(t4.imag()));
+        const R ynew = ci * t6 - (sir * static_cast<R>(t3.real()) - sii * static_cast<R>(t3.imag()));
+        const T znew = T(ci) * t3 + ::batchlas::device::conj(si) * T(t6, t1i);
+        x = T(xnew, R(0));
+        y = T(ynew, R(0));
+        z = znew;
+    } else {
+        const R xi = static_cast<R>(x);
+        const R yi = static_cast<R>(y);
+        const R zi = static_cast<R>(z);
+        const R sr = static_cast<R>(si);
+        const R t1 = sr * zi;
+        const R t2 = ci * zi;
+        const R t3 = t2 - sr * xi;
+        const R t4 = t2 + sr * yi;
+        const R t5 = ci * xi + t1;
+        const R t6 = ci * yi - t1;
+        x = T(ci * t5 + sr * t4);
+        y = T(ci * t6 - sr * t3);
+        z = T(ci * t4 - sr * t5);
+    }
+}
 }  // namespace detail
 // lar2v: the 2 x 2 Hermitian [x z; conj(z) y] (x, y real diagonals) := G [x z; conj(z) y] G^H with
-// G = [c conj(s); -s c] per i (LAPACK zlar2v / dlar2v expressions, in their order).
-template <class Rot = alg::RotLapack, class Ex, class X, class Y, class Z, class C, class S>
+// G = [c conj(s); -s c] per i (LAPACK zlar2v / dlar2v expressions, in their order). Ops:
+// arith::Explicit (explicit real arithmetic) or arith::Native (T's own operators).
+template <class Rot = alg::RotLapack, class Ops = arith::Explicit, class Ex, class X, class Y, class Z, class C, class S>
 BATCHLAS_DEVICE_INLINE void lar2v(const Ex& ex, const X& x, const Y& y, const Z& z, const C& c, const S& s) {
     if constexpr (detail::is_rot_kernel_v<Rot>) {
         for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { Rot::lar2v_pair(x(t), y(t), z(t), c(t), s(t)); });
+    } else if constexpr (detail::is_native_v<Ops>) {
+        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lar2v: arith::Native is alg::RotLapack");
+        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { detail::lar2v_native(x(t), y(t), z(t), c(t), s(t)); });
     } else {
         static_assert(std::is_same_v<Rot, alg::RotLapack>, "lar2v: alg::RotLapack or a rotation kernel class");
         detail::lar2v_lapack(ex, x, y, z, c, s);
@@ -508,12 +650,18 @@ BATCHLAS_DEVICE_INLINE void lar2v(const Ex& ex, const X& x, const Y& y, const Z&
 // lanst<NT>(ex, d, e): the NT norm of the symmetric tridiagonal (d, e), e(i) coupling d(i) and
 // d(i + 1). Max: max |d(i)|, |e(i)| by fmax (a NaN entry is ignored: the steqr rule); One = Inf:
 // max_i |e(i-1)| + |d(i)| + |e(i)| (sycl::max); Frobenius: sqrt(sum d^2 + 2 sum e^2) unscaled.
-// Uniform over scope S. LaneVec form (Max): one element of d and e per item, ascending butterfly.
+// Uniform over scope S. Thread (Max): n >= 1. LaneVec form (Max): one element of d and e per item,
+// ascending butterfly.
 template <NormType NT, Scope S = Scope::Own, class Ex, class D, class E> BATCHLAS_DEVICE_INLINE auto lanst(const Ex& ex, const D& d, const E& e) {
     using R = elem_t<D>;
     static_assert(!Arith<R>::is_complex, "lanst: d and e are real");
     const int n = d.size();
-    if constexpr (NT == NormType::Max) {
+    if constexpr (NT == NormType::Max && is_thread_v<Ex>) {
+        // Serial: seeded with |d(n-1)| (n >= 1, dsteqr's block), no per-step i < n-1 test.
+        R acc = sycl::fabs(d(n - 1));
+        for (int i = 0; i < n - 1; ++i) acc = sycl::fmax(acc, sycl::fmax(sycl::fabs(d(i)), sycl::fabs(e(i))));
+        return acc;
+    } else if constexpr (NT == NormType::Max) {
         R m = R(0);
         for_each_owned(ex, n, [&](int i) {
             m = sycl::fmax(m, sycl::fabs(d(i)));
