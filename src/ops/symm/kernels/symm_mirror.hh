@@ -9,7 +9,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
-namespace batchlas::sycl_symm {
+namespace batchlas::ops::symm {
 
 template <typename T, bool Herm>
 BATCHLAS_INTERNAL_API Event symm_mirror(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A,
@@ -17,4 +17,4 @@ BATCHLAS_INTERNAL_API Event symm_mirror(Queue& q, const MatrixView<T, MatrixForm
                                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side,
                                         Uplo uplo, int chunk);
 
-}  // namespace batchlas::sycl_symm
+}  // namespace batchlas::ops::symm

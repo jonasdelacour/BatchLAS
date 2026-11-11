@@ -7,7 +7,8 @@
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_cta_device.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/lapack/getrf.hh>
 
@@ -30,7 +31,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 namespace {
 
@@ -48,7 +49,7 @@ constexpr int getrf_tile_ld(int m) { return m | 1; }
 template <typename T>
 constexpr std::size_t getrf_scratch_bytes() {
     using DM = sycl_device::DevMap<T>;
-    return static_cast<std::size_t>(getrf_native::kLuRedSlots) *
+    return static_cast<std::size_t>(device::detail::kRedSlots) *
            (sizeof(typename DM::real) + sizeof(int));
 }
 
@@ -60,16 +61,8 @@ constexpr std::size_t getrf_slm_bytes(int m, int n) {
            getrf_scratch_bytes<T>();
 }
 
-// The 48 KB launch hole: a request inside this band is refused at enqueue, so it is padded past.
-// Band and pad must stay byte-identical to potrf_cta.cc's and geqrf_cta.cc's. No group collective
-// here, so the pad is defensive -- adding one arms it. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kGetrfHoleLo = 47104;
-constexpr std::size_t kGetrfHoleHi = 49664;
-constexpr std::size_t kGetrfHolePadTo = 49920;
-
-constexpr std::size_t getrf_hole_padded(std::size_t bytes) {
-    return (bytes > kGetrfHoleLo && bytes <= kGetrfHoleHi) ? kGetrfHolePadTo : bytes;
-}
+// The 48 KB launch hole (resident::hole_padded): no group collective here, so the pad is
+// defensive -- adding one arms it.
 
 // Work-group width: about four columns' worth of rows, clamped to [64, 512]. A pure performance
 // knob -- getrf_slm_bytes does not depend on wg, so changing it cannot move a capacity -- but the
@@ -147,16 +140,16 @@ Event getrf_panel_resident_launch(Queue& ctx,
     const std::size_t scratch = getrf_scratch_bytes<T>();
     const std::size_t raw =
         static_cast<std::size_t>(G) * tile_elems * sizeof(D) + scratch;
-    const std::size_t padded = getrf_hole_padded(raw);
+    const std::size_t padded = resident::hole_padded(raw);
     const std::size_t tile_alloc_elems = (padded - scratch + sizeof(D) - 1) / sizeof(D);
     const int num_wg = (batch + G - 1) / G;
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_alloc_elems), h);
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         batchlas::impl::parallel_for<GetrfPanelResidentKernel<T, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
@@ -210,9 +203,9 @@ Event getrf_panel_global_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         batchlas::impl::parallel_for<GetrfPanelGlobalKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
@@ -244,7 +237,7 @@ bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
     if (elems > static_cast<std::int64_t>(slm_budget_bytes / sizeof(typename DM::type))) {
         return false;
     }
-    return getrf_hole_padded(getrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
+    return resident::hole_padded(getrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
 }
 
 // The TIER's admission test, and so occupancy-scaled by default: what can_run
@@ -276,28 +269,18 @@ int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
     const int hi = static_cast<int>(std::sqrt(cap)) + 2;
     return resident::resident_max_n(
         [](int n) {
-            return getrf_hole_padded(getrf_slm_bytes<T>(n, n));
+            return resident::hole_padded(getrf_slm_bytes<T>(n, n));
         },
         slm_budget_bytes, min_blocks_per_sm, hi);
 }
 
 // ONE term: the fallback `info` span for a caller that supplied none -- an empty OR SHORT span
 // means "not requested". A may carry a null data_ptr() here.
-namespace {
-
-Span<int32_t> getrf_cta_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
-}  // namespace
-
 template <typename T>
 std::size_t getrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    return workspace_bytes([&](BumpAllocator& p) {
-        return getrf_cta_layout(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The panel leaf, and the ONE place the residency is chosen.
@@ -366,25 +349,9 @@ Event getrf_cta_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("getrf_cta: degenerate extents");
-    }
     // m != n is the whole m x n ?GETF2: the device loop runs min(m, n) steps over all n columns.
     const int mn = std::min(m, n);
-    if (A.is_heterogeneous()) {
-        // One (m, n, ld, stride) tuple at CAPACITY extents covers the whole batch.
-        throw batchlas::invalid_argument("getrf_cta: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrf_cta: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never MAX_SUB_GROUP_SIZE >= 32: that property reports the
-        // FIRST supported size, so the weak test accepts a {64}-only device here.
-        throw batchlas::unsupported(
-            "getrf_cta: device does not offer sub-group size 32, which the kernel requires");
-    }
+    const auto dev = native::require_launchable(ctx, "getrf_cta", A, {});
 
     // int64 ON THE WIRE, PACKED 1-BASED int32 IN THE BUFFER: cuBLAS and rocSOLVER
     // reinterpret_cast this span, so any other format is silent garbage downstream.
@@ -407,15 +374,10 @@ Event getrf_cta_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // Empty or SHORT means "not requested"; the zero-fill below hits THIS span.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : getrf_cta_layout(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
-    // The zero pre-pass is a read-after-write dependence, not a pure output:
-    // getf2_panel_device READS info for first-failure-wins across panels, so on an
-    // out-of-order queue the unguarded version returned the caller's own poison. Masked,
-    // an inactive item's slot is left as it was, as are its matrix and pivots.
+    // The zero pre-pass is a read-after-write dependence: getf2_panel_device READS info (first failure
+    // wins across panels). Masked, an inactive item's slot, matrix and pivots stay as they were.
     const auto mask = batchlas::detail::call_mask("getrf_cta", A);
     batchlas::detail::info_clear(ctx, info, batch, mask);
     if (!ctx.in_order()) ctx.wait();
@@ -457,5 +419,5 @@ BATCHLAS_GETRF_CTA_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_CTA_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

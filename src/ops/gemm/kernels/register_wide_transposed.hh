@@ -23,7 +23,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::copy_async_commit;
 using batchlas::device::l3::copy_async_wait;
@@ -686,4 +686,4 @@ Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
     return launch_wide_transposed_leg<T, P, false, Split>(ctx, A, B, C, alpha, beta, trace, split);
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

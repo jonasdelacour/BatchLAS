@@ -7,6 +7,7 @@
 // can name the routed ormqr. An empty seam throws.
 
 #include <src/ops/orgqr/orgqr_native.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
@@ -27,7 +28,7 @@
 #include <type_traits>
 
 namespace batchlas {
-namespace sycl_orgqr {
+namespace ops::orgqr {
 
 namespace {
 
@@ -90,7 +91,7 @@ std::size_t orgqr_apply_bytes(Queue& ctx,
                               const OrgqrApplyQBufferSize<T>& q) {
     if (!q) {
         throw batchlas::internal_error(
-            "sycl_orgqr: the apply-Q workspace query was not injected. orgqr's native arm "
+            "ops::orgqr: the apply-Q workspace query was not injected. orgqr's native arm "
             "is ormqr applied to an identity, and only the facade can name the ROUTED "
             "ormqr_buffer_size -- this driver is instantiated per scalar type with no "
             "Backend parameter (see the note at the top of orgqr_blocked.cc).");
@@ -132,13 +133,6 @@ std::size_t orgqr_part_bytes(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
 
 }  // namespace
 
-// True for all four types; Auto takes this driver where tuned/orgqr.*.txt ranks
-// blocked first (m, n <= 512). evidence: docs/perf/qr.md#qr-route-arms
-template <> bool orgqr_blocked_available<float>()                { return true; }
-template <> bool orgqr_blocked_available<double>()               { return true; }
-template <> bool orgqr_blocked_available<std::complex<float>>()  { return true; }
-template <> bool orgqr_blocked_available<std::complex<double>>() { return true; }
-
 template <typename T>
 std::size_t orgqr_blocked_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -166,25 +160,17 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     const int k = std::min(m, n);
 
     // can_run's gates are re-applied here: direct callers bypass select::choose.
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("orgqr_blocked: degenerate extents");
-    }
+    native::require_launchable(ctx, "orgqr_blocked", A, {.sub_group = 0});
     if (m < n) {
         throw batchlas::invalid_argument(
             "orgqr_blocked: n > m is not supported (orgqr's can_run refuses it)");
-    }
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("orgqr_blocked: heterogeneous batch is not supported");
-    }
-    if (ctx.device().type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("orgqr_blocked: GPU queues only");
     }
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("orgqr_blocked: tau span is shorter than k * batch");
     }
     if (!apply_q) {
         throw batchlas::internal_error(
-            "sycl_orgqr::orgqr_blocked_dispatch: the apply-Q seam was not injected. orgqr's "
+            "ops::orgqr::orgqr_blocked_dispatch: the apply-Q seam was not injected. orgqr's "
             "native arm is ormqr applied to an identity, and only a layer that can name a "
             "Backend can reach the ROUTED ormqr (see the note at the top of "
             "orgqr_blocked.cc).");
@@ -294,5 +280,5 @@ BATCHLAS_ORGQR_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_ORGQR_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_orgqr
+}  // namespace ops::orgqr
 }  // namespace batchlas

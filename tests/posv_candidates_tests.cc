@@ -19,7 +19,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include <src/ops/getrs/getrs_native.hh>
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
 #include <src/util/resident_capacity.hh>
@@ -221,16 +221,16 @@ protected:
         return static_cast<int>(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     }
     int tiny_n() const {
-        return max_wg() >= sycl_posv::kPosvTinyWgSize ? sycl_posv::posv_tiny_max_n<T>() : 0;
+        return max_wg() >= resident::kTinyWgSize ? ops::posv::posv_tiny_max_n<T>() : 0;
     }
     std::size_t cta_elems() const {
-        return sycl_getrs::getrs_fused_max_rhs_elems<T>(
+        return ops::getrs::getrs_fused_max_rhs_elems<T>(
             resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
     }
     bool expect_runs(const C& c, int n, int nrhs) const {
-        if (std::holds_alternative<ps::Tiny>(c)) return n <= tiny_n() && nrhs <= sycl_posv::kPosvTinyMaxRhs;
+        if (std::holds_alternative<ps::Tiny>(c)) return n <= tiny_n() && nrhs <= ops::posv::kPosvTinyMaxRhs;
         if (std::holds_alternative<ps::Cta>(c))
-            return nrhs <= sycl_getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cta_elems();
+            return nrhs <= ops::getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cta_elems();
         return true;
     }
 
@@ -298,12 +298,12 @@ protected:
             q.wait();
         };
         if (std::holds_alternative<ps::Tiny>(c)) {
-            const std::size_t bytes = sycl_posv::posv_tiny_buffer_size<T>(q, A, Bm);
+            const std::size_t bytes = ops::posv::posv_tiny_buffer_size<T>(q, A, Bm);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-            (void)sycl_posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, Span<std::byte>(ws.data(), bytes), info);
+            (void)ops::posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, Span<std::byte>(ws.data(), bytes), info);
         } else if (std::holds_alternative<ps::Cta>(c)) {
             factor();
-            (void)sycl_getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
+            (void)ops::getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
         } else {
             factor();
             const Transpose adj = kCx<T> ? Transpose::ConjTrans : Transpose::Trans;
@@ -321,12 +321,12 @@ protected:
         UnifiedVector<int32_t> info(std::max<int>(A.batch_size(), 1), int32_t(0));
         try {
             if (std::holds_alternative<ps::Tiny>(c)) {
-                const std::size_t bytes = sycl_posv::posv_tiny_buffer_size<T>(q, A, Bm);
+                const std::size_t bytes = ops::posv::posv_tiny_buffer_size<T>(q, A, Bm);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-                (void)sycl_posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, Span<std::byte>(ws.data(), bytes),
+                (void)ops::posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, Span<std::byte>(ws.data(), bytes),
                                                        info.to_span());
             } else if (std::holds_alternative<ps::Cta>(c)) {
-                (void)sycl_getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
+                (void)ops::getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
             } else {
                 return true;  // Blocked has no driver of its own; its children decide
             }
@@ -341,7 +341,7 @@ protected:
     // (n, nrhs) at and one past Cta's resident-RHS capacity, n * nrhs exactly cap and cap + 1.
     // The widest nrhs dividing the product keeps n, and so the host check, small.
     std::optional<std::pair<int, int>> cta_shape(std::size_t elems, std::size_t max_n = 8192) const {
-        for (int r = int(sycl_getrs::kGetrsFusedMaxRhs); r >= 1; --r)
+        for (int r = int(ops::getrs::kGetrsFusedMaxRhs); r >= 1; --r)
             if (elems % r == 0 && elems / r <= max_n) return std::make_pair(int(elems / r), r);
         return std::nullopt;
     }

@@ -35,12 +35,12 @@ select::Key key_of(const MV<T>& A) {
 template <Backend B, typename T>
 Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, tau, ws); },
-        [&](Cta) { return sycl_geqrf::geqrf_cta_dispatch<T>(q, A, tau, ws); },
+        [&](Tiny) { return ops::geqrf::geqrf_tiny_dispatch<T>(q, A, tau, ws); },
+        [&](Cta) { return ops::geqrf::geqrf_cta_dispatch<T>(q, A, tau, ws); },
         [&](Blocked) {
             // The public gemm (table-routed): the trailing updates are TN/NN panel products the
             // native GEMM loses on some shapes, and the gemm table knows which.
-            return sycl_geqrf::geqrf_blocked_dispatch<T>(
+            return ops::geqrf::geqrf_blocked_dispatch<T>(
                 q, A, tau, ws,
                 [](Queue& c2, const MV<T>& ga, const MV<T>& gb, const MV<T>& gc, T galpha, T gbeta, Transpose gta,
                    Transpose gtb, ComputePrecision gp) {
@@ -60,9 +60,9 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_geqrf::geqrf_tiny_buffer_size<T>(q, A); },
-        [&](Cta) { return sycl_geqrf::geqrf_cta_buffer_size<T>(q, A); },
-        [&](Blocked) { return sycl_geqrf::geqrf_blocked_buffer_size<T>(q, A); },
+        [&](Tiny) { return ops::geqrf::geqrf_tiny_buffer_size<T>(q, A); },
+        [&](Cta) { return ops::geqrf::geqrf_cta_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::geqrf::geqrf_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::geqrf_vendor_buffer_size<B, T>(q, A, tau);

@@ -13,7 +13,9 @@
 // The solution vector is NOT permuted -- x_i is the i-th unknown -- so the store writes
 // rX at row `rowid`, exactly as the factor store does.
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/sycl/device_scalar.hh>
@@ -44,13 +46,11 @@ namespace batchlas {
 template <typename T, int N, int NR, int MinBlocks, bool Masked>
 class GesvTinyKernel;
 
-namespace sycl_gesv {
+namespace ops::gesv {
 
 namespace {
 
 
-constexpr int kTinyWg = tiny_native::kTinyWgSize;
-static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED: worst
 // is cdouble N=16 NR=4 at 182 registers, frame 0, spill 0; every gesv tiny kernel is clean. The
@@ -58,7 +58,7 @@ static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSi
 // evidence: docs/perf/lu.md#lu-p2-the-register-bound-is-assumed-not-probed
 constexpr int kWorstRegsPerThread = 224;   // per SUB-PARTITION: 32 x 224 = 7,168 of 16,384
 // Probe: scripts/register_probe.sh out.log '' batchlas_extensions_gesv (a cta probe has no tiny kernel).
-static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
+static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 
 // cdouble stops at 16 for the same reason getrf_tiny does: 32 rows of a 16-byte scalar
@@ -131,7 +131,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 
-    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(resident::kTinyWgSize, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         using Ar = device::arith_t<device::arith::Fma, D>;
         constexpr int kMpw = Mpw;
@@ -318,8 +318,8 @@ Event gesv_tiny_launch_b(Queue& ctx,
 
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
-        kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
-    static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
+        resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
+    static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
     constexpr bool kSlm = gesv_tiny_slm<T, N>();
     using Body = GesvTinyBody<D, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
@@ -335,8 +335,8 @@ Event gesv_tiny_launch_b(Queue& ctx,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
         batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
-                                             static_cast<std::size_t>(kTinyWg)),
-                              sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
+                                             static_cast<std::size_t>(resident::kTinyWgSize)),
+                              sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
             body);
     });
     return ctx.get_event();
@@ -414,10 +414,6 @@ Event gesv_tiny_launch(Queue& ctx,
                                             n, nrhs, batch, piv_ptr, info_ptr, mask);
 }
 
-Span<int32_t> gesv_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
 }  // namespace
 
 template <typename T>
@@ -432,9 +428,7 @@ std::size_t gesv_tiny_buffer_size(Queue& ctx,
     static_cast<void>(B);
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    return workspace_bytes([&](BumpAllocator& p) {
-        return gesv_tiny_layout(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // Every can_run gate is re-applied here, because direct callers reach this without the
@@ -447,16 +441,12 @@ Event gesv_tiny_dispatch(Queue& ctx,
                          Span<int64_t> pivots,
                          Span<std::byte> workspace,
                          Span<int32_t> info_out) {
-    const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (m < 1 || n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("gesv_tiny: degenerate extents");
-    }
-    if (m != n) {
-        throw batchlas::invalid_argument("gesv_tiny: A must be square");
     }
     if (B.rows() != A.rows()) {
         throw batchlas::invalid_argument("gesv_tiny: B must have A.rows() rows");
@@ -464,25 +454,9 @@ Event gesv_tiny_dispatch(Queue& ctx,
     if (B.batch_size() != A.batch_size()) {
         throw batchlas::invalid_argument("gesv_tiny: A and B must share a batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        // Not merely unsupported: the unrolled body's `if (j >= n) continue` skips a
-        // collective, which is legal only because n is kernel-uniform.
-        throw batchlas::invalid_argument("gesv_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("gesv_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never MAX_SUB_GROUP_SIZE >= 32: that property reports entry [0].
-        throw batchlas::unsupported(
-            "gesv_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
-    if (static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)) < kTinyWg) {
-        throw batchlas::unsupported(
-            "gesv_tiny: the tier launches a work-group of " + std::to_string(kTinyWg) +
-            ", which exceeds this device's maximum");
-    }
+    // Homogeneous is not merely a limit: the unrolled body's `if (j >= n) continue` skips a
+    // collective, which is legal only because n is kernel-uniform.
+    native::require_launchable(ctx, "gesv_tiny", A, {.square = true, .min_wg = resident::kTinyWgSize}, B);
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("gesv_tiny: pivot span is shorter than n * batch");
     }
@@ -502,9 +476,7 @@ Event gesv_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : gesv_tiny_layout(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     auto piv_i32 = pivots.as_span<int>();
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("gesv_tiny", A, B));
@@ -565,5 +537,5 @@ BATCHLAS_GESV_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GESV_TINY_INSTANTIATE
 
-}  // namespace sycl_gesv
+}  // namespace ops::gesv
 }  // namespace batchlas

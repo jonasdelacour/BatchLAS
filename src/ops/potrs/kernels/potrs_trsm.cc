@@ -18,7 +18,7 @@ namespace batchlas::ops::potrs {
 template <Backend B, class T>
 Event solve(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
             Uplo uplo, bool fused) {
-    if (fused) return sycl_getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
+    if (fused) return ops::getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
     // ConjTrans only for a complex scalar: a real backend may refuse ConjTrans, and
     // for a real matrix Trans is the same operation. For a real T, base_type<T> IS T.
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;

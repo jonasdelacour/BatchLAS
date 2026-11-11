@@ -301,7 +301,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
         }
     }
 
-    (void)batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
+    (void)batchlas::ops::trsm::trsm_native_v1_dispatch<T>(
         *ctx, A, B, tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
@@ -384,7 +384,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
             Bv.at(r, c, 0) = 1.0;
 
     EXPECT_THROW(
-        ((void)batchlas::sycl_trsm::trsm_native_v1_dispatch<Wide>(
+        ((void)batchlas::ops::trsm::trsm_native_v1_dispatch<Wide>(
             *ctx, A, B, Wide(1), Side::Right, Uplo::Lower,
             Transpose::NoTrans, Diag::NonUnit)),
         std::runtime_error)
@@ -426,7 +426,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
             }
     }
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    (void)batchlas::sycl_trsm::trsm_native_blocked<T>(
+    (void)batchlas::ops::trsm::trsm_native_blocked<T>(
         *ctx, A, B, tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
         [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
            ComputePrecision p) -> Event {
@@ -459,14 +459,14 @@ int trsm_expected_wg(const Queue& ctx, int q, int bs) {
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    return batchlas::sycl_trsm::trsm_v1_ladder_wg(max_wg, cu, q, bs);
+    return batchlas::ops::trsm::trsm_v1_ladder_wg(max_wg, cu, q, bs);
 }
 }  // namespace
 
 // The launcher calls this function, so these literals pin the ladder itself.
 // evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
 TEST(TrsmNativeCta, LadderRungsAreCappedByRhsCount) {
-    using batchlas::sycl_trsm::trsm_v1_ladder_wg;
+    using batchlas::ops::trsm::trsm_v1_ladder_wg;
     // Saturated batch on 188 CUs: the cap alone decides the rung.
     EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 8, 4096), 32);
     EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 32, 4096), 32);
@@ -775,7 +775,7 @@ std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
     const std::vector<T> a_host(abuf.begin(), abuf.begin() + abuf.size());
     MatrixView<T, MatrixFormat::Dense> Av(abuf.data(), n, n, lda, sa, bs);
     MatrixView<T, MatrixFormat::Dense> Bv(bbuf.data(), n, q, ldb, sb, bs);
-    (void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<T>(
+    (void)batchlas::ops::trsm::trsm_native_sg_left_dispatch<T>(
         *ctx, Av, Bv, tc.alpha, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
@@ -848,7 +848,7 @@ TEST(TrsmNativeSgLeft, OrderAboveSubGroupWidthThrows) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     Matrix<float, MatrixFormat::Dense> A(33, 33, 2);
     Matrix<float, MatrixFormat::Dense> B(33, 4, 2);
-    EXPECT_THROW((void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
+    EXPECT_THROW((void)batchlas::ops::trsm::trsm_native_sg_left_dispatch<float>(
                      *ctx, A, B, 1.0f, Uplo::Lower, Transpose::NoTrans,
                      Diag::NonUnit),
                  std::exception);
@@ -905,7 +905,7 @@ TEST(TrsmNativeSgLeft, NonFiniteReciprocalFallsBackToDivision) {
             for (int r = 0; r < n; ++r)
                 Bv.at(r, c, b) = (b == 1 && r == 5) ? tiny : 2.0f * (1 + c);
     }
-    (void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
+    (void)batchlas::ops::trsm::trsm_native_sg_left_dispatch<float>(
         *ctx, A, B, 1.0f, Uplo::Lower, Transpose::NoTrans,
         Diag::NonUnit);
     ctx->wait();

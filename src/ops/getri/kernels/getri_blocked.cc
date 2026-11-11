@@ -6,6 +6,7 @@
 // evidence: docs/perf/lu.md#getri-window-evidence
 
 #include <src/ops/getri/getri_native.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
@@ -26,7 +27,7 @@
 #include <string>
 
 namespace batchlas {
-namespace sycl_getri {
+namespace ops::getri {
 
 namespace {
 
@@ -118,10 +119,6 @@ Event getri_perm_launch(Queue& ctx,
 
 }  // namespace
 
-template <> bool getri_blocked_available<float>()                { return true; }
-template <> bool getri_blocked_available<double>()               { return true; }
-template <> bool getri_blocked_available<std::complex<float>>()  { return true; }
-template <> bool getri_blocked_available<std::complex<double>>() { return true; }
 
 // No workspace. Called from a layout function under mempool's measuring(), so it
 // must not dereference A.data_ptr().
@@ -146,23 +143,8 @@ Event getri_blocked_dispatch(Queue& ctx,
     // can_run(Blocked) in src/ops/getri/getri.cc is re-applied, bar its pivot-format
     // (Backend) clause, which this Backend-free driver cannot see: it is reachable
     // without choose(), and R3 requires the two to agree.
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("getri_blocked: degenerate extents");
-    }
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("getri_blocked: A must be square");
-    }
-    if (A.is_heterogeneous() || C.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getri_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getri_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // This file's kernels need no sub-group size; the routed trsm does.
-        throw batchlas::unsupported("getri_blocked: device does not offer sub-group size 32");
-    }
+    // Sub-group 32: this file's kernels need none; the routed trsm does.
+    const auto dev = native::require_launchable(ctx, "getri_blocked", A, {.square = true}, C);
 
     // Not in can_run: getri's choice is a function of A alone, so C is checked here.
     if (C.rows() != n || C.cols() != n) {
@@ -237,5 +219,5 @@ BATCHLAS_GETRI_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRI_INSTANTIATE
 
-}  // namespace sycl_getri
+}  // namespace ops::getri
 }  // namespace batchlas

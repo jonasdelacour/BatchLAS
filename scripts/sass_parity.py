@@ -98,7 +98,10 @@ def opcode(text):
 
 
 def parse_sass(text, digests=None):
-    """{function: opcode Counter}; digests, if given, gets {function: sha256 of its SASS text}."""
+    """{function: opcode Counter}; digests, if given, gets {function: sha256 of its SASS text}.
+
+    The digest folds whitespace runs: cuobjdump pads the encoding column to the widest line of the
+    whole dump, so one kernel's identical code prints with different spacing in two libraries."""
     funcs, cur, hashes = {}, None, {}
     for line in text.splitlines():
         if "Function :" in line:
@@ -106,7 +109,7 @@ def parse_sass(text, digests=None):
             funcs[cur], hashes[cur] = collections.Counter(), hashlib.sha256()
             continue
         if cur and (INSN.search(line) or ENCODING.match(line)):
-            hashes[cur].update(line.strip().encode() + b"\n")
+            hashes[cur].update(" ".join(line.split()).encode() + b"\n")
         m = INSN.search(line) if cur else None
         if not m:
             continue
@@ -192,15 +195,32 @@ def find_cuobjdump(explicit, build_dir):
 
 
 def resolve_lib(build_dir, lib):
-    if os.path.isfile(lib):
+    """build_dir's own copy of `lib` (target, file name or path), else None.
+
+    A path outside build_dir names the library only, so `--base A --cand B --lib B/src/libX.so`
+    reads A/src/libX.so for the base, never B's file for both sides."""
+    root = os.path.realpath(build_dir)
+    if os.path.isfile(lib) and os.path.realpath(lib).startswith(root + os.sep):
         return lib
-    name = os.path.basename(lib)
-    stem = name if name.startswith("lib") else "lib" + name
-    for cand in (os.path.join(build_dir, "src", stem + ".so"), os.path.join(build_dir, "src", stem + ".dylib"),
-                 os.path.join(build_dir, lib)):
+    stem = re.sub(r"\.(so|dylib)$", "", os.path.basename(lib))
+    stem = stem if stem.startswith("lib") else "lib" + stem
+    cands = [os.path.join(build_dir, "src", stem + ".so"), os.path.join(build_dir, "src", stem + ".dylib")]
+    if not os.path.isabs(lib):
+        cands.append(os.path.join(build_dir, lib))
+    for cand in cands:
         if os.path.isfile(cand):
             return cand
     return None
+
+
+def same_lib_refusal(base_dir, cand_dir, libs):
+    """An error text when two different builds resolved to one library file, else None."""
+    if "base" not in libs or os.path.realpath(base_dir) == os.path.realpath(cand_dir):
+        return None
+    if os.path.realpath(libs["base"]) != os.path.realpath(libs["cand"]):
+        return None
+    return (f"sass_parity: base and cand both resolve to {libs['base']}: refusing to compare a build with itself"
+            " (pass --lib by target name)")
 
 
 def cuobjdump(tool, flag, blob):
@@ -649,13 +669,14 @@ def self_test():
             "                                    /* 0x000fe40000000f00 */\n"
             "        /*0010*/  NOP ;  /* 0x0000000000007918 */\n                    /* 0x000fc00000000000 */\n")
     variants = {"same": sass, "encoding": sass.replace("0x000fe40000000f00", "0x000fe40000000f01"),
-                "nop": sass.replace("NOP", "BRA"), "indent": sass.replace("        /*0010*/", "  /*0010*/")}
+                "nop": sass.replace("NOP", "BRA"), "indent": sass.replace("        /*0010*/", "  /*0010*/"),
+                "column": sass.replace("c[0x0][0x28] ;  /*", "c[0x0][0x28] ;        /*")}
     dig = {}
     for k, text in variants.items():
         d = {}
         parse_sass(text, d)
         dig[k] = d["_Z1Kv"]
-    want_dig = {"encoding": False, "nop": False, "indent": True}
+    want_dig = {"encoding": False, "nop": False, "indent": True, "column": True}
     got_dig = {k: dig[k] == dig["same"] for k in want_dig}
     bad += got_dig != want_dig
     print(f"  {'ok ' if got_dig == want_dig else 'BAD'} SASS digest equal to base: {got_dig} (want {want_dig})")
@@ -664,6 +685,24 @@ def self_test():
            identical_report(rs[:1], {"base": ["C"], "cand": []}, False), identical_report([], {}, True)]
     bad += idc != [0, 1, 1, 1]
     print(f"  {'ok ' if idc == [0, 1, 1, 1] else 'BAD'} --identical exit codes: {idc} (want [0, 1, 1, 1])")
+    with tempfile.TemporaryDirectory() as tmp:
+        lib = {}
+        for side in ("A", "B"):
+            os.makedirs(os.path.join(tmp, side, "src"))
+            lib[side] = os.path.join(tmp, side, "src", "libbatchlas_x.so")
+            open(lib[side], "w").close()
+        os.makedirs(os.path.join(tmp, "C"))
+        a_dir, b_dir, c_dir = (os.path.join(tmp, s) for s in "ABC")
+        got_rl = [resolve_lib(a_dir, lib["B"]), resolve_lib(b_dir, lib["B"]), resolve_lib(a_dir, "batchlas_x"),
+                  resolve_lib(c_dir, lib["B"])]
+        want_rl = [lib["A"], lib["B"], lib["A"], None]
+        got_rf = [same_lib_refusal(a_dir, b_dir, {"base": lib["B"], "cand": lib["B"]}) is not None,
+                  same_lib_refusal(a_dir, a_dir, {"base": lib["A"], "cand": lib["A"]}) is not None,
+                  same_lib_refusal(a_dir, b_dir, {"base": lib["A"], "cand": lib["B"]}) is not None]
+    ok = got_rl == want_rl and got_rf == [True, False, False]
+    bad += not ok
+    print(f"  {'ok ' if ok else 'BAD'} --lib path resolves per build: {got_rl == want_rl}, "
+          f"refusal {got_rf} (want [True, False, False])")
     codes = [exit_code(v) for v in (["pass"], ["pass", "A/B"], ["A/B", "FAIL"])]
     bad += codes != [0, 2, 1]
     print(f"  {'ok ' if codes == [0, 2, 1] else 'BAD'} exit codes: {codes} (want [0, 2, 1])")
@@ -716,6 +755,10 @@ def main():
         if not libs[side]:
             print(f"sass_parity: {a.lib} not found in {getattr(a, side)} (build it, or pass --build)")
             return 1
+    refusal = same_lib_refusal(a.base, a.cand, libs) if a.base else None
+    if refusal:
+        print(refusal)
+        return 1
     if not tool:
         print("sass_parity: cuobjdump not found (set CUDA_PATH or pass --cuobjdump): skip")
         return 77

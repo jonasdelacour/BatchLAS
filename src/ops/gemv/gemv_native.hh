@@ -12,7 +12,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
-namespace batchlas::sycl_gemv {
+namespace batchlas::ops::gemv {
 
 // The work-group ladder of gemv and native spmm over a FLATTENED 1-D grid (out_len * batch).
 // units_per_wg_shift: 0 = one work-ITEM per unit, 5 = one 32-lane SUB-GROUP.
@@ -31,13 +31,6 @@ inline int gemv_wg_ladder(int64_t work_units, int max_wg, int cu,
     if (max_wg > 0 && wg > max_wg) wg = max_wg;
     return wg;
 }
-
-// Compiled into this build? Not a device query -- gates can_run for native.
-template <typename T>
-BATCHLAS_INTERNAL_API bool gemv_direct_available();
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool gemv_cta_available();
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event gemv_native_direct(Queue& ctx,
@@ -62,4 +55,4 @@ BATCHLAS_INTERNAL_API Event gemv_native_cta(Queue& ctx,
 template <typename T>
 BATCHLAS_INTERNAL_API int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch);
 
-}  // namespace batchlas::sycl_gemv
+}  // namespace batchlas::ops::gemv

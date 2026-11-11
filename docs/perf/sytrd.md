@@ -143,9 +143,8 @@ maps 256 threads in 2D, while the Givens path runs one 32-lane sub-group per mat
 with a serial spine for \f$k_d > 32\f$ (`sytrd_sb2st.cc`). Float, \f$n = 1024\f$, \f$k_d = 32\f$ (undated): Givens **366 ms**,
 Householder **67.5 ms**, flat to batch 128.
 
-Both modes use the Householder chase (`syev_two_stage`, `syevx_direct_subset`).
-`BATCHLAS_SYEV_TWO_STAGE_CHASE=givens` restores the old values-only path for an intra-run A/B; it has no
-effect with eigenvectors.
+Both modes use the Householder chase (`syev_two_stage`, `syevx_direct_subset`); the values-only Givens
+path and its `BATCHLAS_SYEV_TWO_STAGE_CHASE` A/B knob are deleted.
 
 ## sytrd: the Householder chase work-group shape
 

@@ -571,7 +571,7 @@ function(batchlas_add_test_target test_name)
     # BATCHLAS_VERIFY_HAVE_LAPACKE is 0 and the test compiles and skips.
     # getrf_tests compares the tiny tier's ipiv ELEMENTWISE against LAPACKE on
     # UNSTRUCTURED data. Every other pivot oracle in that file is BatchLAS code: the
-    # combinatorial expect_piv, or the CTA tier -- which shares getrf_cta_device.hh's
+    # combinatorial expect_piv, or the CTA tier -- which shares lapack/getrf.hh's
     # lu_cabs1 with the tier under test, so a defect in the pivot METRIC moves both
     # and leaves the tiny-vs-cta comparisons green.
     # util_device_queue_tests checks Device::cuda_compute_capability() against the

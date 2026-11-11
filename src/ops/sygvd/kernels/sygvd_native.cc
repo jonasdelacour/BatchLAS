@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_sygvd {
+namespace batchlas::ops::sygvd {
 
 namespace {
 
@@ -76,4 +76,4 @@ BATCHLAS_SYGVD_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SYGVD_INSTANTIATE
 
-}  // namespace batchlas::sycl_sygvd
+}  // namespace batchlas::ops::sygvd

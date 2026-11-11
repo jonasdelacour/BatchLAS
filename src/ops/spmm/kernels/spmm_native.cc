@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::sycl_spmm {
+namespace batchlas::ops::spmm {
 
 using sycl_device::Cx;
 using sycl_device::DevMap;
@@ -29,10 +29,9 @@ using sycl_device::dev_is_complex_v;
 
 namespace {
 
-
 // The work-group ladder is gemv's (src/ops/gemv/gemv_native.hh); every caller here passes
 // units_per_wg_shift 0 (one work-item per unit).
-using sycl_gemv::gemv_wg_ladder;
+using ops::gemv::gemv_wg_ladder;
 
 // 64 bytes of accumulator for every scalar type, so the register block shrinks as
 // the scalar widens. evidence: docs/perf/spmm.md#the-gather-window
@@ -364,19 +363,6 @@ Event spmm_native_csr(Queue& ctx,
                            transA == Transpose::ConjTrans, transB, mask);
 }
 
-// Specialised in the same TU as the kernels, so a build that drops this file
-// cannot advertise an unlinked kernel. A statement about the BUILD, not the
-// device: there is deliberately no is_gpu gate.
-template <> bool spmm_gather_available<float>()                { return true; }
-template <> bool spmm_gather_available<double>()               { return true; }
-template <> bool spmm_gather_available<std::complex<float>>()  { return true; }
-template <> bool spmm_gather_available<std::complex<double>>() { return true; }
-
-template <> bool spmm_scatter_available<float>()                { return true; }
-template <> bool spmm_scatter_available<double>()               { return true; }
-template <> bool spmm_scatter_available<std::complex<float>>()  { return true; }
-template <> bool spmm_scatter_available<std::complex<double>>() { return true; }
-
 #define BATCHLAS_SPMM_NATIVE_INSTANTIATE(fp)                                   \
     template Event spmm_native_csr<fp>(                                        \
         Queue&, const MatrixView<fp, MatrixFormat::CSR>&,                      \
@@ -391,4 +377,4 @@ BATCHLAS_SPMM_NATIVE_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SPMM_NATIVE_INSTANTIATE
 
-}  // namespace batchlas::sycl_spmm
+}  // namespace batchlas::ops::spmm

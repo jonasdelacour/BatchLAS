@@ -323,7 +323,7 @@ protected:
         try {
             if (std::holds_alternative<sy::Mirror>(c)) {
                 const int chunk = int(std::min<std::int64_t>(select::device_of<B>(q).max_groups_yz, 1 << 30));
-                (void)sycl_symm::symm_mirror<T, false>(q, A, Bm, Cm, alpha, beta, side, uplo, chunk);
+                (void)ops::symm::symm_mirror<T, false>(q, A, Bm, Cm, alpha, beta, side, uplo, chunk);
             } else if (std::holds_alternative<sy::Expand>(c)) {
                 const int k = A.rows(), batch = A.batch_size(), ld = backend::detail::expanded_ld<T>(k);
                 UnifiedVector<T> scratch(std::size_t(ld) * k * std::max(batch, 1), T(0));

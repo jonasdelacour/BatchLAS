@@ -9,7 +9,7 @@
 
 #include <sycl/sycl.hpp>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::LinearEpilogue;
 using batchlas::device::l3::OperandAccessor;
@@ -92,4 +92,4 @@ Event launch_tiled_general(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

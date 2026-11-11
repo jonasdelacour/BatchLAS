@@ -13,7 +13,7 @@
 #include <string>
 #include <type_traits>
 
-namespace batchlas::sycl_gesvd {
+namespace batchlas::ops::gesvd {
 
 // gesvdj_cta's smallest work-group at tile capacity C: 32 / P problems (P = min(C, 32)) plus
 // the pivot-pair table, as gesvdj_cta.cc allocates. evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
@@ -62,4 +62,4 @@ bool gesvd_blocked_honours_mask(std::int64_t, std::int64_t, bool, bool) {
     return select::native_gpu_backend<B>;
 }
 
-}  // namespace batchlas::sycl_gesvd
+}  // namespace batchlas::ops::gesvd

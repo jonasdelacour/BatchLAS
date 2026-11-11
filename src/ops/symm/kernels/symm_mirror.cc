@@ -24,14 +24,14 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::sycl_symm {
+namespace batchlas::ops::symm {
 
 namespace {
 
-using sycl_gemm::GemmWide64Body;
+using ops::gemm::GemmWide64Body;
 using batchlas::device::l3::Vec4;
-namespace wide_scalar = sycl_gemm::wide_scalar;
-namespace wide_v2 = sycl_gemm::wide_v2;
+namespace wide_scalar = ops::gemm::wide_scalar;
+namespace wide_v2 = ops::gemm::wide_v2;
 
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -394,7 +394,7 @@ Event symm_mirror(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
         } else {
             // The operand's own (i, kk) triangle: transposed on the Right (the gemm's B is A(kk, i)).
             const bool lower_ik = lower != right;
-            const bool vec = right ? sycl_gemm::wide64_v2_vec_loads<T>(b, a) : sycl_gemm::wide64_v2_vec_loads<T>(a, b);
+            const bool vec = right ? ops::gemm::wide64_v2_vec_loads<T>(b, a) : ops::gemm::wide64_v2_vec_loads<T>(a, b);
             BATCHLAS_KERNEL_TRACE_SCOPE(Herm ? (vec ? "hemm.mirror.vec" : "hemm.mirror.elem")
                                              : (vec ? "symm.mirror.vec" : "symm.mirror.elem"));
             if (right)
@@ -425,4 +425,4 @@ SYMM_MIRROR_INSTANTIATE(std::complex<float>, true)
 SYMM_MIRROR_INSTANTIATE(std::complex<double>, true)
 #undef SYMM_MIRROR_INSTANTIATE
 
-}  // namespace batchlas::sycl_symm
+}  // namespace batchlas::ops::symm

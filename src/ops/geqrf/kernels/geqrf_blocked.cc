@@ -5,6 +5,7 @@
 // the wrong one only breaks complex. Design and evidence: docs/perf/qr.md
 
 #include <src/ops/geqrf/geqrf_native.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/geqrf/geqrf_panel_reg_device.hh>
 #include <src/kernels/common/larft_wy.hh>
 
@@ -31,7 +32,7 @@ namespace batchlas {
 // Kernel-name tag for this TU's copies of the WY kernels; ormqr_blocked.cc has its own.
 struct GeqrfWyTag;
 
-namespace sycl_geqrf {
+namespace ops::geqrf {
 
 namespace {
 
@@ -132,16 +133,6 @@ inline int blocked_part(int chunk, int batch) {
 
 }  // namespace
 
-// Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
-// shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
-// reporting false here sends every such shape back to the vendor.
-// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#qr-route-arms
-template <> bool geqrf_blocked_available<float>()                { return true; }
-template <> bool geqrf_blocked_available<double>()               { return true; }
-template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool geqrf_blocked_available<std::complex<double>>() { return true; }
-
 template <typename T>
 std::size_t geqrf_blocked_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -197,23 +188,9 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
     // Re-applies every gate can_run applies: this entry point is reachable without the
     // selector, so a gate missing here would launch a shape the kernel cannot run.
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
-    }
     // m < n is ?GEQRF's own loop: k = m panels, each trailing update spanning all n columns,
     // so the reflectors' Q^H reaches A(:, m:n) with no separate ormqr pass.
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("geqrf_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported(
-            "geqrf_blocked: device does not offer sub-group size 32, which the panel leaf "
-            "requires");
-    }
+    const auto dev = native::require_launchable(ctx, "geqrf_blocked", A, {});  // sg 32: the panel leaf
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
     }
@@ -354,5 +331,5 @@ BATCHLAS_GEQRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GEQRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_geqrf
+}  // namespace ops::geqrf
 }  // namespace batchlas

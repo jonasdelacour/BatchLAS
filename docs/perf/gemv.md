@@ -17,8 +17,8 @@ row of `tuned/gemv.<device>.txt` that `can_run` admits; last resort `vendor`, th
 
 | spelling | driver | bodies | `can_run` |
 |---|---|---|---|
-| `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | native term, `gemv_cta_available<T>()`, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
-| `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no GPU term (builds for `native_cpu`) |
+| `cta` | `ops::gemv::gemv_native_cta` | 3, 5 | native term, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
+| `direct` | `ops::gemv::gemv_native_direct` | 1, 2, 4 | native term; no GPU term (builds for `native_cpu`) |
 | `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()` |
 
 The native term refuses a heterogeneous \f$A\f$, negative extents and `batch < 1`, and requires

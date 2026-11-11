@@ -18,7 +18,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/blas/enums.hh>
 
-namespace batchlas::sycl_potri {
+namespace batchlas::ops::potri {
 
 
 // (e % m, e / m) for e = start, start + step, ... with no division per step. (Not in a nested
@@ -162,4 +162,4 @@ BATCHLAS_DEVICE_INLINE void ger(const device::Thread&, const device::Frag<T, R, 
 
 } // namespace reg
 
-} // namespace batchlas::sycl_potri
+} // namespace batchlas::ops::potri

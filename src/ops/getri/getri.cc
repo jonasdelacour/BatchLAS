@@ -50,7 +50,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         [&](Blocked) {
-            return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
+            return d.is_gpu && d.has_sg32 && B != Backend::NETLIB &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
         [&](Vendor) {
@@ -64,7 +64,7 @@ Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Spa
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
         [&](Blocked) {
-            return sycl_getri::getri_blocked_dispatch<T>(
+            return ops::getri::getri_blocked_dispatch<T>(
                 q, A, C, pivots, ws, info,
                 [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
                    Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
@@ -81,7 +81,7 @@ Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Spa
 template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
-        [&](Blocked) { return sycl_getri::getri_blocked_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::getri::getri_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::getri_vendor_buffer_size<B, T>(q, A);

@@ -1055,7 +1055,7 @@ std::vector<uint8_t> host_path_mask(Queue& ctx, Span<const uint8_t> mask) {
 
 }  // namespace
 
-namespace sycl_iluk {
+namespace ops::iluk {
 template <typename T>
 IlukPlanStorage iluk_plan(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params) {
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
@@ -1077,7 +1077,7 @@ IlukPlanStorage iluk_plan(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKP
     out.u_levels = u.levels;
     return out;
 }
-}  // namespace sycl_iluk
+}  // namespace ops::iluk
 
 template <typename T>
 void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
@@ -1393,7 +1393,7 @@ size_t iluk_apply_buffer_size(Queue&, const ILUKView<T>&, const MatrixView<T, Ma
 
 #define ILUK_INSTANTIATE_COMMON(FP) \
     template void iluk_build_level_schedule<FP>(ILUKPreconditioner<FP>&); \
-    template sycl_iluk::IlukPlanStorage sycl_iluk::iluk_plan<FP>(const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&);
+    template ops::iluk::IlukPlanStorage ops::iluk::iluk_plan<FP>(const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&);
 
 ILUK_INSTANTIATE_COMMON(float)
 ILUK_INSTANTIATE_COMMON(double)

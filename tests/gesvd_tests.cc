@@ -120,12 +120,12 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    // sycl_gesvd::gesvd_jacobi_max_dim at this device's budget: at the 99 KiB opt-in only
+    // ops::gesvd::gesvd_jacobi_max_dim at this device's budget: at the 99 KiB opt-in only
     // complex<double> with vectors misses the C=64 rung (gesvdj_cta_tests pins both budgets).
     int max_dim_with_vectors() const {
         const std::size_t budget =
             resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-        const int cap = static_cast<int>(sycl_gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
+        const int cap = static_cast<int>(ops::gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
         if (!test_utils::kSlmCappedAt48KiB) {
             EXPECT_EQ(cap, (std::is_same_v<Scalar, std::complex<double>> ? 32 : 64)) << "budget " << budget;
         }

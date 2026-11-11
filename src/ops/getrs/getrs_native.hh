@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Native batched GETRS declarations: the composed tier (row permutation + two routed
-// trsm) and the fused narrow-RHS tier; selected in src/ops/getrs/getrs.cc. evidence: docs/perf/lu.md
+// Native batched GETRS: the composed tier (permutation + two routed trsm) and the fused narrow-RHS tier.
 
 #include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
@@ -14,10 +13,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_getrs {
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool getrs_blocked_available();
+namespace batchlas::ops::getrs {
 
 // Size via BumpAllocator::measuring(), never a hand sum; zero is a legitimate size.
 template <typename T>
@@ -57,9 +53,6 @@ BATCHLAS_INTERNAL_API int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs)
 // A capability, not a speed window: above this width the kernel is not instantiated.
 inline constexpr int64_t kGetrsFusedMaxRhs = 8;
 
-template <typename T>
-BATCHLAS_INTERNAL_API bool getrs_fused_available();
-
 // Pass a DEVICE-queried slm_budget_bytes; device_limits.hh's constant admits a route that cannot launch.
 template <typename T>
 BATCHLAS_INTERNAL_API std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes);
@@ -85,4 +78,4 @@ BATCHLAS_INTERNAL_API Event potrs_fused_dispatch(Queue& ctx,
                                                  const MatrixView<T, MatrixFormat::Dense>& B,
                                                  Uplo uplo);
 
-}  // namespace batchlas::sycl_getrs
+}  // namespace batchlas::ops::getrs

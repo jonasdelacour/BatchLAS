@@ -10,6 +10,8 @@
 // oracle; ipiv is 1-based and GLOBAL, int32 in the public int64 span.
 
 #include <src/ops/getrf/getrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <batchlas/device/lapack/getrf.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/kernels/common/tiny_device.hh>
@@ -31,7 +33,7 @@
 #include <type_traits>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 // At TU namespace scope: a kernel name must not name an internal-linkage entity.
 template <typename T, int N, int NC, int MinBlocks> class GetrfTinyKernel;
@@ -41,13 +43,11 @@ namespace {
 
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
-constexpr int kTinyWg = tiny_native::kTinyWgSize;
-static_assert(kTinyWg == kGetrfTinyWgSize, "getrf.cc's can_run reads kGetrfTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time; per SUB-PARTITION,
 // not per block. evidence: docs/perf/lu.md#the-register-probe-at-wg--64
 constexpr int kWorstRegsPerThread = 143;   // 64 lanes = 2 warps: 32 x 144 = 4,608 of 16,384
-static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
+static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
               "re-run scripts/register_probe.sh out.log '' batchlas_extensions_cta "
               "before raising the tiny tier's work-group size");
 
@@ -159,7 +159,7 @@ struct GetrfTinyBody {
     const std::uint8_t* mask;          // the batch mask, null when unmasked
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
-    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(resident::kTinyWgSize, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
@@ -210,11 +210,11 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "the tiny ladder is {4, 8, 16, 32}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
 
-    // Via the shared helper, not kTinyWg / N: the guarantees stay where they are owned.
+    // Via the shared helper, not resident::kTinyWgSize / N: the guarantees stay where they are owned.
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
-        kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
-    static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
+        resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
+    static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
     constexpr bool kSlm = getrf_tiny_slm<T>() && N >= 16;
     using Body = GetrfTinyBody<D, N, NC, kMpw, MinBlocks, kSlm>;
     const int num_wg = (batch + kMpw - 1) / kMpw;
@@ -226,8 +226,8 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                         sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
         batchlas::impl::parallel_for<GetrfTinyKernel<T, N, NC, MinBlocks>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
-                                             static_cast<std::size_t>(kTinyWg)),
-                              sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
+                                             static_cast<std::size_t>(resident::kTinyWgSize)),
+                              sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
             body);
     });
     return ctx.get_event();
@@ -287,10 +287,6 @@ Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int 
 }
 
 // An empty OR SHORT `info` span means "not requested". A may carry a null data_ptr().
-Span<int32_t> getrf_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
 }  // namespace
 
 // The ONE place the ceiling is spelled: a fork lets can_run promise what the launcher refuses.
@@ -303,9 +299,7 @@ template <typename T>
 std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    return workspace_bytes([&](BumpAllocator& p) {
-        return getrf_tiny_layout(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // Every can_run gate is re-applied here: the driver is also reached directly
@@ -316,36 +310,12 @@ Event getrf_tiny_dispatch(Queue& ctx,
                           Span<int64_t> pivots,
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
-    const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("getrf_tiny: degenerate extents");
-    }
-    if (m != n) {
-        throw batchlas::invalid_argument(
-            "getrf_tiny: A must be square (getrf.cc's can_run refuses m != n)");
-    }
-    if (A.is_heterogeneous()) {
-        // Not merely unsupported: the unrolled body's `if (j >= n) continue` skips a
-        // collective, which is legal only because n is kernel-uniform.
-        throw batchlas::invalid_argument("getrf_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrf_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never MAX_SUB_GROUP_SIZE >= 32: that property reports entry [0].
-        throw batchlas::unsupported(
-            "getrf_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
-    if (static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)) < kTinyWg) {
-        throw batchlas::unsupported(
-            "getrf_tiny: the tier launches a work-group of " + std::to_string(kTinyWg) +
-            ", which exceeds this device's maximum");
-    }
+    // Homogeneous is not merely a limit: the unrolled body's `if (j >= n) continue` skips a
+    // collective, which is legal only because n is kernel-uniform.
+    native::require_launchable(ctx, "getrf_tiny", A, {.square = true, .min_wg = resident::kTinyWgSize});
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("getrf_tiny: pivot span is shorter than n * batch");
     }
@@ -359,9 +329,7 @@ Event getrf_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : getrf_tiny_layout(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     // No zero pre-fill, so this body cannot serve as a blocked-driver panel leaf.
 
@@ -408,5 +376,5 @@ BATCHLAS_GETRF_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_TINY_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

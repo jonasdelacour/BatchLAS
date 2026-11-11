@@ -7,7 +7,7 @@
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
 #include <src/ops/getrf/getrf_native.hh>
-#include <src/ops/getrf/getrf_cta_device.hh>
+#include <batchlas/device/lapack/getrf.hh>
 #include <src/ops/getrf/kernels/getrf_panel_reg_device.hh>
 
 #include <src/queue.hh>
@@ -24,7 +24,7 @@
 #include <type_traits>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 // At TU namespace scope: a kernel name must not name an internal-linkage entity.
 template <typename T, int NB> class GetrfPanelRegKernel;
@@ -136,9 +136,9 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
         // Under a kilobyte for every instantiation: the 48 KB hole cannot be reached.
         sycl::local_accessor<D, 1> sx(sycl::range<1>(static_cast<std::size_t>(NB)), h);
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(getrf_native::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
 
         batchlas::impl::parallel_for<GetrfPanelRegKernel<T, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
@@ -181,8 +181,8 @@ bool getrf_panel_reg_fits(int m, int n, int max_wg) {
     if (nb < 1 || n > nb) return false;
     if (m > getrf_panel_reg_max_m<T>()) return false;
     const int wg = panel_reg_wg(m);
-    // kLuRedSlots argmax slots is the cross-sub-group scan's whole capacity.
-    if (wg > kPanelRegWgQuantum * getrf_native::kLuRedSlots) return false;
+    // device::detail::kRedSlots argmax slots is the cross-sub-group scan's whole capacity.
+    if (wg > kPanelRegWgQuantum * device::detail::kRedSlots) return false;
     return wg <= max_wg;
 }
 
@@ -257,5 +257,5 @@ BATCHLAS_GETRF_PANEL_REG_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_PANEL_REG_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

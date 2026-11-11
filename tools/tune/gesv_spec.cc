@@ -112,15 +112,15 @@ public:
             // family: tiny
             "src/ops/gesv/kernels/gesv_tiny.cc",
             // common
-            "src/kernels/common/solve_native.hh",
+            "src/ops/gesv/gesv_native.hh",
             "src/ops/gesv/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/gesv/gesv.cc"
-        // family: tiny "src/ops/getrf/getrf_native.hh" "src/ops/getrf/getrf_cta_device.hh" "src/kernels/common/tiny_device.hh"
+        // family: tiny "src/ops/getrf/getrf_native.hh" "include/batchlas/device/lapack/getrf.hh" "src/kernels/common/tiny_device.hh"
         // blocked calls the public getrf and getrs (and through them trsm and gemm): their kernels and can_run count too.
-        // family: blocked "src/ops/getrf/kernels/getrf_tiny.cc" "src/ops/getrf/kernels/getrf_blocked.cc" "src/ops/getrf/kernels/getrf_panel_reg.cc" "src/ops/getrf/kernels/getrf_panel_reg_device.hh" "src/ops/getrf/kernels/getrf_cta.cc" "src/ops/getrf/getrf_cta_device.hh" "src/ops/getrf/getrf_native.hh" "src/kernels/common/tiny_device.hh" "src/ops/getrf/choice.hh" "src/ops/getrf/getrf.cc"
+        // family: blocked "src/ops/getrf/kernels/getrf_tiny.cc" "src/ops/getrf/kernels/getrf_blocked.cc" "src/ops/getrf/kernels/getrf_panel_reg.cc" "src/ops/getrf/kernels/getrf_panel_reg_device.hh" "src/ops/getrf/kernels/getrf_cta.cc" "include/batchlas/device/lapack/getrf.hh" "src/ops/getrf/getrf_native.hh" "src/kernels/common/tiny_device.hh" "src/ops/getrf/choice.hh" "src/ops/getrf/getrf.cc"
         // family: blocked "src/ops/getrs/kernels/getrs_fused.cc" "src/ops/getrs/kernels/getrs_native.cc" "src/ops/getrs/getrs_native.hh" "src/kernels/common/lu_laswp.hh" "src/ops/getrs/choice.hh" "src/ops/getrs/getrs.cc"
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh"

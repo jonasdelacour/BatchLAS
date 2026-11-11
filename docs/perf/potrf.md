@@ -30,7 +30,7 @@ Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel
 * `tiny`: `n <= potrf_tiny_max_n<T>()` (32; 16 for cdouble) and `max_wg >= 64`.
 * `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)`.
 * `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)`.
-* `blocked`: `potrf_blocked_available<T>()` and `cta_max_n >= 1`; either triangle, no lower bound on `n`.
+* `blocked`: `cta_max_n >= 1`; either triangle, no lower bound on `n`.
 * `vendor`: `d.has_vendor` and a homogeneous batch.
 
 Upper on `tiny` and `cta` is a load/store transform (\f$S_{ic} = \overline{A_{ci}}\f$).
@@ -316,7 +316,7 @@ driver's leaf can hold. Conflating them is the defect the pin catches.
 in a compile-time `D rA[N]`; every cross-lane value is an indexed sub-group shuffle. Zero local memory, zero barriers,
 zero static shared: the 48 KB hole is unreachable.
 
-* **Geometry:** work-group 64 (`kTinySubGroups = 2`, a tuning constant), `G = 32/N` matrices per sub-group.
+* **Geometry:** work-group 64 (`resident::kTinyWgSize`, a tuning constant), `G = 32/N` matrices per sub-group.
 * `potrf_tiny_max_n<T>()` is a flat 32 (16 for cdouble). `potrf_tiny_buffer_size` is nonzero: an empty `info` span
   draws `batch` int32s of pool scratch.
 

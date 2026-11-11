@@ -16,9 +16,9 @@ correctness only. A masked batch is refused by every family. Every native family
 
 | spelling | implementation | `can_run` beyond the common term |
 |---|---|---|
-| `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) |
-| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) |
-| `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1`; no order term |
+| `cta` | `ops::trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) |
+| `sg_left` | `ops::trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) |
+| `blocked` | `ops::trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_cta_max_n<T>() >= 1`; no order term |
 | `vendor` | `backend::trsm_vendor` | `d.has_vendor`, homogeneous A and B |
 
 The key is `side:exact trans:exact order:log:2 q:log batch:log`. `q` is `B.cols()` for `Side::Left`
@@ -150,7 +150,7 @@ only. Worst clean cell (relative sd \f$\le 10\%\f$) per order:
 | complex\<float\> Right | 1.01 | 1.03 | 1.35 | 1.90 | 8.49 | 15.31 | 19.64 |
 
 223 of 224 clean pairs win; the loser (float/Right, order 512, \f$q=256\f$, batch=128, 0.978-0.983x) is the
-smallest-work cell at that order and got no clause. Before step 16 V2 called `sycl_gemm::gemm_custom`,
+smallest-work cell at that order and got no clause. Before step 16 V2 called `ops::gemm::gemm_custom`,
 bypassing gemm's routing, and float/Left lost 8 cells at orders 256-512 (worst 0.760x).
 `trsm_native_blocked` now takes a mandatory `TrsmTrailingGemm<T>` and the `blocked` arm passes the
 public `gemm`: \f$n=512\f$, \f$q=1024\f$, batch=512 float went 18.8 -> 11.19 ms against the vendor's 14.28 ms.

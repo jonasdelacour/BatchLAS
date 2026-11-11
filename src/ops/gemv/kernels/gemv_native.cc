@@ -27,7 +27,7 @@
 #include <type_traits>
 #include <batchlas/settings.hh>
 
-namespace batchlas::sycl_gemv {
+namespace batchlas::ops::gemv {
 
 using sycl_device::DevMap;
 using Fma = device::arith::Fma;
@@ -588,18 +588,6 @@ Event gemv_native_cta(Queue& ctx,
                              transA == Transpose::ConjTrans, mask);
 }
 
-// The capability flags live in the same TU as the kernels, so a build that drops
-// this file cannot advertise an unlinked kernel. The Direct route has NO GPU GATE.
-template <> bool gemv_direct_available<float>()                { return true; }
-template <> bool gemv_direct_available<double>()               { return true; }
-template <> bool gemv_direct_available<std::complex<float>>()  { return true; }
-template <> bool gemv_direct_available<std::complex<double>>() { return true; }
-
-template <> bool gemv_cta_available<float>()                { return true; }
-template <> bool gemv_cta_available<double>()               { return true; }
-template <> bool gemv_cta_available<std::complex<float>>()  { return true; }
-template <> bool gemv_cta_available<std::complex<double>>() { return true; }
-
 #define BATCHLAS_GEMV_NATIVE_INSTANTIATE(fp)                                   \
     template Event gemv_native_direct<fp>(                                     \
         Queue&, const MatrixView<fp, MatrixFormat::Dense>&,                    \
@@ -616,4 +604,4 @@ BATCHLAS_GEMV_NATIVE_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GEMV_NATIVE_INSTANTIATE
 
-}  // namespace batchlas::sycl_gemv
+}  // namespace batchlas::ops::gemv

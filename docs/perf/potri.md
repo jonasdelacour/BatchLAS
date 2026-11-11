@@ -31,7 +31,7 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 
 | family | driver | `can_run` (`src/ops/potri/potri.cc`) |
 |---|---|---|
-| `cta` | `sycl_potri::potri_cta`, mode `Potri`: trtri + lauum in one launch | homogeneous, `n <= cta_max_n<T>(d.slm_budget, d.max_wg)` |
+| `cta` | `ops::potri::potri_cta`, mode `Potri`: trtri + lauum in one launch | homogeneous, `n <= cta_max_n<T>(d.slm_budget, d.max_wg)` |
 | `blocked:nb=64`, `blocked:nb=128` (float only) | `ops::potri::blocked::run` | homogeneous, `min(nb, n) <= cta_max_n` |
 
 `cta_max_n` (`potri_native.hh`) is the largest order whose padded tile fits local memory and whose
@@ -78,7 +78,7 @@ own table):
   rule), so the cdouble corner (\f$n = 512\f$, batch 32768) needs 64 MiB, not the identity solve's 137 GB. At
   `n <= nb` it is one cta `Potri` launch and no workspace. `potri_finish` zeroes the diagonal's
   imaginary part and mirrors for `full`.
-- A failed item stays unchanged without a host round trip (`sycl_potri::Stash`): the `Trtri` launch
+- A failed item stays unchanged without a host round trip (`ops::potri::Stash`): the `Trtri` launch
   writes `info` (or workspace flags) and stashes the item's triangle; the last `Lauum` launch restores
   it, and `potri_finish` skips it. Healthy-batch cost is unchanged (new/base 0.992-1.002, nine cells,
   sm_89, 2026-10-26).

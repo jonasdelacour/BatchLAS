@@ -297,7 +297,7 @@ LAYOUT_NS = frozenset({DEV} | {f"{DEV}::{s}" for s in (
     "detail", "detail::nvptx", "detail::amdgcn", "detail::spirv", "detail::sscp", "tier", "routine", "l3", "l3::cfg",
     "alg", "arith", "epi", "reduce_op")})
 SRC_DEVICE_NS = ("potrf_native", "getrf_native", "geqrf_native", "tiny_native", "sycl_device", "syev_v2", "stedc_v2",
-                 "krylov_v2", "sycl_trsm::dla", "sycl_gemv::dla")
+                 "krylov_v2", "ops::trsm::dla", "ops::gemv::dla")
 V2_FILE = re.compile(r"(?:^|[_\-/])v2(?:[_\-.]|$)|^v2")
 V2_KEEP = re.compile(r"wide_v2|kernel_hash_v2|nvml")
 INLINE_NS = re.compile(r"\binline\s+namespace\b|\bnamespace\s+[\w:]*::inline\s")

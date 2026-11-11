@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_sygvd {
+namespace batchlas::ops::sygvd {
 
 // Both skip item b where a non-null mask has mask[b] == 0 (potrf_info[b] is then never written).
 // Where potrf_info[b] != 0, B's uplo triangle := the identity's (a partial factor may hold NaN).
@@ -21,7 +21,7 @@ BATCHLAS_INTERNAL_API Event sygvd_identity_failed(Queue& ctx, const MatrixView<T
 BATCHLAS_INTERNAL_API Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info,
                                              const std::uint8_t* mask);
 
-}  // namespace batchlas::sycl_sygvd
+}  // namespace batchlas::ops::sygvd
 
 namespace batchlas::ops::sygvd {
 

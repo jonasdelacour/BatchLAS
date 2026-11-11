@@ -19,7 +19,7 @@
 #include <sycl/sycl.hpp>
 #include <utility>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::static_for;  // core.hh; the wide kernels' halves and the host row tables
 using batchlas::device::l3::supports_aligned_packet_loads;
@@ -220,4 +220,4 @@ Event launch_register_tiled(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

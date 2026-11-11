@@ -11,7 +11,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
-namespace batchlas::sycl_trsm::dla {
+namespace batchlas::ops::trsm::dla {
 
 
 // ---- views ----------------------------------------------------------------------------------
@@ -257,4 +257,4 @@ BATCHLAS_DEVICE_INLINE void trsm_lower_rowfrag(const device::Partition<P>& ex, c
     }
 }
 
-}  // namespace batchlas::sycl_trsm::dla
+}  // namespace batchlas::ops::trsm::dla

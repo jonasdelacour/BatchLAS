@@ -15,15 +15,12 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_potrf {
+namespace batchlas::ops::potrf {
 
 // TINY tier (potrf_tiny.cc): it owns NO local memory, so the ceiling takes no budget argument
 // and is a flat compile-time constant; 0 = absent. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 template <typename T>
 BATCHLAS_INTERNAL_API int potrf_tiny_max_n();
-
-// The tier's fixed work-group size; potrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE.
-inline constexpr int kPotrfTinyWgSize = 64;
 
 // NOT zero: an empty or SHORT caller `info` span means "not requested" and draws scratch.
 template <typename T>
@@ -84,9 +81,6 @@ BATCHLAS_INTERNAL_API Event potrf_lpanel_dispatch(
     int min_blocks_per_sm = resident::kMinBlocksPerSm,
     int nb_hint = 0);
 
-template <typename T>
-BATCHLAS_INTERNAL_API bool potrf_blocked_available();
-
 // Replay the layout through BumpAllocator::measuring(): a hand-summed exact figure fails it.
 template <typename T>
 BATCHLAS_INTERNAL_API std::size_t potrf_cta_buffer_size(Queue& ctx,
@@ -142,4 +136,4 @@ BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,
                                                    PotrfTrailingGemm<T> trailing_gemm,
                                                    PotrfPanelSolve<T> panel_solve);
 
-}  // namespace batchlas::sycl_potrf
+}  // namespace batchlas::ops::potrf

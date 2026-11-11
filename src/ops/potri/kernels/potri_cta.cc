@@ -29,7 +29,7 @@
 #include <cstdint>
 #include <string>
 
-namespace batchlas::sycl_potri {
+namespace batchlas::ops::potri {
 
 namespace {
 
@@ -286,4 +286,4 @@ BATCHLAS_POTRI_CTA_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRI_CTA_INSTANTIATE
 
-}  // namespace batchlas::sycl_potri
+}  // namespace batchlas::ops::potri

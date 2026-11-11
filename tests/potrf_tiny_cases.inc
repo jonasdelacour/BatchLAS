@@ -3,7 +3,7 @@
 // potrf_tests.cc inside its anonymous namespace, so make_spd, make_planted_ldl,
 // potrf_error and kLeafSlack are in scope.
 //
-// Every case here but the facade one drives sycl_potrf::potrf_tiny_dispatch DIRECTLY.
+// Every case here but the facade one drives ops::potrf::potrf_tiny_dispatch DIRECTLY.
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 
 // One batch of n x n matrices at an arbitrary (ld, stride), everything outside the `uplo`
@@ -72,17 +72,17 @@ protected:
         if (!this->ctx->device().supports_sub_group_size(32)) {
             GTEST_SKIP() << "device does not offer sub-group size 32";
         }
-        if (sycl_potrf::potrf_tiny_max_n<T>() < 1) {
+        if (ops::potrf::potrf_tiny_max_n<T>() < 1) {
             GTEST_SKIP() << "the tiny kernel is not linked for this type";
         }
     }
 
-    int cap() const { return sycl_potrf::potrf_tiny_max_n<T>(); }
+    int cap() const { return ops::potrf::potrf_tiny_max_n<T>(); }
 
     // Matrices per work-group, read from the kernel's own geometry hook rather than
     // recomputed here: a test that re-derives the launch cannot see the two disagree.
     int per_wg(int n) const {
-        const unsigned g = sycl_potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
+        const unsigned g = ops::potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
         if (g == 0u) return 0;
         return static_cast<int>(g >> 16) * static_cast<int>(g & 0xffffu);
     }
@@ -90,13 +90,13 @@ protected:
     std::vector<int32_t> run_tiny(MatrixView<T, MatrixFormat::Dense> V, Uplo uplo,
                                   bool pass_info_span = true) {
         const int batch = V.batch_size();
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, V));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_tiny_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
         if (pass_info_span) {
-            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
                                                info.to_span());
         } else {
-            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
                                                Span<int32_t>{});
         }
         this->ctx->wait();
@@ -154,7 +154,7 @@ TYPED_TEST(PotrfTinyTest, TinyAgreesWithCtaWithinOnePanel) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
 
-    const int cta_cap = sycl_potrf::potrf_cta_max_n<T>();
+    const int cta_cap = ops::potrf::potrf_cta_max_n<T>();
     ASSERT_GE(cta_cap, 8);
 
     for (int n = 1; n <= 8; ++n) {
@@ -168,9 +168,9 @@ TYPED_TEST(PotrfTinyTest, TinyAgreesWithCtaWithinOnePanel) {
             const auto info_t = this->run_tiny(tiny.view(), uplo);
 
             UnifiedVector<std::byte> ws(
-                sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, cta.view()));
+                ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, cta.view()));
             UnifiedVector<int32_t> info_c(batch, int32_t(-7));
-            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, cta.view(), uplo, ws.to_span(),
+            (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, cta.view(), uplo, ws.to_span(),
                                               info_c.to_span());
             this->ctx->wait();
 
@@ -462,7 +462,7 @@ TYPED_TEST(PotrfTinyTest, TinyEmptyInfoSpanStillFactorises) {
     auto p = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower, 606u,
                                MV<T>::make(R(0), R(0)));
 
-    EXPECT_GT(sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, p.view()), 0u)
+    EXPECT_GT(ops::potrf::potrf_tiny_buffer_size<T>(*this->ctx, p.view()), 0u)
         << "an empty info span draws batch int32s of scratch from the workspace, so it "
            "cannot be zero bytes";
 
@@ -485,7 +485,7 @@ TYPED_TEST(PotrfTinyTest, TinyLaunchGeometryIsReported) {
 
     int prev_bucket = 0;
     for (int n = 1; n <= this->cap(); ++n) {
-        const unsigned g = sycl_potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
+        const unsigned g = ops::potrf::potrf_tiny_debug_launch<T>(*this->ctx, n);
         ASSERT_NE(g, 0u) << "n=" << n << " is inside the cap but reports unfit";
         const int S = static_cast<int>(g >> 16);
         const int G = static_cast<int>(g & 0xffffu);
@@ -513,7 +513,7 @@ TYPED_TEST(PotrfTinyTest, TinyLaunchGeometryIsReported) {
                                  "maximum, which aborts the enqueue";
     }
 
-    EXPECT_EQ(sycl_potrf::potrf_tiny_debug_launch<T>(*this->ctx, this->cap() + 1), 0u)
+    EXPECT_EQ(ops::potrf::potrf_tiny_debug_launch<T>(*this->ctx, this->cap() + 1), 0u)
         << "one order past the cap must report unfit";
 }
 

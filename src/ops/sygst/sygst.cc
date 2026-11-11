@@ -47,9 +47,9 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, cons
     // vendor (NETLIB only) in its host loop.
     return std::visit(overloaded{
         [&](const Blocked& b) {
-            const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());
-            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagWg &&
-                   static_cast<std::int64_t>(sycl_sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
+            const int kb = std::min(ops::sygst::kDiagMaxOrder, A.rows());
+            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= ops::sygst::kDiagWg &&
+                   static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
         },
         [&](TwoSided) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },

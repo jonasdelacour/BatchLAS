@@ -13,7 +13,7 @@
 
 namespace batchlas::ops::potri {
 
-struct Cta : select::NoFields<"cta"> {};  ///< sycl_potri::potri_cta: trtri + lauum in local memory, one launch
+struct Cta : select::NoFields<"cta"> {};  ///< ops::potri::potri_cta: trtri + lauum in local memory, one launch
 /// LAPACK's blocked trtri then lauum: the CTA kernel on the \f$nb \times nb\f$ diagonal blocks, public trmm, gemm and herk/syrk.
 struct Blocked {
     int nb = 64;  ///< diagonal block order; the CTA kernel must hold one block

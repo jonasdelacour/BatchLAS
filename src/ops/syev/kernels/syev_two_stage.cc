@@ -97,7 +97,6 @@ Event syev_two_stage_part(Queue& ctx,
     const bool want_eigvecs = (jobz == JobType::EigenVectors);
     const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
-    const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);
     const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
@@ -149,15 +148,10 @@ Event syev_two_stage_part(Queue& ctx,
     auto e_span = pool.allocate<Real>(ctx,
                                       static_cast<std::size_t>(std::max(0, n - 1)) *
                                           static_cast<std::size_t>(batch));
-    auto tau_sb2st_span = pool.allocate<T>(ctx,
-                                           static_cast<std::size_t>(std::max(0, n - 1)) *
-                                               static_cast<std::size_t>(batch));
 
     const VectorView<Real> d_view = VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
     const VectorView<Real> e_view =
         VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-    const VectorView<T> tau_sb2st_view =
-        VectorView<T>(tau_sb2st_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
 
     // Stage 2. BOTH modes use the Householder chase: the Givens chase is ~5x slower
     // on this GPU (occupancy, not arithmetic), so values mode also allocates the
@@ -165,9 +159,7 @@ Event syev_two_stage_part(Queue& ctx,
     // evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
     // Only the *phase* chain stays eigenvector-only: it maps eigenvectors of the
     // |e| tridiagonal back to the signed one, whose eigenvalues are identical.
-    const bool use_givens = !want_eigvecs && two_stage_use_givens_chase_for_values();
-    const auto sb2st_sched = use_givens ? std::vector<detail::Sb2stHhRefl>{}
-                                        : detail::build_sb2st_hh_schedule(n, kd);
+    const auto sb2st_sched = detail::build_sb2st_hh_schedule(n, kd);
     const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
 
     UnifiedVector<int32_t> sb2st_starts(static_cast<std::size_t>(nrefl));
@@ -189,56 +181,31 @@ Event syev_two_stage_part(Queue& ctx,
         sb2st_waves[k] = sb2st_wave_host[k];
     }
 
-    Span<T> v_sb2st_span;
-    Span<T> tau_sb2st_hh_span;
-    Span<T> ab_tri_span;
-    MatrixView<T, MatrixFormat::Dense> v_sb2st_view;
-    VectorView<T> tau_sb2st_hh_view;
-    MatrixView<T, MatrixFormat::Dense> ab_tri_view;
-
-    if (use_givens) {
-        BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st");
-        const size_t sb2st_ws_bytes = sytrd_sb2st_buffer_size<B, T>(
-            ctx, ab_view, d_view, e_view, tau_sb2st_view, uplo, kd, sb2st_block_size);
-        auto sb2st_ws = pool.allocate<std::byte>(ctx, sb2st_ws_bytes);
-        (void)sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, uplo, kd,
-                          sb2st_ws, sb2st_block_size);
-    } else {
-        const int32_t nr = std::max<int32_t>(1, nrefl);
-        v_sb2st_span = pool.allocate<T>(ctx,
-                                        static_cast<std::size_t>(kd) *
-                                            static_cast<std::size_t>(nr) *
-                                            static_cast<std::size_t>(batch));
-        tau_sb2st_hh_span = pool.allocate<T>(ctx,
-                                             static_cast<std::size_t>(nr) *
-                                                 static_cast<std::size_t>(batch));
-        ab_tri_span = pool.allocate<T>(ctx,
-                                       static_cast<std::size_t>(2) *
-                                           static_cast<std::size_t>(n) *
-                                           static_cast<std::size_t>(batch));
-        v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
-            v_sb2st_span.data(), kd, nr, kd,
-            static_cast<int64_t>(kd) * static_cast<int64_t>(nr), batch).with_batch_mask(mask_span);
-        tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask_span);
-        ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
-            ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch)
-            .with_batch_mask(mask_span);
-
+    const int32_t nr = std::max<int32_t>(1, nrefl);
+    const std::size_t nb = static_cast<std::size_t>(batch);
+    auto v_sb2st_span = pool.allocate<T>(ctx, static_cast<std::size_t>(kd) * static_cast<std::size_t>(nr) * nb);
+    auto tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<std::size_t>(nr) * nb);
+    auto ab_tri_span = pool.allocate<T>(ctx, std::size_t(2) * static_cast<std::size_t>(n) * nb);
+    const auto v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
+        v_sb2st_span.data(), kd, nr, kd,
+        static_cast<int64_t>(kd) * static_cast<int64_t>(nr), batch).with_batch_mask(mask_span);
+    const auto tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask_span);
+    const auto ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
+        ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch)
+        .with_batch_mask(mask_span);
+    {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st_hh");
         const size_t ws_bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
         auto hh_ws = pool.allocate<std::byte>(ctx, ws_bytes);
-        (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
-                                       v_sb2st_view, tau_sb2st_hh_view, uplo, kd,
-                                       hh_ws);
-
-        // V and tau are dead in eigenvalues-only mode; only the back-transform
-        // reads them. The phase chain is likewise eigenvector-only.
-        if (want_eigvecs) {
-            build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
-        }
+        (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view, v_sb2st_view,
+                                           tau_sb2st_hh_view, uplo, kd, hh_ws);
     }
-    (void)tau_sb2st_view;
-    (void)sb2st_block_size;
+
+    // V and tau are dead in eigenvalues-only mode; only the back-transform
+    // reads them. The phase chain is likewise eigenvector-only.
+    if (want_eigvecs) {
+        build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
+    }
 
     const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
 
@@ -392,7 +359,6 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
     const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
 
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
-    const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);
     const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
@@ -414,9 +380,6 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
     bytes += BumpAllocator::allocation_size<Real>(ctx,
                                                   static_cast<std::size_t>(std::max(0, n - 1)) *
                                                       static_cast<std::size_t>(batch)); // e
-    bytes += BumpAllocator::allocation_size<T>(ctx,
-                                               static_cast<std::size_t>(std::max(0, n - 1)) *
-                                                   static_cast<std::size_t>(batch)); // tau sb2st
     bytes += BumpAllocator::allocation_size<Real>(ctx,
                                                   static_cast<std::size_t>(n) *
                                                       static_cast<std::size_t>(n) *
@@ -426,7 +389,6 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
     // discards V/tau. Only the phase chain and Z stay eigenvector-only.
     {
         const int32_t nr = std::max<int32_t>(1, detail::sb2st_hh_num_reflectors(n, kd));
-        const int32_t kdw = detail::sb2st_hh_work_bandwidth(n, kd);
         bytes += BumpAllocator::allocation_size<T>(ctx,
                                                    static_cast<std::size_t>(kd) *
                                                        static_cast<std::size_t>(nr) *
@@ -438,10 +400,9 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
                                                    static_cast<std::size_t>(2) *
                                                        static_cast<std::size_t>(n) *
                                                        static_cast<std::size_t>(batch)); // tridiagonal band (signed)
-        bytes += BumpAllocator::allocation_size<T>(ctx,
-                                                   static_cast<std::size_t>(kdw + 1) *
-                                                       static_cast<std::size_t>(n) *
-                                                       static_cast<std::size_t>(batch)); // sb2st_hh working band
+        // The chase's own scratch, sized as the solve draws it (a hand-sized band fell short at n = 1).
+        bytes += BumpAllocator::allocation_size<std::byte>(
+            ctx, detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
     }
     if (want_eigvecs) {
         bytes += BumpAllocator::allocation_size<T>(ctx,
@@ -465,23 +426,8 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
                                   1,
                                   tau_sy2sb_n);
 
-    VectorView<Real> d_dummy(nullptr, n, batch, 1, n);
-    VectorView<Real> e_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-    VectorView<T> tau_sb2st_dummy(nullptr,
-                                  std::max(0, n - 1),
-                                  batch,
-                                  1,
-                                  std::max(0, n - 1));
 
     bytes += sytrd_sy2sb_buffer_size<B, T>(ctx, a, ab_dummy, tau_sy2sb_dummy, uplo, kd);
-    bytes += sytrd_sb2st_buffer_size<B, T>(ctx,
-                                           ab_dummy,
-                                           d_dummy,
-                                           e_dummy,
-                                           tau_sb2st_dummy,
-                                           uplo,
-                                           kd,
-                                           sb2st_block_size);
     bytes += stedc_buffer_size<B, Real>(ctx,
                                            static_cast<std::size_t>(n),
                                            static_cast<std::size_t>(batch),

@@ -94,7 +94,6 @@ public:
             "src/ops/potrf/kernels/potrf_tiny.cc",
             // family: cta
             "src/ops/potrf/kernels/potrf_cta.cc",
-            "src/ops/potrf/kernels/potrf_cta_device.hh",
             // family: lpanel
             "src/ops/potrf/kernels/potrf_lpanel.cc",
             "src/ops/potrf/kernels/potrf_lpanel_device.hh",
@@ -102,7 +101,7 @@ public:
             "src/ops/potrf/kernels/potrf_blocked.cc",
             // common
             "src/ops/potrf/potrf_native.hh",
-            "src/ops/potrf/potrf_slm_hole.hh",
+            "src/util/resident_capacity.hh",
             "src/ops/potrf/choice.hh",
         };
         // kernel-sources-end

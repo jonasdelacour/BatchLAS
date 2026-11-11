@@ -9,7 +9,9 @@
 // transpose: at step i, lane i broadcasts rA[0..i-1] and lane r keeps element c == r;
 // N(N-1)/2 shuffles, independent of nrhs. evidence: docs/perf/potrf.md#posv-the-backward-solve-costs-a-transpose
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <batchlas/device/lapack/potrf.hh>
@@ -37,13 +39,11 @@ namespace batchlas {
 template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
 class PosvTinyKernel;
 
-namespace sycl_posv {
+namespace ops::posv {
 
 namespace {
 
 
-constexpr int kTinyWg = tiny_native::kTinyWgSize;
-static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
 // 255 (cdouble N=16 NR=4), the ISA ceiling, and that cell SPILLS.
@@ -52,7 +52,7 @@ constexpr int kWorstRegsPerThread = 255;
 // The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =
 // 8,192 of its 16,384. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 // Probe: scripts/register_probe.sh out.log '' batchlas_extensions_posv (a cta probe has no tiny kernel).
-static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
+static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 
 // The same flat compile-time ceiling potrf_tiny carries, for the same reason: the tier
@@ -114,7 +114,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 
-    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(resident::kTinyWgSize, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
@@ -294,8 +294,8 @@ Event posv_tiny_launch_b(Queue& ctx,
 
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
-        kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
-    static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
+        resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
+    static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
     constexpr bool kSlm = posv_tiny_slm<T, N>();
     using Body = PosvTinyBody<T, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
@@ -310,8 +310,8 @@ Event posv_tiny_launch_b(Queue& ctx,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
         batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
-                                             static_cast<std::size_t>(kTinyWg)),
-                              sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
+                                             static_cast<std::size_t>(resident::kTinyWgSize)),
+                              sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
             body);
     });
     return ctx.get_event();
@@ -381,10 +381,6 @@ Event posv_tiny_launch(Queue& ctx,
                                             upper, n, nrhs, batch, info_ptr, mask);
 }
 
-Span<int32_t> posv_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
 }  // namespace
 
 template <typename T>
@@ -399,9 +395,7 @@ std::size_t posv_tiny_buffer_size(Queue& ctx,
     static_cast<void>(B);
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    return workspace_bytes([&](BumpAllocator& p) {
-        return posv_tiny_layout(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // Every can_run gate is re-applied here; direct callers reach this without the selector.
@@ -416,10 +410,7 @@ Event posv_tiny_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("posv_tiny: A must be square");
-    }
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("posv_tiny: degenerate extents");
     }
     if (B.rows() != A.rows()) {
@@ -428,23 +419,7 @@ Event posv_tiny_dispatch(Queue& ctx,
     if (B.batch_size() != A.batch_size()) {
         throw batchlas::invalid_argument("posv_tiny: A and B must share a batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("posv_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("posv_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
-        throw batchlas::unsupported(
-            "posv_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
-    if (static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)) < kTinyWg) {
-        throw batchlas::unsupported(
-            "posv_tiny: the device's maximum work-group size is below the tier's " +
-            std::to_string(kTinyWg));
-    }
+    native::require_launchable(ctx, "posv_tiny", A, {.square = true, .min_wg = resident::kTinyWgSize}, B);
     const int bucket = tiny_native::tiny_bucket_ge(n);
     if (bucket < 1 || bucket > tiny_cap<T>()) {
         throw batchlas::unsupported(
@@ -460,10 +435,7 @@ Event posv_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // An empty or short caller span means "not requested" and draws pool scratch.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : posv_tiny_layout(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const bool upper = (uplo == Uplo::Upper);
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("posv", A, B));
@@ -524,5 +496,5 @@ BATCHLAS_POSV_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POSV_TINY_INSTANTIATE
 
-}  // namespace sycl_posv
+}  // namespace ops::posv
 }  // namespace batchlas

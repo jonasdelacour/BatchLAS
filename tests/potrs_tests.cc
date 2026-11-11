@@ -106,7 +106,7 @@ protected:
     bool fits(int n, int nrhs) { return ps::fused_fits<T>(dev(), n, nrhs); }
     // The largest n the fused solve takes at nrhs = 8, from the device's own SLM budget.
     int fused_ceiling_n() {
-        return static_cast<int>(sycl_getrs::getrs_fused_max_rhs_elems<T>(static_cast<size_t>(dev().slm_budget)) / 8);
+        return static_cast<int>(ops::getrs::getrs_fused_max_rhs_elems<T>(static_cast<size_t>(dev().slm_budget)) / 8);
     }
 
     // cond > 1: a graded spectrum of that condition; identical: every item is one drawn item.

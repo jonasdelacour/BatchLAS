@@ -43,11 +43,8 @@ struct SyevxSubsetFinalizeKernel;
 
 namespace {
 
-// Per-item length of the internal stebz eigenvalue buffer. A value range needs n
-// entries per item whatever the caller's capacity (stebz throws otherwise); the
-// max() with capacity keeps stein's `w.size() >= k` precondition. Duplicated in
-// syevx_direct_subset_buffer_size below and the two must stay identical -- this
-// is a BumpAllocator size, and an under-computed one is the failure mode here.
+// Per-item stebz eigenvalue buffer: a value range needs n entries whatever the capacity, and
+// max() with capacity keeps stein's `w.size() >= k`. The solve and the size query both call it.
 inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
     return value_range ? static_cast<size_t>(std::max<int64_t>(n, capacity))
                        : static_cast<size_t>(capacity);
@@ -123,18 +120,11 @@ Event syevx_direct_subset(Queue& ctx,
         using namespace two_stage_detail;
         const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
-        const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
-
-        // The Givens chase is legal only without eigenvectors: it discards Q2.
-        const bool use_givens =
-            !want_eigenvectors && two_stage_use_givens_chase_for_values();
 
         // Stage-2 reflector schedule. Depends only on (n, kd) -- never on the matrix
         // values -- so it is identical for every batch item and replayable on the host.
-        const auto sb2st_sched = use_givens
-                                     ? std::vector<detail::Sb2stHhRefl>{}
-                                     : detail::build_sb2st_hh_schedule(n, kd);
+        const auto sb2st_sched = detail::build_sb2st_hh_schedule(n, kd);
         const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
         // Only the Q2 back-transform reads the schedule on the device, so an
         // eigenvalues-only run uploads nothing.
@@ -197,45 +187,26 @@ Event syevx_direct_subset(Queue& ctx,
         const auto e_view =
             VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
 
-        Span<T> v_sb2st_span;
-        Span<T> tau_sb2st_hh_span;
-        MatrixView<T, MatrixFormat::Dense> v_sb2st_view;
-        VectorView<T> tau_sb2st_hh_view;
-
-        if (!use_givens) {
-            const int32_t nr = std::max<int32_t>(1, nrefl);
-            v_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(kd) * nr * batch);
-            tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<size_t>(nr) * batch);
-            auto ab_tri_span = pool.allocate<T>(ctx, static_cast<size_t>(2) * n * batch);
-            v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
-                v_sb2st_span.data(), kd, nr, kd, static_cast<int64_t>(kd) * nr, batch).with_batch_mask(mask);
-            tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask);
-            const auto ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
-                ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch).with_batch_mask(mask);
-
+        const int32_t nr = std::max<int32_t>(1, nrefl);
+        auto v_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(kd) * nr * batch);
+        auto tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<size_t>(nr) * batch);
+        auto ab_tri_span = pool.allocate<T>(ctx, static_cast<size_t>(2) * n * batch);
+        const auto v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
+            v_sb2st_span.data(), kd, nr, kd, static_cast<int64_t>(kd) * nr, batch).with_batch_mask(mask);
+        const auto tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask);
+        const auto ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
+            ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch).with_batch_mask(mask);
+        {
             const size_t bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             auto hh_ws = pool.allocate<std::byte>(ctx, bytes);
             (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
-                                           v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd,
-                                           hh_ws);
+                                               v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd, hh_ws);
+        }
 
-            // The phase comes from stage 2's *output* tridiagonal: it converts
-            // eigenvectors of the tridiagonal built from |e| back to those of the signed
-            // one. The two are a diagonal +-1 similarity with identical eigenvalues, so
-            // stebz works on |e| directly and eigenvalues-only skips this.
-            if (want_eigenvectors) {
-                build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
-            }
-        } else {
-            auto tau_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
-            const auto tau_sb2st_view = VectorView<T>(tau_sb2st_span, std::max(0, n - 1), batch, 1,
-                                                      std::max(0, n - 1)).with_batch_mask(mask);
-            const size_t bytes = sytrd_sb2st_buffer_size<B, T>(ctx, ab_view, d_view, e_view,
-                                                               tau_sb2st_view, Uplo::Lower, kd,
-                                                               sb2st_block_size);
-            auto sb2st_ws = pool.allocate<std::byte>(ctx, bytes);
-            (void)sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, Uplo::Lower, kd,
-                              sb2st_ws, sb2st_block_size);
+        // The phase from stage 2's output tridiagonal maps eigenvectors of the |e| tridiagonal (a +-1
+        // similarity, same eigenvalues) back to the signed one; eigenvalues-only skips it.
+        if (want_eigenvectors) {
+            build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
         }
 
         // Subset tridiagonal solve, internally always ascending: stein's cluster
@@ -422,12 +393,8 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         using namespace two_stage_detail;
         const int32_t kd = choose_two_stage_kd_for_job(n, jobz);
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
-        const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
-        // Must mirror the runtime chase selection exactly, env-var override included.
-        const bool use_givens =
-            !want_eigenvectors && two_stage_use_givens_chase_for_values();
-        const int32_t nrefl = use_givens ? 0 : detail::sb2st_hh_num_reflectors(n, kd);
+        const int32_t nrefl = detail::sb2st_hh_num_reflectors(n, kd);
 
         size_t bytes = 0;
         bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * n * batch);
@@ -445,11 +412,6 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const auto ab_dummy =
             MV(nullptr, kd + 1, n, kd + 1, static_cast<int64_t>(kd + 1) * n, batch).with_batch_mask(mask);
         const auto tau_sy2sb_dummy = VectorView<T>(nullptr, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
-        const auto d_dummy = VectorView<Real>(nullptr, n, batch, 1, n).with_batch_mask(mask);
-        const auto e_dummy =
-            VectorView<Real>(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
-        const auto tau_sb2st_dummy =
-            VectorView<T>(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
 
         bytes += BumpAllocator::allocation_size<std::byte>(
             ctx, sytrd_sy2sb_buffer_size<B, T>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
@@ -457,20 +419,13 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(n) * batch);
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
 
-        if (!use_givens) {
-            // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
-            const int32_t nr = std::max<int32_t>(1, nrefl);
-            bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd) * nr * batch);
-            bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nr) * batch);
-            bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(2) * n * batch);
-            bytes += BumpAllocator::allocation_size<std::byte>(
-                ctx, detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
-        } else {
-            bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
-            bytes += BumpAllocator::allocation_size<std::byte>(
-                ctx, sytrd_sb2st_buffer_size<B, T>(ctx, ab_dummy, d_dummy, e_dummy, tau_sb2st_dummy,
-                                                    Uplo::Lower, kd, sb2st_block_size));
-        }
+        // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
+        const int32_t nr = std::max<int32_t>(1, nrefl);
+        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd) * nr * batch);
+        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nr) * batch);
+        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(2) * n * batch);
+        bytes += BumpAllocator::allocation_size<std::byte>(
+            ctx, detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
 
         // w_sub, then m. Mirrors the runtime allocation order exactly.
         bytes += BumpAllocator::allocation_size<Real>(ctx, w_sub_len * batch);

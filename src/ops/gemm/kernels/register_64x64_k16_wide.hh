@@ -26,7 +26,7 @@
 #include <cstddef>
 #include <type_traits>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::copy_async_commit;
 using batchlas::device::l3::copy_async_wait;
@@ -1122,4 +1122,4 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN>(ctx, A, B, C, alpha, beta, trace);
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

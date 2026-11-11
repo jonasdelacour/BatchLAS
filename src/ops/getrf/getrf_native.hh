@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_getrf {
+namespace batchlas::ops::getrf {
 
 // A RUNTIME local_mem_size budget, not device_limits.hh's build-time constant, and it must
 // cover the pivot-search scratch as well as the tile; 0 = absent. `min_blocks_per_sm` scales
@@ -27,15 +27,10 @@ BATCHLAS_INTERNAL_API int getrf_cta_max_n_for_slm(
     std::size_t slm_budget_bytes,
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-template <typename T>
-BATCHLAS_INTERNAL_API bool getrf_blocked_available();
-
 // THE REGISTER-RESIDENT TIER, and the ONE place its ceiling is spelled: a compile-time
 // property of the kernel, so no budget enters. evidence: docs/perf/lu.md#one-spelling-per-ceiling
 template <typename T>
 BATCHLAS_INTERNAL_API int getrf_tiny_max_n();
-
-inline constexpr int kGetrfTinyWgSize = 64;  // getrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE
 
 // NOT zero: a short or empty `info` span means "not requested" and draws pool scratch.
 template <typename T>
@@ -61,8 +56,7 @@ BATCHLAS_INTERNAL_API std::size_t getrf_blocked_buffer_size(Queue& ctx,
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_params(Queue& ctx, int n);  // nb | leaf<<16
 
-// The leading panel's leaf AS THE DRIVER WOULD TAKE IT: getrf_blocked_debug_params' leaf
-// field is a pure fit query. 1 resident, 2 global, 3 register, 0 degenerate.
+// The leading panel's leaf AS THE DRIVER TAKES IT (debug_params' leaf is a fit query): 1 resident, 2 global, 3 register.
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_leaf(Queue& ctx, int n);
 
@@ -151,4 +145,4 @@ BATCHLAS_INTERNAL_API Event getrf_panel_factorize(Queue& ctx,
                                                   bool* used_resident_out,
                                                   const std::uint8_t* mask = nullptr);
 
-}  // namespace batchlas::sycl_getrf
+}  // namespace batchlas::ops::getrf

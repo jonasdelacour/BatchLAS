@@ -3,7 +3,7 @@
 // potri's kernels: the CTA trtri/lauum and the finish. evidence: docs/perf/potri.md#potri-the-algorithm
 
 #include <src/util/internal-api.hh>
-#include <src/ops/potrf/potrf_slm_hole.hh>
+#include <src/util/resident_capacity.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_potri {
+namespace batchlas::ops::potri {
 
 // Potri: A's uplo triangle := \f$A^{-1}\f$'s from the factor. Trtri: each \f$nb \times nb\f$ diagonal block := its inverse.
 // Lauum: \f$A := X^H X\f$ (Lower) or \f$X X^H\f$ (Upper) from the triangular X in A's uplo triangle.
@@ -39,7 +39,7 @@ constexpr int cta_wg(int m, int ts, int max_wg) {
 // The padded tile (odd ld) and reals: can_run (cta_max_n) and the launcher share it.
 constexpr std::size_t cta_slm_bytes(int m, int ts, std::size_t sz_d, std::size_t sz_r) {
     const std::size_t mp = static_cast<std::size_t>((m + ts - 1) / ts * ts);
-    return potrf_native::potrf_hole_padded((mp + 1) * mp * sz_d + mp * sz_r + 64);
+    return resident::hole_padded((mp + 1) * mp * sz_d + mp * sz_r + 64);
 }
 
 constexpr bool cta_fits(int m, int ts, std::size_t sz_d, std::size_t sz_r, std::size_t slm_budget, int max_wg) {
@@ -76,7 +76,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
                                          bool full, const int32_t* skip = nullptr);
 
-}  // namespace batchlas::sycl_potri
+}  // namespace batchlas::ops::potri
 
 // The blocked family (kernels/potri_blocked.cc): trtri then lauum on \f$nb \times nb\f$ blocks.
 namespace batchlas::ops::potri::blocked {

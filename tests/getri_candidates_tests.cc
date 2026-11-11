@@ -228,7 +228,7 @@ protected:
     // ---- the limit oracle: getri_blocked_dispatch's own checks, not getri.cc's can_run ----
     static bool expect_runs(const C& c, int rows, int cols, int batch, bool het = false) {
         if (std::holds_alternative<gi::Vendor>(c)) return kVendor;
-        return rows == cols && rows >= 1 && batch >= 1 && !het && sycl_getri::getri_blocked_available<T>();
+        return rows == cols && rows >= 1 && batch >= 1 && !het;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<gi::Vendor>(c) && !kVendor; }
 
@@ -282,7 +282,7 @@ protected:
         try {
             if (std::holds_alternative<gi::Blocked>(c)) {
                 UnifiedVector<std::byte> ws(1);
-                (void)sycl_getri::getri_blocked_dispatch<T>(
+                (void)ops::getri::getri_blocked_dispatch<T>(
                     q, p.A(), p.Cv(), p.piv.to_span(), ws.to_span(), p.info.to_span(),
                     [](Queue& c2, const MV& ta, const MV& tb, T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
                         return trsm<B, T>(c2, ta, tb, al, sd, ul, tr, dg);
@@ -417,7 +417,7 @@ TYPED_TEST(GetriCandidates, CanRunEqualsLaunch) {
         UnifiedVector<std::byte> ws(1);
         bool launched = true;
         try {
-            (void)sycl_getri::getri_blocked_dispatch<T>(
+            (void)ops::getri::getri_blocked_dispatch<T>(
                 *this->ctx, A, Cm, piv.to_span(), ws.to_span(), Span<int32_t>{},
                 [](Queue& c2, const MVof<T>& ta, const MVof<T>& tb, T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
                     return trsm<TestFixture::B, T>(c2, ta, tb, al, sd, ul, tr, dg);
@@ -683,7 +683,6 @@ TYPED_TEST(GetriCandidates, TraceLineShowsTheKey) {
 // last resort, Blocked, and a vendor build the vendor.
 TYPED_TEST(GetriCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
-    ASSERT_TRUE(sycl_getri::getri_blocked_available<T>());
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
     const TableGuard restore;
     install_getri_table(std::string(select::dtype_name<T>()), select::device_of<TestFixture::B>(*this->ctx).key,

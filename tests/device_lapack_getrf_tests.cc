@@ -141,11 +141,11 @@ enum class Route { Tiny, Cta };
 template <class T> void run_host(Queue& ctx, Prob<T>& p, Route r) {
     const MatrixView<T, MatrixFormat::Dense> A(p.a_host.data(), p.n, p.n, p.ld, p.stride, kBatch);
     if (r == Route::Tiny) {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_tiny_buffer_size<T>(ctx, A)));
-        (void)sycl_getrf::getrf_tiny_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_tiny_buffer_size<T>(ctx, A)));
+        (void)ops::getrf::getrf_tiny_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
     } else {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_cta_buffer_size<T>(ctx, A)));
-        (void)sycl_getrf::getrf_cta_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_cta_buffer_size<T>(ctx, A)));
+        (void)ops::getrf::getrf_cta_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
     }
     ctx.wait();
 }
@@ -227,7 +227,7 @@ template <class T> void check_device(const Prob<T>& p, const char* what) {
 // it the host route throws, so only the device op runs there, against the oracle.
 template <class T> int host_cta_cap(Queue& ctx) {
     const auto lm = static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    return sycl_getrf::getrf_cta_max_n_for_slm<T>(resident::device_slm_budget(lm));
+    return ops::getrf::getrf_cta_max_n_for_slm<T>(resident::device_slm_budget(lm));
 }
 template <class T> bool host_runs(Queue& ctx, int n, Route r) { return r == Route::Tiny || n <= host_cta_cap<T>(ctx); }
 

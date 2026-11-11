@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Native batched GEQRF: the TINY tier -- square m == n <= 32, one matrix per
-// SubGroupPartition<N>, the whole matrix in registers between the load and the store.
-// evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
+// Native batched GEQRF, the TINY tier: square n <= 32 in registers per SubGroupPartition<N>. evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
 
 #include <src/ops/geqrf/geqrf_native.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
 #include <src/kernels/common/tiny_device.hh>
 #include <batchlas/device/sg_partition.hh>
@@ -28,7 +27,7 @@ template <typename T, int N, int C, bool Masked> class GeqrfTinyKernel;
 }
 
 namespace batchlas {
-namespace sycl_geqrf {
+namespace ops::geqrf {
 
 namespace {
 
@@ -50,9 +49,8 @@ constexpr int geqrf_tiny_worst_regs() {
 // GATE 1, the HARD one: a work-group whose warps overflow a register SUB-PARTITION ABORTS
 // the launch -- 64 lanes is 2 warps in one of the four, 1 x 32 x ceil8(226 + 8) = 7,680 of
 // its 16,384. Both operands are named so raising either is deliberate; GATE 2 still binds.
-constexpr int kGeqrfTinyMaxWg = geqrf_native::kGeqrfTinyWg;
 constexpr int kGeqrfTinyWorstRegs = geqrf_tiny_worst_regs();
-static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
+static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, resident::kTinyWgSize),
               "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "
               "scripts/register_probe.sh before raising either operand");
 
@@ -95,9 +93,9 @@ constexpr std::size_t geqrf_tiny_wg_bytes() {
 }
 
 // No request lands near the (47104, 49664] launch hole, so geqrf_cta.cc's padding is not carried.
-static_assert(geqrf_tiny_wg_bytes<std::complex<double>, 8>() < 47104,
+static_assert(geqrf_tiny_wg_bytes<std::complex<double>, 8>() < resident::kLaunchHoleLo,
               "tiny tile approaching the 48 KB launch hole");
-static_assert(geqrf_tiny_wg_bytes<double, 32>() < 47104,
+static_assert(geqrf_tiny_wg_bytes<double, 32>() < resident::kLaunchHoleLo,
               "tiny tile approaching the 48 KB launch hole");
 
 // Masked: the mask folds into `live` (I2), a template so the unmasked kernel is unchanged (the fold
@@ -119,7 +117,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     constexpr int WG = M * N;
     constexpr std::size_t kPerMatrix = geqrf_native::geqrf_tiny_slm_elems(N, C);
 
-    static_assert(WG == geqrf_native::kGeqrfTinyWg, "the work-group must stay a whole number of warps");
+    static_assert(WG == resident::kTinyWgSize, "the work-group must stay a whole number of warps");
     static_assert(WG % tiny_native::kTinySubGroupSize == 0, "the work-group must be whole sub-groups");
     static_assert(tiny_native::tiny_n_is_legal(N), "N must divide the sub-group");
 
@@ -143,10 +141,8 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 const int slot = tiny_native::tiny_partition_id(sg, part);
                 const int prob = static_cast<int>(it.get_group_linear_id()) * M + slot;
 
-                // NO EARLY RETURN. `if (prob >= batch) return;` is partition-uniform but NOT
-                // sub-group-uniform, so at N < 32 a later group_barrier(sg) is undefined. A
-                // dead partition carries the identity and suppresses its store. Guarded by
-                // source text (GeqrfTinySource.KernelBodyHasNoEarlyReturn), not numerically.
+                // NO EARLY RETURN: a dead partition (not sub-group-uniform at N < 32) carries the
+                // identity and skips its store (GeqrfTinySource.KernelBodyHasNoEarlyReturn).
                 bool live = prob < batch;
                 if constexpr (Masked) live = live && mask[prob] != 0;  // inactive: untouched A and tau
                 const bool row_live = live && lane < n;
@@ -162,9 +158,8 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
 
                 D my_tau = D{};  // one register, stored once N-wide rather than N times
 
-                // unroll(FULL), not the bare hint, on EVERY loop whose index reaches rA: the
-                // hint loses to a code-size threshold at the widest cells, rA[j] becomes a
-                // DYNAMIC index, and the array leaves the register file with ZERO spill.
+                // unroll(FULL) on EVERY loop indexing rA: the bare hint loses to a size threshold, and a
+                // dynamic rA[j] leaves the register file with ZERO spill.
                 // evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
 #pragma clang loop unroll(full)
                 for (int j = 0; j < N; ++j) {
@@ -287,27 +282,8 @@ Event geqrf_tiny_dispatch(Queue& ctx,
 
     // Direct callers reach this without the selector, so every gate can_run applies is
     // RE-APPLIED here and throws (a pin the selector refuses throws there instead).
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("geqrf_tiny: degenerate extents");
-    }
-    if (m != n) {
-        throw batchlas::invalid_argument(
-            "geqrf_tiny: the tiny tier factors SQUARE matrices only (m == n); a tall panel "
-            "is the CTA tier's");
-    }
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("geqrf_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("geqrf_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, not MAX_SUB_GROUP_SIZE >= 32: that returns the FIRST supported
-        // size, so the weak test accepts a {64} device and the launch aborts.
-        throw batchlas::unsupported(
-            "geqrf_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
+    // Square only: a tall panel is the CTA tier's.
+    const auto dev = native::require_launchable(ctx, "geqrf_tiny", A, {.square = true});
     if (tau.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("geqrf_tiny: tau span is shorter than n * batch");
     }
@@ -366,5 +342,5 @@ BATCHLAS_GEQRF_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GEQRF_TINY_INSTANTIATE
 
-}  // namespace sycl_geqrf
+}  // namespace ops::geqrf
 }  // namespace batchlas

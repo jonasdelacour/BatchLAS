@@ -516,7 +516,7 @@ class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
     // Whether sytrs `cta` takes order n on this device (sytrs.hh's can_run).
     bool cta_fits(int n) {
         const auto& d = select::describe(this->ctx->device(), Bk, false);
-        return n <= sycl_sytrf::kSytrsCtaMaxN && static_cast<int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
+        return n <= ops::sytrf::kSytrsCtaMaxN && static_cast<int64_t>(ops::sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
     }
 
     // ---- Blocked<NB> (NB > 1): a different summation order from the host `blocked` route, so the
@@ -745,7 +745,7 @@ TYPED_TEST(DeviceApiSytrfTest, SysvBlocked1IsTheHostComposeOverWgBitForBit) {
 }
 
 // ---- Blocked<NB>: the in-group blocked tiers, NB = the host route's 31 -------------------------
-constexpr int kNb = sycl_sytrf::kSytrfBlockedNb;
+constexpr int kNb = ops::sytrf::kSytrfBlockedNb;
 static_assert(kNb == 31, "the n lists below straddle panels of 31");
 constexpr int kBlockedBatch = 128;
 

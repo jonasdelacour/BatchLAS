@@ -108,7 +108,6 @@ void load_selection(SelectionSettings& s) {
     set_if_present(s.ortho_gram, "BATCHLAS_ORTHO_GRAM");
     set_if_present(s.sb2st_back_wave, "BATCHLAS_SB2ST_BACK_WAVE");
     set_if_present(s.sb2st_subgroup, "BATCHLAS_SB2ST_SUBGROUP");
-    set_if_present(s.syev_two_stage_chase, "BATCHLAS_SYEV_TWO_STAGE_CHASE");
     set_if_present(s.syevx_algorithm, "BATCHLAS_SYEVX_ALGORITHM");
     set_if_present(s.syevx_preconditioner, "BATCHLAS_SYEVX_PRECONDITIONER");
     set_if_present(s.syevx_filter_degree_auto, "BATCHLAS_SYEVX_FILTER_DEGREE_AUTO");
@@ -151,7 +150,6 @@ void load_geometry(GeometrySettings& g) {
     set_if_present(g.potrf_w, "BATCHLAS_POTRF_W", positive_or(0));
 
     set_if_present(g.syev_two_stage_kd, "BATCHLAS_SYEV_TWO_STAGE_KD", positive_or(32));
-    set_if_present(g.syev_two_stage_sb2st_block, "BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK", positive_or(32));
 
     set_if_present(g.sy2sb_ormqr_nb, "BATCHLAS_SY2SB_ORMQR_NB");   // three-valued: unset / off / n
 

@@ -36,7 +36,7 @@ select::Key key_of(const MV<T>& A) {
 
 template <class T>
 int cta_ceiling(const select::Device& d) {
-    return sycl_potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
+    return ops::potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
 }
 
 // Correctness only: false means the launch would throw. Both families need a homogeneous batch and
@@ -67,7 +67,7 @@ Event launch(Queue& q, const PotriChoice& c, const MV<T>& A, Uplo uplo, bool ful
     if (ws.size() < workspace<T>(q, c, A))
         throw batchlas::workspace_error("potri: workspace is shorter than potri_buffer_size()");
     return std::visit(overloaded{
-        [&](Cta) { return sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Potri, A.rows(), full, info); },
+        [&](Cta) { return ops::potri::potri_cta<T>(q, A, uplo, ops::potri::CtaMode::Potri, A.rows(), full, info); },
         [&](Blocked b) { return blocked::run<B, T>(q, A, uplo, b.nb, full, ws, info); },
     }, c);
 }

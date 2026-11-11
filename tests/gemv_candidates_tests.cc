@@ -322,9 +322,9 @@ protected:
         Queue& q = *this->ctx;
         try {
             if (std::holds_alternative<gv::Cta>(c)) {
-                (void)sycl_gemv::gemv_native_cta<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
+                (void)ops::gemv::gemv_native_cta<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
             } else if (std::holds_alternative<gv::Direct>(c)) {
-                (void)sycl_gemv::gemv_native_direct<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
+                (void)ops::gemv::gemv_native_direct<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
             } else {
                 if constexpr (kVendor) {
                     (void)backend::gemv_vendor<B, T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
@@ -873,7 +873,7 @@ void check_masked(Queue& q, const MaskCase& k) {
     SCOPED_TRACE(mask_label(k));
     const ScopedEnvVar segt("BATCHLAS_GEMV_SEGT", k.segt);
     if (std::holds_alternative<gv::Cta>(k.c))
-        ASSERT_EQ(sycl_gemv::gemv_seg_trans_width_debug<T>(q, k.m, std::int64_t(k.n) * k.batch), k.width)
+        ASSERT_EQ(ops::gemv::gemv_seg_trans_width_debug<T>(q, k.m, std::int64_t(k.n) * k.batch), k.width)
             << "the cta case does not run the body it names";
     else if (k.t == Transpose::NoTrans)
         ASSERT_EQ(k.m <= 16, k.width >= 2) << "body 4 runs exactly when out <= 16 (gemv_seg_width)";

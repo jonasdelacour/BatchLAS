@@ -6,6 +6,8 @@
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 
 #include <src/ops/getrs/getrs_native.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/kernels/common/lu_laswp.hh>
 #include <src/util/batch_mask.hh>
 
@@ -25,10 +27,9 @@
 #include <batchlas/settings.hh>
 
 namespace batchlas {
-namespace sycl_getrs {
+namespace ops::getrs {
 
 namespace {
-
 
 // Per-TU tag: this cluster's own instantiation of the shared LASWP kernel.
 struct GetrsLaswpTag {};
@@ -42,16 +43,6 @@ template <typename T> class GetrsPermGatherKernel;
 // evidence: docs/perf/lu.md#getrs-collapsed-permutation
 
 constexpr std::size_t kGetrsPermTileCap = 24576;
-
-// The 48 KB launch hole. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kGetrsPermHoleLo = 47104;
-constexpr std::size_t kGetrsPermHoleHi = 49664;
-constexpr std::size_t kGetrsPermHolePadTo = 49920;
-
-constexpr std::size_t getrs_perm_hole_padded(std::size_t bytes) {
-    return (bytes > kGetrsPermHoleLo && bytes <= kGetrsPermHoleHi) ? kGetrsPermHolePadTo
-                                                                  : bytes;
-}
 
 template <typename T>
 bool getrs_perm_gather_fits(int n, std::size_t slm_budget) {
@@ -94,7 +85,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
 
     std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
     const std::size_t raw = int_bytes + tile_elems * sizeof(D);
-    const std::size_t padded = getrs_perm_hole_padded(raw);
+    const std::size_t padded = resident::hole_padded(raw);
     if (padded > raw && padded <= slm_budget) {
         tile_elems = (padded - int_bytes + sizeof(D) - 1) / sizeof(D);
     }
@@ -196,13 +187,6 @@ int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
     return getrs_perm_gather_fits<T>(n, budget) ? 1 : 0;
 }
 
-// Capability flag, true for all four types; which family Auto takes is the
-// tuned/getrs.* table's call.
-template <> bool getrs_blocked_available<float>()                { return true; }
-template <> bool getrs_blocked_available<double>()               { return true; }
-template <> bool getrs_blocked_available<std::complex<float>>()  { return true; }
-template <> bool getrs_blocked_available<std::complex<double>>() { return true; }
-
 // Workspace: ZERO in every mode -- the interchange is in place and the routed
 // trsm takes none. It dereferences nothing: A and B arrive null when measuring.
 template <typename T>
@@ -233,11 +217,8 @@ Event getrs_blocked_dispatch(Queue& ctx,
 
     // src/ops/getrs/getrs.cc's can_run(Blocked) mirrors these checks (R3); keep the
     // two in step. The entry point is also reachable directly.
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("getrs_blocked: degenerate extents");
-    }
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("getrs_blocked: A must be square");
     }
     if (A.rows() != B.rows()) {
         throw batchlas::invalid_argument("getrs_blocked: B must have A.rows() rows");
@@ -245,19 +226,7 @@ Event getrs_blocked_dispatch(Queue& ctx,
     if (A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("getrs_blocked: A and B must agree on batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getrs_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrs_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never MAX_SUB_GROUP_SIZE >= 32: that property returns
-        // sub_group_sizes()[0], so it would ACCEPT a {64}-only device.
-        throw batchlas::unsupported(
-            "getrs_blocked: device does not offer sub-group size 32");
-    }
+    const auto dev = native::require_launchable(ctx, "getrs_blocked", A, {.square = true}, B);
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("getrs_blocked: pivot span is shorter than n * batch");
     }
@@ -331,5 +300,5 @@ BATCHLAS_GETRS_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRS_INSTANTIATE
 
-}  // namespace sycl_getrs
+}  // namespace ops::getrs
 }  // namespace batchlas

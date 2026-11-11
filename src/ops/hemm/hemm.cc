@@ -70,7 +70,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Mirror) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
-                return sycl_symm::symm_mirror<T, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
+                return ops::symm::symm_mirror<T, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
                                                                 level3::grid_chunk<B>(q));
             else
                 throw batchlas::internal_error("hemm: mirror is wired for GPU backends only");  // can_run refuses it

@@ -15,24 +15,16 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_geqrf {
+namespace batchlas::ops::geqrf {
 
 // 2, not resident::kMinBlocksPerSm's 4: this ceiling is a ROUTING cut wearing a capacity's
 // clothes, placed at the measured CTA-vs-Blocked crossover. GeqrfTest.OccupancyTargetIsPinned
 // fails if it moves. evidence: docs/perf/qr.md#settling-the-target-on-the-tall-panels
 inline constexpr int kGeqrfMinBlocksPerSm = 2;
 
-// The WHOLE budget (0 = tier absent); min_blocks_per_sm cuts the slice the tier ADVERTISES.
-template <typename T>
-BATCHLAS_INTERNAL_API int geqrf_cta_max_m_for_slm(
-    std::size_t slm_budget_bytes, int min_blocks_per_sm = kGeqrfMinBlocksPerSm);
-
 template <typename T>
 BATCHLAS_INTERNAL_API int64_t geqrf_cta_max_elems_for_slm(
     std::size_t slm_budget_bytes, int min_blocks_per_sm = kGeqrfMinBlocksPerSm);
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool geqrf_blocked_available();
 
 // TINY tier (square \f$m = n \le 32\f$): the ONE predicate for its ceiling -- the shape builder, the
 // entry point and the tests all call it. evidence: docs/perf/qr.md#the-tiny-ceiling-predicate
@@ -134,4 +126,4 @@ BATCHLAS_INTERNAL_API bool geqrf_cta_fits(
 template <typename T>
 BATCHLAS_INTERNAL_API bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
 
-}  // namespace batchlas::sycl_geqrf
+}  // namespace batchlas::ops::geqrf

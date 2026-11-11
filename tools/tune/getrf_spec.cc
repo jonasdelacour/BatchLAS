@@ -107,7 +107,6 @@ public:
             "src/ops/getrf/kernels/getrf_panel_reg_device.hh",
             // common
             "src/ops/getrf/kernels/getrf_cta.cc",
-            "src/ops/getrf/getrf_cta_device.hh",
             "src/ops/getrf/getrf_native.hh",
             "src/ops/getrf/choice.hh",
             "include/batchlas/device/arith.hh",

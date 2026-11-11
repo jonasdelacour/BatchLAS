@@ -261,14 +261,14 @@ protected:
         const std::size_t lm = this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         return lm > 4096 ? lm - 4096 : 0;
     }
-    std::size_t cap() const { return sycl_getrs::getrs_fused_max_rhs_elems<T>(budget()); }
+    std::size_t cap() const { return ops::getrs::getrs_fused_max_rhs_elems<T>(budget()); }
 
     // ---- the limit oracle: the drivers' own constants, not getrs.cc's can_run ----
     bool expect_runs(const C& c, int n, int nrhs) const {
         if (n < 1 || nrhs < 1) return false;
         if (std::holds_alternative<gs::Cta>(c))
-            return nrhs <= sycl_getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cap();
-        if (std::holds_alternative<gs::Blocked>(c)) return sycl_getrs::getrs_blocked_available<T>();
+            return nrhs <= ops::getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cap();
+        if (std::holds_alternative<gs::Blocked>(c)) return true;
         return kVendor;
     }
     bool cta_fits(int n, int nrhs) const { return expect_runs(C{gs::Cta{}}, n, nrhs); }
@@ -319,9 +319,9 @@ protected:
         UnifiedVector<std::byte> ws(4096);
         try {
             if (std::holds_alternative<gs::Cta>(c)) {
-                (void)sycl_getrs::getrs_fused_dispatch<T>(q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span());
+                (void)ops::getrs::getrs_fused_dispatch<T>(q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span());
             } else if (std::holds_alternative<gs::Blocked>(c)) {
-                (void)sycl_getrs::getrs_blocked_dispatch<T>(
+                (void)ops::getrs::getrs_blocked_dispatch<T>(
                     q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span(),
                     [](Queue& c2, const MV& ta, const MV& tb, T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
                         return trsm<B, T>(c2, ta, tb, al, sd, ul, tr, dg);
@@ -401,7 +401,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
 // and refused one order past it; Blocked serves the refused shape.
 TYPED_TEST(GetrsCandidates, CtaLaunchesAtItsResidentCapacity) {
     using T = typename TestFixture::T;
-    const int nrhs = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int nrhs = int(ops::getrs::kGetrsFusedMaxRhs);
     const int fit = int(this->cap() / std::size_t(nrhs));
     ASSERT_GT(fit, 32) << "the fused tier has no useful capacity on this device";
     Spec s{fit, nrhs, 2, Transpose::ConjTrans};
@@ -509,9 +509,9 @@ TYPED_TEST(GetrsCandidates, WorkspaceIsExactlyWhatTheChoiceNeeds) {
             auto Bm = p.B();
             const std::size_t need = getrs_buffer_size<B, T>(*this->ctx, A, Bm, s.trans);
             if (std::holds_alternative<gs::Cta>(c))
-                EXPECT_EQ(need, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bm, s.trans));
+                EXPECT_EQ(need, ops::getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bm, s.trans));
             if (std::holds_alternative<gs::Blocked>(c))
-                EXPECT_EQ(need, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bm, s.trans));
+                EXPECT_EQ(need, ops::getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bm, s.trans));
             constexpr std::size_t kTail = 4096;
             UnifiedVector<std::byte> arena(need + kTail, std::byte{0xA5});
             (void)getrs<B, T>(*this->ctx, A, Bm, s.trans, p.piv.to_span(), Span<std::byte>(arena.data(), need));
@@ -542,7 +542,7 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     struct Case { C c; int an, ac, bn, bc, ab, bb; const char* what; };
-    const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int w = int(ops::getrs::kGetrsFusedMaxRhs);
     const Case cases[] = {{gs::Cta{}, 0, 0, 0, 2, 1, 1, "order 0"},        {gs::Blocked{}, 0, 0, 0, 2, 1, 1, "order 0"},
                           {gs::Cta{}, 8, 8, 8, 0, 1, 1, "nrhs 0"},         {gs::Blocked{}, 8, 8, 8, 0, 1, 1, "nrhs 0"},
                           {gs::Cta{}, 8, 8, 8, w + 1, 1, 1, "nrhs past the width"},
@@ -654,7 +654,7 @@ TYPED_TEST(GetrsCandidates, ClassWordsAndSpellings) {
 TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
     const ScopedEnvVar env("BATCHLAS_GETRS_ROUTE", "cta");
-    const Spec wide{40, int(sycl_getrs::kGetrsFusedMaxRhs) + 1, 2};
+    const Spec wide{40, int(ops::getrs::kGetrsFusedMaxRhs) + 1, 2};
     {
         auto p = make_sys<T>(wide);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
@@ -822,7 +822,7 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // equal the transcribed preference at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrsTranscribedTable, RowsHoldTheTranscribedPreferenceOnBothSidesOfEveryThreshold) {
     test_utils::TranscribedRowsHeld held;
-    const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int w = int(ops::getrs::kGetrsFusedMaxRhs);
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getrs", dt, select::device_from_key(dev));

@@ -6,7 +6,8 @@
 // device::larfg_scalars<alg::LarfgLapack> (tau's real-beta convention is read by ormqr/orgqr/ormbr/sy2sb).
 // evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
 
-#include <src/ops/geqrf/geqrf_cta_device.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 
 #include <src/sycl/device_scalar.hh>
 #include <src/util/resident_capacity.hh>

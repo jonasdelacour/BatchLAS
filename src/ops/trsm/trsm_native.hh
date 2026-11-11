@@ -11,15 +11,12 @@
 #include <functional>
 #include <batchlas/util/sycl-device-queue.hh>
 
-namespace batchlas::sycl_trsm {
+namespace batchlas::ops::trsm {
 
 // Zero means "no native TRSM kernel in this build": trsm's can_run (src/ops/trsm/trsm.cc)
 // then refuses cta and blocked.
 template <typename T>
 BATCHLAS_INTERNAL_API int trsm_cta_max_n();
-
-template <typename T>
-BATCHLAS_INTERNAL_API bool trsm_blocked_available();
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
@@ -82,4 +79,4 @@ BATCHLAS_INTERNAL_API Event trsm_native_blocked(Queue& ctx,
                                                 Diag diag,
                                                 TrsmTrailingGemm<T> trailing_gemm);
 
-} // namespace batchlas::sycl_trsm
+} // namespace batchlas::ops::trsm

@@ -226,7 +226,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int i = lane % m, jsub = lane / m;
             D acc{};
             if (!al.zero && jsub < P) acc = device::dot_partial<false, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
-            acc = sycl_gemv::dla::fold_down<P>(sg, acc, device::Dyn{m});
+            acc = ops::gemv::dla::fold_down<P>(sg, acc, device::Dyn{m});
             if (lane < m) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::ColSubGroup) {
@@ -333,11 +333,11 @@ TYPED_TEST(GemvNativeKernelsTest, FoldDownStridesAndLeaderSum) {
         const int l = int(sg.get_local_linear_id());
         const D x = v[b * kSg + l];
         D* ob = o + b * kCases * kSg + l;
-        ob[0 * kSg] = sycl_gemv::dla::fold_down<2>(sg, x, device::Dyn{13});
-        ob[1 * kSg] = sycl_gemv::dla::fold_down<4>(sg, x, device::Dyn{7});
-        ob[2 * kSg] = sycl_gemv::dla::fold_down<8>(sg, x, device::Dyn{3});
-        ob[3 * kSg] = sycl_gemv::dla::fold_down<16>(sg, x, device::Dyn{2});
-        ob[4 * kSg] = sycl_gemv::dla::fold_down<32>(sg, x);
+        ob[0 * kSg] = ops::gemv::dla::fold_down<2>(sg, x, device::Dyn{13});
+        ob[1 * kSg] = ops::gemv::dla::fold_down<4>(sg, x, device::Dyn{7});
+        ob[2 * kSg] = ops::gemv::dla::fold_down<8>(sg, x, device::Dyn{3});
+        ob[3 * kSg] = ops::gemv::dla::fold_down<16>(sg, x, device::Dyn{2});
+        ob[4 * kSg] = ops::gemv::dla::fold_down<32>(sg, x);
         ob[5 * kSg] = device::shift_reduce<4>(device::Partition<4>{sg}.part, x, AddOf{});
         ob[6 * kSg] = device::shift_reduce<32>(device::SubGroup<32>{sg}.sg, x, AddOf{});
     });

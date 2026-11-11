@@ -8,7 +8,7 @@ set(EXTENSIONS_CTA_SOURCES
     gesvd/gebrd/gebrd_cta.cc
     ormqr/kernels/ormqr_cta.cc
     # WP4 Phases 1 and 2. THIS list and no other (W12): the blocked driver's
-    # diagonal leaf IS potrf_cta_body, shared through potrf_cta_device.hh, so
+    # diagonal leaf IS potrf_cta_body, shared through lapack/potrf.hh, so
     # potrf_blocked.cc lands here too. While every helper stays an inline
     # template a split would link by duplicating the body into both TUs and break
     # only when someone marks one SYCL_EXTERNAL -- "the device-link note below: a source must
@@ -30,11 +30,11 @@ set(EXTENSIONS_CTA_SOURCES
     potrf/kernels/potrf_lpanel.cc
     # WP5 scaffolding, and THIS list for the same W12 reason as potrf's pair: the
     # blocked geqrf driver's panel leaf will BE the CTA device function, shared
-    # through a geqrf_cta_device.hh, so the two sources must sit in ONE
+    # through lapack/geqrf.hh, so the two sources must sit in ONE
     # device-code cluster ("the device-link note below: a source must sit with the
     # sources whose device symbols it calls"). Both files now DO contain device code --
     # getrf_cta.cc defines GetrfPanelResidentKernel and GetrfPanelGlobalKernel,
-    # and getrf_blocked_available<T>() is true for all four types -- so this
+    # and getrf_blocked.cc launches them for all four types -- so this
     # grouping is load-bearing, not speculative: getting it wrong is the
     # `ptxas fatal: Unresolved extern function` this comment warns about.
     # NOTE the counter-example NOT to copy: ormqr_cta.cc is in
@@ -45,14 +45,14 @@ set(EXTENSIONS_CTA_SOURCES
     geqrf/kernels/geqrf_blocked.cc
     # WP6/P1, the register-resident TINY tier for square n <= 32. HERE because the rule
     # "a source must sit with the sources whose device symbols it calls" places
-    # it: geqrf_tiny.cc reuses geqrf_cta_device.hh's xLARFG (device::larfg_scalars<alg::LarfgLapack>)
+    # it: geqrf_tiny.cc reuses lapack/geqrf.hh's xLARFG (device::larfg_scalars<alg::LarfgLapack>)
     # verbatim rather than re-deriving the LAPACK real-beta tau convention, so it shares
     # a device-code cluster with the pair above. It is also GPU-only, which is what this
     # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt) wants.
     geqrf/kernels/geqrf_tiny.cc
     # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
     # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
-    # device function, shared through a getrf_cta_device.hh, so the two sources
+    # device function, shared through lapack/getrf.hh, so the two sources
     # must sit in ONE device-code cluster ("the device-link note below: a source must sit with
     # the sources whose device symbols it calls"). Neither file contains device
     # code YET -- both currently hold only the capability answers, which report
@@ -77,7 +77,7 @@ set(EXTENSIONS_CTA_SOURCES
     # gesv_tiny.cc (WP6/P2) is NOT here: EXTENSIONS_GESV_SOURCES below.
     # WP6/P4, the register-resident PANEL leaf for the blocked driver. HERE by the
     # cluster rule and not by the GPU-only one: getrf_panel_reg_device.hh includes
-    # getrf_cta_device.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this
+    # lapack/getrf.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this
     # file's getrf_panel_reg_factorize, so all three share a device-code cluster.
     getrf/kernels/getrf_panel_reg.cc
     syev/steqr/steqr_cta.cc

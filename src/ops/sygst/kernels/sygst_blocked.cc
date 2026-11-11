@@ -25,7 +25,7 @@
 namespace batchlas::ops::sygst {
 
 // Whether the call is one diagonal-kernel launch: no child, no workspace, no chunking.
-inline bool single_block(int n, int nb) { return n <= std::min(nb, sycl_sygst::kDiagMaxOrder); }
+inline bool single_block(int n, int nb) { return n <= std::min(nb, ops::sygst::kDiagMaxOrder); }
 
 // Fewest items per pass, in CUs: parts of 128 or 256 items starve the children (float n = 480, batch
 // 1024: 22.0 ms at potrf's chunk, 14.0 ms at 512). Here, not in tuning_params.hh, which getrf, potrf,
@@ -117,7 +117,7 @@ void mm(Queue& q, const MV<T>& X, const MV<T>& Y, const MV<T>& C, T alpha) {
 
 template <class T>
 void mirror(Queue& q, const Pass<T>& p, int at, int kb, Uplo uplo) {
-    (void)sycl_sygst::sygst_mirror<T>(q, p.at_a(at), p.lda, p.sa, kb, p.cb, uplo, p.l.h.data(), p.nb,
+    (void)ops::sygst::sygst_mirror<T>(q, p.at_a(at), p.lda, p.sa, kb, p.cb, uplo, p.l.h.data(), p.nb,
                                       std::ptrdiff_t(p.nb) * p.nb, p.mask_ptr());
 }
 
@@ -129,13 +129,13 @@ void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, 
     const T one(1), half(0.5), mhalf(-0.5), mone(-1);
     // Reduce the diagonal block at `at`; with `full`, also leave the whole Hermitian result in H.
     auto diag = [&](int at, int kb, bool full) {
-        if (kb <= sycl_sygst::kDiagMaxOrder) {
-            (void)sycl_sygst::sygst_diag<T>(q, p.at_a(at), p.lda, p.sa, p.at_b(at), p.ldb, p.sb, kb, p.cb, itype, uplo,
+        if (kb <= ops::sygst::kDiagMaxOrder) {
+            (void)ops::sygst::sygst_diag<T>(q, p.at_a(at), p.lda, p.sa, p.at_b(at), p.ldb, p.sb, kb, p.cb, itype, uplo,
                                             full ? p.l.h.data() : nullptr, p.nb, std::ptrdiff_t(p.nb) * p.nb,
                                             p.mask_ptr());
             return;
         }
-        blocked_range<B, T>(q, p, at, kb, std::max(sycl_sygst::kDiagMaxOrder, kb / 4), itype, uplo);
+        blocked_range<B, T>(q, p, at, kb, std::max(ops::sygst::kDiagMaxOrder, kb / 4), itype, uplo);
         if (full) mirror(q, p, at, kb, uplo);
     };
     T** const pf = p.l.pf.data();

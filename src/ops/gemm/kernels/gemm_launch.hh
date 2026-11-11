@@ -30,7 +30,7 @@
 #include <string>
 #include <sycl/sycl.hpp>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 using batchlas::device::l3::LinearEpilogue;
 using batchlas::device::l3::operand_value;
@@ -39,20 +39,16 @@ namespace {
 
 namespace og = ::batchlas::ops::gemm;
 
-static_assert(og::kSmallMaxDim == sycl_gemm_small::kSmallMaxDim && og::kSmallWg == sycl_gemm_small::kSmallWg &&
-                  og::kSmallTiledMaxDim == sycl_gemm_small::kSmallTiledMaxDim,
-              "choice.hh's small limits must match small_batched.hh");
 template <typename T>
 constexpr bool small_slm_matches() {
-    namespace gs = sycl_gemm_small;
     constexpr std::int64_t s = sizeof(T);
-    return og::small_max_dim<T>() == gs::kSmallMaxDimFor<T> &&
-           og::small_slm_bytes<T>(false, 8) == s * gs::kSmallBatchedSlmElems<8> &&
-           og::small_slm_bytes<T>(false, 16) == s * gs::kSmallBatchedSlmElems<16> &&
-           og::small_slm_bytes<T>(true, 32) == s * gs::kSmallBatchedSlmElems<32> &&
-           og::small_slm_bytes<T>(false, 64) == s * gs::kSmallBatchedSlmElems<64> &&
-           (!std::is_same_v<T, float> || (og::small_slm_bytes<T>(true, 48) == s * gs::kSmallTiledSlmElems<48> &&
-                                          og::small_slm_bytes<T>(true, 56) == s * gs::kSmallTiledSlmElems<56>));
+    return og::small_max_dim<T>() == og::kSmallMaxDimFor<T> &&
+           og::small_slm_bytes<T>(false, 8) == s * og::kSmallBatchedSlmElems<8> &&
+           og::small_slm_bytes<T>(false, 16) == s * og::kSmallBatchedSlmElems<16> &&
+           og::small_slm_bytes<T>(true, 32) == s * og::kSmallBatchedSlmElems<32> &&
+           og::small_slm_bytes<T>(false, 64) == s * og::kSmallBatchedSlmElems<64> &&
+           (!std::is_same_v<T, float> || (og::small_slm_bytes<T>(true, 48) == s * og::kSmallTiledSlmElems<48> &&
+                                          og::small_slm_bytes<T>(true, 56) == s * og::kSmallTiledSlmElems<56>));
 }
 static_assert(small_slm_matches<float>() && small_slm_matches<double>() && small_slm_matches<std::complex<float>>() &&
                   small_slm_matches<std::complex<double>>(),
@@ -569,4 +565,4 @@ void gemm_reg_row(std::optional<Event>& out, Queue& ctx, const MatrixView<float,
                   const MatrixView<float, MatrixFormat::Dense>& B,
                   const MatrixView<float, MatrixFormat::Dense>& C, float alpha, float beta, bool ta, bool tb);
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

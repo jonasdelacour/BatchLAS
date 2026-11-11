@@ -27,18 +27,17 @@
 #include <batchlas/device/level3/mma.hh>
 #include <batchlas/device/level3/packet.hh>
 #include <batchlas/device/level3/stage.hh>
+#include <src/ops/gemm/choice.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 
-namespace batchlas::sycl_gemm_small {
+namespace batchlas::ops::gemm {
 
 
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
 
-inline constexpr int kSmallWg = 128;
-
-// The largest order the kernel serves; \f$\max(m, n, k)\f$ picks the bucket.
-inline constexpr int kSmallMaxDim = 64;
+// kSmallWg, kSmallMaxDim (the largest order served; \f$\max(m, n, k)\f$ picks the bucket) and
+// kSmallTiledMaxDim are choice.hh's.
 
 // A 16-byte scalar stops at 32: its 64 bucket stages \f$64 \times 65 \times 16\f$ B = 66.5 KB and holds a
 // 64-entry row plus 32 accumulators, 384 registers. choice.hh's small_max_dim mirrors it.
@@ -169,7 +168,6 @@ class GemmSmallTiledKernel;
 // With \f$\beta \ne 0\f$ the lane reads its C tile BEFORE the barrier so that latency
 // overlaps the staging; at \f$\beta = 0\f$ that prefetch is compiled out, because
 // its registers cost more than it saves. evidence: docs/perf/gemm.md#the-small-tiled-kernel
-inline constexpr int kSmallTiledMaxDim = 56;
 template <int NB>
 inline constexpr std::int64_t kSmallTiledSlmElems = std::int64_t(2) * NB * (NB + 4);
 
@@ -202,7 +200,7 @@ Event launch_small_tiled(Queue& ctx,
             [=](sycl::nd_item<1> it) {
                 const int t = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t bi = static_cast<std::ptrdiff_t>(it.get_group(0));
-                if (sycl_gemm::item_off(mask, bi)) return;  // one item per work-group: before the barrier
+                if (ops::gemm::item_off(mask, bi)) return;  // one item per work-group: before the barrier
                 const int kp = (k + 3) & ~3;
                 T* const sA = &slm[0];           // sA[l * kLd + r]
                 T* const sB = sA + NB * kLd;     // sB[c * kLd + l]
@@ -295,7 +293,7 @@ Event small_batched(Queue& ctx,
                     T alpha, T beta, Transpose transA, Transpose transB,
                     int m, int n, int k) {
     const int max_dim = m > n ? (m > k ? m : k) : (n > k ? n : k);
-    const std::uint8_t* mask = sycl_gemm::item_mask(A, B, C);
+    const std::uint8_t* mask = ops::gemm::item_mask(A, B, C);
     if constexpr (std::is_same_v<T, float>) {
         if (transA == Transpose::NoTrans && transB == Transpose::NoTrans && max_dim > 32 &&
             max_dim <= kSmallTiledMaxDim) {
@@ -317,4 +315,4 @@ Event small_batched(Queue& ctx,
     }
 }
 
-}  // namespace batchlas::sycl_gemm_small
+}  // namespace batchlas::ops::gemm

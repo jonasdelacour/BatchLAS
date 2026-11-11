@@ -816,24 +816,24 @@ protected:
         const Transpose ta = p.s.ta, tb = p.s.tb;
         try {
             const bool launched = std::visit(overloaded{
-                [&](og::Direct) { (void)sycl_gemm::gemm_direct<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
-                [&](og::Tiled) { (void)sycl_gemm::gemm_tiled<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
-                [&](og::Small) { (void)sycl_gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Direct) { (void)ops::gemm::gemm_direct<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Tiled) { (void)ops::gemm::gemm_tiled<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Small) { (void)ops::gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
                 [&](const og::Reg& r) {
                     if constexpr (!std::is_same_v<T, float>) {
                         if (why) *why = "reg is float only";
                         return false;
                     } else {
-                        (void)sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                        (void)ops::gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                         return true;
                     }
                 },
                 [&](const og::Wide& w) {
-                    (void)sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                    (void)ops::gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                     return true;
                 },
                 [&](const og::SplitK& sk) {
-                    (void)sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                    (void)ops::gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                     return true;
                 },
                 [&](og::Vendor) {

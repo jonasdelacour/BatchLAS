@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 // The call's batch mask as a kernel argument (null: unmasked). A, B and C share one span, so a
 // chunk's views (batch_range) hand its slice to the chunk's launch.
@@ -133,4 +133,4 @@ BATCHLAS_INTERNAL_API Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int 
                                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                         Transpose transA, Transpose transB);
 
-} // namespace batchlas::sycl_gemm
+} // namespace batchlas::ops::gemm

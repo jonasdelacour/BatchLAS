@@ -254,32 +254,32 @@ protected:
         return static_cast<int>(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     }
     int tiny_n() const {
-        return max_wg() >= sycl_getrf::kGetrfTinyWgSize ? sycl_getrf::getrf_tiny_max_n<T>() : 0;
+        return max_wg() >= resident::kTinyWgSize ? ops::getrf::getrf_tiny_max_n<T>() : 0;
     }
-    int cta_n() const { return sycl_getrf::getrf_cta_max_n_for_slm<T>(budget()); }
+    int cta_n() const { return ops::getrf::getrf_cta_max_n_for_slm<T>(budget()); }
     bool expect_runs(const C& c, int n) const {
         if (n < 1) return false;
         if (std::holds_alternative<gf::Tiny>(c)) return n <= tiny_n();
-        if (std::holds_alternative<gf::Cta>(c)) return sycl_getrf::getrf_cta_fits<T>(n, budget());
-        if (std::holds_alternative<gf::Blocked>(c)) return sycl_getrf::getrf_blocked_available<T>();
+        if (std::holds_alternative<gf::Cta>(c)) return ops::getrf::getrf_cta_fits<T>(n, budget());
+        if (std::holds_alternative<gf::Blocked>(c)) return true;
         return kVendor;
     }
     bool expect_runs_rect(const C& c, int m, int n) const {
         if (m == n) return expect_runs(c, n);
         if (m < 1 || n < 1) return false;
-        if (std::holds_alternative<gf::Cta>(c)) return sycl_getrf::getrf_cta_fits_rect<T>(m, n, budget());
-        if (std::holds_alternative<gf::Blocked>(c)) return sycl_getrf::getrf_blocked_available<T>();
+        if (std::holds_alternative<gf::Cta>(c)) return ops::getrf::getrf_cta_fits_rect<T>(m, n, budget());
+        if (std::holds_alternative<gf::Blocked>(c)) return true;
         return std::holds_alternative<gf::Vendor>(c) && kVendor && B != Backend::CUDA;
     }
     // The CTA fit's edges at 24 columns / 24 rows, asked of the predicate rather than hardcoded.
     int cta_tall_m() const {
         int m = 24;
-        while (sycl_getrf::getrf_cta_fits_rect<T>(m + 1, 24, budget())) ++m;
+        while (ops::getrf::getrf_cta_fits_rect<T>(m + 1, 24, budget())) ++m;
         return m;
     }
     int cta_wide_n() const {
         int n = 24;
-        while (sycl_getrf::getrf_cta_fits_rect<T>(24, n + 1, budget())) ++n;
+        while (ops::getrf::getrf_cta_fits_rect<T>(24, n + 1, budget())) ++n;
         return n;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor exists.
@@ -307,14 +307,14 @@ protected:
         const MV A = p.A();
         try {
             if (std::holds_alternative<gf::Tiny>(c)) {
-                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_tiny_buffer_size<T>(q, A)));
-                (void)sycl_getrf::getrf_tiny_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_tiny_buffer_size<T>(q, A)));
+                (void)ops::getrf::getrf_tiny_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
             } else if (std::holds_alternative<gf::Cta>(c)) {
-                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_cta_buffer_size<T>(q, A)));
-                (void)sycl_getrf::getrf_cta_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_cta_buffer_size<T>(q, A)));
+                (void)ops::getrf::getrf_cta_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
             } else if (std::holds_alternative<gf::Blocked>(c)) {
-                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_blocked_buffer_size<T>(q, A)));
-                (void)sycl_getrf::getrf_blocked_dispatch<T>(
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_blocked_buffer_size<T>(q, A)));
+                (void)ops::getrf::getrf_blocked_dispatch<T>(
                     q, A, p.pivots(), ws.to_span(), p.info.to_span(),
                     [](Queue& c2, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
                        ComputePrecision pr) { return gemm<B, T>(c2, ga, gb, gc, al, be, ta, tb, pr); },
@@ -353,17 +353,17 @@ protected:
         const MV A = p.A();
         try {
             std::size_t bytes = 0;
-            if (std::holds_alternative<gf::Tiny>(c)) bytes = sycl_getrf::getrf_tiny_buffer_size<T>(q, A);
-            if (std::holds_alternative<gf::Cta>(c)) bytes = sycl_getrf::getrf_cta_buffer_size<T>(q, A);
-            if (std::holds_alternative<gf::Blocked>(c)) bytes = sycl_getrf::getrf_blocked_buffer_size<T>(q, A);
+            if (std::holds_alternative<gf::Tiny>(c)) bytes = ops::getrf::getrf_tiny_buffer_size<T>(q, A);
+            if (std::holds_alternative<gf::Cta>(c)) bytes = ops::getrf::getrf_cta_buffer_size<T>(q, A);
+            if (std::holds_alternative<gf::Blocked>(c)) bytes = ops::getrf::getrf_blocked_buffer_size<T>(q, A);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
             const Span<std::byte> w(ws.data(), bytes);
             if (std::holds_alternative<gf::Tiny>(c)) {
-                (void)sycl_getrf::getrf_tiny_dispatch<T>(q, A, p.piv.to_span(), w, p.info.to_span());
+                (void)ops::getrf::getrf_tiny_dispatch<T>(q, A, p.piv.to_span(), w, p.info.to_span());
             } else if (std::holds_alternative<gf::Cta>(c)) {
-                (void)sycl_getrf::getrf_cta_dispatch<T>(q, A, p.piv.to_span(), w, p.info.to_span());
+                (void)ops::getrf::getrf_cta_dispatch<T>(q, A, p.piv.to_span(), w, p.info.to_span());
             } else if (std::holds_alternative<gf::Blocked>(c)) {
-                (void)sycl_getrf::getrf_blocked_dispatch<T>(
+                (void)ops::getrf::getrf_blocked_dispatch<T>(
                     q, A, p.piv.to_span(), w, p.info.to_span(),
                     [](Queue& c2, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
                        ComputePrecision pr) { return gemm<B, T>(c2, ga, gb, gc, al, be, ta, tb, pr); },

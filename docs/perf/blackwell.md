@@ -163,7 +163,7 @@ V1 alone, BASE -> capped, ms, batch 32768: float n32 q8 Left 0.994 -> 0.284; cfl
 
 ### trsm sub-group Left kernel
 
-`sycl_trsm::trsm_native_sg_left_dispatch` (`src/ops/trsm/kernels/trsm_sg_left.cc`) is the trsm
+`ops::trsm::trsm_native_sg_left_dispatch` (`src/ops/trsm/kernels/trsm_sg_left.cc`) is the trsm
 candidate `sg_left`: Side::Left, orders 1..32, sub-group 32 (`src/ops/trsm/choice.hh`); a pin above
 order 32 throws. Each lane is a (matrix, canonical row \f$r\f$) pair, so a sub-group holds \f$32/N\f$ matrices for \f$N \in \{4, 8, 16, 32\}\f$. Each lane carries QC right-hand sides: 4 for \f$q \le 4\f$, 8 for \f$q \le 8\f$, otherwise 16
 (complex<double> caps at 8). Lane \f$r\f$ holds row \f$r\f$ of the canonical Lc; step \f$s\f$ broadcasts \f$x_s\f$ from lane \f$s\f$
