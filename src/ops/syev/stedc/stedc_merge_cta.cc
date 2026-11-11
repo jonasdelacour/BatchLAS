@@ -10,7 +10,9 @@
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/syev/stedc/stedc_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/laed2.hh>
+#include <batchlas/device/lapack/laed4.hh>
 #include <batchlas/device/lapack/laed3.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 

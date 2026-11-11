@@ -184,6 +184,9 @@ struct Native {};
 struct ExplicitInline {};
 struct Fma {};
 }  // namespace arith
+namespace detail {
+template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, arith::Native>;
+}  // namespace detail
 
 // Operands by reference and complex parts read one at a time, as in the hand helper: the loads
 // sit inside the call, and a by-value std::complex is one 8/16-byte load (other unrolling).

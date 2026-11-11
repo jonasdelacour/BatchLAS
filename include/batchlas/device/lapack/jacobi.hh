@@ -3,7 +3,7 @@
 // Shared pieces of the Jacobi routines (syevj two-sided, gesvj one-sided): pivot schedule,
 // rotation threshold and record, the one-sided norm recurrence, the phased plane rotation
 // U = [c s; -d s  d c] and the rounds of disjoint rotations from the right (A U) or the left
-// (U^H A). sym_schur2 waits in src/kernels/common/dla_v2_jacobi.hh for core inv_sqrt.
+// (U^H A), and the 2x2 Hermitian rotation sym_schur2.
 //
 // Ops = arith::Native (default) writes every update with T's own operators, the legacy kernels'
 // expressions kept whole (bit identity; -ffp-contract=on fuses within one expression; for
@@ -15,11 +15,11 @@
 
 #include <sycl/sycl.hpp>
 
+#include <batchlas/device/arith.hh>
 #include <batchlas/device/core.hh>
+#include <batchlas/device/scalar.hh>
 
 namespace batchlas::device::detail {
-
-template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, arith::Native>;
 
 struct PivotPair {
     int p, q;
@@ -211,6 +211,48 @@ BATCHLAS_DEVICE_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR
         a(pq.p, col) = r.x;
         a(pq.q, col) = r.y;
     }
+}
+
+// Golub & Van Loan sym.schur2 generalised by a diagonal phase: for H = [app apq; conj(apq) aqq]
+// (app, aqq real) U^H H U is diagonal. d = conj(apq) / |apq| makes the 2x2 real, then the
+// classical rotation with tau = (aqq - app) / (2 g), t = sign(tau) / (|tau| + sqrt(1 + tau^2)).
+// For real T, d = 1 and g carries the sign of apq. A rotation below the threshold or whose s
+// rounds to 0 (it could never annihilate apq) is the identity with active == false.
+template <class T>
+BATCHLAS_DEVICE_INLINE JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T apq,
+                                                                const JacobiThreshold<real_t<T>>& th) {
+    using R = real_t<T>;
+    JacobiRotation<T> r = identity_rotation<T>();
+    const R g_abs = modulus(apq);
+    const R thresh = th.tol * sycl::sqrt(sycl::fabs(app) * sycl::fabs(aqq));
+    if (g_abs > thresh && g_abs > th.tiny) {
+        R g;
+        if constexpr (Arith<T>::is_complex) {
+            g = g_abs;
+            r.d = T(apq.real() / g_abs, -apq.imag() / g_abs);
+        } else {
+            g = apq;
+            r.d = T(1);
+        }
+        r.g = g;
+        const R tau = (aqq - app) / (R(2) * g);
+        R tt;
+        if (sycl::fabs(tau) > th.tau_big) {
+            tt = R(1) / (R(2) * tau);
+        } else {
+            tt = sycl::copysign(R(1), tau) / (sycl::fabs(tau) + sycl::sqrt(R(1) + tau * tau));
+        }
+        r.t = tt;
+        r.c = inv_sqrt<InvSqrtEdge::FiniteGeOne>(R(1) + tt * tt);
+        r.s = tt * r.c;
+        r.active = !(r.s == R(0));
+    }
+    if (!r.active) {
+        r.c = R(1);
+        r.s = R(0);
+        r.d = T(1);
+    }
+    return r;
 }
 
 }  // namespace batchlas::device::detail

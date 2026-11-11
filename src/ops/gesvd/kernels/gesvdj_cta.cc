@@ -8,7 +8,9 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_jacobi.hh>
+#include <batchlas/device/lapack/jacobi.hh>
+#include <batchlas/device/level1.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
@@ -343,7 +345,7 @@ BATCHLAS_UNROLL_FULL
                             app = nrm(kpq.p);
                             aqq = nrm(kpq.q);
                             // An identity rotation must not count, or every problem burns all max_sweeps.
-                            jr = device::sym_schur2<T>(app, aqq, apq, thr);
+                            jr = device::detail::sym_schur2<T>(app, aqq, apq, thr);
                         }
                         active = jr.active;
 
@@ -509,7 +511,7 @@ BATCHLAS_UNROLL_FULL
                                 }
                                 const Real nrm2 = device::allreduce(ex, device::sumsq_owned(ex, v, RR));
                                 if (nrm2 > accept_tol) {
-                                    const Real inv_nr = ::batchlas::sycl_device::inv_sqrt(nrm2);
+                                    const Real inv_nr = ::batchlas::device::inv_sqrt(nrm2);
                                     device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
                                         A(row, cdst) = v[rr] * T(inv_nr);
                                     });

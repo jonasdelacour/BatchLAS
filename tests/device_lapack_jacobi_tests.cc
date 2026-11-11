@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Device LA Jacobi family ops (src/kernels/common/dla_v2_jacobi.hh, private to syev_jacobi_cta
-// and gesvdj_cta) against host references; the core ops they compose with are covered by
+// Device LA Jacobi family ops (the owned-Frag ops in level1.hh, sym_schur2 in lapack/jacobi.hh;
+// used by syev_jacobi_cta and gesvdj_cta) against host references; the core ops they compose with are covered by
 // device_core_ops_tests. Guards (docs/developer/agent-guide.md section 8): tiles with ld = P + 1
 // and Rows + 1, a global matrix with ld = n + 3, complex data with nonzero imaginary parts, the
 // unread triangle NaN-poisoned and Im(diag) poisoned, batch 1024 with period-3 items bit-identical
@@ -21,7 +21,9 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_jacobi.hh>
+#include <batchlas/device/lapack/jacobi.hh>
+#include <batchlas/device/level1.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
@@ -222,7 +224,7 @@ TYPED_TEST(DeviceLapackJacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
     this->dev.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int i = static_cast<int>(it.get_local_linear_id());
         if (i >= nc) return;
-        const device::detail::JacobiRotation<T> r = device::sym_schur2<T>(app[i], aqq[i], apq[i], th);
+        const device::detail::JacobiRotation<T> r = device::detail::sym_schur2<T>(app[i], aqq[i], apq[i], th);
         oc[i] = r.c, os[i] = r.s, ot[i] = r.t, og[i] = r.g, od[i] = r.d, oa[i] = r.active ? 1 : 0;
     });
     const auto c = this->dev.down(oc, nc), s = this->dev.down(os, nc), t = this->dev.down(ot, nc), g = this->dev.down(og, nc);
@@ -321,7 +323,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
                     active = pq.q < n;
                 }
                 device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
-                if (active) jr = device::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)), static_cast<T>(A(pq.p, pq.q)), th);
+                if (active) jr = device::detail::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)), static_cast<T>(A(pq.p, pq.q)), th);
                 if (lane < m / 2) rnd.store(lane, jr);
                 group_barrier(ex.part);
                 const int cnt = device::allreduce(ex, jr.active ? 1 : 0);

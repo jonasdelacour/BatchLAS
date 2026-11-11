@@ -4,7 +4,9 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-collectives.hh>
-#include <src/ops/syev/stedc/stedc_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/laed2.hh>
+#include <batchlas/device/lapack/laed4.hh>
 #include <batchlas/device/lapack/laed3.hh>
 #include <sycl/sycl.hpp>
 

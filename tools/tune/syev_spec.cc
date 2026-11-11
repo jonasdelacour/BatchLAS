@@ -133,7 +133,6 @@ public:
             "src/ops/syev/kernels/syev_cta_fused.cc",
             // family: jacobi
             "src/ops/syev/kernels/syev_jacobi_cta.cc",
-            "src/sycl/inv_sqrt.hh",
             // family: blocked
             "src/ops/syev/kernels/syev_blocked.cc",
             "src/ops/syev/sytrd/sytrd_blocked.cc",

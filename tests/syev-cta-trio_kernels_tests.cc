@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Family-private device LA ops of the syev CTA trio against host references:
-//   src/ops/syev/kernels/syev_drivers_v2.hh  (herm_load, ElemAt, dgmm, similarities, repack,
-//                                             column-owner larf / org2l / orm2l)
+//   include/batchlas/device/lapack/syev.hh   (herm_load, dgmm, similarities, repack, the host
+//                                             drivers' flat 2-D glue, column-owner larf / org2l /
+//                                             orm2l)
 //   include/batchlas/device/lapack/sytrd.hh  (sytd2; detail Fit ops, lacpy_herm) and core
 //                                             larfg (the row-fragment form sytd2 calls)
 //   include/batchlas/device/lapack/steqr.hh  (detail lanst_max, tridiag_split, scal_lane,
@@ -29,7 +30,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/syev/kernels/syev_drivers_v2.hh>
+#include <batchlas/device/lapack/syev.hh>
 #include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/device/lapack/sytrd.hh>
 #include <src/queue.hh>
@@ -152,9 +153,16 @@ using RealTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(SyevCtaTrioKernelsTest, Types);
 TYPED_TEST_SUITE(SyevCtaTrioKernelsRealTest, RealTypes);
 
-// =============================== syev drivers (syev_drivers_v2.hh) ===============================
+// =============================== syev drivers (lapack/syev.hh) ====================================
 
-// herm_load from both stored triangles; ElemAt driving core mirror (uplo_mirror's guarded Upper,
+// One element (r, c) as an executor (Grid2D's row()/col() contract): core 2-D ops visit only it.
+struct TrioElemAt {
+    int r, c;
+    BATCHLAS_DEVICE_INLINE int row() const { return r; }
+    BATCHLAS_DEVICE_INLINE int col() const { return c; }
+};
+
+// herm_load from both stored triangles; TrioElemAt driving core mirror (uplo_mirror's guarded Upper,
 // syev_cta's Lower with Im(diag) dropped) and core laset (the fused kernel's Q identity on the
 // leading nn block). Pure data movement: every entry bit for bit, the ld padding included.
 TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
@@ -184,13 +192,13 @@ TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
         for (int t = static_cast<int>(it.get_local_linear_id()); t < n * n; t += WG) {
             const int i = t % n, j = t / n;
             T hu, hl;
-            syev_v2::herm_load(hu, A, true, i, j);
-            syev_v2::herm_load<device::arith::Explicit>(hl, A, false, i, j);
+            device::detail::herm_load(hu, A, true, i, j);
+            device::detail::herm_load<device::arith::Explicit>(hl, A, false, i, j);
             Hu(i, j) = hu;
             Hl(i, j) = hl;
-            if (i > j) device::mirror<Uplo::Upper, true>(syev_v2::ElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
-            device::mirror<Uplo::Lower, true>(syev_v2::ElemAt{i, j}, M2);
-            device::laset(syev_v2::ElemAt{i, j}, device::Zero{}, i < nn ? R(1) : R(0), Q);
+            if (i > j) device::mirror<Uplo::Upper, true>(TrioElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
+            device::mirror<Uplo::Lower, true>(TrioElemAt{i, j}, M2);
+            device::laset(TrioElemAt{i, j}, device::Zero{}, i < nn ? R(1) : R(0), Q);
         }
     });
     const auto go = this->dev.down(o, hout.size());
@@ -246,8 +254,8 @@ TYPED_TEST(SyevCtaTrioKernelsTest, DgmmLeftAt) {
         const auto Y = device::mat(y + std::ptrdiff_t(b) * n * ldc, n, n, ldc);
         for (int t = static_cast<int>(it.get_local_linear_id()); t < n * n; t += WG) {
             const int i = t % n, j = t / n;
-            syev_v2::dgmm_left_at(D, Z, C, i, j);
-            syev_v2::dgmm_left_at<device::arith::Explicit>(D, Y, Y, i, j);
+            device::detail::dgmm_left_at(D, Z, C, i, j);
+            device::detail::dgmm_left_at<device::arith::Explicit>(D, Y, Y, i, j);
         }
     });
     const auto gc = this->dev.down(c, hc.size());
@@ -298,10 +306,10 @@ TYPED_TEST(SyevCtaTrioKernelsTest, TridiagonalSimilarities) {
             const auto drv = device::vec(dr + (std::ptrdiff_t(b) * 3 + k) * n, n);
             const auto erv = device::vec(er + (std::ptrdiff_t(b) * 3 + k) * (n - 1), n - 1);
             const auto sv = device::vec(s + (std::ptrdiff_t(b) * 3 + k) * n, n);
-            syev_v2::phase_similarity(device::Thread{}, n, dvv, ev, drv, erv, sv, u, /*want_s=*/k < 2);
+            device::detail::phase_similarity(device::Thread{}, n, dvv, ev, drv, erv, sv, u, /*want_s=*/k < 2);
         }
         if constexpr (!is_cplx<T>) {
-            syev_v2::sign_similarity(device::Thread{}, n, device::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1), device::vec(s2 + std::ptrdiff_t(b) * n, n));
+            device::detail::sign_similarity(device::Thread{}, n, device::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1), device::vec(s2 + std::ptrdiff_t(b) * n, n));
         }
     });
     const auto gdr = this->dev.down(dr, hdr.size());
@@ -369,13 +377,13 @@ template <class T, int P> void run_phase_replay(Dev& dev, int n) {
         const int b = static_cast<int>(it.get_group_linear_id()) * chunks + static_cast<int>(it.get_local_linear_id()) / P;
         const T el = lane < n - 1 ? e[std::ptrdiff_t(b) * P + lane] : T(0);
         const R al = lane < n - 1 ? sycl::hypot(device::Arith<T>::re(el), device::Arith<T>::im(el)) : R(0);
-        o[std::ptrdiff_t(b) * 2 * P + lane] = syev_v2::phase_replay(pex, el, al, n);
+        o[std::ptrdiff_t(b) * 2 * P + lane] = device::detail::phase_replay(pex, el, al, n);
         if (lane == 0) {  // serial reference on lane 0 (Thread): S written to the second half
             T* sr = o + std::ptrdiff_t(b) * 2 * P + P;
             const auto ev = device::vec(e + std::ptrdiff_t(b) * P, n - 1);
             R scratch[P];
             const auto rv = device::Vec<R, device::Ext<P>>{scratch, {}};
-            syev_v2::phase_similarity(device::Thread{}, n, ev, ev, rv, rv, device::vec(sr, n), Uplo::Upper, true);
+            device::detail::phase_similarity(device::Thread{}, n, ev, ev, rv, rv, device::vec(sr, n), Uplo::Upper, true);
         }
     });
     const auto g = dev.down(o, ho.size());
@@ -414,10 +422,10 @@ TYPED_TEST(SyevCtaTrioKernelsTest, SytrdReflectorPack) {
             const auto AQ = device::mat(aq + (std::ptrdiff_t(b) * 4 + k) * n * ldq, n, n, ldq);
             const auto tqv = device::vec(tq + (std::ptrdiff_t(b) * 6 + k) * n, n);
             for (int t = lid; t < n * n; t += WG) {
-                if (k < 2) syev_v2::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n, tvv, tqv);
-                else syev_v2::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n);
+                if (k < 2) device::detail::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n, tvv, tqv);
+                else device::detail::sytrd_reflector_pack_at(A, AQ, u, n, t % n, t / n);
             }
-            if (k >= 2 && lid < n) syev_v2::sytrd_tau_pack_at(tvv, device::vec(tq + (std::ptrdiff_t(b) * 6 + k + 2) * n, n), u, n, lid);
+            if (k >= 2 && lid < n) device::detail::sytrd_tau_pack_at(tvv, device::vec(tq + (std::ptrdiff_t(b) * 6 + k + 2) * n, n), u, n, lid);
         }
     });
     const auto gq = this->dev.down(aq, hq.size());
@@ -523,12 +531,12 @@ template <class T, int P> void run_org2l_orm2l(Dev& dev, int n) {
         const T tau_lane = tg[std::ptrdiff_t(b) * P + lane];
 
         device::Frag<T, P, device::ColPerLane> q;
-        syev_v2::org2l(pex, q, vs, tm, tau_lane, n);
+        device::org2l(pex, q, vs, tm, tau_lane, n);
         device::store(q, device::vec(qg + std::ptrdiff_t(b) * P * P + lane * P, P));
 
         device::Frag<T, P, device::ColPerLane> c;
         device::load(c, device::vec(cg + std::ptrdiff_t(b) * P * P + lane * P, P));
-        syev_v2::orm2l<device::arith::Explicit>(pex, c, vs, tm, tau_lane, n);
+        device::orm2l<device::arith::Explicit>(pex, c, vs, tm, tau_lane, n);
         device::store(c, device::vec(og + std::ptrdiff_t(b) * P * P + lane * P, P));
     });
     const auto gq = dev.down(qg, hq.size());
@@ -590,16 +598,16 @@ TYPED_TEST(SyevCtaTrioKernelsTest, RegisterColumnOps) {
         device::Frag<T, N, device::ColPerLane> f, g;
         device::load(f, cv);
         device::load(g, cv);
-        syev_v2::larf_col(f, vv, tau);
+        device::detail::larf_col(f, vv, tau);
         device::store(f, out(0));
-        syev_v2::larf_col<device::arith::Explicit>(g, vv, tau);
+        device::detail::larf_col<device::arith::Explicit>(g, vv, tau);
         device::store(g, out(1));
-        syev_v2::larf_unit_col(f, vv, tau, k);
+        device::detail::larf_unit_col(f, vv, tau, k);
         device::store(f, out(2));
-        syev_v2::laset_col(f, k, T(2), T(-3));
+        device::detail::laset_col(f, k, T(2), T(-3));
         device::store(f, out(3));
         device::fill(f, T(5));
-        syev_v2::dgmm_lift(f, cv, device::Vec<R, device::Ext<N>>{z + std::ptrdiff_t(b) * N, {}}, n);
+        device::detail::dgmm_lift(f, cv, device::Vec<R, device::Ext<N>>{z + std::ptrdiff_t(b) * N, {}}, n);
         device::store(f, out(4));
     });
     const auto g = this->dev.down(o, ho.size());

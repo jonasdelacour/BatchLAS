@@ -18,7 +18,7 @@
 
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/ops/syev/tridiag/tridiag_v2.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
 
@@ -76,7 +76,7 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     if (ex.leader()) {
         for (int k = 0; k < n - 1; k++) {
             if (L[k] != T(0)) {
-                const auto v = device::tridiag::house2(D[k], L[k]);
+                const auto v = device::house2(D[k], L[k]);
                 Vout[2 * k] = v[0];
                 Vout[2 * k + 1] = v[1];
                 refl3(device::Givens<T>{v[0], v[1]}, device::refs(D[k], U[k], U2(k)), device::refs(L[k], D[k + 1], U[k + 1]));

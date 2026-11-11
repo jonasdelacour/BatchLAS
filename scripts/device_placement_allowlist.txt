@@ -9,15 +9,6 @@ duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
 duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
 duplicate include/batchlas/device/view.hh fn_vec/include/batchlas/device/lapack/sb2st.hh
 duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::col_sumsq
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::dotc_owned
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::for_each_owned_frag
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::load_dotc_owned
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::load_owned_masked
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::set_unit_owned
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::sub_mul
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::sumsq_owned
-src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::sym_schur2
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::DiagC
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::LowerC
 src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::Tri
@@ -43,4 +34,3 @@ src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::col_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::item_n
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::row_of
 src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::sub_of
-src-device src/ops/syev/tridiag/tridiag_v2.hh batchlas::device::tridiag::house2

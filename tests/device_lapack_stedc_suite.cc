@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// stedc-private device helpers (src/ops/syev/stedc/stedc_v2.hh: uniform, fold) and the core ops that
+// stedc-private device helpers (detail uniform, lapack/laed4.hh; fold, lapack/laed2.hh) and the core ops that
 // replaced its copies (prod_scaled, sqrt_scaled, the work-group sync<scope::Group>(ex, Mem::Global)
 // stedc uses as its barrier) against host references. The shared ops the stedc kernels use
 // (RtGroup, nrm2<alg::Blue>, rot, allreduce, for_each_owned_2d, ...) are covered by
@@ -28,7 +28,8 @@
 #include <batchlas/device.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/device/sg_partition.hh>
-#include <src/ops/syev/stedc/stedc_v2.hh>
+#include <batchlas/device/lapack/laed2.hh>
+#include <batchlas/device/lapack/laed4.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
@@ -267,13 +268,13 @@ TYPED_TEST(DeviceLapackStedcTest, FoldMatchesHost) {
             // Staged through local memory with no barrier: fold reads each element on its owner.
             const auto s = device::vec<device::Mem::Local>(reinterpret_cast<T*>(lm), n);
             device::map(ex, s, [](T v) { return -v; }, xv);
-            const T staged = stedc_v2::fold(ex, s, sycl::plus<T>());
-            const T mx = stedc_v2::fold(ex, xv, sycl::maximum<T>());
-            const T sm = stedc_v2::fold(ex, xv, sycl::plus<T>());
+            const T staged = device::detail::fold(ex, s, sycl::plus<T>());
+            const T mx = device::detail::fold(ex, xv, sycl::maximum<T>());
+            const T sm = device::detail::fold(ex, xv, sycl::plus<T>());
             // plus: an empty sycl::joint_reduce gives Op's identity (-inf for maximum), T{} on acpp.
-            const T em = stedc_v2::fold(ex, xv.head(0), sycl::plus<T>());
-            const T win = stedc_v2::fold(ex, xv.tail(lo).head(len), sycl::plus<T>());  // off = lo, not at the start
-            const T wmx = stedc_v2::fold(ex, xv.tail(lo).head(len), sycl::minimum<T>());
+            const T em = device::detail::fold(ex, xv.head(0), sycl::plus<T>());
+            const T win = device::detail::fold(ex, xv.tail(lo).head(len), sycl::plus<T>());  // off = lo, not at the start
+            const T wmx = device::detail::fold(ex, xv.tail(lo).head(len), sycl::minimum<T>());
             if (ex.leader()) {
                 T* o = out + std::ptrdiff_t(b) * nslot;
                 o[0] = mx, o[1] = sm, o[2] = em, o[3] = win, o[4] = wmx, o[5] = staged;
@@ -317,9 +318,9 @@ TEST(DeviceLapackStedcHelpers, UniformAndGroupSync) {
         int* gbuf = dev.up(std::vector<int>(std::size_t(items) * L, -7));
         launch<Spec>(dev, items, sizeof(int) * Spec::wg, [=](const auto& ex, int b, unsigned char* lm) {
             const int lid = ex.lid();
-            uni[std::ptrdiff_t(b) * L + lid] = stedc_v2::uniform(ex, static_cast<float>(lid * 7 + 3 + b));
-            flag[std::ptrdiff_t(b) * L + lid] = stedc_v2::uniform(ex, lid == 0) ? 1 : 0;
-            if constexpr (stedc_v2::is_group_v<Ex>) {
+            uni[std::ptrdiff_t(b) * L + lid] = device::detail::uniform(ex, static_cast<float>(lid * 7 + 3 + b));
+            flag[std::ptrdiff_t(b) * L + lid] = device::detail::uniform(ex, lid == 0) ? 1 : 0;
+            if constexpr (device::detail::is_group_v<Ex>) {
                 int* buf = reinterpret_cast<int*>(lm);
                 const int src = (lid + 33) % L;
                 buf[lid] = lid + 1 + b;
@@ -338,7 +339,7 @@ TEST(DeviceLapackStedcHelpers, UniformAndGroupSync) {
                 const std::size_t k = std::size_t(b) * L + l;
                 bad_u += gu[k] != static_cast<float>(3 + b);
                 bad_f += gf[k] != 1;
-                if constexpr (stedc_v2::is_group_v<Ex>) {
+                if constexpr (device::detail::is_group_v<Ex>) {
                     bad_s += gs[k] != ((l + 33) % L) + 1 + b;
                     bad_g += gg[k] != 2 * ((l + 33) % L) + b;
                 } else {
@@ -353,9 +354,9 @@ TEST(DeviceLapackStedcHelpers, UniformAndGroupSync) {
 }
 
 // Which executors stedc barriers and folds on as a work-group.
-static_assert(stedc_v2::is_group_v<device::RtGroup<>> && stedc_v2::is_group_v<device::WorkGroup<64>>);
-static_assert(!stedc_v2::is_group_v<device::RtGroup<device::Scope::Sub>> && !stedc_v2::is_group_v<device::Partition<8>> &&
-              !stedc_v2::is_group_v<device::SgpPartition<8, true>> && !stedc_v2::is_group_v<device::Thread>);
+static_assert(device::detail::is_group_v<device::RtGroup<>> && device::detail::is_group_v<device::WorkGroup<64>>);
+static_assert(!device::detail::is_group_v<device::RtGroup<device::Scope::Sub>> && !device::detail::is_group_v<device::Partition<8>> &&
+              !device::detail::is_group_v<device::SgpPartition<8, true>> && !device::detail::is_group_v<device::Thread>);
 
 }  // namespace
 

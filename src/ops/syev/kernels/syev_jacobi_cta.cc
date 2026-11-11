@@ -8,7 +8,9 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/dla_v2_jacobi.hh>
+#include <batchlas/device/lapack/jacobi.hh>
+#include <batchlas/device/level1.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
@@ -222,7 +224,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                         }
                         device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
                         if (active) {
-                            jr = device::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)),
+                            jr = device::detail::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)),
                                                    static_cast<T>(A(pq.p, pq.q)), thr);
                         }
                         active = jr.active;

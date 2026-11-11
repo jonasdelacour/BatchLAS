@@ -19,7 +19,6 @@
 #include <src/util/batch_mask.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device.hh>
-#include <src/ops/syev/kernels/syev_drivers_v2.hh>
 
 #include <complex>
 #include <cstdint>

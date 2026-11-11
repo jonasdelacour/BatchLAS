@@ -105,6 +105,7 @@ public:
             "src/ops/potri/kernels/potri_cta.cc",
             "src/ops/potri/kernels/potri_native.cc",
             "src/ops/potri/potri_native.hh",
+            "src/ops/potri/potri_v2.hh",
             "src/ops/potrf/potrf_slm_hole.hh",
             "src/ops/potri/choice.hh",
             "include/batchlas/device.hh",

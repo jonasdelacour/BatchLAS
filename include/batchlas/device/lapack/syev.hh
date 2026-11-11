@@ -8,7 +8,7 @@
 //   syev<J, UL, tier::Blocked<NB>>  any n, one problem per WorkGroup<256>: sytrd<Lower, Blocked<NB>>,
 //                                   steqr<J, Blocked<1>> and ormqr<Left, NoTrans, Blocked> on the
 //                                   caller's global slice (Upper input is mirrored first).
-// detail also holds the steps the host syev drivers share (syev_drivers_v2.hh names them).
+// detail also holds the steps and the flat 2-D glue the host syev drivers share.
 // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 
 #include <cstddef>
@@ -479,6 +479,83 @@ BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::G
     }
     ex.barrier(Mem::Global);
     return info;
+}
+
+// ---- the host syev drivers' flat 2-D glue (syev_blocked.cc, syev_cta.cc) ----------------------
+// Flat id over batch x n x n (column-major per item): the item first, so a masked item leaves early.
+struct RowCol {
+    std::int32_t r, c;
+};
+BATCHLAS_DEVICE_INLINE std::int32_t batched_item(std::int64_t idx, std::int32_t n) {
+    return static_cast<std::int32_t>(idx / (static_cast<std::int64_t>(n) * n));
+}
+BATCHLAS_DEVICE_INLINE RowCol batched_rc(std::int64_t idx, std::int32_t b, std::int32_t n) {
+    const std::int64_t rem = idx - static_cast<std::int64_t>(b) * n * n;
+    return {static_cast<std::int32_t>(rem % n), static_cast<std::int32_t>(rem / n)};
+}
+
+// ---- element kernels -----------------------------------------------------------------------------
+// C(i, j) := d(i) * B(i, j); a real B is lifted to C's scalar type. C may alias B.
+template <class Ops = device::arith::Native, class Dv, class Bm, class Cm>
+BATCHLAS_DEVICE_INLINE void dgmm_left_at(const Dv& d, const Bm& B, const Cm& C, int i, int j) {
+    using T = std::remove_cvref_t<decltype(C(0, 0))>;
+    using AR = device::arith_t<Ops, T>;
+    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(B(i, j))>, T>) C(i, j) = AR::mul(d(i), B(i, j));
+    else C(i, j) = AR::mul(d(i), device::lift<T>(B(i, j)));
+}
+
+// Element (r, c) of the QR/QL layout ormqx expects, from a SYTRD output A (n x n):
+// Uplo::Lower -> QR reflectors in columns 1..n-1 (AQ(r, c) = A(r, c-1), r > c);
+// Uplo::Upper -> QL reflectors in columns 0..n-2 (AQ(r, c) = A(r, c+1), r < c); 0 elsewhere.
+// With a TAU / TAUQ pair (not NoTau), row 0 also writes TAUQ(c): tau shifted the same way.
+struct NoTau {};
+template <class Am, class AQm, class Tv = NoTau, class TQv = NoTau>
+BATCHLAS_DEVICE_INLINE void sytrd_reflector_pack_at(const Am& A, const AQm& AQ, Uplo uplo, int n, int r, int c, const Tv& tau = {},
+                                                 const TQv& tauq = {}) {
+    using T = std::remove_cvref_t<decltype(AQ(0, 0))>;
+    constexpr bool kTau = !std::is_same_v<Tv, NoTau>;
+    AQ(r, c) = T(0);
+    if (uplo == Uplo::Lower) {
+        if (c >= 1) {
+            const int i = c - 1;
+            if (r >= (c + 1) && r < n) AQ(r, c) = A(r, i);
+        }
+        if constexpr (kTau) {
+            if (r == 0) tauq(c) = (c >= 1 && (c - 1) < (n - 1)) ? tau(c - 1) : T(0);
+        }
+    } else {
+        if (c <= n - 2) {
+            const int k = c + 1;
+            if (r < c) AQ(r, c) = A(r, k);
+        }
+        if constexpr (kTau) {
+            if (r == 0) tauq(c) = (c < (n - 1)) ? tau(c) : T(0);
+        }
+    }
+}
+// TAUQ(j) of the same repack as a separate pass.
+template <class Tv, class TQv> BATCHLAS_DEVICE_INLINE void sytrd_tau_pack_at(const Tv& tau, const TQv& tauq, Uplo uplo, int n, int j) {
+    using T = std::remove_cvref_t<decltype(tauq(0))>;
+    if (uplo == Uplo::Lower) {
+        if (j == 0) tauq(j) = T(0);
+        else tauq(j) = (j - 1 < (n - 1)) ? tau(j - 1) : T(0);
+    } else {
+        if (j < (n - 1)) tauq(j) = tau(j);
+        else tauq(j) = T(0);
+    }
+}
+
+// ---- tridiagonal similarities ------------------------------------------------------------------
+// Real symmetric tridiagonal: e := |e| by the +-1 similarity S (S(0) = 1, S(i+1) = S(i) sign(e_i)).
+template <class Ev, class Sv> BATCHLAS_DEVICE_INLINE void sign_similarity(const device::Thread&, int n, const Ev& e, const Sv& s) {
+    using T = std::remove_cvref_t<decltype(e(0))>;
+    s(0) = T(1);
+    for (int i = 0; i < n - 1; ++i) {
+        const T ei = e(i);
+        const T sgn = (ei >= T(0)) ? T(1) : T(-1);
+        s(i + 1) = s(i) * sgn;
+        e(i) = sycl::fabs(ei);
+    }
 }
 
 // The host syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}).

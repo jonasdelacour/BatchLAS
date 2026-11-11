@@ -23,7 +23,8 @@
 #include <batchlas/settings.hh>
 #include <batchlas/tuning_params.hh>
 #include <batchlas/device.hh>
-#include <src/ops/syev/kernels/syev_drivers_v2.hh>
+#include <batchlas/device/sg_partition.hh>
+#include <batchlas/device/lapack/syev.hh>
 
 namespace batchlas {
 
@@ -146,9 +147,9 @@ Event syev_cta_part(Queue& ctx,
             const int64_t total = static_cast<int64_t>(nb) * nn * nn;
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
-                const int32_t b = syev_v2::batched_item(idx, nn);
+                const int32_t b = device::detail::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
+                const auto [row, col] = device::detail::batched_rc(idx, b, nn);
                 // The strict upper triangle from the lower (conj), Im(diag) dropped: element (row, col).
                 device::mirror<Uplo::Lower, true>(device::ElemAt{row, col}, device::item(A, b, nn, nn));
             });
@@ -239,7 +240,7 @@ Event syev_cta_part(Queue& ctx,
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // The subdiagonal becomes real; S is always recorded here.
-                syev_v2::phase_similarity(device::Thread{}, nn, device::item(D, b), device::item(E, b), device::item(Dr, b), device::item(Er, b),
+                device::detail::phase_similarity(device::Thread{}, nn, device::item(D, b), device::item(E, b), device::item(Dr, b), device::item(Er, b),
                                      device::item(S, b), u, /*want_s=*/true);
             });
         });
@@ -279,10 +280,10 @@ Event syev_cta_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * nn * nn;
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = syev_v2::batched_item(idx, nn);
+                    const int32_t b = device::detail::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
-                    syev_v2::dgmm_left_at(device::item(S, b), device::item(Z, b, nn, nn), device::item(ZC, b, nn, nn), row, col);
+                    const auto [row, col] = device::detail::batched_rc(idx, b, nn);
+                    device::detail::dgmm_left_at(device::item(S, b), device::item(Z, b, nn, nn), device::item(ZC, b, nn, nn), row, col);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after lift Z and phase");
@@ -300,10 +301,10 @@ Event syev_cta_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = syev_v2::batched_item(idx, nn);
+                    const int32_t b = device::detail::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
-                    syev_v2::sytrd_reflector_pack_at(device::item(A, b, nn, nn), device::item(AQ, b, nn, nn), uplo_eff, nn, row, col);
+                    const auto [row, col] = device::detail::batched_rc(idx, b, nn);
+                    device::detail::sytrd_reflector_pack_at(device::item(A, b, nn, nn), device::item(AQ, b, nn, nn), uplo_eff, nn, row, col);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after pack AQ");
@@ -320,7 +321,7 @@ Event syev_cta_part(Queue& ctx,
                     const int32_t b = static_cast<int32_t>(idx / nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
-                    syev_v2::sytrd_tau_pack_at(device::item(TAU, b), device::item(TAUQ, b), uplo_eff, nn, j);
+                    device::detail::sytrd_tau_pack_at(device::item(TAU, b), device::item(TAUQ, b), uplo_eff, nn, j);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
@@ -424,12 +425,12 @@ Event syev_cta_part(Queue& ctx,
             const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
-                const int32_t b = syev_v2::batched_item(idx, nn);
+                const int32_t b = device::detail::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                const auto [row, col] = syev_v2::batched_rc(idx, b, nn);
+                const auto [row, col] = device::detail::batched_rc(idx, b, nn);
                 // The TAUQ shift is folded in (row 0 writes it): one thread per column
                 // already exists here, so a separate n*batch launch would be pure overhead.
-                syev_v2::sytrd_reflector_pack_at(device::item(A, b, nn, nn), device::item(AQ, b, nn, nn), uplo_eff, nn, row, col,
+                device::detail::sytrd_reflector_pack_at(device::item(A, b, nn, nn), device::item(AQ, b, nn, nn), uplo_eff, nn, row, col,
                                             device::item(TAU, b), device::item(TAUQ, b));
             });
         });

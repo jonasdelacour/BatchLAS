@@ -5,7 +5,9 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/ops/syev/stedc/stedc_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/laed2.hh>
+#include <batchlas/device/lapack/laed4.hh>
 #include <src/sort.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
@@ -25,12 +27,12 @@ auto sec_eval(const Ex& ex, const V& v, const V& d, const T& x, const int32_t i,
     const auto terms = psi.head(n);
     device::map(ex, terms, [=](T vk, T dk) { return vk / (dk - x); }, v, d);
     device::sync<device::scope::Group>(ex, device::Mem::Global);
-    auto psi1 = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
-    auto psi2 = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
+    auto psi1 = device::detail::fold(ex, terms.head(i + 1), sycl::plus<T>());
+    auto psi2 = (i + 1) < n ? device::detail::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     device::map(ex, terms, [=](T vk, T dk) { return vk / ( (dk - x) * (dk - x)); }, v, d);
     device::sync<device::scope::Group>(ex, device::Mem::Global);
-    auto psi1_prime = stedc_v2::fold(ex, terms.head(i + 1), sycl::plus<T>());
-    auto psi2_prime = (i + 1) < n ? stedc_v2::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
+    auto psi1_prime = device::detail::fold(ex, terms.head(i + 1), sycl::plus<T>());
+    auto psi2_prime = (i + 1) < n ? device::detail::fold(ex, terms.tail(i + 1), sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
 }
 
@@ -75,7 +77,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
             device::map(ex, sgn, [](T vk) { return (vk >= T(0)) ? T(1) : T(-1); }, vb);
             device::map(ex, vb, [](T vk) { return vk * vk; }, vb);  // z = v .* v, in place
 
-            auto v_norm2 = stedc_v2::fold(ex, device::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
+            auto v_norm2 = device::detail::fold(ex, device::vec(v.batch_item(bid).data_ptr(), n), sycl::plus<T>());
 
             for (int i = 0; i < n; i++) {
                 auto di = d(i, bid);
@@ -153,7 +155,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     return sycl::log(diff);
                 }, db);
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
-                auto log_den2 = i > 0 ? stedc_v2::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
+                auto log_den2 = i > 0 ? device::detail::fold(ex, scratch.head(i), sycl::plus<T>()) : T(0);
 
                 device::map(ex, scratch.head(n - i - 1), [&](T dk) {
                     auto diff = sycl::fabs(dk - db(i));
@@ -161,7 +163,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     return sycl::log(diff);
                 }, db.tail(i + 1));
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
-                auto log_den1 = (i + 1) < n ? stedc_v2::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
+                auto log_den1 = (i + 1) < n ? device::detail::fold(ex, scratch.head(n - i - 1), sycl::plus<T>()) : T(0);
 
                 if (ex.leader()) { [&]() BATCHLAS_DEVICE_BODY { lden(i) = log_den1 + log_den2; }(); }
             }

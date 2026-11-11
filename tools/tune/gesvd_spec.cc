@@ -191,7 +191,6 @@ public:
             "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: jacobi
             "src/ops/gesvd/kernels/gesvdj_cta.cc",
-            "src/sycl/inv_sqrt.hh",
             // family: cta
             "src/ops/gesvd/gebrd/gebrd_cta.cc",
             "src/ops/ormqr/kernels/ormqr_cta.cc",

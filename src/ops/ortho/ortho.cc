@@ -21,7 +21,6 @@
 #include <batchlas/settings.hh>
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/ortho.hh>
-#include <src/ops/ortho/krylov-ortho-ritz_v2.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
@@ -338,7 +337,7 @@ namespace batchlas {
                 const auto d_in = device::vec(diags.data() + bid * k, k);
                 device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
                 const auto D = ex.publish(d_slm);
-                krylov_v2::laqge(ex, D, D, device::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
+                device::laqge(ex, D, D, device::mat(ATA_ptr + bid * k * k, k, k, k));  // C := D C D
                 });
             });
 
@@ -358,7 +357,7 @@ namespace batchlas {
                 const float_t* lam = lambdas.data() + bid * k;
                 const float_t tau = device::lamch<'P', float_t>() * std::abs(lam[k - 1]);
                 const auto lam_rsqrt = device::fn_vec(k, [=](int i) { return sycl::rsqrt(std::abs(lam[i] < tau ? tau : lam[i])); });
-                krylov_v2::laqge(ex, D, lam_rsqrt, device::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
+                device::laqge(ex, D, lam_rsqrt, device::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
