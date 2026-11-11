@@ -101,15 +101,15 @@ template <class Ev, class Sv> BATCHLAS_DEVICE_INLINE void sign_similarity(const 
 
 // The Hermitian load, the phase similarity and replay, and the column-owner xORG2L / xORM2L
 // are the public syev's (device/lapack/syev.hh); the host drivers name them from there.
-using device::syev_detail::chunk_barrier;
-using device::syev_detail::dgmm_lift;
-using device::syev_detail::herm_load;
-using device::syev_detail::larf_col;
-using device::syev_detail::larf_unit_col;
-using device::syev_detail::laset_col;
-using device::syev_detail::org2l;
-using device::syev_detail::orm2l;
-using device::syev_detail::phase_replay;
-using device::syev_detail::phase_similarity;
+using device::detail::chunk_barrier;
+using device::detail::dgmm_lift;
+using device::detail::herm_load;
+using device::detail::larf_col;
+using device::detail::larf_unit_col;
+using device::detail::laset_col;
+using device::org2l;
+using device::orm2l;
+using device::detail::phase_replay;
+using device::detail::phase_similarity;
 
 }  // namespace batchlas::syev_v2

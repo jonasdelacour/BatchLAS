@@ -7,7 +7,7 @@
 //   sb2st_hh_chase(ex, rows, A, n, kd, vl, wl, V, tau)      the two-stage Householder chase
 //                                                          (xSYTRD_SB2ST), reflectors kept in V, tau
 // Rot supplies the scalar rotation kernels (Rot::lartg, Rot::rot_pair, Rot::lar2v_pair); the
-// vector forms are core's largv / lartv / lar2v. sb2st_detail holds what core has no form for:
+// vector forms are core's largv / lartv / lar2v. detail holds what core has no form for:
 //   StridedTeams<C>  C strided teams per sub-group (xor masks C, 2C, ...)
 //   win_of, fn_vec   an index-form window, and a vector of write-through references
 //   HermBandLower    a writable Hermitian matrix in LAPACK lower band storage
@@ -22,7 +22,7 @@
 // (band chased in place, scratch in the caller's global slice; NB unused: a band chase has no
 // panel). Sizes: sb2st_buffer_size<UL, Tier, T>(n, kd); with_tier: routine::sb2st<UL, KDMax>.
 // The rotation kernels are sb2st_rot<T>; the host sub-group route runs the same body
-// (sb2st_detail::givens_on + finalize_tridiag) with its run-time storage choice.
+// (detail::givens_on + finalize_tridiag) with its run-time storage choice.
 
 #include <array>
 #include <cstddef>
@@ -38,7 +38,7 @@
 
 namespace batchlas::device {
 
-namespace sb2st_detail {
+namespace detail {
 
 // C strided teams inside each sub-group: lane l is member l / C of team l mod C (SG / C members,
 // xor distances C, 2C, ...): the column-tile layout of a resident Z tile. lane() and lid() are the
@@ -210,7 +210,7 @@ BATCHLAS_DEVICE_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, c
     for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DEVICE_BODY { Rot::rot_pair(x(i), y(i), c, s); });
 }
 
-}  // namespace sb2st_detail
+}  // namespace detail
 
 // xSBTRD / xHBTRD's bulge chase (lower band, kd >= 2) for one matrix on one sub-group partition
 // executor pex (SgpPartition<P>): AB the band with leading dimension ldab (global or local), C (real)
@@ -234,7 +234,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
     // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the band
     // entries AB(r, j + dc), addressed as the scalar loops address them.
     auto rseq = [&](int cnt, auto at) {
-        return sb2st_detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+        return detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
             return at(j1 + t * kd1);
         });
     };
@@ -273,7 +273,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                     if (kdm1 > 0) {
                         for_each_owned(pex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
-                            sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(kd - 1, j - kd), kdm1, incx), vec(AB + idx(kd, j - kd), kdm1, incx),
+                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(kd - 1, j - kd), kdm1, incx), vec(AB + idx(kd, j - kd), kdm1, incx),
                                                       C[j], WORK[j]);
                         });
                     }
@@ -300,7 +300,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                         if (k > 2) {
                             const R ct2 = C[i + k];
                             const T st2 = WORK[i + k];
-                            sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
                                                       vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct2, st2);
                         }
                     }
@@ -338,7 +338,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                     if (kdm1 > 0 && main_nrot > 0) {
                         for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
-                            sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, j - 1), kdm1), vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
+                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, j - 1), kdm1), vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
                         });
                     }
 
@@ -348,7 +348,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                         const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                         const int last = j1end + kd1;
                         if (lend > 0) {
-                            sb2st_detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, last - 1), lend), vec(AB + idx(1, last), lend), C[last],
+                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, last - 1), lend), vec(AB + idx(1, last), lend), C[last],
                                                       WORK[last]);
                         }
                     }
@@ -388,7 +388,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
 // team-per-row executor of the window updates. The reflector count follows the host-side schedule
 // (build_sb2st_hh_schedule), which the back-transform indexes V by. Exit: A holds the tridiagonal.
 template <class Ex, class Rows, class T, class VL, class WL, class VOut, class TauOut>
-BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const sb2st_detail::HermBandLower<T>& A, int n, int kd, const VL& vloc,
+BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const detail::HermBandLower<T>& A, int n, int kd, const VL& vloc,
                                         const WL& wloc, const VOut& Vb, const TauOut& tau_out) {
     using Real = real_t<T>;
     const int32_t kd_i = kd;
@@ -402,7 +402,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
         const auto W = A.sub(a, a, m, m);
         const auto v = vec(vloc, m);
         const auto w = vec(wloc, m);
-        sb2st_detail::hemv_band<Uplo::Lower>(rows, One{}, W, assume_published(v), Zero{}, w);
+        detail::hemv_band<Uplo::Lower>(rows, One{}, W, assume_published(v), Zero{}, w);
         sync(ex, Mem::Global);
 
         const T kappa = dotc<Scope::Auto, arith::Native>(ex, v, w);
@@ -420,7 +420,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
     auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
         if (r0 > r1 || c0 > c1) return;
         const auto v = assume_published(vec(vloc, c1 - c0 + 1));
-        sb2st_detail::larf_right(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
+        detail::larf_right(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
         sync(ex, Mem::Global);
     };
 
@@ -593,7 +593,7 @@ template <class T> struct sb2st_rot<T, true> {
     }
 };
 
-namespace sb2st_detail {
+namespace detail {
 
 // Re x read through the reference (no copy of the imaginary part).
 template <class T> inline real_t<T> re_of(const T& x) {
@@ -714,29 +714,25 @@ BATCHLAS_DEVICE_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int 
 template <class Ex> inline constexpr bool is_sgp_v = false;
 template <int P, bool M> inline constexpr bool is_sgp_v<Partition<P, M, SubGroupPartition<static_cast<std::size_t>(P), M>>> = true;
 
-template <class Tier> inline constexpr bool is_cta_v = false;
-template <int N, class A> inline constexpr bool is_cta_v<tier::Cta<N, A>> = true;
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
 
 // The workspace of one matrix (kd >= 2), carved by the op and summed by sb2st_buffer_size: the
 // rotation scratch c (real) and work, n + kd + 2 each, then (Cta) the packed band (kd + 1) x n,
 // all local; Blocked: c and work in the caller's global slice, nothing local.
-template <class T> struct Layout {
+template <class T> struct Sb2stLayout {
     ws::Slot<real_t<T>> c;
     ws::Slot<T> work;
     ws::Slot<T> ab;
     WorkspaceSize size;
 };
-template <class Tier, class T> constexpr Layout<T> band_layout(int n, int kd) {
-    static_assert(is_cta_v<Tier> || is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
-    constexpr ws::Space sp = is_cta_v<Tier> ? ws::Space::Local : ws::Space::Global;
+template <class Tier, class T> constexpr Sb2stLayout<T> band_layout(int n, int kd) {
+    static_assert(tier::is_cta_v<Tier> || tier::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
+    constexpr ws::Space sp = tier::is_cta_v<Tier> ? ws::Space::Local : ws::Space::Global;
     Plan p;
     const std::size_t cw = static_cast<std::size_t>(n + kd + 2);
     const auto c = p.take<real_t<T>>(sp, cw);
     const auto w = p.take<T>(sp, cw);
     ws::Slot<T> ab{ws::Space::Local, 0, 0};
-    if constexpr (is_cta_v<Tier>) ab = p.take<T>(ws::Space::Local, static_cast<std::size_t>(kd + 1) * static_cast<std::size_t>(n));
+    if constexpr (tier::is_cta_v<Tier>) ab = p.take<T>(ws::Space::Local, static_cast<std::size_t>(kd + 1) * static_cast<std::size_t>(n));
     return {c, w, ab, p.size()};
 }
 
@@ -745,14 +741,14 @@ template <class M> BATCHLAS_DEVICE_INLINE int band_ld(const M& a) {
     else return static_cast<int>(a.ld);
 }
 
-}  // namespace sb2st_detail
+}  // namespace detail
 
 // Bytes of ONE matrix's workspace for sb2st<UL, Tier> at (n, kd); zero when no chase runs
 // (n <= 0 or kd <= 1).
 template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sb2st_buffer_size(int n, int kd) {
     static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
     if (n <= 0 || kd <= 1) return {};
-    return sb2st_detail::band_layout<Tier, T>(n, kd).size;
+    return detail::band_layout<Tier, T>(n, kd).size;
 }
 
 namespace routine {
@@ -790,14 +786,14 @@ template <Uplo UL, int KDMax, class T> struct tiers<routine::sb2st<UL, KDMax>, T
 template <Uplo UL, class Tier, class Ex, class AB, class D, class E, class Tau>
 BATCHLAS_DEVICE_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const E& e, const Tau& tau, int kd, const Workspace& ws) {
     static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");
-    static_assert(sb2st_detail::is_sgp_v<Ex>, "sb2st: the executor is a SgpPartition<P>");
-    static_assert(sb2st_detail::is_cta_v<Tier> || sb2st_detail::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
+    static_assert(detail::is_sgp_v<Ex>, "sb2st: the executor is a SgpPartition<P>");
+    static_assert(tier::is_cta_v<Tier> || tier::is_blocked_v<Tier>, "sb2st: tier::Cta<N> or tier::Blocked<NB>");
     using T = std::remove_cvref_t<decltype(ab(0, 0))>;
     const int n = ab.cols();
     const int nm1 = n > 0 ? n - 1 : 0;
     if (kd < 0) return -5;
     if (ab.rows() < kd + 1) return -1;
-    if constexpr (sb2st_detail::is_cta_v<Tier>) {
+    if constexpr (tier::is_cta_v<Tier>) {
         if (n > Tier::n_max) return -1;
     }
     if (d.size() < n) return -2;
@@ -808,28 +804,28 @@ BATCHLAS_DEVICE_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const 
     const auto& partition = pex.part;
     if (kd <= 1) {
         ::batchlas::invoke_one(partition, [&]() {
-            if (kd == 0) sb2st_detail::extract_narrow<0>(n, ab, d, e, tau);
-            else sb2st_detail::extract_narrow<1>(n, ab, d, e, tau);
+            if (kd == 0) detail::extract_narrow<0>(n, ab, d, e, tau);
+            else detail::extract_narrow<1>(n, ab, d, e, tau);
         });
         group_barrier(partition);
         return 0;
     }
 
     T* const abg = &ab(0, 0);
-    const int ldg = sb2st_detail::band_ld(ab);
-    const auto lay = sb2st_detail::band_layout<Tier, T>(n, kd);
-    if constexpr (sb2st_detail::is_cta_v<Tier>) {
+    const int ldg = detail::band_ld(ab);
+    const auto lay = detail::band_layout<Tier, T>(n, kd);
+    if constexpr (tier::is_cta_v<Tier>) {
         auto abl = [&]() BATCHLAS_DEVICE_BODY { return carve_local(ws, lay.ab).get_raw(); };
-        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
+        detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
                                               carve_local(ws, lay.work).get_raw());
     } else {
         auto no_abl = []() BATCHLAS_DEVICE_BODY { return static_cast<T*>(nullptr); };
-        sb2st_detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
+        detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
                                               carve_global(ws, lay.work));
     }
     group_barrier(partition);
     ::batchlas::invoke_one(partition, [&]() {
-        sb2st_detail::finalize_tridiag(n, vec(abg, n, ldg), vec(abg + 1, n, ldg), d, e, tau);
+        detail::finalize_tridiag(n, vec(abg, n, ldg), vec(abg + 1, n, ldg), d, e, tau);
     });
     group_barrier(partition);
     return 0;

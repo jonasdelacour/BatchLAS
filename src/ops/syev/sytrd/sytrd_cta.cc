@@ -133,7 +133,7 @@ namespace batchlas {
 
                     // Thin launcher: the body of device::sytrd<UL, tier::Cta<P>> on the accessors (the
                     // named triangle only, defect 14; an inactive item reduces a zero tile, stores nothing).
-                    device::sytrd_detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
+                    device::detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
                         part, A_tile, base_a, V_local, base_v, W_local, base_w, A, D_prob, E_prob, TAU_prob, n, live);
                 });
         });

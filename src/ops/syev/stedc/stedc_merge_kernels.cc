@@ -82,7 +82,7 @@ void stedc_merge_fused(Queue& ctx,
                 });
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
 
-                device::laed3_detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
+                device::detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.

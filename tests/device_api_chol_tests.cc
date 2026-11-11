@@ -53,11 +53,11 @@ using batchlas::verify::Check;
 
 namespace {
 
-constexpr int kWg = batchlas::device::potrf_detail::kBlockedWg;
+constexpr int kWg = batchlas::device::detail::kBlockedWg;
 constexpr int kPeriod = 3;
 constexpr int kBatch = 6;
 constexpr int kNrhs = 3;
-template <class T> constexpr int kNb = batchlas::device::potrf_detail::reg_max_n<T> >= 32 ? 32 : 16;
+template <class T> constexpr int kNb = batchlas::device::detail::reg_max_n<T> >= 32 ? 32 : 16;
 template <class T> using Big = batchlas::device::tier::Blocked<kNb<T>>;  // the tier potrf's and posv's lists end with
 using Small = batchlas::device::tier::Blocked<8>;
 
@@ -726,9 +726,9 @@ TYPED_TEST(DeviceApiCholTest, WithTierFilters) {
 // posv's potrs carves potrf's first slot; potri's global panel is n x NB.
 TYPED_TEST(DeviceApiCholTest, BufferSizeIsTheCarvedPlan) {
     using T = TypeParam;
-    using D = batchlas::device::potrf_detail::dev_scalar_t<T>;
-    using Cfg = batchlas::device::potrf_detail::BlockedCfg<T>;
-    constexpr auto pl = batchlas::device::potrf_detail::BlockedPlan<T, 16>::make();
+    using D = batchlas::device::detail::dev_scalar_t<T>;
+    using Cfg = batchlas::device::detail::PotrfBlockedCfg<T>;
+    constexpr auto pl = batchlas::device::detail::PotrfBlockedPlan<T, 16>::make();
     const auto sz = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Blocked<16>, T>(1000);
     EXPECT_EQ(sz, pl.size);
     EXPECT_EQ(pl.smem.offset, 0u);

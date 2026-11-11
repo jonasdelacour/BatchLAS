@@ -16,19 +16,19 @@
 
 namespace batchlas::device {
 
-namespace larfb_detail {
+namespace detail {
 // The L3 configuration of a QR tier::Blocked<NB, Alg>: Alg itself when it is an l3::cfg preset,
 // else RegTiled<T, 32, 32, 8, 2, 2> (256 items, the in-group L3 tests' tile).
-template <class Alg, class T> struct cfg_of {
+template <class Alg, class T> struct larfb_cfg_of {
     using type = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 };
-template <l3::Config Alg, class T> struct cfg_of<Alg, T> {
+template <l3::Config Alg, class T> struct larfb_cfg_of<Alg, T> {
     static_assert(std::is_same_v<typename Alg::value_type, T>, "larfb: the tier's l3 Cfg is for another scalar type");
     using type = Alg;
 };
-}  // namespace larfb_detail
+}  // namespace detail
 
-template <class Alg, class T> using larfb_cfg_t = typename larfb_detail::cfg_of<Alg, T>::type;
+template <class Alg, class T> using larfb_cfg_t = typename detail::larfb_cfg_of<Alg, T>::type;
 
 /// The QR family's default WY block width, the host blocked routes' (16 for double, else 32).
 template <class T> constexpr int larfb_default_nb() { return std::is_same_v<T, double> ? 16 : 32; }

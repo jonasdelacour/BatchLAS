@@ -140,9 +140,9 @@ BATCHLAS_UNROLL_FULL
         // "lane r holds row r of L" whichever triangle the caller owns.
         device::Frag<D, NC> rA;
         if (upper) {
-            device::potrf_detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            device::detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         } else {
-            device::potrf_detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
+            device::detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         }
 
         D rB[NR];   // b, then y
@@ -154,10 +154,10 @@ BATCHLAS_UNROLL_FULL
         // batch). Slm: column j of L through local memory, double-buffered by parity.
         int32_t linfo;
         if constexpr (Slm) {
-            linfo = device::potrf_detail::potf2_reg<D, N, NC, device::potrf_detail::OrderGuard::Skip>(
+            linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(
                 device::wrap(part), rA, n, live, device::bcast_policy::Slm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
         } else {
-            linfo = device::potrf_detail::potf2_reg<D, N, NC, device::potrf_detail::OrderGuard::Skip>(device::wrap(part), rA, n, live,
+            linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(device::wrap(part), rA, n, live,
                                                                                               device::bcast_policy::Shuffle{});
         }
 
@@ -254,9 +254,9 @@ BATCHLAS_UNROLL_FULL
 
         D* __restrict Aout = ap + static_cast<std::ptrdiff_t>(b) * stride_a;
         if (upper) {
-            device::potrf_detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
+            device::detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
         } else {
-            device::potrf_detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
+            device::detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
         }
 
         if (row_live) {

@@ -173,8 +173,8 @@ Event copy_band_lower(Queue& q,
                 T* AB = ab_ptr + b * stride_ab;
 
                 // The band column copy of device::sy2sb (lapack/sy2sb.hh), one column per item.
-                const int lk = device::sy2sb_detail::band_len(kd, n, j);
-                device::sy2sb_detail::copy_band_col(device::Thread{}, device::mat(A, n, n, lda), device::mat(AB, kd + 1, n, ldab), lk, j);
+                const int lk = device::detail::band_len(kd, n, j);
+                device::detail::copy_band_col(device::Thread{}, device::mat(A, n, n, lda), device::mat(AB, kd + 1, n, ldab), lk, j);
             });
     });
 

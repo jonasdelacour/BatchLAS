@@ -2,7 +2,7 @@
 #pragma once
 // LAPACK xGEQR2, geqrf's panel leaves: geqr2 (team executor, any memory) and geqr2_reg (a row per
 // item, panel in registers); and xGEQRF in a kernel, geqrf<tier::Blocked<NB>> (geqr2 panels and
-// larfb trailing updates on the in-group Level 3). geqrf_detail: pieces core has no strict
+// larfb trailing updates on the in-group Level 3). detail: pieces core has no strict
 // spelling for yet. Statement boundaries are load-bearing (fp-contract=on fuses a*b+c only within
 // one expression).
 
@@ -19,7 +19,7 @@
 
 namespace batchlas::device {
 
-namespace geqrf_detail {
+namespace detail {
 
 // A complex copied as two scalars, not as a struct: larfg_scalars takes alpha by const&, and
 // a struct-copied Cx<float> alpha is re-read from A after the reductions (+2 loads a column).
@@ -135,7 +135,7 @@ template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y
     }
 }
 
-}  // namespace geqrf_detail
+}  // namespace detail
 
 // xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and butterflies: no
 // static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Scalars: larfg_scalars<
@@ -153,7 +153,7 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
 
     for (int j = 0; j < kmax; ++j) {
         ex.barrier(Mem::Global);  // B1 -- the previous reflector's column writes are visible.
-        const D alpha = geqrf_detail::copy_by_parts(a(j, j));
+        const D alpha = detail::copy_by_parts(a(j, j));
         R smax = abs_inf(alpha);
         for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { smax = sycl::fmax(smax, abs_inf(a(r, j))); });
         // Scope::Sub: the run-time xor butterfly; Scope::Group: portable::reduce_over_group.
@@ -161,7 +161,7 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
         else smax = ex.group_reduce(smax, sycl::maximum<R>());
         R ssq = R(0);  // the collective sits outside the `smax > 0` test: all items reach it
         if (smax > R(0)) {
-            for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { ssq += geqrf_detail::abs2_scaled(a(r, j), smax); });
+            for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { ssq += detail::abs2_scaled(a(r, j), smax); });
         }
         if constexpr (sub) ssq = butterfly(ex.sub(), ssq, sycl::plus<R>(), 1, lanes);
         else ssq = ex.group_reduce(ssq, sycl::plus<R>());
@@ -182,11 +182,11 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
 
         // Uniform over the barriers' scope (two collectives there): cannot desync B1/B2/B3.
         if (h.identity) continue;
-        geqrf_detail::larf_left_head(ex, lanes, Arith<D>::conj(h.tau), a, j, m, n);
+        detail::larf_left_head(ex, lanes, Arith<D>::conj(h.tau), a, j, m, n);
     }
 }
 
-namespace geqrf_detail {
+namespace detail {
 // geqr2_reg's body, a call: ex is built here (an Ex argument: 24 B frame, FP64 N = 16 spills).
 template <int N, int SG, class D, class Real>
 inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
@@ -216,17 +216,17 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 
         // Same slots folded in the same order on every item: h is work-group-uniform.
         const R part = (live && r >= j) ? abs_inf(rA[j]) : R(0);
-        geqrf_detail::team_slot_put(ex, sred, 0, butterfly(ex.sub(), part, op::FMax{}, 1, ex.team_size()));
+        detail::team_slot_put(ex, sred, 0, butterfly(ex.sub(), part, op::FMax{}, 1, ex.team_size()));
         if (r == j) sw[0] = rA[j];
         ex.barrier(Mem::Global);                                   // B1
-        const R smax = geqrf_detail::slot_fold_max(sred, 0, nsg);
+        const R smax = detail::slot_fold_max(sred, 0, nsg);
         const D alpha = sw[0];
 
         R ssq_part = R(0);
-        if (live && r > j && smax > R(0)) ssq_part = geqrf_detail::abs2_scaled(rA[j], smax);
-        geqrf_detail::team_slot_put(ex, sred, nsg, butterfly(ex.sub(), ssq_part, sycl::plus<R>(), 1, ex.team_size()));
+        if (live && r > j && smax > R(0)) ssq_part = detail::abs2_scaled(rA[j], smax);
+        detail::team_slot_put(ex, sred, nsg, butterfly(ex.sub(), ssq_part, sycl::plus<R>(), 1, ex.team_size()));
         ex.barrier(Mem::Global);                                   // B2
-        const R ssq = geqrf_detail::slot_fold_sum(sred, nsg, nsg);
+        const R ssq = detail::slot_fold_sum(sred, nsg, nsg);
 
         const LarfgScalars<D> h = larfg_scalars<conv::Lapack>(alpha, ScaledSsq<R>{smax, ssq});
 
@@ -247,9 +247,9 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
         const D ctau = A::conj(h.tau);
 
         // larf: team partials of v^H A(:, j+1:n) into the slots, B3, then A -= (ctau w) v.
-        geqrf_detail::gemv_rowfrag_partials<N>(ex, cv, rA, j + 1, n, sw, 1, N);
+        detail::gemv_rowfrag_partials<N>(ex, cv, rA, j + 1, n, sw, 1, N);
         ex.barrier(Mem::Global);                                   // B3
-        geqrf_detail::ger_rowfrag_slots<N>(ctau, v, rA, j + 1, n, sw, 1, nsg, N);
+        detail::ger_rowfrag_slots<N>(ctau, v, rA, j + 1, n, sw, 1, nsg, N);
     }
 
 #pragma clang loop unroll(full)
@@ -259,7 +259,7 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
         }
     }
 }
-}  // namespace geqrf_detail
+}  // namespace detail
 
 // xGEQR2 on an m x n panel (a, ld), n <= N, a row per item of the work-group ex (RtGroup<
 // Scope::Group>); m <= its size, kmax <= min(m, n), launch-uniform. Rows >= m run every barrier
@@ -268,7 +268,7 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 template <int N, class D, class Real, class Ex>
 BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
     static_assert(Ex::runtime && !Ex::sub_whole, "geqr2_reg: ex is an RtGroup<Scope::Group>");
-    geqrf_detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
+    detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
 }
 
 // ---- xGEQRF: the public in-kernel op (v22 design C.7 Blocked) --------------------------------
@@ -279,7 +279,7 @@ struct geqrf {
 };
 }  // namespace routine
 
-namespace geqrf_detail {
+namespace detail {
 template <class T> struct GeqrfSlots {
     ws::Slot<T> smem, v, t, work;
 };
@@ -326,13 +326,13 @@ BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>&
 
 template <class Tier> inline constexpr bool geqrf_is_blocked_v = false;
 template <int NB, class A> inline constexpr bool geqrf_is_blocked_v<tier::Blocked<NB, A>> = true;
-}  // namespace geqrf_detail
+}  // namespace detail
 
 template <int NB, class A, class T> struct tier_info<routine::geqrf, tier::Blocked<NB, A>, T> {
     using cfg = larfb_cfg_t<A, T>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return geqrf_detail::geqrf_size<NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::geqrf_size<NB, cfg, T>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
 template <class T> struct tiers<routine::geqrf, T> {
@@ -362,7 +362,7 @@ BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& A, const Tau& tau, cons
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::geqrf, T, Tier>;
     static_assert(HasTier<routine::geqrf, Tr, T>, "geqrf: this tier is not offered for this scalar type");
-    static_assert(geqrf_detail::geqrf_is_blocked_v<Tr>, "geqrf: only tier::Blocked<NB> is offered");
+    static_assert(detail::geqrf_is_blocked_v<Tr>, "geqrf: only tier::Blocked<NB> is offered");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
     larfb_check_ex<Cfg, Ex>();
     const auto a = l3::global_of(A);
@@ -373,8 +373,8 @@ BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& A, const Tau& tau, cons
     if (ws.global == nullptr) return -3;
     if (k <= 0) return 0;
     Plan p;
-    const auto s = geqrf_detail::geqrf_take<Tr::nb, Cfg, T>(p, a.m, a.n);
-    geqrf_detail::geqrf_blocked_run<Tr::nb, Cfg>(ex, a, larfb_tau_base(tau), s, ws);
+    const auto s = detail::geqrf_take<Tr::nb, Cfg, T>(p, a.m, a.n);
+    detail::geqrf_blocked_run<Tr::nb, Cfg>(ex, a, larfb_tau_base(tau), s, ws);
     return 0;
 }
 

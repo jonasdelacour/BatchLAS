@@ -182,7 +182,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 const auto At = device::mat_wide<device::Mem::Local>(
                     &tile[0] + static_cast<std::ptrdiff_t>(slot) * static_cast<std::ptrdiff_t>(ldt) * n, m, n, ldt);
                 const auto Ag = device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld);
-                device::getrf_detail::cta_run(  // the public Cta body: stage, ?GETF2, store
+                device::detail::getrf_cta_run(  // the public Cta body: stage, ?GETF2, store
                     ex, Ag, At, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
                     piv_base, info_ptr + b, rval, ridx);

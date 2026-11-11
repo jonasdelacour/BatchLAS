@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The public larft (include/batchlas/device/lapack/larft.hh: larft, larft_detail::trmv_upper_row_owner),
+// The public larft (include/batchlas/device/lapack/larft.hh: larft, detail::trmv_upper_row_owner),
 // core larf's register-column form as ormqr_cta calls it, and the larft kernels behind them
 // (src/kernels/common/larft_wy.hh), against long-double host references. Shared ops (gemv, copy,
 // map, laset, core larf's memory forms) are covered by device_blas_v2_tests and device_core_*.
@@ -149,7 +149,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
     return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
 }
 
-// ---- larft_detail::trmv_upper_row_owner ---------------------------------------------------------
+// ---- detail::trmv_upper_row_owner ---------------------------------------------------------
 
 // y := A x, A n x n upper with ld = n + 5 and the strictly lower part poisoned, x with inc 2.
 template <int WG, class T, class MakeEx>
@@ -170,7 +170,7 @@ void trmv_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per_item, c
         const auto ex = make_ex(it);
         const auto av = device::mat(a + std::ptrdiff_t(b) * ld * n, n, n, ld);
         const auto xv = device::assume_published(device::vec(x + std::ptrdiff_t(b) * n * inc, n, inc));
-        device::larft_detail::trmv_upper_row_owner(ex, av, xv, device::vec(y + std::ptrdiff_t(b) * n, n));
+        device::detail::trmv_upper_row_owner(ex, av, xv, device::vec(y + std::ptrdiff_t(b) * n, n));
     });
     const auto got = dev.down(y, hy.size());
     EXPECT_EQ(items_differing(got, n), 0) << where;
@@ -214,7 +214,7 @@ TYPED_TEST(DeviceBlasV2LarftTest, TrmvColumnRecurrenceNeedsNoBarrier) {
         const auto Tm = device::mat(t + std::ptrdiff_t(b) * ld * n, n, n, ld);
         device::copy(ex, device::vec(dg + std::ptrdiff_t(b) * n, n), device::vec(Tm.p, n, ld + 1));
         for (int j = 1; j < n; ++j)
-            device::larft_detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), device::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
+            device::detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), device::assume_published(Tm.row(j).head(j)), Tm.col(j).head(j));
     });
     const auto got = this->dev.down(t, hy.size());
     EXPECT_EQ(items_differing(got, ld * n), 0);

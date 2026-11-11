@@ -67,8 +67,8 @@ constexpr int tiny_cap() {
     return std::is_same_v<T, std::complex<double>> ? 16 : 32;
 }
 
-// The launcher's addressing of the public Reg body (lapack/getrf.hh getrf_detail::reg_run, whose
-// pivot policy is getf2_detail::PivotPartition): 64-bit index math with the functor's 64-bit
+// The launcher's addressing of the public Reg body (lapack/getrf.hh detail::getrf_reg_run, whose
+// pivot policy is detail::PivotPartition): 64-bit index math with the functor's 64-bit
 // ld; ipiv and info at matrix b's slots.
 template <typename D>
 struct TinyMat {
@@ -108,7 +108,7 @@ struct TinySlmBcast {
     int pidx;
     int lane;
     mutable R4* sp = nullptr;
-    BATCHLAS_DEVICE_INLINE void publish(int j, const device::Frag<D, NC>& rA, int, device::getf2_detail::PivotWinner w) const {
+    BATCHLAS_DEVICE_INLINE void publish(int j, const device::Frag<D, NC>& rA, int, device::detail::PivotWinner w) const {
         sp = &slm[((j & 1) * Mpw + pidx) * kNCV];
         if (lane == w.src) {
 BATCHLAS_UNROLL_FULL
@@ -119,11 +119,11 @@ BATCHLAS_UNROLL_FULL
         }
         sycl::group_barrier(sg);
     }
-    BATCHLAS_DEVICE_INLINE D pivot(int j, const device::Frag<D, NC>&, device::getf2_detail::PivotWinner) const {
+    BATCHLAS_DEVICE_INLINE D pivot(int j, const device::Frag<D, NC>&, device::detail::PivotWinner) const {
         return tiny_native::tiny_r4_get<D, R>(sp[j / kW], j % kW);
     }
     template <typename F>
-    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const device::Frag<D, NC>&, device::getf2_detail::PivotWinner, F&& f) const {
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const device::Frag<D, NC>&, device::detail::PivotWinner, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int v = 0; v < kNCV; ++v) {
             if (v < j / kW || v * kW >= ncols) continue;
@@ -185,10 +185,10 @@ struct GetrfTinyBody {
         // rejects a heterogeneous batch). evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
         if constexpr (Slm) {
             const TinySlmBcast<D, NC, kMpw> bc{slm, sg, pidx, lane};
-            device::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, bc, info);
+            device::detail::getrf_reg_run<NC>(px, lane, A, piv, n, live, bc, info);
         } else {
             // one select per element, two per complex
-            device::getrf_detail::reg_run<NC>(px, lane, A, piv, n, live, device::getf2_detail::bcast_shuffle(px), info);
+            device::detail::getrf_reg_run<NC>(px, lane, A, piv, n, live, device::detail::bcast_shuffle(px), info);
         }
     }
 };

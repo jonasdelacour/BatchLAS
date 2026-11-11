@@ -158,9 +158,9 @@ Event steqr_impl(Queue& ctx,
             bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             const device::Thread th{};
-            const device::steqr_detail::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
+            const device::detail::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
             for (size_t k = 0; k < max_sweeps; ++k) {
-                const T anorm = device::steqr_detail::lanst_max(th, d_, e_);
+                const T anorm = device::detail::lanst_max(th, d_, e_);
                 if (anorm > detail::ssfmax<T>()) {
                     const T s = detail::ssfmax<T>() / anorm;
                     device::scal(th, s, d_);
@@ -172,27 +172,27 @@ Event steqr_impl(Queue& ctx,
                 }
 
                 // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = detail::wilkinson_shift(device::steqr_detail::virt_get<T, 1>(d_, QR, n, n - 2),
-                                                   device::steqr_detail::virt_get<T, 2>(e_, QR, n, n - 2),
-                                                   device::steqr_detail::virt_get<T, 1>(d_, QR, n, n - 1));
+                const auto shift = detail::wilkinson_shift(device::detail::virt_get<T, 1>(d_, QR, n, n - 2),
+                                                   device::detail::virt_get<T, 2>(e_, QR, n, n - 2),
+                                                   device::detail::virt_get<T, 1>(d_, QR, n, n - 1));
 
                 // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = detail::givens_rotation(device::steqr_detail::virt_get<T, 1>(d_, QR, n, 0) - shift, device::steqr_detail::virt_get<T, 2>(e_, QR, n, 0));
+                auto [c0, s0] = detail::givens_rotation(device::detail::virt_get<T, 1>(d_, QR, n, 0) - shift, device::detail::virt_get<T, 2>(e_, QR, n, 0));
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
-                auto bulge = device::steqr_detail::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, device::Givens<T>{c0, s0}, QR);
+                auto bulge = device::detail::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, device::Givens<T>{c0, s0}, QR);
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = detail::givens_rotation(device::steqr_detail::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
+                    auto [cj, sj] = detail::givens_rotation(device::detail::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
-                    bulge = device::steqr_detail::tridiag_rot(th, d_, e_, bulge, j, j + 1, device::Givens<T>{cj, sj}, QR);
+                    bulge = device::detail::tridiag_rot(th, d_, e_, bulge, j, j + 1, device::Givens<T>{cj, sj}, QR);
                 }
 
-                const bool deflatable = device::steqr_detail::tridiag_split(th, d_, e_, tol);
+                const bool deflatable = device::detail::tridiag_split(th, d_, e_, tol);
 
                 if (anorm > detail::ssfmax<T>()) {
                     const T s = anorm / detail::ssfmax<T>();

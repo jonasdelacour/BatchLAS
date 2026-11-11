@@ -3,7 +3,7 @@
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
 // barriers, every cross-lane value a sub-group shuffle. The kernel is a thin launcher: its body
 // is device::potrf's tier::Reg body (include/batchlas/device/lapack/potrf.hh: reg_load_*,
-// potf2_reg, reg_store_*, the steps potrf_reg composes) with the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
+// potf2_reg, reg_store_*, the steps potrf_reg_run composes) with the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
 // device-code cluster. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
@@ -119,28 +119,28 @@ Event potrf_tiny_launch(Queue& ctx,
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const bool row_live = live && (lane < n);
 
-                // The public tier::Reg body's three steps (potrf_detail::potrf_reg composes the same
+                // The public tier::Reg body's three steps (detail::potrf_reg_run composes the same
                 // ones), spelled here so the captures, hence the kernel arguments, keep their order.
                 const D* __restrict Ag =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
 
                 device::Frag<D, N> rA;
                 if (upper) {
-                    device::potrf_detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                    device::detail::reg_load_upper<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 } else {
-                    device::potrf_detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
+                    device::detail::reg_load_lower<D, N>(rA.v, Ag, ld, lane, row_live, real_diag);
                 }
 
                 // `linfo` is partition-uniform because the pivot is a broadcast.
                 const int32_t linfo =
-                    device::potrf_detail::potf2_reg<D, N, N>(device::wrap(part), rA, n, live, device::bcast_policy::Shuffle{});
+                    device::detail::potf2_reg<D, N, N>(device::wrap(part), rA, n, live, device::bcast_policy::Shuffle{});
 
                 D* __restrict Aout =
                     a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
                 if (upper) {
-                    device::potrf_detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
+                    device::detail::reg_store_upper<D, N>(rA.v, Aout, ld, lane, row_live);
                 } else {
-                    device::potrf_detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
+                    device::detail::reg_store_lower<D, N>(rA.v, Aout, ld, lane, row_live);
                 }
 
                 if (live && part.leader()) info_ptr[prob_id] = linfo;

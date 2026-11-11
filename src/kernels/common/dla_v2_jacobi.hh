@@ -4,7 +4,7 @@
 // (sym_schur2) and per-item fragment ops on Cyclic rows of a static extent, the pieces still
 // waiting for core (inv_sqrt in scalar.hh; the Frag ops in level1 / reduce). The pivot schedule,
 // threshold, rotation record, phased rotation and rotation rounds are public
-// (batchlas/device/lapack/jacobi.hh, jacobi_detail); reduce_scatter is core (reduce.hh).
+// (batchlas/device/lapack/jacobi.hh, detail); reduce_scatter is core (reduce.hh).
 // Ops = arith::Native (default) keeps each legacy expression whole (see lapack/jacobi.hh).
 
 #include <src/sycl/inv_sqrt.hh>
@@ -48,7 +48,7 @@ template <class Ops = arith::Native, class T, int K> BATCHLAS_DEVICE_INLINE T do
     T acc = T(0);
 #pragma unroll
     for (int k = 0; k < K; ++k) {
-        if constexpr (jacobi_detail::is_native_v<Ops>) acc = acc + conj(x[k]) * y[k];
+        if constexpr (detail::is_native_v<Ops>) acc = acc + conj(x[k]) * y[k];
         else arith_t<Ops, T>::mac_conj(acc, x[k], y[k]);
     }
     return acc;
@@ -73,7 +73,7 @@ BATCHLAS_DEVICE_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v
 template <class Ops = arith::Native, class T, int K> BATCHLAS_DEVICE_INLINE void sub_mul(Frag<T, K>& y, const Frag<T, K>& x, T a) {
 #pragma unroll
     for (int k = 0; k < K; ++k) {
-        if constexpr (jacobi_detail::is_native_v<Ops>) y[k] = y[k] - x[k] * a;
+        if constexpr (detail::is_native_v<Ops>) y[k] = y[k] - x[k] * a;
         else arith_t<Ops, T>::msub(y[k], x[k], a);
     }
 }
@@ -110,10 +110,10 @@ template <class Ex, class M> BATCHLAS_DEVICE_INLINE auto col_sumsq(const Ex& ex,
 // For real T, d = 1 and g carries the sign of apq. A rotation below the threshold or whose s
 // rounds to 0 (it could never annihilate apq) is the identity with active == false.
 template <class T>
-BATCHLAS_DEVICE_INLINE jacobi_detail::JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T apq,
-                                                                const jacobi_detail::JacobiThreshold<real_t<T>>& th) {
+BATCHLAS_DEVICE_INLINE detail::JacobiRotation<T> sym_schur2(real_t<T> app, real_t<T> aqq, T apq,
+                                                                const detail::JacobiThreshold<real_t<T>>& th) {
     using R = real_t<T>;
-    jacobi_detail::JacobiRotation<T> r = jacobi_detail::identity_rotation<T>();
+    detail::JacobiRotation<T> r = detail::identity_rotation<T>();
     const R g_abs = modulus(apq);
     const R thresh = th.tol * sycl::sqrt(sycl::fabs(app) * sycl::fabs(aqq));
     if (g_abs > thresh && g_abs > th.tiny) {

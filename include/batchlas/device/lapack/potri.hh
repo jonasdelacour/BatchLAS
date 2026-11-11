@@ -27,7 +27,7 @@
 
 namespace batchlas::device {
 
-namespace potri_detail {
+namespace detail {
 
 // One plan for every op here: the L3 stage slot (local) and the n x NB panel W (global). Each
 // use of W takes its own leading dimension, inside the n * NB elements.
@@ -37,7 +37,7 @@ template <class T> struct BlockedPanelPlan {
     WorkspaceSize size;
     static constexpr BlockedPanelPlan make(int n, int nb) {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(potrf_detail::BlockedCfg<T>::smem_elems));
+        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
         const auto g = p.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
         return {s, g, p.size()};
     }
@@ -142,7 +142,7 @@ template <class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri_blocked_prologue(
     const int n = a.rows();
     if (n < 0 || a.cols() != n) return -2;
     if (n == 0) return 0;
-    if (!potrf_detail::blocked_ws_ok(ws, true)) return -3;
+    if (!detail::blocked_ws_ok(ws, true)) return -3;
     if (!zero_check) return 0;
     const int z = find_first(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { return Arith<T>::is_zero(a(i, i)); });
     return z + 1;
@@ -154,7 +154,7 @@ enum class BlockedChain { Trtri, Lauum, Potri };
 template <BlockedChain C, Uplo UL, Diag DG, int NB, class Alg, int WG, int SG, class MA>
 BATCHLAS_DEVICE_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
-    using Cfg = potrf_detail::BlockedCfg<T>;
+    using Cfg = detail::PotrfBlockedCfg<T>;
     static_assert(std::is_same_v<Alg, alg::Default>, "potri / trtri / lauum: tier::Blocked has one algorithm");
     static_assert(NB >= 1, "potri / trtri / lauum: tier::Blocked<NB> needs NB >= 1");
     static_assert(WG == Cfg::threads && SG == 32, "potri / trtri / lauum: tier::Blocked runs on WorkGroup<256, 32>");
@@ -170,7 +170,7 @@ BATCHLAS_DEVICE_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const M
     return 0;
 }
 
-}  // namespace potri_detail
+}  // namespace detail
 
 namespace routine {
 template <Uplo UL> struct potri {
@@ -189,22 +189,22 @@ template <Uplo UL> struct lauum {
 }  // namespace routine
 
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potri<UL>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = potrf_detail::kBlockedWg;
+    static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return potri_detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };
 template <Uplo UL, Diag DG, int NB, class Alg, class T> struct tier_info<routine::trtri<UL, DG>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = potrf_detail::kBlockedWg;
+    static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return potri_detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::lauum<UL>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = potrf_detail::kBlockedWg;
+    static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return potri_detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };
 template <Uplo UL, class T> struct tiers<routine::potri<UL>, T> {
     using type = tier::list<tier::Blocked<32>>;
@@ -235,24 +235,24 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize lauum_buffer_siz
 template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potri<UL>, T, Tier>;
-    static_assert(potrf_detail::is_blocked_v<Tr>, "potri: tier::Blocked<NB> (the CTA tier lands with WP7)");
-    return potri_detail::potri_blocked_op<potri_detail::BlockedChain::Potri, UL, Diag::NonUnit, Tr::nb, typename Tr::alg_type>(ex, A, ws);
+    static_assert(tier::is_blocked_v<Tr>, "potri: tier::Blocked<NB> (the CTA tier lands with WP7)");
+    return detail::potri_blocked_op<detail::BlockedChain::Potri, UL, Diag::NonUnit, Tr::nb, typename Tr::alg_type>(ex, A, ws);
 }
 
 // A's UL triangle := its inverse; DG = Unit never reads or writes the diagonal.
 template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int trtri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::trtri<UL, DG>, T, Tier>;
-    static_assert(potrf_detail::is_blocked_v<Tr>, "trtri: tier::Blocked<NB>");
-    return potri_detail::potri_blocked_op<potri_detail::BlockedChain::Trtri, UL, DG, Tr::nb, typename Tr::alg_type>(ex, A, ws);
+    static_assert(tier::is_blocked_v<Tr>, "trtri: tier::Blocked<NB>");
+    return detail::potri_blocked_op<detail::BlockedChain::Trtri, UL, DG, Tr::nb, typename Tr::alg_type>(ex, A, ws);
 }
 
 // A's UL triangle := L^H L (Lower) or U U^H (Upper) of that triangle; returns 0 or -i.
 template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int lauum(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::lauum<UL>, T, Tier>;
-    static_assert(potrf_detail::is_blocked_v<Tr>, "lauum: tier::Blocked<NB>");
-    return potri_detail::potri_blocked_op<potri_detail::BlockedChain::Lauum, UL, Diag::NonUnit, Tr::nb, typename Tr::alg_type>(ex, A, ws);
+    static_assert(tier::is_blocked_v<Tr>, "lauum: tier::Blocked<NB>");
+    return detail::potri_blocked_op<detail::BlockedChain::Lauum, UL, Diag::NonUnit, Tr::nb, typename Tr::alg_type>(ex, A, ws);
 }
 
 }  // namespace batchlas::device

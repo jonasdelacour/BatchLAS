@@ -21,7 +21,7 @@ template <Side SD, Transpose TR> struct ormqr {
 };
 }  // namespace routine
 
-namespace ormqr_detail {
+namespace detail {
 template <class T> struct OrmqrSlots {
     ws::Slot<T> smem, v, t, work;
 };
@@ -41,8 +41,6 @@ template <Side SD, int NB, class Cfg, class T> constexpr WorkspaceSize ormqr_siz
     return p.size();
 }
 
-template <class Tier> inline constexpr bool ormqr_is_blocked_v = false;
-template <int NB, class A> inline constexpr bool ormqr_is_blocked_v<tier::Blocked<NB, A>> = true;
 
 // The blocks in application order: forward for Q^H C and C Q, backward for Q C and C Q^H.
 template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class T>
@@ -62,14 +60,14 @@ BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a
         larfb_from_panel<SD, TR, Cfg>(ex, a, i0, ib, tau, cs, vb, tb, NB, wb, sm);
     }
 }
-}  // namespace ormqr_detail
+}  // namespace detail
 
 template <Side SD, Transpose TR, int NB, class A, class T> struct tier_info<routine::ormqr<SD, TR>, tier::Blocked<NB, A>, T> {
     using cfg = larfb_cfg_t<A, T>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
     /// C of m x n (Q of order m for Left, n for Right); k never changes the workspace.
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return ormqr_detail::ormqr_size<SD, NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::ormqr_size<SD, NB, cfg, T>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
 template <Side SD, Transpose TR, class T> struct tiers<routine::ormqr<SD, TR>, T> {
@@ -101,7 +99,7 @@ BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const T
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::ormqr<SD, TR>, T, Tier>;
     static_assert(HasTier<routine::ormqr<SD, TR>, Tr, T>, "ormqr: this tier is not offered for this scalar type");
-    static_assert(ormqr_detail::ormqr_is_blocked_v<Tr>, "ormqr: only tier::Blocked<NB> is offered");
+    static_assert(tier::is_blocked_v<Tr>, "ormqr: only tier::Blocked<NB> is offered");
     static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "ormqr: complex Trans; use ConjTrans");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
     larfb_check_ex<Cfg, Ex>();
@@ -115,8 +113,8 @@ BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const T
     if (ws.global == nullptr) return -4;
     if (k <= 0 || c.m <= 0 || c.n <= 0) return 0;
     Plan p;
-    const auto s = ormqr_detail::ormqr_take<SD, Tr::nb, Cfg, T>(p, c.m, c.n);
-    ormqr_detail::ormqr_wy_blocks<SD, TR, Tr::nb, Cfg>(ex, a, c, k, static_cast<const T*>(larfb_tau_base(tau)), s, ws);
+    const auto s = detail::ormqr_take<SD, Tr::nb, Cfg, T>(p, c.m, c.n);
+    detail::ormqr_wy_blocks<SD, TR, Tr::nb, Cfg>(ex, a, c, k, static_cast<const T*>(larfb_tau_base(tau)), s, ws);
     return 0;
 }
 

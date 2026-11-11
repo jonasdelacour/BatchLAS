@@ -131,8 +131,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
         // RELATIVE off-diagonal threshold (an absolute test forfeits the relative accuracy);
-        // tiny and tau_big as documented on device::jacobi_detail::JacobiThreshold.
-        const auto thr = device::jacobi_detail::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
+        // tiny and tau_big as documented on device::detail::JacobiThreshold.
+        const auto thr = device::detail::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
 
         Real* W = w_ptr;
         // A local of the submit lambda for the same reason as W, so the kernel's
@@ -154,7 +154,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
-                    Pair_local[idx] = device::jacobi_detail::pack_pair(device::jacobi_detail::round_robin_pair(mm, t, idx - t * pairs_per_round));
+                    Pair_local[idx] = device::detail::pack_pair(device::detail::round_robin_pair(mm, t, idx - t * pairs_per_round));
                 }
                 sycl::group_barrier(wg);
 
@@ -211,16 +211,16 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const auto rnd = device::jacobi_detail::rot_round<T>(device::vec(Rcs_local, kRotSlots, base_r), rd,
+                        const auto rnd = device::detail::rot_round<T>(device::vec(Rcs_local, kRotSlots, base_r), rd,
                                                           device::vec(Pair_local, pairs_per_round, t * pairs_per_round));
 
-                        device::jacobi_detail::PivotPair pq{0, 0};
+                        device::detail::PivotPair pq{0, 0};
                         bool active = false;
                         if (pair_lane) {
                             pq = rnd.pair(lane);
                             active = (pq.q < nn);
                         }
-                        device::jacobi_detail::JacobiRotation<T> jr = device::jacobi_detail::identity_rotation<T>();
+                        device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
                         if (active) {
                             jr = device::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)),
                                                    static_cast<T>(A(pq.p, pq.q)), thr);
@@ -237,14 +237,14 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                         // Lane owns row `lane`; the pairs touch disjoint columns.
                         if (row_lane) {
-                            if constexpr (ComputeVectors) device::jacobi_detail::rot_round_right(rnd, pairs_per_round, lane, A, Z);
-                            else device::jacobi_detail::rot_round_right(rnd, pairs_per_round, lane, A);
+                            if constexpr (ComputeVectors) device::detail::rot_round_right(rnd, pairs_per_round, lane, A, Z);
+                            else device::detail::rot_round_right(rnd, pairs_per_round, lane, A);
                         }
                         group_barrier(ex.part);
 
                         // Lane now owns column `lane`; the pivots are stored exactly (zeros,
                         // real diagonal) so the convergence test does not chase rounding noise.
-                        if (row_lane) device::jacobi_detail::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
+                        if (row_lane) device::detail::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
                         group_barrier(ex.part);
                     }
 

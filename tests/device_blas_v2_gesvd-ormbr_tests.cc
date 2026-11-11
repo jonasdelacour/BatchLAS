@@ -361,17 +361,17 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, BidiagonalOps) {
         const KernelMatrixView<T, MatrixFormat::Dense> vk(v, k, k, ldv, sv, kBatch);
         this->dev.line(order, [=](int b, int i) {
             if (i < k)
-                device::gesvd_detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdrv, b, k),
+                device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdrv, b, k),
                                           device::gesvd_glue::item_n(terv, b, k - 1));
-            device::gesvd_detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdlv, b, order),
+            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdlv, b, order),
                                      device::gesvd_glue::item_n(telv, b, order - 1));
         });
         this->dev.template run<64>([=](sycl::nd_item<1> it, int b) {
             const device::WorkGroup<64> ex{it};
-            device::gesvd_detail::bdgram<Side::Left>(ex, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::vec(tdw + b * order, order),
+            device::detail::bdgram<Side::Left>(ex, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::vec(tdw + b * order, order),
                                      device::vec(tew + b * (order - 1), order - 1));
             if (ex.leader())
-                device::gesvd_detail::bdmv_div(device::Thread{}, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::gesvd_glue::col_of(device::item(vk, b, k, k), 5),
+                device::detail::bdmv_div(device::Thread{}, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::gesvd_glue::col_of(device::item(vk, b, k, k), 5),
                                sig[b], T(1e-3), device::vec(u + b * order, order));
         });
         const auto gtdr = this->dev.down(tdr, std::size_t(kBatch) * k), gter = this->dev.down(ter, std::size_t(kBatch) * (k - 1));
@@ -428,7 +428,7 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, SignScan) {
         T* e = this->dev.up(he);
         T* sg = this->dev.up(poisoned<T>(std::size_t(kBatch) * (n + 2)));
         const VectorView<T> evw(e, n - 1, kBatch), sgv(sg, n + 2, kBatch);
-        this->dev.line(1, [=](int b, int) { device::gesvd_detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(evw, b, n - 1), device::gesvd_glue::item_n(sgv, b, n)); });
+        this->dev.line(1, [=](int b, int) { device::detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(evw, b, n - 1), device::gesvd_glue::item_n(sgv, b, n)); });
         const auto ge = this->dev.down(e, he.size()), gs = this->dev.down(sg, std::size_t(kBatch) * (n + 2));
         int bad = 0;
         for (int b = 0; b < kBatch; ++b) {

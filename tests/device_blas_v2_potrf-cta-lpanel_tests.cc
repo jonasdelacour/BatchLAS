@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The potrf CTA / LPANEL kernels' pieces and their potf2 distributions (potrf_detail in
+// The potrf CTA / LPANEL kernels' pieces and their potf2 distributions (detail in
 // include/batchlas/device/lapack/potrf.hh)
 // against long-double host references; the core ops they compose with are device_blas_v2_tests'.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld for every operand, complex data
@@ -296,11 +296,11 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
         };
         const device::RtGroup<kScope> ex(it);
         D* Ag = a + std::ptrdiff_t(b) * ldg * n;
-        const auto A = device::potrf_detail::slm_mat(S, lda, n, lda);
+        const auto A = device::detail::slm_mat(S, lda, n, lda);
         const device::Vec<R, device::Ext<NB>, device::Unit, device::Mem::Local> dg{diag, {}};
-        device::potrf_detail::lacpy_herm_lower(ex, device::potrf_detail::HermLower<D>{Ag, ldg, upper}, A, n);
+        device::detail::lacpy_herm_lower(ex, device::detail::HermLower<D>{Ag, ldg, upper}, A, n);
         device::scal(ex, device::Zero{}, dg);
-        device::potrf_detail::tri_tile_prefix_init(ex, off, Rt0);
+        device::detail::tri_tile_prefix_init(ex, off, Rt0);
         if (ex.leader()) *fail = 0;
         bar();
         bool ok = true;
@@ -309,15 +309,15 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
             const auto A11 = A.sub(j, j, ib, ib);
             const auto A21 = A.sub(j + ib, j, m2, ib);
             if (ok && it.get_sub_group().get_group_linear_id() == 0)
-                device::potf2_sg_slm<NB, device::potrf_detail::InvSqrt>(device::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
+                device::potf2_sg_slm<NB, device::detail::InvSqrt>(device::SubGroup<32>{it.get_sub_group()}, A11, ib, dg, fail, j);
             bar();
             ok = (*fail == 0);
-            if (ok && m2 > 0) device::potrf_detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, A11, dg, A21, ib);
+            if (ok && m2 > 0) device::detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, A11, dg, A21, ib);
             bar();
             if (ok && m2 > 0) {
                 const int Rt = (m2 + TS - 1) / TS;
-                device::potrf_detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A21, device::One{}, A.sub(j + ib, j + ib, m2, m2),
-                                                 device::potrf_detail::TriTilePrefix{off, Rt, Rt0 - Rt});
+                device::detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A21, device::One{}, A.sub(j + ib, j + ib, m2, m2),
+                                                 device::detail::TriTilePrefix{off, Rt, Rt0 - Rt});
             }
             bar();
         }
@@ -383,7 +383,7 @@ TYPED_TEST(DeviceBlasV2PotrfTest, TrsmRowfragRightLowerConjTrans) {
             const auto L = device::mat(l + std::ptrdiff_t(b) * ldl * kb, kb, kb, ldl);
             const auto X = device::mat(x + std::ptrdiff_t(b) * ldx * kb, m, kb, ldx);
             const device::Vec<const R, device::Ext<NB>> dv{d + std::ptrdiff_t(b) * NB, {}};
-            device::potrf_detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, L, dv, X, kb);
+            device::detail::trsm_rowfrag<Side::Right, Uplo::Lower, Transpose::ConjTrans, NB>(ex, L, dv, X, kb);
         });
         const auto got = this->dev.down(x, hx.size());
         int bitdiff = 0;
@@ -441,11 +441,11 @@ template <class T, int TS> void herk_case(Dev& dev, int mm, int k) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<WG> ex{it};
         int* off = reinterpret_cast<int*>(lm);
-        device::potrf_detail::tri_tile_prefix_init(ex, off, Rt0);
+        device::detail::tri_tile_prefix_init(ex, off, Rt0);
         ex.barrier();
         const auto A = device::mat(a + std::ptrdiff_t(b) * lda * k, mm, k, lda);
         const auto C = device::mat(cc + std::ptrdiff_t(b) * ldc * mm, mm, mm, ldc);
-        device::potrf_detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A, device::One{}, C, device::potrf_detail::TriTilePrefix{off, Rt, Rt0 - Rt});
+        device::detail::herk_tiles<Uplo::Lower, TS>(ex, device::NegOne{}, A, device::One{}, C, device::detail::TriTilePrefix{off, Rt, Rt0 - Rt});
     });
     const auto got = dev.down(cc, hc.size());
     int bitdiff = 0, poisonbad = 0, diagbad = 0;
@@ -514,8 +514,8 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
         int* fail = reinterpret_cast<int*>(mine + b_bytes + std::size_t(slda) * NB * sizeof(D));
         const device::Slot<> ex{tid, SLOT};
         const auto A = device::mat_wide(a + std::ptrdiff_t(b) * ldg * n, n, n, ldg);
-        const auto P = device::potrf_detail::slm_mat(sA, n, NB, slda);
-        const auto B = device::potrf_detail::slm_tile<NB, NB>(sB);
+        const auto P = device::detail::slm_mat(sA, n, NB, slda);
+        const auto B = device::detail::slm_tile<NB, NB>(sB);
         auto bar = [&] { sycl::group_barrier(it.get_group()); };
         if (ex.leader()) *fail = 0;
         bar();
@@ -525,22 +525,22 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
             const int ib = std::min(NB, n - j);
             const bool panel_ok = ok, live = ok && row >= j && row < n;
             device::Frag<D, NB> rp, rS;
-            device::potrf_detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
+            device::detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
             device::fill(rS, Ar::zero());
             for (int k = 0; k < j; k += NB) {
                 const int kb = std::min(NB, j - k);
-                device::potrf_detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+                device::detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
                 bar();
                 if (live) {
                     device::Frag<D, NB> rA;
                     device::load_row(rA, A.sub(0, k, n, kb), row, kb);
-                    device::potrf_detail::gemv_n_slm_bcast<NB>(rS, rA, sB);
+                    device::detail::gemv_n_slm_bcast<NB>(rS, rA, sB);
                 }
                 bar();
             }
-            if (live) device::potrf_detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
+            if (live) device::detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
             bar();
-            ok = device::potf2_panel_rows<device::potrf_detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
+            ok = device::potf2_panel_rows<device::detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
             if (panel_ok) device::lacpy<device::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));
             bar();
         }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // LAPACK xLARFT (Direct = Forward, Store = Columnwise), the only larft: T of the block reflector
-// H = I - V T V^H from a unit-lower V and tau, on one work-group. larft_detail holds the one
+// H = I - V T V^H from a unit-lower V and tau, on one work-group. detail holds the one
 // piece core has no spelling for yet (a distributed out-of-place upper trmv, one item per row).
 
 #include <batchlas/device.hh>
@@ -9,7 +9,7 @@
 
 namespace batchlas::device {
 
-namespace larft_detail {
+namespace detail {
 
 // y := A x, A upper (strict lower never read), y not aliasing x. Item r forms y(r) from row r:
 // y is Cyclic, so a later call reading y(r) as A(r, :) runs on its writer (no barrier).
@@ -29,7 +29,7 @@ BATCHLAS_DEVICE_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, cons
     });
 }
 
-}  // namespace larft_detail
+}  // namespace detail
 
 // T (ib x ib, upper) from V (m x ib, unit diagonal stored) and tau(0:ib). Two barriers: Y_j =
 // -tau_j V^H v_j parks in T's strict lower row j; the trmv owner reads back only its rows; the
@@ -52,7 +52,7 @@ BATCHLAS_DEVICE_INLINE void larft(const Ex& ex, const MV& V, const MT& Tm, const
     for (int j = 1; j < ib; ++j) {  // T(0:j, j) := T(0:j, 0:j) Y_j, or 0 when tau_j == 0
         const auto t_col = Tm.col(j).head(j);
         if (A::is_zero(static_cast<T>(tau(j)))) map(ex, t_col, [] { return A::zero(); });
-        else larft_detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), assume_published(Tm.row(j).head(j)), t_col);
+        else detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), assume_published(Tm.row(j).head(j)), t_col);
     }
     ex.barrier(Mem::Global);
 

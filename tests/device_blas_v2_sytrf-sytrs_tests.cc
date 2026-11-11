@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // sytrf / sytrs device routine internals (batchlas/device/lapack/sytrf.hh and sytrs.hh, their
-// sytrf_detail / sytrs_detail pieces) against long-double host references.
+// detail / detail pieces) against long-double host references.
 // The shared ops the kernels use (RtGroup, SubGroup, for_each_owned over a Range, lacpy,
 // for_each_owned_2d, abs1, arith::Fma) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): non-natural ld, the index-reversed view
@@ -144,11 +144,11 @@ TYPED_TEST(DeviceBlasV2SytrfTest, RevMatRevVecLowerCopy) {
     this->dev.template run<64>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto b = static_cast<std::ptrdiff_t>(it.get_group_linear_id());
         const device::RtGroup<> g(it);
-        const auto G = device::sytrf_detail::rev_mat(gp + b * std::ptrdiff_t(pg), lg, n, true);
-        const auto S = device::sytrf_detail::rev_mat(sp + b * std::ptrdiff_t(ps), ls, n, false);
+        const auto G = device::detail::rev_mat(gp + b * std::ptrdiff_t(pg), lg, n, true);
+        const auto S = device::detail::rev_mat(sp + b * std::ptrdiff_t(ps), ls, n, false);
         device::lacpy<device::Part::Lower, Transpose::NoTrans, device::alg::DivMod>(g, G, S);
         device::sync<device::scope::Group>(g, device::Mem::Global);
-        const device::sytrf_detail::RevVec<T> v{vp + b * n, n, true};
+        const device::detail::RevVec<T> v{vp + b * n, n, true};
         device::for_each_owned(g, n, [&](int i) { v(i) = S(i, 0); });
     });
     const auto gs = this->dev.down(sp, hs.size());
@@ -194,29 +194,29 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
         const auto sg = it.get_sub_group();
         if (SgOnly && sg.get_group_linear_id() != 0) return;
         R* sv = reinterpret_cast<R*>(lm);
-        const device::sytrf_detail::ArgMaxScratch<R> am{sv, reinterpret_cast<int*>(sv + 64)};
-        const device::sytrf_detail::SumScratch<R> ss{sv, sv + 32};
+        const device::detail::ArgMaxScratch<R> am{sv, reinterpret_cast<int*>(sv + 64)};
+        const device::detail::SumScratch<R> ss{sv, sv + 32};
         const T* xb = x + b * n;
         const T* yb = y + b * n;
         const T* zb = z + b * n;
         auto xv = [=](int i) -> const T& { return xb[i]; };
         auto yv = [=](int i) -> const T& { return yb[i]; };
         auto body = [&](const auto& g) {
-            const auto lo = device::sytrf_detail::iamax_bk(g, am, xv, device::Range{3, n}, true);
-            const auto hi = device::sytrf_detail::iamax_bk(g, am, xv, device::Range{3, n}, false);
-            const auto sk = device::sytrf_detail::iamax_bk<true>(g, am, xv, device::Range{0, n}, true, lo.index);
-            const auto em = device::sytrf_detail::iamax_bk(g, am, xv, device::Range{n, n}, true);
-            const auto nl = device::sytrf_detail::iamax_bk(g, am, yv, device::Range{0, n}, true);
-            const auto nh = device::sytrf_detail::iamax_bk(g, am, yv, device::Range{0, n}, false);
+            const auto lo = device::detail::iamax_bk(g, am, xv, device::Range{3, n}, true);
+            const auto hi = device::detail::iamax_bk(g, am, xv, device::Range{3, n}, false);
+            const auto sk = device::detail::iamax_bk<true>(g, am, xv, device::Range{0, n}, true, lo.index);
+            const auto em = device::detail::iamax_bk(g, am, xv, device::Range{n, n}, true);
+            const auto nl = device::detail::iamax_bk(g, am, yv, device::Range{0, n}, true);
+            const auto nh = device::detail::iamax_bk(g, am, yv, device::Range{0, n}, false);
             T p0 = A::zero(), p1 = A::zero(), pe = A::zero();
             device::for_each_owned(g, device::Range{60, n}, [&](int i) {
                 p0 = A::add(p0, A::mul(xb[i], zb[i]));
                 p1 = A::add(p1, A::mul(zb[i], zb[i]));
             });
             device::for_each_owned(g, device::Range{n, n}, [&](int i) { pe = A::add(pe, A::mul(xb[i], zb[i])); });
-            const T s0 = device::sytrf_detail::sum_reduce(g, ss, p0);
-            const T s1 = device::sytrf_detail::sum_reduce(g, ss, p1);
-            const T se = device::sytrf_detail::sum_reduce(g, ss, pe);
+            const T s0 = device::detail::sum_reduce(g, ss, p0);
+            const T s1 = device::detail::sum_reduce(g, ss, p1);
+            const T se = device::detail::sum_reduce(g, ss, pe);
             if (g.leader()) {
                 int* o = oip + b * kISlots;
                 o[kLow] = lo.index, o[kHigh] = hi.index, o[kSkip] = sk.index, o[kEmpty] = em.index, o[kNanLow] = nl.index, o[kNanHigh] = nh.index;
@@ -303,7 +303,7 @@ TYPED_TEST(DeviceBlasV2SytrfTest, BkStageAndChoiceThresholds) {
     std::vector<R> ha(1, R(0));
     R* ap = this->dev.up(ha);
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
-        if (it.get_local_linear_id() == 0) ap[0] = device::sytrf_detail::bk_alpha<R>();
+        if (it.get_local_linear_id() == 0) ap[0] = device::detail::bk_alpha<R>();
     });
     const R alpha = this->dev.down(ap, 1)[0];
     EXPECT_NEAR(alpha, (R(1) + std::sqrt(R(17))) / R(8), 2 * std::numeric_limits<R>::epsilon());
@@ -329,19 +329,19 @@ TYPED_TEST(DeviceBlasV2SytrfTest, BkStageAndChoiceThresholds) {
         // only item 0 sees the real inputs: the verdict must be its broadcast
         const bool l0 = g.leader();
         const R absakk = l0 ? p[0] : R(-5), colmax = l0 ? p[1] : R(7), rowmax = l0 ? p[2] : R(1), absimax = l0 ? p[3] : R(9);
-        const R al = device::sytrf_detail::bk_alpha<R>();
-        const int stage = device::sytrf_detail::bk_stage(g, absakk, colmax, al);
+        const R al = device::detail::bk_alpha<R>();
+        const int stage = device::detail::bk_stage(g, absakk, colmax, al);
         int kp = 3, kstep = 1;
-        if (stage == device::sytrf_detail::kBkNeedRow) device::sytrf_detail::bk_choice(g, absakk, colmax, rowmax, absimax, al, 3, 8, kp, kstep);
+        if (stage == device::detail::kBkNeedRow) device::detail::bk_choice(g, absakk, colmax, rowmax, absimax, al, 3, 8, kp, kstep);
         int* o = out + 3 * c;
         if (it.get_local_linear_id() == 47) o[0] = stage, o[1] = kp, o[2] = kstep;
     });
     const auto got = this->dev.down(out, hout.size());
     for (int c = 0; c < nc; ++c) {
         const auto [akk, cmax, rmax, aimax] = cases[c];
-        int stage = device::sytrf_detail::kBkNeedRow, kp = 3, kstep = 1;
-        if (std::max(akk, cmax) == R(0) || std::isnan(akk)) stage = device::sytrf_detail::kBkZero;
-        else if (akk >= alpha * cmax) stage = device::sytrf_detail::kBkKeep;
+        int stage = device::detail::kBkNeedRow, kp = 3, kstep = 1;
+        if (std::max(akk, cmax) == R(0) || std::isnan(akk)) stage = device::detail::kBkZero;
+        else if (akk >= alpha * cmax) stage = device::detail::kBkKeep;
         else if (akk >= alpha * cmax * (cmax / rmax)) kp = 3;
         else if (aimax >= alpha * rmax) kp = 8;
         else kp = 8, kstep = 2;
@@ -369,12 +369,12 @@ TYPED_TEST(DeviceBlasV2SytrfTest, LdlBlockSolves) {
         const T* p = in + b * per;
         T* o = out + b * 5;
         const T dkk = p[0], dk1 = p[1], off = p[2], b0 = p[3], b1 = p[4];
-        o[0] = device::sytrs_detail::ldl_dsolve_row(1, b0, b1, dkk, dk1, off);
-        o[1] = device::sytrs_detail::ldl_dsolve_row(2, b1, b0, dk1, dkk, off);
-        const auto blk = device::sytrf_detail::bk_block2(dkk, off, dk1);
+        o[0] = device::detail::ldl_dsolve_row(1, b0, b1, dkk, dk1, off);
+        o[1] = device::detail::ldl_dsolve_row(2, b1, b0, dk1, dkk, off);
+        const auto blk = device::detail::bk_block2(dkk, off, dk1);
         o[2] = blk.first(b0, b1);
         o[3] = blk.second(b0, b1);
-        o[4] = device::sytrs_detail::ldl_dsolve_row(0, b0, b0, dkk, dkk, dkk);
+        o[4] = device::detail::ldl_dsolve_row(0, b0, b0, dkk, dkk, dkk);
     });
     const auto got = this->dev.down(out, ho.size());
     EXPECT_EQ(twins_differ(got, 5), 0);
@@ -445,13 +445,13 @@ TYPED_TEST(DeviceBlasV2SytrfTest, TrsvFragAndDsolveFrag) {
             x[r] = t < n ? bb[t] : T(0);
             y[r] = x[r];
         }
-        device::sytrs_detail::trsv_frag<Transpose::NoTrans>(ex, L, n, x);
+        device::detail::trsv_frag<Transpose::NoTrans>(ex, L, n, x);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[lane + 32 * r] = x[r];
-        device::sytrs_detail::trsv_frag<Transpose::Trans>(ex, L, n, x);
+        device::detail::trsv_frag<Transpose::Trans>(ex, L, n, x);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[n + lane + 32 * r] = x[r];
-        device::sytrs_detail::ldl_dsolve_frag(ex, Dm, kp, ep + b * n, n, y);
+        device::detail::ldl_dsolve_frag(ex, Dm, kp, ep + b * n, n, y);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[2 * n + lane + 32 * r] = y[r];
     });

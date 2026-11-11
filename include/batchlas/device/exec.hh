@@ -42,9 +42,9 @@ template <class Impl, class R> BATCHLAS_DEVICE_INLINE R xor_shuffle(const Impl& 
 
 // xor butterfly over P lanes; every lane ends with the same value. O = bfly::Down: masks
 // P/2 .. 1; bfly::Asc: 1 .. P/2 (another summation order, geqrf's tiny reductions).
-template <int P, class O = bfly::Down, class Impl, class T, class Op> BATCHLAS_DEVICE_INLINE T butterfly(const Impl& part, T v, Op op) {
+template <int P, class O = bfly::Down, class Impl, class T, class Op> BATCHLAS_DEVICE_INLINE T xor_butterfly(const Impl& part, T v, Op op) {
     using A = Arith<T>;
-    static_assert(std::is_same_v<O, bfly::Down> || std::is_same_v<O, bfly::Asc>, "butterfly: the order is bfly::Down or bfly::Asc");
+    static_assert(std::is_same_v<O, bfly::Down> || std::is_same_v<O, bfly::Asc>, "xor_butterfly: the order is bfly::Down or bfly::Asc");
     constexpr bool down = std::is_same_v<O, bfly::Down>;
     if constexpr (A::is_complex) {
         using R = typename A::real_t;
@@ -186,7 +186,7 @@ template <int WG, int P = 32, class O = bfly::Down, int SG = 32> struct Teams {
     BATCHLAS_DEVICE_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T team_reduce(T v, Op op = {}) const {
         if constexpr (P == SG && std::is_same_v<O, bfly::Down>) return detail::sycl_reduce(it.get_sub_group(), v, op);
-        else return detail::butterfly<P, O>(it.get_sub_group(), v, op);
+        else return detail::xor_butterfly<P, O>(it.get_sub_group(), v, op);
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);
@@ -243,7 +243,7 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
     BATCHLAS_DEVICE_INLINE int team() const { return 0; }
     BATCHLAS_DEVICE_INLINE bool leader() const { return lid() == 0; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T team_reduce(T v, Op op = {}) const {
-        return detail::butterfly<P>(part, v, op);
+        return detail::xor_butterfly<P>(part, v, op);
     }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DEVICE_INLINE T group_reduce(T v, Op op = {}) const {
         return team_reduce(v, op);

@@ -149,7 +149,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 auto ABs = ABsrc.batch_item(b);
                 auto ABt = ABtri.batch_item(b);
                 auto Vb = Vout.batch_item(b);
-                const device::sb2st_detail::HermBandLower<T> A{AB, ldw, kdw};
+                const device::detail::HermBandLower<T> A{AB, ldw, kdw};
 
                 // --- Load the input band into the expanded working band (rows past kd read 0).
                 device::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
@@ -263,7 +263,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
 
                 // cols: tile column lane % C is owned by the G = 32 / C lanes lane / C.
                 const device::WorkGroup<kWg> ex{it};
-                const device::sb2st_detail::StridedTeams<C, kWg> cols{it};
+                const device::detail::StridedTeams<C, kWg> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
@@ -292,7 +292,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
                         const int32_t L = lens_p[k];
                         device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
                             cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
-                            device::sb2st_detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
+                            device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     }
                     device::sync(ex, device::Mem::Global);
                 }
@@ -313,7 +313,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
 // writes it back once. Reordering into larft/larfb blocks is not possible here: the
 // row-sharing reflectors are never contiguous in the product.
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
-// Lane mapping: device::sb2st_detail::StridedTeams<C> (xor masks C, 2C, ... < 32); Zs is
+// Lane mapping: device::detail::StridedTeams<C> (xor masks C, 2C, ... < 32); Zs is
 // row-major with C columns, so consecutive lanes touch consecutive addresses.
 template <Backend B, typename T, int C>
 Event unmqr_hb2st_tiled(Queue& ctx,
@@ -353,7 +353,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
 
                 // One sub-group: ex for the tile load/store, cols for the column-per-team larf.
                 const device::WorkGroup<kSg> ex{it};
-                const device::sb2st_detail::StridedTeams<C> cols{it};
+                const device::detail::StridedTeams<C> cols{it};
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
@@ -376,7 +376,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                     const int32_t L = lens_p[k];
                     device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleV, device::loop::Lockstep>(
                         cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
-                        device::sb2st_detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
+                        device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     device::sync(cols);
                 }
 

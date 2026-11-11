@@ -324,7 +324,7 @@ TYPED_TEST(DeviceApiSvd, UptoAndBufferSizeMatchThePlan) {
         auto check = [](auto tier) {
             using Tier = decltype(tier);
             constexpr int P = Tier::n_max;
-            constexpr auto plan = device::gebrd_detail::cta_plan<P, T>();
+            constexpr auto plan = device::detail::gebrd_cta_plan<P, T>();
             static_assert(plan.tile.offset == 0 && plan.tile.count == std::size_t(P) * P);
             for (int n = 1; n <= P; ++n) {
                 const auto sz = device::gebrd_buffer_size<Tier, T>(n);
@@ -894,7 +894,7 @@ TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
     static_assert(std::is_same_v<device::resolve_tier_t<Ro, T, device::tier::upto<4096>>, Blk>);
     const std::pair<int, int> shapes[] = {{1, 1}, {16, 17}, {64, 33}, {33, 64}};
     for (const auto& [m, n] : shapes) {
-        const auto plan = device::gesvd_detail::driver_plan<All, All, 16, T>(m, n);
+        const auto plan = device::detail::driver_plan<All, All, 16, T>(m, n);
         EXPECT_EQ((device::gesvd_buffer_size<All, All, Blk, T>(m, n)), plan.size) << m << " x " << n;
         EXPECT_EQ(plan.size.local_bytes, lb) << "local bytes depend on neither m nor n";
         EXPECT_EQ(plan.at.count, m < n ? std::size_t(m) * n : 0u) << "A^H only on the m < n path";

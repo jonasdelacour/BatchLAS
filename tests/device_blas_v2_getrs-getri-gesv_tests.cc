@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The device LA ops getrs / getri / gesv run on (getrs_detail in lapack/getrs.hh
-// and gesv_detail in lapack/gesv.hh, and the core ones they took over: SafeRecip, laswp_index,
+// The device LA ops getrs / getri / gesv run on (detail in lapack/getrs.hh
+// and detail in lapack/gesv.hh, and the core ones they took over: SafeRecip, laswp_index,
 // AtomicMinSlot, shift_reduce, conj_if, op_view) against host references, as the LU kernels call
 // them; RtGroup, lacpy, laswp, select and Partition::bcast are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): SafeRecip bit for bit against getf2's
@@ -216,7 +216,7 @@ template <class T, int WG> void gather_case(Dev& dev) {
         const device::RtGroup<> ex(it);  // the width is the launch's, a run-time value
         const auto src = device::mat_wide(reinterpret_cast<const D*>(s) + std::size_t(b) * kSrc, m + i0, NA, ldA).sub(i0, j0, m, n);
         D* ob = reinterpret_cast<D*>(o) + std::size_t(b) * kOut;
-        device::getrs_detail::lapmr_copy(ex, src, perm, device::mat_wide(ob, m, n, ldB));
+        device::detail::lapmr_copy(ex, src, perm, device::mat_wide(ob, m, n, ldB));
         device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, device::conj_if(device::op_view<Transpose::Trans>(src), true),
                                                                      device::mat_wide(ob + ldB * n, n, m, ldT));
     });
@@ -439,8 +439,8 @@ template <class T, Uplo UL, Diag DG, bool Tr> void trsm_lane_case(Dev& dev, int 
         const auto am = device::mat_wide(reinterpret_cast<const D*>(a) + std::size_t(b) * ld * jb, jb, jb, ld);
         const auto ym = device::mat_wide(reinterpret_cast<D*>(y) + std::size_t(b) * ldy * nrhs, jb, nrhs, ldy);
         const int c0 = static_cast<int>(sg.get_group_linear_id());
-        if constexpr (Tr) device::getrs_detail::trsm_lane<UL, DG>(sx, device::conj_if(device::op_view<Transpose::Trans>(am), true), ym, c0, 2);
-        else device::getrs_detail::trsm_lane<UL, DG>(sx, am, ym, c0, 2);
+        if constexpr (Tr) device::detail::trsm_lane<UL, DG>(sx, device::conj_if(device::op_view<Transpose::Trans>(am), true), ym, c0, 2);
+        else device::detail::trsm_lane<UL, DG>(sx, am, ym, c0, 2);
     });
     const auto h = dev.down(y, hy.size());
     EXPECT_EQ(twin_diffs(h, ldy * nrhs), 0) << "jb " << jb;
@@ -489,9 +489,9 @@ template <class T, int WG> void gemm_nr_case(Dev& dev) {
         const auto xm = device::mat_wide(reinterpret_cast<const D*>(x) + std::size_t(b) * kX, m, nrhs, ldX);
         D* cb = reinterpret_cast<D*>(c) + std::size_t(b) * 2 * kC;
         // A view (1, 2) of m x k; X rows (3, k) for NoTrans; the full m rows for Trans.
-        device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, am.sub(1, 2, m, k), xm.sub(3, 0, k, nrhs), device::One{},
+        device::detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, am.sub(1, 2, m, k), xm.sub(3, 0, k, nrhs), device::One{},
                                             device::mat_wide(cb, m, nrhs, ldC));
-        device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(am.sub(1, 2, m, k), true), xm, device::One{},
+        device::detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(am.sub(1, 2, m, k), true), xm, device::One{},
                                           device::mat_wide(cb + kC, k, nrhs, ldC));
     });
     const auto h = dev.down(c, hc.size());
@@ -557,7 +557,7 @@ TYPED_TEST(DeviceBlasV2LuTest, GerFragBcastRowUpdate) {
         const D* L = reinterpret_cast<const D*>(in) + (std::size_t(item) * P + lane) * NC;
         D g[NC];
         for (int k = 0; k < NC; ++k) g[k] = L[k];
-        device::gesv_detail::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
+        device::detail::ger_frag_bcast(px, g[0], g, static_cast<std::uint32_t>(kSrcLane), k0, kend_of(item), act_of(lane));
         D* O = reinterpret_cast<D*>(out) + (std::size_t(item) * P + lane) * NC;
         for (int k = 0; k < NC; ++k) O[k] = g[k];
     });

@@ -213,7 +213,7 @@ TYPED_TEST_SUITE(DeviceApiSb2stTest, Types);
 // the outputs' poisoned tails.
 template <class T, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx, int n, int kd, const Out<T>& host, const std::vector<T>& band) {
     const int ld = kd + 4, nm1 = std::max(0, n - 1);
-    if constexpr (device::sb2st_detail::is_cta_v<Tier>) {
+    if constexpr (device::tier::is_cta_v<Tier>) {
         if (!fx.fits(device::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd).local_bytes * (32 / P))) {
             std::printf("[   NOTE   ] Cta tier at n=%d kd=%d does not fit this device's local memory; not run\n", n, kd);
             return;
@@ -318,11 +318,11 @@ TYPED_TEST(DeviceApiSb2stTest, WideBandMatchesTheWorkGroupRoute) {
 // ---- host-side: the workspace plan and with_tier --------------------------------------------
 using Lower8 = device::routine::sb2st<Uplo::Lower, 8>;
 
-constexpr auto kCta = device::sb2st_detail::band_layout<device::tier::Cta<64>, std::complex<double>>(37, 5);
+constexpr auto kCta = device::detail::band_layout<device::tier::Cta<64>, std::complex<double>>(37, 5);
 static_assert(kCta.c.offset == 0 && kCta.work.offset % 16 == 0 && kCta.work.offset >= kCta.c.count * sizeof(double));
 static_assert(kCta.ab.offset % 16 == 0 && kCta.ab.offset >= kCta.work.offset + kCta.work.count * sizeof(std::complex<double>));
 static_assert(kCta.size.local_bytes >= kCta.ab.offset + kCta.ab.count * sizeof(std::complex<double>) && kCta.size.global_bytes == 0);
-constexpr auto kBlk = device::sb2st_detail::band_layout<device::tier::Blocked<32>, float>(37, 5);
+constexpr auto kBlk = device::detail::band_layout<device::tier::Blocked<32>, float>(37, 5);
 static_assert(kBlk.size.local_bytes == 0 && kBlk.size.global_bytes >= (37 + 5 + 2) * 2 * sizeof(float));
 static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<64>, float>(10, 1) == device::WorkspaceSize{});
 static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Blocked<32>, float>(0, 5) == device::WorkspaceSize{});
@@ -332,7 +332,7 @@ static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier:
 template <class T> std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        device::with_tier<Lower8, T>(lim, n, [&]<class Tier>(Tier) { got = device::sb2st_detail::is_cta_v<Tier> ? "cta" : "blocked"; });
+        device::with_tier<Lower8, T>(lim, n, [&]<class Tier>(Tier) { got = device::tier::is_cta_v<Tier> ? "cta" : "blocked"; });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string("throw:") + e.what();
     }

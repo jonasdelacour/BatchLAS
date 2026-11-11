@@ -271,7 +271,7 @@ TEST(DeviceApiSteqrTier, BufferSizeIsQOnlyWithVectors) {
 // ---- tier::Blocked<1>: the host steqr_wg algorithm inside one work-group, any n -----------------
 // Against the host steqr route, which takes steqr_wg for n > 32 (steqr.cc should_use_cta: no
 // choice.hh, nothing to pin), the multi-kernel pipeline over the same sweep body
-// (steqr_detail::wg_sweep / wg_solve_2x2) and the same rotation kernel (core lasr):
+// (detail::wg_sweep / wg_solve_2x2) and the same rotation kernel (core lasr):
 //   - eigenvalues and info bit-identical (memcmp), both jobz, n = 33 (just past the Cta
 //     ceiling), 64, 97, the full and a one-sweep budget (info > 0 must occur: straddled);
 //   - Q equal value for value (an identity rotation the host applies to a finished block can

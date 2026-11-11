@@ -2,13 +2,11 @@
 # One `<rule> <file> <name>` per line; work packages delete lines, never add them.
 # Regenerate: python3 scripts/check_device_placement.py --write-allowlist
 duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand.hh
-duplicate include/batchlas/device/exec.hh butterfly/include/batchlas/device/reduce.hh
 duplicate include/batchlas/device/lapack/sb2st.hh fn_vec/include/batchlas/device/view.hh
 duplicate include/batchlas/device/lapack/sytrd.hh dotc/include/batchlas/device/level1.hh
 duplicate include/batchlas/device/level1.hh dotc/include/batchlas/device/lapack/sytrd.hh
 duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
 duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
-duplicate include/batchlas/device/reduce.hh butterfly/include/batchlas/device/exec.hh
 duplicate include/batchlas/device/view.hh fn_vec/include/batchlas/device/lapack/sb2st.hh
 duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
 src-device src/kernels/common/dla_v2_jacobi.hh batchlas::device::col_sumsq

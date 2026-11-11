@@ -110,10 +110,10 @@ namespace batchlas {
 
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     using QLocalAccT = decltype(Q_local);
-                    device::steqr_detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
+                    device::detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
                     // Thin launcher: device::steqr<J, tier::Cta<P>>'s body; info is written before the stores.
-                    device::steqr_detail::steqr_cta_run<T, P, ComputeVecs>(
+                    device::detail::steqr_cta_run<T, P, ComputeVecs>(
                         partition, d_prob, e_prob, Q_view.batch_item(b), qcache, n, static_cast<int32_t>(max_sweeps),
                         cta_shift_strategy, cta_update_scheme, live, [&](bool failed) BATCHLAS_DEVICE_BODY {
                             if (live && failed && lane == 0) {

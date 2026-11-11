@@ -206,7 +206,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
                 // Thin launcher: the panel body of device::sytrd<Lower, tier::Blocked<NB>> (latrd_lower_run).
-                device::sytrd_detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
+                device::detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
                                                       vip_local, wip_local, [&](int i, const T& beta, const T& tau_i) BATCHLAS_DEVICE_BODY {
                                                           E_view(i, b) = beta;
                                                           TAU_view(i, b) = tau_i;

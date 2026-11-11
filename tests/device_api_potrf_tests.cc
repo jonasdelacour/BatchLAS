@@ -240,7 +240,7 @@ template <class T> class DeviceApiPotrfTest : public DeviceCoreTest<T> {
 };
 TYPED_TEST_SUITE(DeviceApiPotrfTest, AllTypes);
 
-template <class T> constexpr bool kReg32 = batchlas::device::potrf_detail::reg_max_n<T> >= 32;
+template <class T> constexpr bool kReg32 = batchlas::device::detail::reg_max_n<T> >= 32;
 
 TYPED_TEST(DeviceApiPotrfTest, RegMatchesHostRoute) {
     using T = TypeParam;
@@ -314,8 +314,8 @@ template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, i
     std::string got = "none";
     try {
         batchlas::device::with_tier<batchlas::device::routine::potrf<Uplo::Lower>, T>(lim, n, [&]<class Tier>(Tier) {
-            if constexpr (batchlas::device::potrf_detail::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
-            else if constexpr (batchlas::device::potrf_detail::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
+            if constexpr (batchlas::device::tier::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
+            else if constexpr (batchlas::device::tier::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });
     } catch (const batchlas::invalid_argument& e) {
@@ -360,16 +360,16 @@ TYPED_TEST(DeviceApiPotrfTest, WithTierFilters) {
 
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<8>>, batchlas::device::tier::Reg<8>>);
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<100>>, batchlas::device::tier::Cta<128>>);
-    static_assert(batchlas::device::potrf_detail::is_blocked_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<200>>>);
+    static_assert(batchlas::device::tier::is_blocked_v<batchlas::device::resolve_tier_t<batchlas::device::routine::potrf<Uplo::Lower>, T, batchlas::device::tier::upto<200>>>);
     static_assert(batchlas::device::potrf_buffer_size<Uplo::Upper, batchlas::device::tier::Reg<16>, T>(16) == batchlas::device::WorkspaceSize{});
 }
 
 // The plan the op carves is the size the host allocates: every slot inside it, aligned, disjoint.
 TYPED_TEST(DeviceApiPotrfTest, BufferSizeIsTheCarvedPlan) {
     using T = TypeParam;
-    using D = batchlas::device::potrf_detail::dev_scalar_t<T>;
+    using D = batchlas::device::detail::dev_scalar_t<T>;
     for (int n : {1, 8, 9, 37, 64, 65, 128}) {
-        const auto pl = batchlas::device::potrf_detail::CtaPlan<D>::make(n);
+        const auto pl = batchlas::device::detail::PotrfCtaPlan<D>::make(n);
         const auto sz = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<128>, T>(n);
         EXPECT_EQ(sz, pl.size) << n;
         const std::size_t ends[] = {pl.tile.offset + pl.tile.count * sizeof(D), pl.diag.offset + pl.diag.count * sizeof(real_of<T>),

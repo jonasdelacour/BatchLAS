@@ -33,7 +33,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                Span<int32_t> fail_flags,
                                const std::uint8_t* mask) {
     // DBDSQR's tolerance and iteration cap, formed on the host.
-    const auto params = device::bdsqr_detail::params<Real>(n);
+    const auto params = device::detail::params<Real>(n);
 
     ctx->submit([&](sycl::handler& cgh) {
         auto D = d;

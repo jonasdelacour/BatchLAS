@@ -56,7 +56,7 @@ namespace {
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
 constexpr int kInc = 2;
-constexpr int kWg = device::stedc_detail::wg_size;
+constexpr int kWg = device::detail::wg_size;
 
 std::uint64_t mix(std::uint64_t x) {
     x += 0x9e3779b97f4a7c15ull;
@@ -185,7 +185,7 @@ void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const 
                 std::byte* gws, std::int32_t* info, std::int32_t max_sec_iter, int n) {
     const device::WorkspaceSize sz = device::stedc_buffer_size<J, Tier, T>(n);
     const auto Zk = Z.kernel_view();
-    device::stedc_detail::Params<T> p;
+    device::detail::stedc_params<T> p;
     p.max_sec_iter = max_sec_iter;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
@@ -382,11 +382,11 @@ TYPED_TEST(DeviceApiStedc, StedcTierQueries) {
         EXPECT_EQ(got, "blocked1") << n;
         const auto sz = device::stedc_buffer_size<JobType::EigenVectors, Tier, T>(n);
         const auto szn = device::stedc_buffer_size<JobType::NoEigenVectors, Tier, T>(n);
-        const auto L = device::stedc_detail::dc_layout<T>(n, false);
+        const auto L = device::detail::dc_layout<T>(n, false);
         EXPECT_EQ(sz, L.size);
-        EXPECT_EQ(szn, device::stedc_detail::dc_layout<T>(n, true).size);
+        EXPECT_EQ(szn, device::detail::dc_layout<T>(n, true).size);
         EXPECT_GE(szn.global_bytes, sz.global_bytes + std::size_t(n) * n * sizeof(T)) << n;
-        EXPECT_GE(sz.local_bytes, device::l3::smem_bytes<device::stedc_detail::gemm_cfg<T>>() + sizeof(std::int32_t));
+        EXPECT_GE(sz.local_bytes, device::l3::smem_bytes<device::detail::gemm_cfg<T>>() + sizeof(std::int32_t));
         const std::size_t nn = std::size_t(n) * n;
         for (const auto* s : {&L.qp, &L.tmp}) {
             EXPECT_LE(s->offset + nn * sizeof(T), sz.global_bytes) << n;

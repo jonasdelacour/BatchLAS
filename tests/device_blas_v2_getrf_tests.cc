@@ -315,13 +315,13 @@ template <int N, class Px> struct KeyPivot {
     int n, lane, base;
     int* ipiv;
     std::int32_t& info;
-    template <class R> device::getf2_detail::PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class R> device::detail::PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = rowid >= j && rowid < n;
-        device::getf2_detail::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), ((cand ? rowid : rowid + N) << 8) | lane};
-        device::getf2_detail::maxloc_bfly_up(px, a);
+        device::detail::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), ((cand ? rowid : rowid + N) << 8) | lane};
+        device::detail::maxloc_bfly_up(px, a);
         return {a.i >> 8, a.i & 0xff};
     }
-    void record(int j, device::getf2_detail::PivotWinner w) const {
+    void record(int j, device::detail::PivotWinner w) const {
         if (lane == 0) ipiv[j] = base + w.row + 1;
     }
     void on_zero(bool zero, int j) const {
@@ -370,8 +370,8 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
                 }
                 int rowid = live ? tid : -1;
                 std::int32_t info = ex.leader() ? inf[b] : 0;
-                auto pv = device::getf2_detail::pivot_rows_group(ex, vs, is, m, device::IpivSink{piv + std::size_t(b) * kmax, base}, info);
-                auto bc = device::getf2_detail::bcast_row_local(ex, sx);
+                auto pv = device::detail::pivot_rows_group(ex, vs, is, m, device::IpivSink{piv + std::size_t(b) * kmax, base}, info);
+                auto bc = device::detail::bcast_row_local(ex, sx);
                 device::getf2_relabel(rA, rowid, kmax, n, pv, bc);
                 ex.barrier();  // every item has read A before rows land at their relabelled place
                 if (live)
@@ -395,7 +395,7 @@ TYPED_TEST(DeviceBlasV2GetrfTest, Getf2RelabelMatchesExplicitSwapBitForBit) {
                 int rowid = lane;
                 std::int32_t info = inf[b];  // partition-uniform
                 const KeyPivot<16, decltype(px)> pv{px, n, lane, base, piv + std::size_t(b) * kmax, info};
-                const auto bc = device::getf2_detail::bcast_shuffle(px);
+                const auto bc = device::detail::bcast_shuffle(px);
                 device::getf2_relabel(rA, rowid, kmax, n, pv, bc);
                 sycl::group_barrier(sg);
                 if (lane < n)
@@ -456,10 +456,10 @@ TYPED_TEST(DeviceBlasV2GetrfTest, IamaxColTiesNanEveryExecutor) {
         const auto xv = device::mat_wide(xd + std::size_t(c) * n, c == 3 ? 0 : n, 1, n);
         const int r0 = c == 4 ? 78 : 0;
         const device::RtGroup<device::Scope::Group> eg{it};
-        const int ig = device::getf2_detail::iamax_col(eg, xv, r0, 0, 32, vs, is);
+        const int ig = device::detail::iamax_col(eg, xv, r0, 0, 32, vs, is);
         eg.barrier();
-        const int isub = device::getf2_detail::iamax_col(device::RtGroup<device::Scope::Sub>{it}, xv, r0, 0, 32, vs, is);
-        const int iwg = device::getf2_detail::iamax_col(device::WorkGroup<96>{it}, xv, r0, 0, 32, vs + 32, is + 32);
+        const int isub = device::detail::iamax_col(device::RtGroup<device::Scope::Sub>{it}, xv, r0, 0, 32, vs, is);
+        const int iwg = device::detail::iamax_col(device::WorkGroup<96>{it}, xv, r0, 0, 32, vs + 32, is + 32);
         if (eg.leader()) o[c * nexec] = ig, o[c * nexec + 1] = isub, o[c * nexec + 2] = iwg;
     });
     const auto g = this->dev.down(o, ho.size());
@@ -495,10 +495,10 @@ TYPED_TEST(DeviceBlasV2GetrfTest, RsclColArmsSmithAndGerTrailing) {
     D *xd = dv(x), *ddd = dv(dd), *aad = dv(a);
     this->dev.template run<96>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const device::RtGroup<device::Scope::Group> eg{it};
-        for (int s = 0; s < 3; ++s) device::getf2_detail::rscl_col(eg, ddd[s], device::mat_wide(xd + s * n, n, 1, n), r0, 0);
+        for (int s = 0; s < 3; ++s) device::detail::rscl_col(eg, ddd[s], device::mat_wide(xd + s * n, n, 1, n), r0, 0);
         if (eg.leader()) flag[0] = sycl_device::dev_is_zero(ddd[1]) ? 1 : 0, flag[1] = sycl_device::dev_isfinite(sycl_device::dev_recip(ddd[1])) ? 1 : 0;
-        device::getf2_detail::ger_trailing(eg, device::mat_wide(aad, m, nc, ld), k);
-        device::getf2_detail::ger_trailing(device::WorkGroup<96>{it}, device::mat(aad + std::size_t(ld) * nc, m, nc, ld), k);
+        device::detail::ger_trailing(eg, device::mat_wide(aad, m, nc, ld), k);
+        device::detail::ger_trailing(device::WorkGroup<96>{it}, device::mat(aad + std::size_t(ld) * nc, m, nc, ld), k);
     });
     const auto gx = this->dev.down(x, hx.size());
     const auto gf = this->dev.down(flag, 2);

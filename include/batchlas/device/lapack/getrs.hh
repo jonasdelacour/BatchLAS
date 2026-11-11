@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// ?GETRS's device steps (the fused and composed host tiers run them), in getrs_detail until core
+// ?GETRS's device steps (the fused and composed host tiers run them), in detail until core
 // Level 3 / lapack_aux has SASS-identical forms of them. Everything else comes from core
 // (RtGroup, for_each_owned, lacpy, laswp, conj_if, op_view, shift_reduce, select, arith::Fma):
 //   trsm_lane          op(A)^{-1} Y, one sub-group, lane i owns row i, shuffles only
@@ -19,7 +19,7 @@
 #include <batchlas/device/lapack/getrf.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::getrs_detail {
+namespace batchlas::device::detail {
 
 // Y(:, c) := op(A)^{-1} Y(:, c) for c = c0, c0 + cs, ... < Y.cols(), lane i owning row i (rows
 // >= A.rows() idle). Lower runs forward, Upper backward; Unit skips the last pivot, which
@@ -114,7 +114,7 @@ BATCHLAS_DEVICE_INLINE void lapmr_copy(const Ex& ex, const MA& a, const P& perm,
     for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int c) BATCHLAS_DEVICE_BODY { b(i, c) = a(perm(i), c); });
 }
 
-}  // namespace batchlas::device::getrs_detail
+}  // namespace batchlas::device::detail
 
 // ==== the public op: getrs<TR, Tier>(ex, A, B, ipiv, ws [, live]) (v22 design C.2-C.7) ===========
 namespace batchlas::device {
@@ -125,7 +125,7 @@ struct getrs {
 };
 }  // namespace routine
 
-namespace getrs_detail {
+namespace detail {
 
 // getrf's pivots, read only (1-based int32).
 struct PivIn {
@@ -154,7 +154,7 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const MB
     const auto a = l3::global_of(a_in);
     const auto b = l3::global_of(b_in);
     const auto bw = mat_wide(b.p, b.m, b.n, b.ld);
-    constexpr auto pl = getrf_detail::lu_blocked_plan<D, Cfg>();
+    constexpr auto pl = detail::lu_blocked_plan<D, Cfg>();
     const l3::Smem<Cfg> sm{carve_local(w, pl.smem).get_raw()};
     const PivIn piv{ipiv};
     if constexpr (TR == Transpose::NoTrans) {
@@ -168,7 +168,7 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const MB
     }
 }
 
-}  // namespace getrs_detail
+}  // namespace detail
 
 /// getrs's Blocked<NB>: any n and nrhs; getrf's Blocked executor and local plan (no global workspace).
 template <int NB, class Alg, class T>
@@ -201,13 +201,13 @@ template <Transpose TR, class Tier, class T> constexpr WorkspaceSize getrs_buffe
 template <Transpose TR, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE std::int32_t getrs(const Ex& ex, const MA& a, const MB& b, const std::int32_t* ipiv, const Workspace& ws = {},
                                        bool live = true) {
-    using D = getrf_detail::lu_value_t<MA>;
+    using D = detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getrs, D, Tier>;
     static_assert(HasTier<routine::getrs, Tr, D>, "getrs: this tier is not offered for this scalar type");
-    static_assert(std::is_same_v<D, getrf_detail::lu_value_t<MB>>, "getrs: A and B hold one scalar type");
-    using Cfg = getrf_detail::lu_blocked_cfg_t<D, Tr>;
+    static_assert(std::is_same_v<D, detail::lu_value_t<MB>>, "getrs: A and B hold one scalar type");
+    using Cfg = detail::lu_blocked_cfg_t<D, Tr>;
     static_assert(Ex::size == Cfg::threads, "getrs: tier::Blocked runs on a WorkGroup of tier_info::wg_size items");
-    if (live) getrs_detail::solve_blocked<TR, Tr::nb, Cfg>(ex, a, b, ipiv, ws);
+    if (live) detail::solve_blocked<TR, Tr::nb, Cfg>(ex, a, b, ipiv, ws);
     return 0;
 }
 

@@ -25,7 +25,7 @@
 // `UL != Uplo::Lower` to sygs2_group: every BitIdentical case red (device vs host); (2) in
 // sygs2_group's first sweep, F stored with `fat<Inverse>(fs, row, c)` in the Upper branch: the
 // Upper reference checks red on both paths, the bit-identity green (the shared body); (3) in
-// sygst_detail::blocked, itype 1 Lower, the second gemm dropped: Blocked itype 1 Lower red
+// detail::blocked, itype 1 Lower, the second gemm dropped: Blocked itype 1 Lower red
 // against host and reference at every n > 32, Upper and n <= 32 green (recorded on sm_89, all
 // four types: Blocked<32> n = 33, 63, 64, 65 and Blocked<16> n = 33 red, nothing else).
 #include <gtest/gtest.h>

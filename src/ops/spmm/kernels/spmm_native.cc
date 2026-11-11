@@ -160,7 +160,7 @@ Event spmm_gather(Queue& ctx,
                 const device::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
 
                 // C(i, c0:c0+NC) = alpha A(i, :) op(B)(:, c0:c0+NC) + beta C: the device spmm's unit.
-                device::spmm_detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, device::MaybeZero{beta_d, beta_zero}, Cb, i);
+                device::detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, device::MaybeZero{beta_d, beta_zero}, Cb, i);
             });
     });
 
@@ -320,8 +320,8 @@ Event spmm_scatter(Queue& ctx,
 
                 // C(A_ci, :) += conj?(A(i, :))^T (alpha op(B)(i, :)), the device spmm's scatter row;
                 // ConjTrans conjugates the SPARSE operand.
-                device::spmm_detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
-                                                      device::spmm_detail::ColPtr<D>{Cb, ldc});
+                device::detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
+                                                      device::detail::ColPtr<D>{Cb, ldc});
             });
     });
 

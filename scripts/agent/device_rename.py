@@ -19,10 +19,12 @@ string and character literals are masked), except where a rule names comments. S
       batchlas;` or a `namespace batchlas` scope, or with `using namespace sycl;`; relative in include/).
       Host aliases (ops::<op>, select, test_support, std::filesystem, GEMM wide_v2) stay.
   R4  BATCHLAS_DLA_{INLINE,HELPER,BODY} -> BATCHLAS_DEVICE_* (every text file, scripts and fixtures too).
-  R5  `<routine>_detail` -> `detail` (openers, closers, qualifiers, aliases onto them), colliding
-      names first get the routine prefix (COLLIDE); batchlas::sgp / batchlas::sycl_impl ->
-      batchlas::device::detail; backend `<b>_detail` -> `detail::<b>`.
-  R6  `[<r>_]detail::is_{reg,cta,blocked}_v` -> `tier::is_*_v`; the per-op definitions are deleted.
+  R5  the 40 `<routine>_detail` (ROUTINES) -> `detail` (openers, closers, qualifiers, mentions);
+      first the LOCAL_RENAMES (colliding names get the routine prefix, tier bodies become
+      <routine>_<tier>_run) and the PROMOTED LAPACK names lose the qualifier. The sg_partition
+      backends' <b>_detail, batchlas::sgp and batchlas::sycl_impl are not merged yet.
+  R6  `[<r>_]detail::is_{reg,cta,blocked}_v`, `ormqr_is_blocked_v` -> `tier::is_*_v`; the per-op
+      definitions are deleted (tier.hh holds the one copy; sygst's bounded ones were renamed by R5).
   R7  file moves (MOVES), test target renames (TEST_RENAMES), the doc slug and heading renames.
   R8  tag and enum renames (TAG_RENAMES): plan section 2, C10. The table is the R-d step's to complete.
 Files that are data about other code (snapshots, results, hash data) are never touched.
@@ -250,80 +252,105 @@ def r4(rel, text):
     return "".join(out), total, []
 
 
-# R5 tables. COLLIDE: names defined in more than one <routine>_detail (l1_collide.txt). A type
-# (CamelCase) gets a CamelCase routine prefix, any other name a snake_case one, so CtaPlan and
-# cta_plan of one routine stay distinct. The R-b step reviews this table before applying.
-COLLIDE = ("Layout", "layout", "cta_plan", "CtaPlan", "BlockedPlan", "blocked_plan", "Params", "BlockedCfg",
-           "cfg_of")
-BACKENDS = ("nvptx", "amdgcn", "spirv", "sscp")
-R5_KEEP = ("detail",)   # `detail::` itself is the target
+# R5 tables. ROUTINES: the per-routine detail namespaces of include/batchlas/device that merge into
+# batchlas::device::detail (the sg_partition backends' <b>_detail and src's host *_detail stay).
+ROUTINES = ("bdsdc", "bdsqr", "gebd2", "gebrd", "geqrf", "gesv", "gesvd", "getf2", "getrf", "getri", "getrs",
+            "iluk", "inv", "jacobi", "laed2", "laed3", "laed4", "larfb", "larft", "orgqr", "ormqr", "ortho", "posv",
+            "potrf", "potri", "potrs", "ritz_values", "sb2st", "spmm", "stebz", "stedc", "stein", "steqr", "sy2sb",
+            "syev", "sygst", "sysv", "sytrd", "sytrf", "sytrs")
+R5_SKIP = ("src/backends/",)   # cusolver.cc's host gesvd_detail
+# (routine, old, new), applied before the merge: inside the routine's own detail blocks (unqualified)
+# and wherever `<routine>_detail::old` is spelled. The names defined in two routines' detail
+# (l1_collide.txt: a type gets a CamelCase routine prefix, anything else a snake_case one; Params
+# becomes <routine>_params, since batchlas:: has the host StebzParams, StedcParams, SteinParams), stein's
+# Scratch (it would hide device::Scratch from core detail), sygst's bounded tier traits (R6 hoists
+# the plain ones), and the tier bodies src calls, named <routine>_<tier>_run.
+LOCAL_RENAMES = tuple((r, "Layout", f"{p}Layout") for r, p in (
+    ("bdsdc", "Bdsdc"), ("bdsqr", "Bdsqr"), ("ortho", "Ortho"), ("sb2st", "Sb2st"), ("stebz", "Stebz"),
+    ("stedc", "Stedc"), ("stein", "Stein"), ("sy2sb", "Sy2sb"))) + tuple(
+    (r, "layout", f"{r}_layout") for r in ("ortho", "stebz", "stein")) + tuple(
+    (r, "cta_plan", f"{r}_cta_plan") for r in ("gebrd", "getrf", "steqr", "syev", "sygst", "sytrd")) + tuple(
+    (r, "BlockedPlan", f"{p}BlockedPlan") for r, p in (
+        ("gebrd", "Gebrd"), ("gesvd", "Gesvd"), ("potrf", "Potrf"), ("ritz_values", "RitzValues"), ("sygst", "Sygst"))) + tuple(
+    (r, "CtaPlan", f"{p}CtaPlan") for r, p in (("gebrd", "Gebrd"), ("getrf", "Getrf"), ("potrf", "Potrf"), ("sygst", "Sygst"))) + tuple(
+    (r, "Params", f"{r}_params") for r in ("bdsqr", "stebz", "stedc", "stein")) + tuple(
+    (r, "blocked_plan", f"{r}_blocked_plan") for r in ("syev", "sygst", "sytrd")) + tuple(
+    (r, "BlockedCfg", f"{p}BlockedCfg") for r, p in (("gebrd", "Gebrd"), ("potrf", "Potrf"))) + tuple(
+    (r, "cfg_of", f"{r}_cfg_of") for r in ("larfb", "sy2sb")) + (
+    ("stein", "Scratch", "SteinScratch"),
+    ("sygst", "is_cta_v", "sygst_is_cta_v"), ("sygst", "is_blocked_v", "sygst_is_blocked_v"),
+    ("potrf", "cta_body", "potrf_cta_run"), ("potrf", "potrf_reg", "potrf_reg_run"),
+    ("getrf", "cta_run", "getrf_cta_run"), ("getrf", "reg_run", "getrf_reg_run"),
+    ("sytrf", "sytrf_cta_factor", "sytrf_cta_run"), ("sytrs", "sytrs_cta_solve", "sytrs_cta_run"))
+# (routine, name): moved out of <routine>_detail into batchlas::device by hand (LAPACK names).
+PROMOTED = (("syev", "org2l"), ("syev", "orm2l"))
 
 
-def collide_name(routine, name):
-    if name[0].isupper():
-        return "".join(p.capitalize() for p in routine.split("_")) + name
-    return f"{routine}_{name}"
-
-
-R5_OPEN = re.compile(r"\bnamespace\s+((?:(?:::)?batchlas::)?(?:device::)?)(\w+)_detail\b")
-R5_QUAL = re.compile(r"(?<![\w])(\w+)_detail::")
-R5_SGP = re.compile(r"(?<![\w:])(?:::)?batchlas::(?:sgp|sycl_impl)\b")
+def detail_spans(code):
+    """[(routine, start, end)] of every `namespace [batchlas::device::]<routine>_detail {` block."""
+    out, stack = [], []
+    for m in re.finditer(r"\bnamespace\s+((?:::)?[\w:]+)\s*\{|\{|\}", code):
+        if m.group(0) == "{":
+            stack.append(None)
+        elif m.group(0) == "}":
+            if stack:
+                top = stack.pop()
+                if top:
+                    out.append((top[0], top[1], m.start()))
+        else:
+            leaf = m.group(1).split("::")[-1]
+            r = leaf[:-len("_detail")] if leaf.endswith("_detail") else None
+            stack.append((r, m.end()) if r in ROUTINES else None)
+    return out
 
 
 def r5(rel, text):
-    if not rel.endswith(CXX_EXT):
+    if not rel.endswith(CXX_EXT) or rel.startswith(R5_SKIP):
         return text, 0, []
     total, problems = 0, []
-    opened = sorted({m.group(2) for m in R5_OPEN.finditer(code_only(text))} - set(R5_KEEP) - set(BACKENDS))
-    local = [r for r in opened if r not in BACKENDS]
-    for name in COLLIDE:
-        owners = [r for r in local if re.search(rf"\b{name}\b", code_only(text))]
-        if len(owners) > 1:
-            problems.append(f"{rel}: {name} is used under {', '.join(owners)}; rename by hand")
-            continue
-        if owners:
-            text, n = sub_kinds(text, re.compile(rf"(?<![\w:]){name}\b"), collide_name(owners[0], name))
-            total += n
-    for name in COLLIDE:
-        text, n = sub_kinds(text, re.compile(rf"\b(\w+)_detail::{name}\b"),
-                            lambda m, nm=name: f"{m.group(1)}_detail::{collide_name(m.group(1), nm)}")
+    alt = "|".join(sorted(ROUTINES, key=len, reverse=True))
+    # 1. Local renames inside the routine's own detail blocks, then its qualified spellings.
+    code = code_only(text)
+    edits = []
+    for r, s, e in detail_spans(code):
+        for rr, old, new in LOCAL_RENAMES:
+            if rr == r:
+                edits += [(m.start(), m.end(), new) for m in re.finditer(rf"(?<![\w.:>]){old}\b", code[:e]) if m.start() >= s]
+    for a, b, new in sorted(edits, reverse=True):
+        text = text[:a] + new + text[b:]
+    total += len(edits)
+    for r, old, new in LOCAL_RENAMES:
+        text, n = sub_kinds(text, re.compile(rf"(?<![\w]){r}_detail::{old}\b"), f"{r}_detail::{new}", ("code", "comment"))
         total += n
-
-    def opener(m):
-        r = m.group(2)
-        if r in R5_KEEP:
-            return m.group(0)
-        return f"namespace {m.group(1)}detail::{r}" if r in BACKENDS else f"namespace {m.group(1)}detail"
-    text, n = sub_kinds(text, R5_OPEN, opener)
+    # 2. Promoted LAPACK names lose the qualifier.
+    for r, name in PROMOTED:
+        text, n = sub_kinds(text, re.compile(rf"(?<![\w]){r}_detail::{name}\b"), name, ("code", "comment"))
+        total += n
+    # 3. Openers, closing comments, qualifiers and bare mentions -> detail.
+    text, n = sub_kinds(text, re.compile(rf"\b(namespace\s+(?:(?:::)?batchlas::device::)?)(?:{alt})_detail\b"),
+                        r"\1detail", ("code", "comment"))
     total += n
-    text, n = sub_kinds(text, R5_OPEN, opener, kinds=("comment",))
+    text, n = sub_kinds(text, re.compile(rf"(?<![\w])(?:{alt})_detail\b"), "detail", ("code", "comment"))
     total += n
-
-    def qual(m):
-        r = m.group(1)
-        if r in R5_KEEP:
-            return m.group(0)
-        return f"detail::{r}::" if r in BACKENDS else "detail::"
-    text, n = sub_kinds(text, R5_QUAL, qual)
-    total += n
-    text, n = sub_kinds(text, R5_SGP, "batchlas::device::detail")
-    total += n
+    for m in re.finditer(r"\busing\s+namespace\s+(?:\w+::)*detail\s*;", code_only(text)):
+        if rel.startswith("include/batchlas/device/"):
+            problems.append(f"{rel}: `using namespace detail;` pulls every merged name in; qualify instead")
     return text, total, problems
 
 
-R6_QUAL = re.compile(r"(?<![\w:])(?:(?:\w+_)?detail::)?is_(reg|cta|blocked)_v\b")
-R6_DEF = re.compile(r"^[ \t]*(?:template\s*<[^;{]*?>\s*)?(?:inline\s+)?constexpr\s+bool\s+is_(?:reg|cta|blocked)_v\b"
+R6_QUAL = re.compile(r"(?<![\w:])((?:(?:::)?batchlas::)?(?:device::)?)(?:(?:\w+_)?detail::)?(?:ormqr_)?is_(reg|cta|blocked)_v\b")
+R6_DEF = re.compile(r"^[ \t]*(?:template\s*<[^;{]*?>\s*)?(?:inline\s+)?constexpr\s+bool\s+(?:ormqr_)?is_(?:reg|cta|blocked)_v\b"
                     r"[^;]*;[ \t]*(?://[^\n]*)?\n", re.M)
 
 
 def r6(rel, text):
-    if not rel.endswith(CXX_EXT) or rel == "include/batchlas/device/tier.hh":
+    if not rel.endswith(CXX_EXT) or rel == "include/batchlas/device/tier.hh" or not rel.startswith(("include/", "src/", "tests/", "examples/", "benchmarks/", "tools/")):
         return text, 0, []
     code = code_only(text)
     spans = [m.span() for m in R6_DEF.finditer(code)]
     for a, b in reversed(spans):
         text = text[:a] + text[b:]
-    text, n = sub_kinds(text, R6_QUAL, r"tier::is_\1_v")
+    text, n = sub_kinds(text, R6_QUAL, r"\1tier::is_\2_v")
     return text, n + len(spans), []
 
 

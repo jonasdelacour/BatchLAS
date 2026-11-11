@@ -47,8 +47,8 @@ BATCHLAS_UNROLL_FULL
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
     // iamax (B1), relabel, pivot row through sx (B2), rscl, ger: docs/perf/lu.md#two-barriers-per-column
-    auto piv = device::getf2_detail::pivot_rows_group(ex, rval, ridx, m, device::IpivSink{piv_item, piv_base}, info_local);
-    auto bc = device::getf2_detail::bcast_row_local(ex, sx);
+    auto piv = device::detail::pivot_rows_group(ex, rval, ridx, m, device::IpivSink{piv_item, piv_base}, info_local);
+    auto bc = device::detail::bcast_row_local(ex, sx);
     device::getf2_relabel(rA, rowid, kmax, ncols, piv, bc);
 
     if (live) {  // to the RELABELLED row: rowid is where this data belongs in P A

@@ -24,7 +24,7 @@ struct getri {
 };
 }  // namespace routine
 
-namespace getri_detail {
+namespace detail {
 
 // C := P (C(i, perm(i)) = 1, zero elsewhere; row i walked back through the interchanges, the
 // host route's formula) and the first exact zero U(i, i), 1-based, or 0. Every item scans the
@@ -43,7 +43,7 @@ BATCHLAS_DEVICE_INLINE std::int32_t permute_identity(const Ex& ex, const MA& a, 
     return info;
 }
 
-}  // namespace getri_detail
+}  // namespace detail
 
 /// getri's Blocked<NB>: any n; getrf's Blocked executor and local plan (no global workspace).
 template <int NB, class Alg, class T>
@@ -73,20 +73,20 @@ template <class Tier, class T> constexpr WorkspaceSize getri_buffer_size(int n) 
 template <class Tier, class Ex, class MA, class MC>
 BATCHLAS_DEVICE_INLINE std::int32_t getri(const Ex& ex, const MA& a, const MC& c, const std::int32_t* ipiv, const Workspace& ws = {},
                                        bool live = true) {
-    using D = getrf_detail::lu_value_t<MA>;
+    using D = detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getri, D, Tier>;
     static_assert(HasTier<routine::getri, Tr, D>, "getri: this tier is not offered for this scalar type");
-    static_assert(std::is_same_v<D, getrf_detail::lu_value_t<MC>>, "getri: A and C hold one scalar type");
-    using Cfg = getrf_detail::lu_blocked_cfg_t<D, Tr>;
+    static_assert(std::is_same_v<D, detail::lu_value_t<MC>>, "getri: A and C hold one scalar type");
+    using Cfg = detail::lu_blocked_cfg_t<D, Tr>;
     static_assert(Ex::size == Cfg::threads, "getri: tier::Blocked runs on a WorkGroup of tier_info::wg_size items");
     if (!live) return 0;
     const auto ag = l3::global_of(a);
     const auto cg = l3::global_of(c);
     const int n = ag.n;
-    constexpr auto pl = getrf_detail::lu_blocked_plan<D, Cfg>();
-    const std::int32_t info = getri_detail::permute_identity(ex, mat_wide(ag.p, n, n, ag.ld), mat_wide(cg.p, n, n, cg.ld),
-                                                             getrs_detail::PivIn{ipiv});
-    getrs_detail::lu_trsm_pair<Transpose::NoTrans, Tr::nb>(ex, ag, cg, l3::Smem<Cfg>{carve_local(ws, pl.smem).get_raw()});
+    constexpr auto pl = detail::lu_blocked_plan<D, Cfg>();
+    const std::int32_t info = detail::permute_identity(ex, mat_wide(ag.p, n, n, ag.ld), mat_wide(cg.p, n, n, cg.ld),
+                                                             detail::PivIn{ipiv});
+    detail::lu_trsm_pair<Transpose::NoTrans, Tr::nb>(ex, ag, cg, l3::Smem<Cfg>{carve_local(ws, pl.smem).get_raw()});
     return info;
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// sygst_detail of lapack/sygst.hh (the ?sygs2 body's helpers) against host references; the core
+// detail of lapack/sygst.hh (the ?sygs2 body's helpers) against host references; the core
 // ops they compose with (device::load / store, arith::Fma) are covered by device_blas_v2_tests.
 // Guards (docs/developer/agent-guide.md section 8): pack-padded, non-natural ld and inc, complex
 // data, every Uplo x {Trans, ConjTrans}, a NaN-poisoned unread triangle, pad and fragment tail,
@@ -146,7 +146,7 @@ template <class NE> NE make_ne(int n) {
 // padding NaN, Im(diag) 1e3.
 template <class T, Uplo UP, Transpose TR, bool Solve, class NE, int N>
 void check_tri(Dev& dev, int n, const char* what) {
-    constexpr int V = device::sygst_detail::pack16_elems<T>;
+    constexpr int V = device::detail::pack16_elems<T>;
     const int ld = (n + V - 1) / V * V + V, per_a = ld * n;
     const auto upper = UP == Uplo::Upper;
     auto ha = batched<T>(per_a, 11, [&](T* a) {
@@ -173,8 +173,8 @@ void check_tri(Dev& dev, int n, const char* what) {
 #pragma unroll
         for (int i = 0; i < N; ++i)
             if (i >= n) x[i] = device::Arith<T>::make(std::numeric_limits<real_of<T>>::quiet_NaN(), real_of<T>(0));
-        if constexpr (Solve) device::sygst_detail::trsv_packed<UP, TR>(th, a, x);
-        else device::sygst_detail::trmv_packed<UP, TR>(th, a, x);
+        if constexpr (Solve) device::detail::trsv_packed<UP, TR>(th, a, x);
+        else device::detail::trmv_packed<UP, TR>(th, a, x);
         device::store(x, device::vec(Y + std::ptrdiff_t(b) * 2 * n, n, 2), n);
     });
     const auto got = dev.down(Y, hy.size());
@@ -267,11 +267,11 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
         const device::Mat<T, NE, NE, device::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
         for (int j = 0; j < n; ++j) {
             device::Frag<T, N> x{};
-            device::load(x, device::sygst_detail::herm(s, ul).col(j), n);
+            device::load(x, device::detail::herm(s, ul).col(j), n);
             device::store(x, o1.col(j), n);
             device::load(x, device::conj_view(s.row(j)), n);
             device::store(x, o2.col(j), n);
-            for (int i = 0; i < n; ++i) device::lacpy(device::ElemAt<true>{i, j}, device::sygst_detail::herm(s, ul), o3);
+            for (int i = 0; i < n; ++i) device::lacpy(device::ElemAt<true>{i, j}, device::detail::herm(s, ul), o3);
         }
     });
     const auto g1 = dev.down(O1, ho.size()), g2 = dev.down(O2, ho.size()), g3 = dev.down(O3, ho.size());
@@ -316,7 +316,7 @@ TYPED_TEST(DeviceBlasV2SygstTest, ForEachTileColCoversEveryTileElement) {
         int* cnt = this->dev.up(hc);
         this->dev.template run<128>(1, [=](sycl::nd_item<1> it) {
             const int lid = static_cast<int>(it.get_local_linear_id());
-            device::sygst_detail::for_each_tile_col(lid, 128, m, tiles, [&](int g, int row, int c) {
+            device::detail::for_each_tile_col(lid, 128, m, tiles, [&](int g, int row, int c) {
                 using Ref = sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                              sycl::access::address_space::global_space>;
                 Ref(cnt[g * m * m + row + c * m]).fetch_add(1);

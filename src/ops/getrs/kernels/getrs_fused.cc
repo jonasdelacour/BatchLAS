@@ -190,8 +190,8 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
 }
 
 // The getrs bodies are device LA ops (the core plus lapack/getrs.hh): the RHS y is
-// resident in local memory, the block solve is getrs_detail::trsm_lane (one sub-group, lane i owns row i,
-// shuffles only), the off-diagonal update getrs_detail::gemm_nr (NoTrans: row-parallel axpy form; Trans:
+// resident in local memory, the block solve is detail::trsm_lane (one sub-group, lane i owns row i,
+// shuffles only), the off-diagonal update detail::gemm_nr (NoTrans: row-parallel axpy form; Trans:
 // one sub-group per column, a shift-down sum with no static local memory, which would reopen the
 // 48 KB hole). NR == 1 keeps the sub-group-0 form: the round-robin over sub-groups cannot help
 // there and cost ~3%. PotrsFused stays hand-written: as gemm_nr its backward axpy loop was
@@ -262,9 +262,9 @@ Event fused_launch_notrans(Queue& ctx,
                     stage(ex, a.sub(j, j, jb, jb), blk);
                     ex.barrier();
                     if (c_active && jb > 1)
-                        device::getrs_detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
+                        device::detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                    device::detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
                                                             y.sub(j, 0, jb, nrhs), device::One{},
                                                             y.sub(j + jb, 0, n - j - jb, nrhs));
                     ex.barrier();
@@ -278,9 +278,9 @@ Event fused_launch_notrans(Queue& ctx,
                     stage(ex, a.sub(j0, j0, jb, jb), blk);
                     ex.barrier();
                     if (c_active)
-                        device::getrs_detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
+                        device::detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
                     ex.barrier();
-                    device::getrs_detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(0, j0, j0, jb),
+                    device::detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(0, j0, j0, jb),
                                                             y.sub(j0, 0, jb, nrhs), device::One{}, y.sub(0, 0, j0, nrhs));
                     ex.barrier();
                 }
@@ -350,11 +350,11 @@ Event fused_launch_trans(Queue& ctx,
                     const int jb = (n - j < nb) ? (n - j) : nb;
                     const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, device::conj_if(a.sub(j, j, jb, jb), conj), blk);
-                    device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
+                    device::detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
                                                           device::One{}, y.sub(j, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active)
-                        device::getrs_detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
+                        device::detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
                                                                       cs);
                     ex.barrier();
                 }
@@ -365,12 +365,12 @@ Event fused_launch_trans(Queue& ctx,
                     const int jb = jend - j0;
                     const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
                     stage(ex, device::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
-                    device::getrs_detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(jend, j0, n - jend, jb), conj),
+                    device::detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(jend, j0, n - jend, jb), conj),
                                                           y.sub(jend, 0, n - jend, nrhs), device::One{},
                                                           y.sub(j0, 0, jb, nrhs));
                     ex.barrier();
                     if (c_active && jb > 1)
-                        device::getrs_detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
+                        device::detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
                                                                    cs);
                     ex.barrier();
                 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The geqr2 leaves' helpers (include/batchlas/device/lapack/geqrf.hh geqrf_detail, plus the core
+// The geqr2 leaves' helpers (include/batchlas/device/lapack/geqrf.hh detail, plus the core
 // abs_inf / op::FMax / butterfly forms they call) against host references; the other core ops the
 // leaves use (RtGroup, mat_wide, for_each_owned, FmaArith, larfg_scalars) are covered by
 // device_blas_v2_tests and device_core_*. Guards (docs/developer/agent-guide.md section 8): non-natural ld,
@@ -181,7 +181,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, NormScalars) {
         const T a = in[std::ptrdiff_t(b) * 2];
         const R s = device::abs_inf(a);
         o[b * 4 + 0] = s;
-        o[b * 4 + 1] = device::geqrf_detail::abs2_scaled(a, s);
+        o[b * 4 + 1] = device::detail::abs2_scaled(a, s);
         o[b * 4 + 2] = device::op::FMax{}(std::numeric_limits<R>::quiet_NaN(), s);
         o[b * 4 + 3] = device::op::FMax{}(s, std::numeric_limits<R>::quiet_NaN());
     });
@@ -275,7 +275,7 @@ template <class T, int WG, device::Scope S> void larf_case(Dev& dev, const char*
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         T* p = d + std::ptrdiff_t(it.get_group_linear_id()) * per;
         const device::RtGroup<S> ex{it};
-        device::geqrf_detail::larf_left_head(ex, ex.team_size(), p[ld * nc], device::mat_wide(p, m, nc, ld), j, m, nc);
+        device::detail::larf_left_head(ex, ex.team_size(), p[ld * nc], device::mat_wide(p, m, nc, ld), j, m, nc);
     });
     const auto got = dev.down(d, h.size());
     EXPECT_EQ(period_bitdiff(got, per), 0) << what;
@@ -330,12 +330,12 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, TeamSlotFolds) {
         T* slots = reinterpret_cast<T*>(lm);
         const T v = in[std::ptrdiff_t(b) * WG + ex.lid()];
         const auto add = [](const T& p, const T& q) { return A::add(p, q); };
-        device::geqrf_detail::team_slot_put(ex, slots, 0, device::butterfly(ex.sub(), v, add, 1, ex.team_size()));
-        if constexpr (!is_cplx<T>) device::geqrf_detail::team_slot_put(ex, slots, NT, device::butterfly(ex.sub(), sycl::fabs(v), device::op::FMax{}, 1, ex.team_size()));
+        device::detail::team_slot_put(ex, slots, 0, device::butterfly(ex.sub(), v, add, 1, ex.team_size()));
+        if constexpr (!is_cplx<T>) device::detail::team_slot_put(ex, slots, NT, device::butterfly(ex.sub(), sycl::fabs(v), device::op::FMax{}, 1, ex.team_size()));
         ex.barrier();
         if (ex.leader()) {
-            o[b * 2] = device::geqrf_detail::slot_fold_sum(slots, 0, ex.nteams());
-            if constexpr (!is_cplx<T>) o[b * 2 + 1] = device::geqrf_detail::slot_fold_max(slots, NT, ex.nteams());
+            o[b * 2] = device::detail::slot_fold_sum(slots, 0, ex.nteams());
+            if constexpr (!is_cplx<T>) o[b * 2 + 1] = device::detail::slot_fold_max(slots, NT, ex.nteams());
         }
     });
     const auto got = this->dev.down(o, ho.size());
@@ -400,9 +400,9 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c) rA[c] = (live && c < n) ? p[c * m + r] : A::zero();
             const T v = (!live || r < j) ? A::zero() : (r == j ? A::one() : rA[j]);
-            device::geqrf_detail::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
+            device::detail::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
             ex.barrier();
-            device::geqrf_detail::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
+            device::detail::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams(), N);
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)
                 if (live && c < n) p[c * m + r] = rA[c];
@@ -437,11 +437,11 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int k0 = 0; k0 < N; k0 += C) {
                 if (k0 + C <= j + 1 || k0 >= n) continue;
-                device::geqrf_detail::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
+                device::detail::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
                 sycl::group_barrier(sg);
-                device::geqrf_detail::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
+                device::detail::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
                 sycl::group_barrier(sg);
-                device::geqrf_detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                device::detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
             }
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)

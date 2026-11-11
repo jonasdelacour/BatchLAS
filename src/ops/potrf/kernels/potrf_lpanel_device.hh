@@ -36,8 +36,8 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
     using Ar = device::arith_t<device::arith::Fma, D>;
     const device::Slot<> ex{tid, L};  // this matrix's slot of the packed work-group
     const auto A = device::mat_wide(Ag, n, n, ldg);
-    const auto P = device::potrf_detail::slm_mat(sA, n, NB, slda);  // local-space views: generic reads were LD.E
-    const auto B = device::potrf_detail::slm_tile<NB, NB>(sB);
+    const auto P = device::detail::slm_mat(sA, n, NB, slda);  // local-space views: generic reads were LD.E
+    const auto B = device::detail::slm_tile<NB, NB>(sB);
     auto bar = [&]() BATCHLAS_DEVICE_BODY { sycl::group_barrier(it.get_group()); };
 
     if (ex.leader()) *fail = 0;
@@ -52,30 +52,30 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
         const bool live = panel_ok && (row >= j) && (row < n);
 
         device::Frag<D, NB> rp, rS;  // (1) prefetch row `row` of the panel's lower triangle
-        device::potrf_detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
+        device::detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
         device::fill(rS, Ar::zero());
 
         // (2) rS(row, i) = sum_{k<j} L(row, k) conj(L(j+i, k)) against the ZERO-padded broadcast
         // block, so the FMA loop is a fully unrolled NB x NB with no inner bound test.
         for (int k = 0; k < j; k += NB) {
             const int kb = ((j - k) < NB) ? (j - k) : NB;
-            device::potrf_detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+            device::detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
             bar();  // B1
             if (live) {
                 device::Frag<D, NB> rA;
                 device::load_row(rA, A.sub(0, k, n, kb), row, kb);
-                device::potrf_detail::gemv_n_slm_bcast<NB>(rS, rA, sB);  // evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+                device::detail::gemv_n_slm_bcast<NB>(rS, rA, sB);  // evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
             }
             bar();  // B2 -- WAR on sB
         }
 
         if (live) {  // (3) publish rp - rS; the strictly upper diagonal block is ZEROED
-            device::potrf_detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) BATCHLAS_DEVICE_BODY { return Ar::sub(rp[i], rS[i]); });
+            device::detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) BATCHLAS_DEVICE_BODY { return Ar::sub(rp[i], rS[i]); });
         }
         bar();  // B3
 
         // (4) potf2 with B3b / B4 / B5 per column. evidence: docs/perf/potrf.md#the-pivot-cell-war-race
-        ok = device::potf2_panel_rows<device::potrf_detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
+        ok = device::potf2_panel_rows<device::detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
 
         if (store && panel_ok) device::lacpy<device::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));  // (5) ENTRY state: a failed panel is finite
         bar();  // B6 -- the next panel READS these columns

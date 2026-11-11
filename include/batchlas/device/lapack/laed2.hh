@@ -6,7 +6,7 @@
 //                            it deflates; returns the gather order, kept first
 //   laed2_merge_vector       z = [last row of Q1, sign(rho) first row of Q2] / sqrt(2) (xLAED1's
 //                            z of the rank-one tear)
-//   laed2_detail::fold       a work-group reduction over a contiguous operand (joint_reduce)
+//   detail::fold       a work-group reduction over a contiguous operand (joint_reduce)
 // The host merge's StedcComputeV / StedcDeflation kernels and device::stedc run these bodies.
 // Every operand an op writes is a callable (i) -> T&: the host passes its batched views'
 // element expressions, device::stedc its workspace vectors.
@@ -25,15 +25,15 @@
 
 namespace batchlas::device {
 
-namespace laed2_detail {
+namespace detail {
 // portable::joint_reduce over a contiguous x (core allreduce folds in another order); empty: T{}.
 template <class Ex, class X, class Op> BATCHLAS_DEVICE_INLINE auto fold(const Ex& ex, const X& x, Op op) {
-    static_assert(laed4_detail::is_group_v<Ex>, "laed2_detail::fold: a work-group executor");
+    static_assert(detail::is_group_v<Ex>, "laed2_detail::fold: a work-group executor");
     static_assert(std::is_same_v<std::remove_cvref_t<decltype(x.inc)>, Unit>, "laed2_detail::fold: x must be contiguous");
     const auto first = x.p + x.off;
     return batchlas::portable::joint_reduce(ex.it.get_group(), first, first + x.size(), op);
 }
-}  // namespace laed2_detail
+}  // namespace detail
 
 /// z(0..m) = row1 / sqrt(2), z(m..) = sign * row2 / sqrt(2): the rank-one term of the tear is
 /// |rho| u u^T with u = e_{m-1} + sign(rho) e_m (the diagonal corrections are -|rho|), so the
@@ -76,9 +76,9 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
     sync<scope::Group>(ex, Mem::Global);
 
     map(ex, absx, abs_of, d);
-    const T eig_max = laed2_detail::fold(ex, absx, sycl::maximum<T>());
+    const T eig_max = detail::fold(ex, absx, sycl::maximum<T>());
     map(ex, absx, abs_of, z);
-    const T v_max_pre = laed2_detail::fold(ex, absx, sycl::maximum<T>());
+    const T v_max_pre = detail::fold(ex, absx, sycl::maximum<T>());
     const T abs_tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max, v_max_pre);
 
     for (int j = 0; j < n - 1; j++) {
@@ -104,11 +104,11 @@ BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, cons
     // LAPACK LAED8 based tolerance (small-|z| deflation), using the same absolute tolerance.
 
     map(ex, absx, abs_of, d);
-    const T eig_max2 = laed2_detail::fold(ex, absx, sycl::maximum<T>());
+    const T eig_max2 = detail::fold(ex, absx, sycl::maximum<T>());
 
     const T v_norm = nrm2<alg::Blue>(ex, z);
     map(ex, absx, [=](T x) { return std::abs(x / v_norm); }, z);
-    const T v_max = laed2_detail::fold(ex, absx, sycl::maximum<T>());
+    const T v_max = detail::fold(ex, absx, sycl::maximum<T>());
     auto tol = T(8.0) * std::numeric_limits<T>::epsilon() * std::max(eig_max2, v_max);
 
     for_each_owned(ex, nn, [&](int k) {

@@ -268,7 +268,7 @@ namespace batchlas {
                             if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
                             const device::RtGroup<> ex{item};
                             const auto v = device::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
-                            device::ortho_detail::normalize(ex, v);  // the device ortho's CGS2 step
+                            device::detail::normalize(ex, v);  // the device ortho's CGS2 step
                         });
                 });
             }

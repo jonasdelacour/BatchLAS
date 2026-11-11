@@ -143,12 +143,12 @@ TEST(DeviceBlasV2JacobiSchedule, RoundRobinCoversEveryPairOnce) {
         for (int t = 0; t < m - 1; ++t) {
             std::vector<int> used(m, 0);
             for (int k = 0; k < m / 2; ++k) {
-                const device::jacobi_detail::PivotPair pq = device::jacobi_detail::round_robin_pair(m, t, k);
+                const device::detail::PivotPair pq = device::detail::round_robin_pair(m, t, k);
                 ASSERT_TRUE(0 <= pq.p && pq.p < pq.q && pq.q < m) << "m " << m << " t " << t << " k " << k;
                 EXPECT_EQ(++used[pq.p], 1);
                 EXPECT_EQ(++used[pq.q], 1);
                 ++seen[std::size_t(pq.p) * m + pq.q];
-                const device::jacobi_detail::PivotPair back = device::jacobi_detail::unpack_pair(device::jacobi_detail::pack_pair(pq));
+                const device::detail::PivotPair back = device::detail::unpack_pair(device::detail::pack_pair(pq));
                 EXPECT_TRUE(back.p == pq.p && back.q == pq.q);
             }
         }
@@ -163,12 +163,12 @@ TEST(DeviceBlasV2JacobiSchedule, RoundRobinCoversEveryPairOnce) {
     dev.run<128>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         for (int idx = static_cast<int>(it.get_local_linear_id()); idx < slots; idx += 128) {
             const int t = idx / (m / 2);
-            d[idx] = device::jacobi_detail::pack_pair(device::jacobi_detail::round_robin_pair(m, t, idx - t * (m / 2)));
+            d[idx] = device::detail::pack_pair(device::detail::round_robin_pair(m, t, idx - t * (m / 2)));
         }
     });
     const auto got = dev.down(d, slots);
     for (int idx = 0; idx < slots; ++idx)
-        EXPECT_EQ(got[idx], device::jacobi_detail::pack_pair(device::jacobi_detail::round_robin_pair(m, idx / (m / 2), idx % (m / 2)))) << "slot " << idx;
+        EXPECT_EQ(got[idx], device::detail::pack_pair(device::detail::round_robin_pair(m, idx / (m / 2), idx % (m / 2)))) << "slot " << idx;
 }
 
 // ---- sym_schur2 ----------------------------------------------------------------------------
@@ -185,7 +185,7 @@ template <class T> struct Case2 {
 TYPED_TEST(DeviceBlasV2JacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
     using T = TypeParam;
     using R = real_of<T>;
-    const auto th = device::jacobi_detail::JacobiThreshold<R>::relative(R(1), 8);
+    const auto th = device::detail::JacobiThreshold<R>::relative(R(1), 8);
     const R thresh2 = th.tol * std::sqrt(R(2));  // the threshold at app = 1, aqq = 2
     const R mn = std::numeric_limits<R>::min();
     std::vector<Case2<T>> cs = {
@@ -222,7 +222,7 @@ TYPED_TEST(DeviceBlasV2JacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
     this->dev.template run<64>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int i = static_cast<int>(it.get_local_linear_id());
         if (i >= nc) return;
-        const device::jacobi_detail::JacobiRotation<T> r = device::sym_schur2<T>(app[i], aqq[i], apq[i], th);
+        const device::detail::JacobiRotation<T> r = device::sym_schur2<T>(app[i], aqq[i], apq[i], th);
         oc[i] = r.c, os[i] = r.s, ot[i] = r.t, og[i] = r.g, od[i] = r.d, oa[i] = r.active ? 1 : 0;
     });
     const auto c = this->dev.down(oc, nc), s = this->dev.down(os, nc), t = this->dev.down(ot, nc), g = this->dev.down(og, nc);
@@ -266,7 +266,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
     using Vec2 = sycl::vec<R, 2>;
     constexpr int LDT = P + 1, kTile = P * LDT, kSlots = P / 2, kPairs = (P - 1) * kSlots, parts = 32 / P;
     const int lda = n + 3, m = (n % 2 == 0) ? n : n + 1, groups = kBatch / parts;
-    const auto th = device::jacobi_detail::JacobiThreshold<R>::relative(R(1), n);
+    const auto th = device::detail::JacobiThreshold<R>::relative(R(1), n);
     auto hA = batched<T>(lda * n, 11, [&](T* a) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < j; ++i) a[i + j * lda] = T(std::numeric_limits<R>::quiet_NaN());
@@ -293,7 +293,7 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         std::int16_t* pairs = reinterpret_cast<std::int16_t*>(lm + off_pairs);
         for (int idx = static_cast<int>(it.get_local_linear_id()); idx < (m - 1) * (m / 2); idx += 32) {
             const int t = idx / (m / 2);
-            pairs[idx] = device::jacobi_detail::pack_pair(device::jacobi_detail::round_robin_pair(m, t, idx - t * (m / 2)));
+            pairs[idx] = device::detail::pack_pair(device::detail::round_robin_pair(m, t, idx - t * (m / 2)));
         }
         sycl::group_barrier(it.get_group());
         T* tile = reinterpret_cast<T*>(lm) + part * 2 * kTile;
@@ -312,24 +312,24 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
         for (; sweeps < 30 && !conv; ++sweeps) {
             int rot = 0;
             for (int t = 0; t < m - 1; ++t) {
-                const auto rnd = device::jacobi_detail::rot_round<T>(device::vec<device::Mem::Local>(rcs, kSlots), device::vec<device::Mem::Local>(rd, kSlots),
+                const auto rnd = device::detail::rot_round<T>(device::vec<device::Mem::Local>(rcs, kSlots), device::vec<device::Mem::Local>(rd, kSlots),
                                                   device::vec<device::Mem::Local>(pairs + t * (m / 2), m / 2));
-                device::jacobi_detail::PivotPair pq{0, 0};
+                device::detail::PivotPair pq{0, 0};
                 bool active = false;
                 if (lane < m / 2) {
                     pq = rnd.pair(lane);
                     active = pq.q < n;
                 }
-                device::jacobi_detail::JacobiRotation<T> jr = device::jacobi_detail::identity_rotation<T>();
+                device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
                 if (active) jr = device::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)), static_cast<T>(A(pq.p, pq.q)), th);
                 if (lane < m / 2) rnd.store(lane, jr);
                 group_barrier(ex.part);
                 const int cnt = device::allreduce(ex, jr.active ? 1 : 0);
                 rot += cnt;
                 if (cnt == 0) continue;
-                if (lane < n) device::jacobi_detail::rot_round_right<Ops>(rnd, m / 2, lane, A, Z);
+                if (lane < n) device::detail::rot_round_right<Ops>(rnd, m / 2, lane, A, Z);
                 group_barrier(ex.part);
-                if (lane < n) device::jacobi_detail::rot_round_left_hermitian<Ops>(rnd, m / 2, lane, A);
+                if (lane < n) device::detail::rot_round_left_hermitian<Ops>(rnd, m / 2, lane, A);
                 group_barrier(ex.part);
             }
             conv = (rot == 0);
@@ -536,12 +536,12 @@ TYPED_TEST(DeviceBlasV2JacobiTest, FragmentOpsAndRotationsMatchHost) {
         device::set_unit_owned(ex, j, E);
         const T dn = device::allreduce(ex, device::dotc_owned(X, Y));
         const T de = device::allreduce(ex, device::dotc_owned<EOps>(X, Y));
-        const device::jacobi_detail::Rot2<T> ur = device::jacobi_detail::rot2<false>(c, s, d), ul = device::jacobi_detail::rot2<true>(c, s, d);
-        const device::jacobi_detail::Rot2<T> uer = device::jacobi_detail::rot2<false, EOps>(c, s, d), uel = device::jacobi_detail::rot2<true, EOps>(c, s, d);
+        const device::detail::Rot2<T> ur = device::detail::rot2<false>(c, s, d), ul = device::detail::rot2<true>(c, s, d);
+        const device::detail::Rot2<T> uer = device::detail::rot2<false, EOps>(c, s, d), uel = device::detail::rot2<true, EOps>(c, s, d);
         T* ob = o + std::ptrdiff_t(b) * per;
         device::for_each_owned_frag<Rows>(ex, [&](int k, int r) {
-            const device::jacobi_detail::Pair2<T> r1 = device::jacobi_detail::rot_right(ur, X[k], Y[k]), r2 = device::jacobi_detail::rot_right<EOps>(uer, X[k], Y[k]);
-            const device::jacobi_detail::Pair2<T> l1 = device::jacobi_detail::rot_left(ul, X[k], Y[k]), l2 = device::jacobi_detail::rot_left<EOps>(uel, X[k], Y[k]);
+            const device::detail::Pair2<T> r1 = device::detail::rot_right(ur, X[k], Y[k]), r2 = device::detail::rot_right<EOps>(uer, X[k], Y[k]);
+            const device::detail::Pair2<T> l1 = device::detail::rot_left(ul, X[k], Y[k]), l2 = device::detail::rot_left<EOps>(uel, X[k], Y[k]);
             T* row = ob + r * kRowSlots;
             row[kRx] = r1.x, row[kRy] = r1.y, row[kRxE] = r2.x, row[kRyE] = r2.y;
             row[kLx] = l1.x, row[kLy] = l1.y, row[kLxE] = l2.x, row[kLyE] = l2.y;

@@ -179,11 +179,11 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
                     R smax = (lane >= j) ? device::abs_inf(rA[j]) : R(0);
                     // FMax(), not FMax{}: geqrf_tests' source guards end the kernel body at a brace-paren.
-                    smax = device::detail::butterfly<N, device::bfly::Asc>(ex.part, smax, device::op::FMax());
+                    smax = device::detail::xor_butterfly<N, device::bfly::Asc>(ex.part, smax, device::op::FMax());
 
                     R ssq = R(0);
-                    if (lane > j && smax > R(0)) ssq = device::geqrf_detail::abs2_scaled(rA[j], smax);
-                    ssq = device::detail::butterfly<N, device::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
+                    if (lane > j && smax > R(0)) ssq = device::detail::abs2_scaled(rA[j], smax);
+                    ssq = device::detail::xor_butterfly<N, device::bfly::Asc>(ex.part, ssq, sycl::plus<R>());
 
                     const device::ScaledSsq<R> nrm{smax, ssq};
                     const device::LarfgScalars<D> hh = device::larfg_scalars<device::conv::Lapack>(alpha, nrm);
@@ -212,14 +212,14 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     for (int k0 = 0; k0 < N; k0 += C) {
                         if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
                         if (k0 >= n) continue;          // wholly past the runtime cap
-                        device::geqrf_detail::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
+                        device::detail::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
                         sycl::group_barrier(sg);
-                        device::geqrf_detail::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
+                        device::detail::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
                         sycl::group_barrier(sg);
                         // The two barriers above cover all three hazards ONLY because sy is a
                         // separate array; their count and placement are guarded by source text.
                         // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
-                        device::geqrf_detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
+                        device::detail::frag_rank1<C>(vr, sy, rA, k0, j + 1, n);
                     }
                     // No barrier between columns: column j+1's butterflies read rA[j+1], which
                     // this lane updated itself in frag_rank1 -- a register-private dependence.

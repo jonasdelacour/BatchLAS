@@ -40,7 +40,7 @@ using potrf_native::PotrfScope;
 // NB / TS are device::potrf's tier::Cta constants (one source). evidence: docs/perf/potrf.md#register-gate
 template <typename T>
 struct PotrfCtaConst {
-    using C = ::batchlas::device::potrf_detail::CtaConst<typename sycl_device::DevMap<T>::type>;
+    using C = ::batchlas::device::detail::CtaConst<typename sycl_device::DevMap<T>::type>;
     static constexpr int NB = C::nb;
     static constexpr int TS = C::ts;
 };
@@ -93,7 +93,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
 
     // L follows m2_0 = n - NB, the first trailing update, not n, and counts elements
     // rather than tiles because TS varies: the tier::Cta ladder. evidence: docs/perf/potrf.md#the-l-ladder
-    p.L = ::batchlas::device::potrf_detail::cta_items(n, NB, TS);
+    p.L = ::batchlas::device::detail::cta_items(n, NB, TS);
     while (p.L > 32 && p.L > max_wg) p.L >>= 1;
 
     p.slm_per_matrix = potrf_slm_per_matrix(n, NB, TS, sz_d, sz_r);
@@ -256,7 +256,7 @@ Event potrf_cta_launch(Queue& ctx,
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(matrix_id) * stride_a;
 
                 // The public tier::Cta body, the triangle at run time.
-                ::batchlas::device::potrf_detail::cta_body<D, R, NB, TS, potrf_native::potrf_body_scope<SC>>(
+                ::batchlas::device::detail::potrf_cta_run<D, R, NB, TS, potrf_native::potrf_body_scope<SC>>(
                     it, sg, p1_active, S, lda, dg, fl, of, Ag, ldg, n, upper);
 
                 // One writer per matrix; `fail` is published by B3 of the last panel.

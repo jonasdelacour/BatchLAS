@@ -26,22 +26,18 @@
 
 namespace batchlas::device {
 
-namespace ortho_detail {
-template <class Tier> inline constexpr bool is_cta_v = false;
-template <int N, class A> inline constexpr bool is_cta_v<tier::Cta<N, A>> = true;
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
+namespace detail {
 template <OrthoAlgorithm A>
 inline constexpr bool is_chol_v = A == OrthoAlgorithm::Cholesky || A == OrthoAlgorithm::Chol2 || A == OrthoAlgorithm::ShiftChol3;
-template <OrthoAlgorithm A, class Tier> inline constexpr bool on_l3_v = is_chol_v<A> || is_blocked_v<Tier>;
+template <OrthoAlgorithm A, class Tier> inline constexpr bool on_l3_v = is_chol_v<A> || tier::is_blocked_v<Tier>;
 
 template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr void check() {
     static_assert(TR == Transpose::NoTrans, "ortho: the rows arm (TR != NoTrans) is not a device op yet");
     static_assert(Algo == OrthoAlgorithm::CGS2 || is_chol_v<Algo>,
                   "ortho: CGS2, Cholesky, Chol2 and ShiftChol3 are the device algorithms (SVQB needs a device syev, "
                   "Householder a device geqrf + orgqr)");
-    static_assert(is_cta_v<Tier> || is_blocked_v<Tier>, "ortho: tier::Cta<N> or tier::Blocked<NB>");
-    static_assert(!is_chol_v<Algo> || is_cta_v<Tier>,
+    static_assert(tier::is_cta_v<Tier> || tier::is_blocked_v<Tier>, "ortho: tier::Cta<N> or tier::Blocked<NB>");
+    static_assert(!is_chol_v<Algo> || tier::is_cta_v<Tier>,
                   "ortho: the Cholesky algorithms take tier::Cta<N>; tier::Blocked waits for potrf tier::Blocked (v22 B1)");
     if constexpr (on_l3_v<Algo, Tier>) {
         static_assert(l3::Config<Cfg>, "ortho: this tier runs on the in-group Level 3, Cfg is an l3::cfg preset");
@@ -53,20 +49,20 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> con
 
 // The one workspace plan (buffer_size and the carve). Local: the Level 3 stages, potrf's tile or
 // the Cta coefficients h (k); global: Blocked's H (k x NB, ld k) and h (NB), or the Gram k x k.
-template <class T> struct Layout {
+template <class T> struct OrthoLayout {
     ws::Slot<T> smem, h, hb, gram;
     ws::Slot<std::byte> chol;
     WorkspaceSize size;
 };
-template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr Layout<T> layout(int k) {
+template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr OrthoLayout<T> ortho_layout(int k) {
     const std::size_t uk = static_cast<std::size_t>(k);
     ::batchlas::device::Plan p;
-    Layout<T> l{};
+    OrthoLayout<T> l{};
     if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<T>(ws::Space::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
     if constexpr (is_chol_v<Algo>) {
         l.chol = p.take<std::byte>(ws::Space::Local, potrf_buffer_size<Uplo::Lower, tier::Cta<Tier::n_max>, T>(k).local_bytes);
         l.gram = p.take<T>(ws::Space::Global, uk * uk);
-    } else if constexpr (is_cta_v<Tier>) {
+    } else if constexpr (tier::is_cta_v<Tier>) {
         l.h = p.take<T>(ws::Space::Local, uk);
     } else {
         l.hb = p.take<T>(ws::Space::Global, uk * static_cast<std::size_t>(Tier::nb));
@@ -147,7 +143,7 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const W
     trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg>(ex, gram, a, One{}, sm);
     return 0;
 }
-}  // namespace ortho_detail
+}  // namespace detail
 
 /// @brief Workspace of ONE matrix for ortho() on k columns (constexpr, host and device).
 /// @tparam Algo  CGS2, Cholesky, Chol2 or ShiftChol3
@@ -156,8 +152,8 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const W
 /// @param[in] k  the number of columns
 /// @return local and global bytes; the caller's global buffer holds batch times global_bytes
 template <Transpose TR, OrthoAlgorithm Algo, class Tier, class T, class Cfg = void> constexpr WorkspaceSize ortho_buffer_size(int k) {
-    ortho_detail::check<TR, Algo, Tier, Cfg, T>();
-    return ortho_detail::layout<Algo, Tier, Cfg, T>(k).size;
+    detail::check<TR, Algo, Tier, Cfg, T>();
+    return detail::ortho_layout<Algo, Tier, Cfg, T>(k).size;
 }
 
 /// @brief The host ortho() inside a kernel: the k columns of the m x k A (k <= m) become an
@@ -177,30 +173,30 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class T, class Cfg = vo
 template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg = void, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
-    ortho_detail::check<TR, Algo, Tier, Cfg, T>();
+    detail::check<TR, Algo, Tier, Cfg, T>();
     const int k = a.cols();
-    const auto lay = ortho_detail::layout<Algo, Tier, Cfg, T>(k);
-    if constexpr (ortho_detail::is_chol_v<Algo>) {
+    const auto lay = detail::ortho_layout<Algo, Tier, Cfg, T>(k);
+    if constexpr (detail::is_chol_v<Algo>) {
         constexpr int N = Tier::n_max;
         if (k > N) return -2;
         if (k == 0) return 0;
         const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
         const Workspace pws{carve_local(ws, lay.chol), nullptr};
         T* const g = carve_global(ws, lay.gram);
-        int info = ortho_detail::cholqr_pass<N, Algo == OrthoAlgorithm::ShiftChol3>(ex, a, g, pws, sm);
+        int info = detail::cholqr_pass<N, Algo == OrthoAlgorithm::ShiftChol3>(ex, a, g, pws, sm);
         if constexpr (Algo != OrthoAlgorithm::Cholesky) {
-            if (info == 0) info = ortho_detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
+            if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
         }
         if constexpr (Algo == OrthoAlgorithm::ShiftChol3) {
-            if (info == 0) info = ortho_detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
+            if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
         }
         return info;
-    } else if constexpr (ortho_detail::is_cta_v<Tier>) {
+    } else if constexpr (tier::is_cta_v<Tier>) {
         if (k > Tier::n_max) return -2;
-        ortho_detail::cgs2(ex, a, mat_local(carve_local(ws, lay.h), k, 1, k).col(0));
+        detail::cgs2(ex, a, mat_local(carve_local(ws, lay.h), k, 1, k).col(0));
     } else {
         const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
-        ortho_detail::bcgs2<Tier::nb>(ex, a, carve_global(ws, lay.hb), carve_global(ws, lay.h), sm);
+        detail::bcgs2<Tier::nb>(ex, a, carve_global(ws, lay.hb), carve_global(ws, lay.h), sm);
     }
     return 0;
 }

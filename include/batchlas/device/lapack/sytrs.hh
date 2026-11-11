@@ -20,7 +20,7 @@
 
 namespace batchlas::device {
 
-namespace sytrs_detail {
+namespace detail {
 
 // ?SYTRS's 2 x 2 solve: x0 / x1 and d0 / d1 the first / second row's value and diagonal, off the
 // block's off-diagonal. ldl_block2 divides once per block; ldl_block2_row gives one row.
@@ -154,7 +154,7 @@ BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int
     }
 }
 
-}  // namespace sytrs_detail
+}  // namespace detail
 
 // ?SYCONV on column j of a staged lower factor (one item): the interchanges of the steps after j
 // in step order (a 2 x 2 step at k swaps row k + 1), and the 2 x 2 off-diagonal of a block
@@ -181,8 +181,8 @@ template <class T, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const ML& l,
 // LAPACK's ipiv entry. A list sytrf cannot have written (|ipiv| outside [1, n], an unpaired
 // \f$2 \times 2\f$ entry) would index b out of bounds: that item's X is NaN instead.
 template <typename D, typename R, typename Ex, typename PivIn>
-inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const sytrf_detail::RevVec<D>& b, const Ex& g,
-                      sytrf_detail::SumScratch<R> sum, PivIn&& piv) {
+inline void sytrs_col(const detail::RevMat<D>& S, int n, bool rev, const detail::RevVec<D>& b, const Ex& g,
+                      detail::SumScratch<R> sum, PivIn&& piv) {
     using A = arith_t<arith::Fma, D>;
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     // Every lane walks the list, lane 0 decides.
@@ -208,7 +208,7 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
             const D bk = b(k);
             sync<scope::Group>(g, Mem::Global);
             for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { b(i) = A::sub(b(i), A::mul(S(i, k), bk)); });
-            if (g.leader()) b(k) = sytrs_detail::ldl_dsolve_row(0, bk, bk, S(k, k), S(k, k), S(k, k));
+            if (g.leader()) b(k) = detail::ldl_dsolve_row(0, bk, bk, S(k, k), S(k, k), S(k, k));
             sync<scope::Group>(g, Mem::Global);
             k += 1;
         } else {
@@ -221,9 +221,9 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
                 b(i) = A::sub(A::sub(b(i), A::mul(S(i, k), bk)), A::mul(S(i, k + 1), bk1));
             });
             if (g.leader()) {
-                const auto blk = sytrs_detail::ldl_block2(bk, bk1, S(k, k), S(k + 1, k + 1), S(k + 1, k));
-                b(k) = sytrs_detail::ldl_block2_row(blk, false);
-                b(k + 1) = sytrs_detail::ldl_block2_row(blk, true);
+                const auto blk = detail::ldl_block2(bk, bk1, S(k, k), S(k + 1, k + 1), S(k + 1, k));
+                b(k) = detail::ldl_block2_row(blk, false);
+                b(k + 1) = detail::ldl_block2_row(blk, true);
             }
             sync<scope::Group>(g, Mem::Global);
             k += 2;
@@ -238,8 +238,8 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
             p0 = A::add(p0, A::mul(S(i, k), b(i)));
             if (raw < 0) p1 = A::add(p1, A::mul(S(i, k - 1), b(i)));
         });
-        const D s0 = sytrf_detail::sum_reduce(g, sum, p0);
-        const D s1 = raw < 0 ? sytrf_detail::sum_reduce(g, sum, p1) : A::zero();
+        const D s0 = detail::sum_reduce(g, sum, p0);
+        const D s1 = raw < 0 ? detail::sum_reduce(g, sum, p1) : A::zero();
         sync<scope::Group>(g, Mem::Global);
         if (g.leader()) {
             b(k) = A::sub(b(k), s0);
@@ -256,12 +256,12 @@ inline void sytrs_col(const sytrf_detail::RevMat<D>& S, int n, bool rev, const s
 // An invalid list leaves L as staged, perm the identity and every kind 1 x 1; the caller writes NaN.
 template <typename D, typename Acc, typename Ex>
 inline bool syconv(const Acc& L, int n, const int* ps, int* perm, int* kind, D* e, const Ex& ex, int* flag) {
-    if (ex.leader()) *flag = sytrs_detail::piv_list_valid(ps, n) ? 1 : 0;
+    if (ex.leader()) *flag = detail::piv_list_valid(ps, n) ? 1 : 0;
     sync<scope::Group>(ex, Mem::Global);
     const bool ok = *flag != 0;
     if (ok) {
         for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY { syconv_col<D>(L, ps, n, j, e); });
-        if (ex.leader()) sytrs_detail::build_perm(ps, n, perm, kind);
+        if (ex.leader()) detail::build_perm(ps, n, perm, kind);
     } else {
         for_each_owned(ex, n, [&](int t) BATCHLAS_DEVICE_BODY {
             perm[t] = t;
@@ -308,17 +308,17 @@ inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, cons
 // L w = y, w := D^-1 w, L^T z = w on one 32-lane executor; x[r] holds logical row lane + 32 r.
 // Collective.
 template <class Ex, typename D, int R>
-inline void sytrs_regs(const Ex& ex, const sytrs_detail::Staged<D>& S, Frag<D, R, Cyclic>& x) {
-    sytrs_detail::trsv_frag<Transpose::NoTrans>(ex, S, S.n, x);
-    sytrs_detail::ldl_dsolve_frag(ex, S, S.kind, S.e, S.n, x);
-    sytrs_detail::trsv_frag<Transpose::Trans>(ex, S, S.n, x);
+inline void sytrs_regs(const Ex& ex, const detail::Staged<D>& S, Frag<D, R, Cyclic>& x) {
+    detail::trsv_frag<Transpose::NoTrans>(ex, S, S.n, x);
+    detail::ldl_dsolve_frag(ex, S, S.kind, S.e, S.n, x);
+    detail::trsv_frag<Transpose::Trans>(ex, S, S.n, x);
 }
 
 // Every right-hand side of one item, sub-group `sgid` of `nsg` taking columns sgid, sgid + nsg, ...
 // Row t is gathered from and scattered back to the same physical row of B, map(perm[t]), so no
 // lane reads what another writes. An invalid list (ok false) gives an all-NaN X.
 template <int R, typename D>
-inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, const sytrs_detail::Staged<D>& S, bool ok, bool rev,
+inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, const detail::Staged<D>& S, bool ok, bool rev,
                        D* bb, std::ptrdiff_t ldb, int nrhs) {
     const SubGroup<32> ex{sg};
     const int n = S.n;
@@ -366,7 +366,7 @@ template <Uplo UL> struct sytrs {
 };
 }  // namespace routine
 
-namespace sytrs_detail {
+namespace detail {
 
 template <class T> struct SytrsCtaPlan {
     ws::Slot<T> tile;   // the n x n factor at ld n | 1, then e (n)
@@ -386,7 +386,7 @@ template <class R> struct SytrsWgPlan {
 };
 template <class R> constexpr SytrsWgPlan<R> sytrs_wg_plan() {
     Plan p;
-    const auto red = p.take<R>(ws::Space::Local, 2 * (sytrf_detail::sytrf_wg_max / 32));
+    const auto red = p.take<R>(ws::Space::Local, 2 * (detail::sytrf_wg_max / 32));
     return {red, p.size()};
 }
 template <class T> struct SytrsBlockedPlan {
@@ -401,7 +401,7 @@ template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int n
     Plan p;
     const auto un = static_cast<std::size_t>(n);
     const auto flag = p.take<int>(ws::Space::Local, 1);
-    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<sytrf_detail::sytrf_l3_cfg<T>>());
+    const auto sm = p.take<T>(ws::Space::Local, l3::smem_elems<detail::sytrf_l3_cfg<T>>());
     const auto l = p.take<T>(ws::Space::Global, un * un);
     const auto y = p.take<T>(ws::Space::Global, un * static_cast<std::size_t>(nrhs));
     const auto idx = p.take<int>(ws::Space::Global, 5 * un);
@@ -411,12 +411,12 @@ template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int n
 // LAPACK's argument numbers (?sytrs and ?sysv): -2 (N: A not square or outside the tier),
 // -5 (LDA), -7 (B: not n rows), -8 (LDB < max(1, n)); -1 the executor as sytrf's.
 template <class Tier, class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE int sytrs_check(const Ex& ex, const MA& a, const MB& b) {
-    if (const int e = sytrf_detail::sytrf_exec_check<Tier>(ex); e != 0) return e;
+    if (const int e = detail::sytrf_exec_check<Tier>(ex); e != 0) return e;
     const int n = a.rows(), lo = n > 1 ? n : 1;
     if (a.cols() != n || !detail::bound_admits<Tier>(n)) return -2;
-    if (sytrf_detail::sytrf_ld(a) < lo) return -5;
+    if (detail::sytrf_ld(a) < lo) return -5;
     if (b.rows() != n) return -7;
-    if (sytrf_detail::sytrf_ld(b) < lo) return -8;
+    if (detail::sytrf_ld(b) < lo) return -8;
     return 0;
 }
 
@@ -424,7 +424,7 @@ template <class Tier, class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE int s
 // `cta`): S's logical ipiv from `raw` (LAPACK's, physical order), ?syconv, then every column of
 // B (ld ldb) on sub-group sgid of nsg. `flag`: one int of local memory. No trailing barrier.
 template <int R, class All, typename D>
-BATCHLAS_DEVICE_INLINE void sytrs_cta_solve(const All& all, const sycl::sub_group& sg, int lane, int sgid, int nsg, const Staged<D>& S,
+BATCHLAS_DEVICE_INLINE void sytrs_cta_run(const All& all, const sycl::sub_group& sg, int lane, int sgid, int nsg, const Staged<D>& S,
                                          const int* raw, bool rev, int* flag, D* bb, std::ptrdiff_t ldb, int nrhs) {
     const int n = S.n;
     for_each_owned(all, n, [&](int k) BATCHLAS_DEVICE_BODY { S.ps[k] = logical_piv(raw[rev ? n - 1 - k : k], n, rev); });
@@ -442,9 +442,9 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Cta<N>, const Ex& ex, const MA& A, c
     D* const tp = carve_local(ws, pl.tile).get_raw();
     int* const im = carve_local(ws, pl.idx).get_raw();
     const Staged<D> S{tp, ldt, n, tp + static_cast<std::size_t>(n) * ldt, im, im + n, im + 2 * n};
-    lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(ex, sytrf_detail::sytrf_view(A, rev), S);
-    sytrs_cta_solve<(N + 31) / 32>(ex, ex.sub(), ex.lane(), sytrf_detail::sytrf_team(ex), sytrf_detail::sytrf_nteams(ex), S, ipiv,
-                                   rev, im + 3 * n, &B(0, 0), sytrf_detail::sytrf_ld(B), B.cols());
+    lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(ex, detail::sytrf_view(A, rev), S);
+    sytrs_cta_run<(N + 31) / 32>(ex, ex.sub(), ex.lane(), detail::sytrf_team(ex), detail::sytrf_nteams(ex), S, ipiv,
+                                   rev, im + 3 * n, &B(0, 0), detail::sytrf_ld(B), B.cols());
     sync<scope::Group>(ex, Mem::Global);
 }
 
@@ -456,13 +456,13 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<1>, const Ex& ex, const MA& 
     constexpr auto pl = sytrs_wg_plan<Rl>();
     Rl* const red = carve_local(ws, pl.red).get_raw();
     const int n = A.rows(), nrhs = B.cols();
-    const auto G = sytrf_detail::sytrf_view(A, rev);
+    const auto G = detail::sytrf_view(A, rev);
     D* const b0 = &B(0, 0);
-    const std::ptrdiff_t ldb = sytrf_detail::sytrf_ld(B);
+    const std::ptrdiff_t ldb = detail::sytrf_ld(B);
     // sytrs_col ends on a barrier: the scratch is free for the next column, B visible at the end.
     for (int c = 0; c < nrhs; ++c)
-        sytrs_col(G, n, rev, sytrf_detail::RevVec<D>{b0 + c * ldb, n, rev}, ex,
-                  sytrf_detail::SumScratch<Rl>{red, red + sytrf_detail::sytrf_wg_max / 32}, [&](int k) { return ipiv[k]; });
+        sytrs_col(G, n, rev, detail::RevVec<D>{b0 + c * ldb, n, rev}, ex,
+                  detail::SumScratch<Rl>{red, red + detail::sytrf_wg_max / 32}, [&](int k) { return ipiv[k]; });
 }
 
 // The host `blocked` route's ?sytrs2 in one work-group: the logical ipiv, its validity and the
@@ -474,7 +474,7 @@ template <Uplo UL, int NB, class Ex, class MA, class MB>
     requires(NB > 1)
 BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, const int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
-    using Cfg = sytrf_detail::sytrf_l3_cfg<D>;
+    using Cfg = detail::sytrf_l3_cfg<D>;
     static_assert(!is_runtime_v<Ex> && Ex::size == Cfg::threads, "sytrs tier::Blocked<NB>: a WorkGroup<256, 32> executor");
     constexpr bool rev = UL == Uplo::Upper;
     const int n = A.rows(), nrhs = B.cols();
@@ -486,9 +486,9 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
     int* const ps = carve_global(ws, pl.idx);
     int* const perm = ps + n;
     int* const kind = ps + 2 * n;
-    const auto G = sytrf_detail::sytrf_view(A, rev);
+    const auto G = detail::sytrf_view(A, rev);
     D* const bb = &B(0, 0);
-    const int ldb = static_cast<int>(sytrf_detail::sytrf_ld(B));
+    const int ldb = static_cast<int>(detail::sytrf_ld(B));
     const int total = n * nrhs;
     for_each_owned(ex, n, [&](int k) BATCHLAS_DEVICE_BODY { ps[k] = logical_piv(ipiv[rev ? n - 1 - k : k], n, rev); });
     sync<scope::Group>(ex, Mem::Global);
@@ -503,7 +503,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
         sync<scope::Group>(ex, Mem::Global);
         return;
     }
-    syconv_gather<D>(sytrf_detail::rev_mat(lw, n, n, rev), G, n, ps, kind, ps + 3 * n, ps + 4 * n, ex);
+    syconv_gather<D>(detail::rev_mat(lw, n, n, rev), G, n, ps, kind, ps + 3 * n, ps + 4 * n, ex);
     // The row of B that physical row t of y comes from and goes back to.
     auto src = [&](int t) {
         const int lt = rev ? n - 1 - t : t;
@@ -518,7 +518,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
         const int t = e % n;  // logical: x reads through the reversal
         const int kd = kind[t];
         if (kd == 2) return;  // the first row of its block writes both
-        const sytrf_detail::RevVec<D> x{y + (e / n) * n, n, rev};
+        const detail::RevVec<D> x{y + (e / n) * n, n, rev};
         if (kd == 0) {
             x(t) = ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
             return;
@@ -533,7 +533,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
     sync<scope::Group>(ex, Mem::Global);
 }
 
-}  // namespace sytrs_detail
+}  // namespace detail
 
 template <Uplo UL, class T> struct tiers<routine::sytrs<UL>, T> {
     using type = tier::list<tier::Cta<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<1>>;
@@ -542,18 +542,18 @@ template <Uplo UL, int N, class T> struct tier_info<routine::sytrs<UL>, tier::Ct
     static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n, int = 1) { return sytrs_detail::sytrs_cta_plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int = 1) { return detail::sytrs_cta_plan<T>(n).size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int, int = 1) { return sytrs_detail::sytrs_wg_plan<real_t<T>>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sytrs_wg_plan<real_t<T>>().size; }
 };
 // Its local part does not depend on nrhs, so with_tier's buffer_size(n) filter is exact.
 template <Uplo UL, int NB, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return sytrs_detail::sytrs_blocked_plan<T>(n, nrhs).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return detail::sytrs_blocked_plan<T>(n, nrhs).size; }
 };
 
 // The workspace of one matrix with nrhs right-hand sides (only Blocked<NB>'s global part uses it).
@@ -571,10 +571,10 @@ inline int sytrs(const Ex& ex, const MA& A, const MB& B, const int* ipiv, const 
     using D = std::remove_cv_t<typename MA::value_type>;
     static_assert(std::is_same_v<D, std::remove_cv_t<typename MB::value_type>>, "sytrs: A and B of one scalar type");
     using Tr = resolve_tier_t<routine::sytrs<UL>, D, Tier>;
-    static_assert(sytrf_detail::sytrf_exec_ok<Ex>(), "sytrs: an executor of whole 32-wide sub-groups");
-    const int chk = sytrs_detail::sytrs_check<Tr>(ex, A, B);
+    static_assert(detail::sytrf_exec_ok<Ex>(), "sytrs: an executor of whole 32-wide sub-groups");
+    const int chk = detail::sytrs_check<Tr>(ex, A, B);
     if (chk != 0 || A.rows() == 0 || B.cols() == 0) return chk;
-    sytrs_detail::sytrs_run<UL>(Tr{}, ex, A, B, ipiv, ws);
+    detail::sytrs_run<UL>(Tr{}, ex, A, B, ipiv, ws);
     return 0;
 }
 

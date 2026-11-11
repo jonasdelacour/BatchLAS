@@ -30,7 +30,7 @@
 
 namespace batchlas::device {
 
-namespace sytrf_detail {
+namespace detail {
 
 // Logical (i, j) of an m x n matrix; with rev, physical (m - 1 - i, n - 1 - j). The Upper
 // triangle of A is the Lower triangle of its reversal, so one Lower loop serves both uplo.
@@ -207,15 +207,15 @@ template <class D> BATCHLAS_DEVICE_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t 
     return rev_mat(p, ld, n, ncol, rev);
 }
 
-}  // namespace sytrf_detail
+}  // namespace detail
 
 // ?sytf2, lower form, on the logical tile. `piv_out(phys_k, value)` stores LAPACK's ipiv entry
 // (1-based; a 2x2 pivot writes -(p+1) at both of its positions); item 0 calls it. Returns info.
 template <typename D, typename R, typename Ex, typename PivOut>
-inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g, sytrf_detail::ArgMaxScratch<R> am,
+inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detail::ArgMaxScratch<R> am,
                  PivOut&& piv_out) {
     using A = arith_t<arith::Fma, D>;
-    const R alpha = sytrf_detail::bk_alpha<R>();
+    const R alpha = detail::bk_alpha<R>();
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     int info = 0;
     int k = 0;
@@ -225,16 +225,16 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
         const R absakk = abs1(S(k, k));
         // ?sytf2's I?AMAX takes the first maximum in storage order: the smallest physical row,
         // which for the reversed (upper) form is the largest logical one.
-        const auto col = sytrf_detail::iamax_bk(g, am, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, !rev);
+        const auto col = detail::iamax_bk(g, am, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, !rev);
         const R colmax = col.value < R(0) ? R(0) : col.value;
         const int imax = col.index;
-        const int stage = sytrf_detail::bk_stage(g, absakk, colmax, alpha);
-        if (stage == sytrf_detail::kBkNeedRow) {
-            const auto row = sytrf_detail::iamax_bk<true>(
+        const int stage = detail::bk_stage(g, absakk, colmax, alpha);
+        if (stage == detail::kBkNeedRow) {
+            const auto row = detail::iamax_bk<true>(
                 g, am, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, true, imax);
-            sytrf_detail::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
+            detail::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
         }
-        if (stage == sytrf_detail::kBkZero) {
+        if (stage == detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
         } else {
             const int kk = k + kstep - 1;
@@ -257,7 +257,7 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
                 const D r1 = A::neg(mr1);
                 for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, k) = A::mul(r1, S(i, k)); });
             } else if (k < n - 2) {  // A22 -= A21 D^-1 A21^T, then L21 = A21 D^-1
-                const auto blk = sytrf_detail::bk_block2(S(k, k), S(k + 1, k), S(k + 1, k + 1));
+                const auto blk = detail::bk_block2(S(k, k), S(k + 1, k), S(k + 1, k + 1));
                 for (int j = k + 2; j < n; ++j) {
                     const D a = blk.first(S(j, k), S(j, k + 1)), b = blk.second(S(j, k), S(j, k + 1));
                     for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY {
@@ -295,10 +295,10 @@ inline int sytf2(const sytrf_detail::RevMat<D>& S, int n, bool rev, const Ex& g,
 // The loops stay hand-written: as device ops the W zero-fill unrolled fully at device link and the
 // column update moved loads and FMAs (complex<float> registers 68 -> 128).
 template <typename D, typename R, typename Ex, typename PivOut>
-inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>& W, int n, int k0, int nb, int start, bool rev,
-                 const Ex& g, sytrf_detail::ArgMaxScratch<R> am, int& info, PivOut&& piv_out) {
+inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, int k0, int nb, int start, bool rev,
+                 const Ex& g, detail::ArgMaxScratch<R> am, int& info, PivOut&& piv_out) {
     using A = arith_t<arith::Fma, D>;
-    const R alpha = sytrf_detail::bk_alpha<R>();
+    const R alpha = detail::bk_alpha<R>();
     const int lid = g.lid(), nl = detail::size_of(g);
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     for (int i = k0 + lid; i < n; i += nl)
@@ -323,29 +323,29 @@ inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>
         R cv = R(-1);
         int ci = -1;
         for (int i = k + 1 + lid; i < n; i += nl) {
-            const R v = sytrf_detail::nan_as_inf(abs1(W(i, c)));
-            if (sytrf_detail::argmax_beats(v, i, cv, ci, !rev)) { cv = v; ci = i; }
+            const R v = detail::nan_as_inf(abs1(W(i, c)));
+            if (detail::argmax_beats(v, i, cv, ci, !rev)) { cv = v; ci = i; }
         }
-        sytrf_detail::argmax_reduce(g, am, cv, ci, !rev);
+        detail::argmax_reduce(g, am, cv, ci, !rev);
         const R colmax = cv < R(0) ? R(0) : cv;
         const int imax = ci;
-        const int stage = sytrf_detail::bk_stage(g, absakk, colmax, alpha);
-        if (stage == sytrf_detail::kBkNeedRow) {
+        const int stage = detail::bk_stage(g, absakk, colmax, alpha);
+        if (stage == detail::kBkNeedRow) {
             update_col(k, c + 1, imax, [&](int i) { return i < imax ? S(imax, i) : S(i, imax); });
             R rv = R(-1);
             int ri = -1;
             for (int j = k + lid; j < n; j += nl) {
                 if (j == imax) continue;
-                const R v = sytrf_detail::nan_as_inf(abs1(W(j, c + 1)));
-                if (sytrf_detail::argmax_beats(v, j, rv, ri, true)) { rv = v; ri = j; }
+                const R v = detail::nan_as_inf(abs1(W(j, c + 1)));
+                if (detail::argmax_beats(v, j, rv, ri, true)) { rv = v; ri = j; }
             }
-            sytrf_detail::argmax_reduce(g, am, rv, ri, true);
-            sytrf_detail::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
+            detail::argmax_reduce(g, am, rv, ri, true);
+            detail::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k)
                 for (int i = k + lid; i < n; i += nl) W(i, c) = W(i, c + 1);
             sync<scope::Group>(g, Mem::Global);
         }
-        if (stage == sytrf_detail::kBkZero) {
+        if (stage == detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
             for (int i = k + lid; i < n; i += nl) S(i, k) = W(i, c);
         } else {
@@ -364,7 +364,7 @@ inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>
                 const D r1 = A::recip(W(k, c));
                 for (int i = k + lid; i < n; i += nl) S(i, k) = i == k ? W(k, c) : A::mul(r1, W(i, c));
             } else {
-                const auto blk = sytrf_detail::bk_block2(W(k, c), W(k + 1, c), W(k + 1, c + 1));
+                const auto blk = detail::bk_block2(W(k, c), W(k + 1, c), W(k + 1, c + 1));
                 for (int j = k + 2 + lid; j < n; j += nl) {
                     const D wk = W(j, c), wk1 = W(j, c + 1);
                     S(j, k) = blk.first(wk, wk1);
@@ -399,7 +399,7 @@ inline int lasyf(const sytrf_detail::RevMat<D>& S, const sytrf_detail::RevMat<D>
 // reverse, so they hold ?sytf2's form. `logical_partner(j)` is ipiv's partner of logical column j
 // (rows j / j-1 for a 2 x 2 block ending at j) and its sign. Runs after the trailing update.
 template <typename D, typename Ex, typename PivIn>
-inline void lasyf_undo(const sytrf_detail::RevMat<D>& S, int start, int end, const Ex& g, PivIn&& logical_partner) {
+inline void lasyf_undo(const detail::RevMat<D>& S, int start, int end, const Ex& g, PivIn&& logical_partner) {
     const int lid = g.lid(), nl = detail::size_of(g);
     int j = end - 1;
     while (j >= start) {
@@ -426,7 +426,7 @@ inline void lasyf_undo(const sytrf_detail::RevMat<D>& S, int start, int end, con
 //                           ex = WorkGroup<256, 32>. Not in tiers_t (no measured win yet, design
 //                           F6): name it, or pass with_tier a tier::list holding it. NB = 31 is
 //                           the host route's (the update's k = 32).
-// The host routes `cta` and `wg` run the same bodies (sytrf_cta_factor, sytf2) with uplo a
+// The host routes `cta` and `wg` run the same bodies (sytrf_cta_run, sytf2) with uplo a
 // run-time flag: the reversal map makes Upper an index transform, so one kernel per T serves
 // both and the kernel names stay.
 
@@ -437,7 +437,7 @@ template <Uplo UL> struct sytrf {
 };
 }  // namespace routine
 
-namespace sytrf_detail {
+namespace detail {
 
 inline constexpr int sytrf_wg_max = 256;
 
@@ -530,7 +530,7 @@ template <class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int sytrf_check
 // items with `factors`) runs ?sytf2 on S, copies the factor back to G, and its leader calls
 // info_out(info). Returns ?sytf2's info on g, 0 elsewhere. No trailing barrier.
 template <class All, class Sub, typename D, typename R, typename PivOut, typename InfoOut>
-BATCHLAS_DEVICE_INLINE int sytrf_cta_factor(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
+BATCHLAS_DEVICE_INLINE int sytrf_cta_run(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
                                          bool rev, ArgMaxScratch<R> am, PivOut&& piv_out, InfoOut&& info_out) {
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
     sync<scope::Group>(all, Mem::Global);
@@ -553,7 +553,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, in
     const RevMat<D> S = rev_mat(carve_local(ws, pl.tile).get_raw(), N + 1, n, false);
     const SubGroup<32> g{ex.sub()};
     // One sub-group factors: its arg-max never reaches the cross-sub-group scratch.
-    const int st = sytrf_cta_factor(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev, ArgMaxScratch<R>{nullptr, nullptr},
+    const int st = sytrf_cta_run(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev, ArgMaxScratch<R>{nullptr, nullptr},
                                     [&](int k, int v) { ipiv[k] = v; }, NoOp{});
     sync<scope::Group>(ex, Mem::Global);
     if constexpr (Ex::sub_whole) return st;
@@ -631,7 +631,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
     return info;
 }
 
-}  // namespace sytrf_detail
+}  // namespace detail
 
 template <Uplo UL, class T> struct tiers<routine::sytrf<UL>, T> {
     using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
@@ -640,17 +640,17 @@ template <Uplo UL, int N, class T> struct tier_info<routine::sytrf<UL>, tier::Ct
     static_assert(N <= 32, "sytrf tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int) { return sytrf_detail::sytrf_cta_plan<N, T>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_cta_plan<N, T>().size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<1>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int) { return sytrf_detail::sytrf_wg_plan<real_t<T>>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_wg_plan<real_t<T>>().size; }
 };
 template <Uplo UL, int NB, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<NB>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sytrf_detail::sytrf_blocked_plan<NB, T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrf_blocked_plan<NB, T>(n).size; }
 };
 
 // The workspace of one matrix: local bytes for the tier's tile / scratch; a global part only for
@@ -671,10 +671,10 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrf_buffer_siz
 template <Uplo UL, class Tier, class Ex, class MA> inline int sytrf(const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Tr = resolve_tier_t<routine::sytrf<UL>, D, Tier>;
-    static_assert(sytrf_detail::sytrf_exec_ok<Ex>(), "sytrf: an executor of whole 32-wide sub-groups");
-    const int chk = sytrf_detail::sytrf_check<Tr>(ex, A);
+    static_assert(detail::sytrf_exec_ok<Ex>(), "sytrf: an executor of whole 32-wide sub-groups");
+    const int chk = detail::sytrf_check<Tr>(ex, A);
     if (chk != 0 || A.rows() == 0) return chk;
-    return sytrf_detail::sytrf_run<UL>(Tr{}, ex, A, ipiv, ws);
+    return detail::sytrf_run<UL>(Tr{}, ex, A, ipiv, ws);
 }
 
 }  // namespace batchlas::device

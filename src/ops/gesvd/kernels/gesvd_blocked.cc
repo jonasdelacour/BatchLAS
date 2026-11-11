@@ -216,7 +216,7 @@ Event solve_tridiagonal(Queue& ctx,
             const int32_t batch = static_cast<int32_t>(diag.batch_size());
             h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
-                device::gesvd_detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(E, b, n - 1), device::gesvd_glue::item_n(S, b, n));
+                device::detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(E, b, n - 1), device::gesvd_glue::item_n(S, b, n));
             });
         });
     }
@@ -281,7 +281,7 @@ void form_right_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
-            device::gesvd_detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, n), device::gesvd_glue::item_n(E, b, n - 1),
+            device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, n), device::gesvd_glue::item_n(E, b, n - 1),
                                       device::gesvd_glue::item_n(TD, b, n), device::gesvd_glue::item_n(TE, b, n - 1));
         });
     });
@@ -307,7 +307,7 @@ void form_left_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / left_order;
             const int32_t i = linear - b * left_order;
-            device::gesvd_detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
+            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
                                      device::gesvd_glue::item_n(TD, b, left_order), device::gesvd_glue::item_n(TE, b, left_order - 1));
         });
     });
@@ -613,7 +613,7 @@ void build_bidiag_vectors(Queue& ctx,
                 // u_tgt = B v_src / sigma (zero rows past k), or 0 for a sigma at or below tol_zero.
                 const int32_t src = (k - 1) - tgt;
                 const T sigma = sycl::sqrt(sycl::fmax(Evals(src, b), T(0)));
-                device::gesvd_detail::bdmv_div(device::Thread{}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
+                device::detail::bdmv_div(device::Thread{}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
                                device::gesvd_glue::col_of(device::item(V, b, k, k), src), sigma, tol_zero, device::gesvd_glue::col_of(ub, tgt));
             });
         });

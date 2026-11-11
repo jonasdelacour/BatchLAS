@@ -17,7 +17,7 @@
 
 #include <batchlas/device/core.hh>
 
-namespace batchlas::device::jacobi_detail {
+namespace batchlas::device::detail {
 
 template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, arith::Native>;
 
@@ -213,4 +213,4 @@ BATCHLAS_DEVICE_INLINE void rot_round_left_hermitian(const RotRound<T, CS, D, PR
     }
 }
 
-}  // namespace batchlas::device::jacobi_detail
+}  // namespace batchlas::device::detail

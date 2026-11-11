@@ -4,7 +4,7 @@
 // sytrd<UL, tier::Cta<N>> (one matrix per SgpPartition<N>, the tile in local memory) and
 // sytrd<Lower, tier::Blocked<NB>> (one matrix per WorkGroup<256>, any n: xLATRD panels on A in
 // global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
-// replaced kernels' expression shapes. sytrd_detail holds the CTA body (sytrd_cta_run, the host
+// replaced kernels' expression shapes. detail holds the CTA body (sytrd_cta_run, the host
 // sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
 // and the forms core does not reproduce bit for bit yet: Fit dotc / gemv / her2, lacpy_herm.
 
@@ -20,7 +20,7 @@
 
 namespace batchlas::device {
 
-namespace sytrd_detail {
+namespace detail {
 
 // x1 conj(y1) + x2 conj(y2): one term of a rank-2 Hermitian update. Real: one expression, so
 // it contracts to fma(x1, y1, x2 * y2) as the hand kernel's did.
@@ -143,12 +143,12 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
             row(ar) = Ar::one();
         }
         sync<scope::Part>(ex);
-        sytrd_detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
+        detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
         sync<scope::Part>(ex);
-        const T alpha2 = T(-0.5) * taui * sytrd_detail::dotc<Ops>(fx, vm, wm);
+        const T alpha2 = T(-0.5) * taui * detail::dotc<Ops>(fx, vm, wm);
         axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
         sync<scope::Part>(ex);
-        sytrd_detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
+        detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
         sync<scope::Part>(ex);
         if (is_alpha) {
             col(ar) = alpha;
@@ -160,7 +160,7 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
     }
 }
 
-}  // namespace sytrd_detail
+}  // namespace detail
 
 // xSYTD2 / xHETD2 on the n x n leading block of a resident tile held in FULL storage (both
 // triangles, real diagonal), one row per item (n <= Ex::size); v and w are length >= n scratch.
@@ -177,21 +177,21 @@ BATCHLAS_DEVICE_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, 
     T tau_lane = arith_t<Ops, T>::zero();
     if constexpr (UL == Uplo::Upper) {
         for (int k = n - 1; k >= 1; --k) {  // annihilate A(0:k-2, k); alpha = A(k-1, k)
-            sytrd_detail::sytd2_step<UL, Ops>(ex, k - 1, k, k - 1, a.sub(0, 0, k, k), a.col(k).head(k), a.row(k).head(k), v, w,
+            detail::sytd2_step<UL, Ops>(ex, k - 1, k, k - 1, a.sub(0, 0, k, k), a.col(k).head(k), a.row(k).head(k), v, w,
                                               lane < k - 1, tau_lane, on_step);
             sync<scope::Part>(ex);
         }
     } else {
         for (int i = 0; i <= n - 2; ++i) {  // annihilate A(i+2:n-1, i); alpha = A(i+1, i) on item 0
             const int s = i + 1, m = n - s;
-            sytrd_detail::sytd2_step<UL, Ops>(ex, i, m, 0, a.sub(s, s, m, m), a.col(i).tail(s).head(m), a.row(i).tail(s).head(m),
+            detail::sytd2_step<UL, Ops>(ex, i, m, 0, a.sub(s, s, m, m), a.col(i).tail(s).head(m), a.row(i).tail(s).head(m),
                                               v, w, lane >= 1 && lane < m, tau_lane, on_step);
         }
     }
     return tau_lane;
 }
 
-namespace sytrd_detail {
+namespace detail {
 
 // Local memory as the decorated pointer the Upper tile views take (never &acc[off]: generic).
 template <class T> BATCHLAS_DEVICE_INLINE typename local_mptr<T>::pointer decorated_ptr(const sycl::local_accessor<T, 1>& a) {
@@ -269,10 +269,10 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
 }
 
 // The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.
-template <int N, class T> struct cta_plan {
+template <int N, class T> struct sytrd_cta_plan {
     Plan plan{};
     ws::Slot<T> a{}, v{}, w{};
-    constexpr cta_plan()
+    constexpr sytrd_cta_plan()
         : a(plan.take<T>(ws::Space::Local, static_cast<std::size_t>(N) * N)), v(plan.take<T>(ws::Space::Local, N)),
           w(plan.take<T>(ws::Space::Local, N)) {}
 };
@@ -429,15 +429,13 @@ template <class T> struct ColView {
 // The trailing update's tile: the in-group L3 preset the device_api_l3 tests cover (256 items).
 template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
 
 // The Blocked tier's workspace: W (n x NB, ld n), v and wcol (n each) in global memory; vip, wip
 // (NB each) and the L3 stage in local memory. O(NB) local bytes, so any n fits.
-template <int NB, class T> struct blocked_plan {
+template <int NB, class T> struct sytrd_blocked_plan {
     Plan plan{};
     ws::Slot<T> w{}, v{}, wc{}, vip{}, wip{}, smem{};
-    constexpr explicit blocked_plan(int n)
+    constexpr explicit sytrd_blocked_plan(int n)
         : w(plan.take<T>(ws::Space::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<T>(ws::Space::Global, n)),
           wc(plan.take<T>(ws::Space::Global, n)), vip(plan.take<T>(ws::Space::Local, NB)), wip(plan.take<T>(ws::Space::Local, NB)),
           smem(plan.take<T>(ws::Space::Local, l3::smem_elems<blocked_cfg<T>>())) {}
@@ -454,7 +452,7 @@ BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3:
     using Cfg = blocked_cfg<T>;
     using Ar = Arith<T>;
     const int n = a.m, lda = a.ld;
-    const blocked_plan<NB, T> plan(n);
+    const sytrd_blocked_plan<NB, T> plan(n);
     T* const wp = carve_global(ws, plan.w);
     T* const vp = carve_global(ws, plan.v);
     T* const wcp = carve_global(ws, plan.wc);
@@ -492,7 +490,7 @@ BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3:
     ex.barrier(Mem::Global);
 }
 
-}  // namespace sytrd_detail
+}  // namespace detail
 
 namespace routine {
 // xSYTRD / xHETRD, triangle UL.
@@ -506,15 +504,15 @@ template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::sytrd<UL
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int) { return sytrd_detail::cta_plan<N, T>{}.plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::sytrd_cta_plan<N, T>{}.plan.size(); }
 };
 // tier::Blocked<NB>: Uplo::Lower only (the host sytrd_blocked's restriction; mirror an Upper input
 // with core mirror<Uplo::Upper, true> first, as syev_blocked does).
 template <int NB, class Alg, class T> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = sytrd_detail::blocked_cfg<T>::threads;  // 256: the her2k tile's items
+    static constexpr int wg_size = detail::blocked_cfg<T>::threads;  // 256: the her2k tile's items
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sytrd_detail::blocked_plan<NB, T>(n).plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrd_blocked_plan<NB, T>(n).plan.size(); }
 };
 template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
     using cta = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
@@ -543,12 +541,12 @@ BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const E
     using R = routine::sytrd<UL>;
     using Tr = resolve_tier_t<R, T, Tier>;
     static_assert(HasTier<R, Tr, T>, "sytrd: the routine has no such tier (tier::Cta<N>; tier::Blocked<NB> for Uplo::Lower)");
-    if constexpr (sytrd_detail::is_blocked_v<Tr>) {
+    if constexpr (tier::is_blocked_v<Tr>) {
         constexpr int WG = tier_info<R, Tr, T>::wg_size;
         static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "sytrd: tier::Blocked<NB> runs on device::WorkGroup<256> (one matrix per work-group)");
         const auto a = l3::global_of(A);
         if (a.m < 1 || a.n != a.m) return -2;
-        sytrd_detail::sytrd_blocked_run<Tr::nb>(ex, a, d, e, tau, ws);
+        detail::sytrd_blocked_run<Tr::nb>(ex, a, d, e, tau, ws);
         return 0;
     } else {
         constexpr int N = Tr::n_max;
@@ -556,11 +554,11 @@ BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const E
                       "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
         const int n = A.rows();
         if (n < 1 || n > N || A.cols() != n) return -2;
-        const sytrd_detail::cta_plan<N, T> plan{};
+        const detail::sytrd_cta_plan<N, T> plan{};
         const auto a = carve_local(ws, plan.a).get();
         const auto v = carve_local(ws, plan.v).get();
         const auto w = carve_local(ws, plan.w).get();
-        sytrd_detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
+        detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
         return 0;
     }
 }

@@ -38,10 +38,10 @@ template <typename T> class SytrsScatterKernel;
 
 namespace {
 
-using device::sytrs_detail::Staged;
-template <typename D> using Tile = device::sytrf_detail::RevMat<D>;
-template <typename D> using Vec = device::sytrf_detail::RevVec<D>;
-using device::sytrf_detail::rev_mat;
+using device::detail::Staged;
+template <typename D> using Tile = device::detail::RevMat<D>;
+template <typename D> using Vec = device::detail::RevVec<D>;
+using device::detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -98,7 +98,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 const Tile<D> G = rev_mat(const_cast<D*>(ap) + b * stra, lda, n, rev);
                 device::lacpy<device::Part::Lower, Transpose::NoTrans, device::alg::DivMod>(all, G, S);
                 const int* const gp = piv + b * n;  // before nsg: keeps the base closure layout
-                device::sytrs_detail::sytrs_cta_solve<R>(all, sg, lane, sgid, nsg, S, gp, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
+                device::detail::sytrs_cta_run<R>(all, sg, lane, sgid, nsg, S, gp, rev, &im[3 * n], bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -179,13 +179,13 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 int* const perm = pw + i0 * n;
                 int* const kind = kw + i0 * n;
                 device::for_each_owned(ex, n, [&](int k) BATCHLAS_DEVICE_BODY {
-                    ps[k] = device::sytrs_detail::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
+                    ps[k] = device::detail::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
                 });
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
                 if (ex.leader()) {
-                    const bool valid = device::sytrs_detail::piv_list_valid(ps, n);
+                    const bool valid = device::detail::piv_list_valid(ps, n);
                     flag[0] = valid ? 1 : 0;
-                    if (valid) device::sytrs_detail::build_perm(ps, n, perm, kind);
+                    if (valid) device::detail::build_perm(ps, n, perm, kind);
                 }
                 device::sync<device::scope::Group>(ex, device::Mem::Global);
                 const bool ok = flag[0] != 0;
@@ -239,12 +239,12 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
                 const Tile<D> G = rev_mat(const_cast<D*>(ap) + i0 * stra, lda, n, rev);
                 const Vec<D> x{bw + static_cast<std::ptrdiff_t>(rest) * n, n, rev};
                 if (kd == 0) {
-                    x(t) = device::sytrs_detail::ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
+                    x(t) = device::detail::ldl_dsolve_row(0, x(t), x(t), G(t, t), G(t, t), G(t, t));
                     return;
                 }
                 const D x0 = x(t), x1 = x(t + 1), d0 = G(t, t), d1 = G(t + 1, t + 1), off = G(t + 1, t);
-                x(t) = device::sytrs_detail::ldl_dsolve_row(1, x0, x1, d0, d1, off);
-                x(t + 1) = device::sytrs_detail::ldl_dsolve_row(2, x1, x0, d1, d0, off);
+                x(t) = device::detail::ldl_dsolve_row(1, x0, x1, d0, d1, off);
+                x(t + 1) = device::detail::ldl_dsolve_row(2, x1, x0, d1, d0, off);
             });
     });
 }

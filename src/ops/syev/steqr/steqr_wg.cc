@@ -121,19 +121,19 @@ Event steqr_wg_impl(Queue& ctx,
                     auto n_local = end_ix - start_ix;
 
                     if (n_local == 1) continue;
-                    // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (steqr_detail::wg_*).
+                    // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (detail::wg_*).
                     if (n_local == 2) {
-                        device::steqr_detail::wg_solve_2x2<T>(d_, e_, store_givens, [&](const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
+                        device::detail::wg_solve_2x2<T>(d_, e_, store_givens, [&](const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
                             rotations_view(0, 0, gid) = {g.c, g.s};
                             order_view[gid] = ApplyOrder::Forward;
                         });
                         continue;
                     }
 
-                    bool QR = device::steqr_detail::wg_forward(d_, n_local);
+                    bool QR = device::detail::wg_forward(d_, n_local);
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        const bool deflatable = device::steqr_detail::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
+                        const bool deflatable = device::detail::wg_sweep<T>(d_, e_, n_local, QR, [&](size_t j, const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {g.c, g.s};
                             }

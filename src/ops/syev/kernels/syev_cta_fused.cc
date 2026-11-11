@@ -50,7 +50,7 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
 // in one partition from load to store (sytrd -> steqr -> back-transform), so no
 // intermediate touches global memory. The body is device::syev<J, UL, tier::Cta<P>>'s
-// (device/lapack/syev.hh syev_detail::syev_cta_run), its stages the SAME code as the
+// (device/lapack/syev.hh detail::syev_cta_run), its stages the SAME code as the
 // standalone kernels (lapack/sytrd.hh, lapack/steqr.hh): keep it that way, so a
 // head-to-head benchmark measures fusion and nothing else. Real input seeds the
 // sweeps with an in-place Q_house (DSYEV's route); Hermitian input applies the
@@ -82,7 +82,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // The tile layout of the one body (device/lapack/syev.hh cta_layout: real vectors on
         // ONE P+1-padded tile, Hermitian vectors with a separate real accumulator).
-        using Lay = device::syev_detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
+        using Lay = device::detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
         constexpr int32_t LDQ = Lay::ldq;
         constexpr int32_t LDA = Lay::lda;
         constexpr bool kSeparateQTile = Lay::separate_q;
@@ -166,10 +166,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                const device::syev_detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
+                const device::detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
                 // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
                 // back-transform; the stores skip a dead chunk.
-                device::syev_detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
+                device::detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
                     part, solve_part, A_local, base_a, V_local, base_v, W_local, base_w, Q_local, base_q, A_prob,
                     device::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
                     [&](bool failed) BATCHLAS_DEVICE_BODY {

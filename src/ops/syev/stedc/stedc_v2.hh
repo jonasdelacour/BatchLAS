@@ -10,8 +10,8 @@
 namespace batchlas::stedc_v2 {
 
 
-using batchlas::device::laed2_detail::fold;
-using batchlas::device::laed4_detail::is_group_v;
-using batchlas::device::laed4_detail::uniform;
+using batchlas::device::detail::fold;
+using batchlas::device::detail::is_group_v;
+using batchlas::device::detail::uniform;
 
 }  // namespace batchlas::stedc_v2

@@ -29,7 +29,7 @@ template <Uplo UL> struct sysv {
 };
 }  // namespace routine
 
-namespace sysv_detail {
+namespace detail {
 
 // The fused tile of sysv `cta`: the (N + 1) x N factor then e (N); the int part holds ipiv's
 // copy [0, N), ps, perm, kind (N each), the validity flag at 4N and the factor's info at 4N + 1.
@@ -56,9 +56,9 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
     D* const tp = carve_local(ws, pl.tile).get_raw();
     int* const pp = carve_local(ws, pl.idx).get_raw();
     const SubGroup<32> g{ex.sub()};
-    sytrf_detail::sytrf_cta_factor(
-        ex, g, sytrf_detail::sytrf_team(ex) == 0, sytrf_detail::sytrf_view(A, rev), sytrf_detail::rev_mat(tp, ldt, n, false), n, rev,
-        sytrf_detail::ArgMaxScratch<R>{nullptr, nullptr},
+    detail::sytrf_cta_run(
+        ex, g, detail::sytrf_team(ex) == 0, detail::sytrf_view(A, rev), detail::rev_mat(tp, ldt, n, false), n, rev,
+        detail::ArgMaxScratch<R>{nullptr, nullptr},
         [&](int k, int v) {
             ipiv[k] = v;
             pp[k] = v;
@@ -67,9 +67,9 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
     sync<scope::Group>(ex, Mem::Global);
     const int info = pp[4 * N + 1];
     if (info == 0) {
-        const sytrs_detail::Staged<D> L{tp, ldt, n, tp + ldt * N, pp + N, pp + 2 * N, pp + 3 * N};
-        sytrs_detail::sytrs_cta_solve<1>(ex, ex.sub(), ex.lane(), sytrf_detail::sytrf_team(ex), sytrf_detail::sytrf_nteams(ex), L, pp,
-                                         rev, pp + 4 * N, &B(0, 0), sytrf_detail::sytrf_ld(B), B.cols());
+        const detail::Staged<D> L{tp, ldt, n, tp + ldt * N, pp + N, pp + 2 * N, pp + 3 * N};
+        detail::sytrs_cta_run<1>(ex, ex.sub(), ex.lane(), detail::sytrf_team(ex), detail::sytrf_nteams(ex), L, pp,
+                                         rev, pp + 4 * N, &B(0, 0), detail::sytrf_ld(B), B.cols());
     }
     sync<scope::Group>(ex, Mem::Global);
     return info;
@@ -78,9 +78,9 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
 template <Uplo UL, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
     // Both halves carve the same workspace from offset 0: sytrf's ends on a barrier.
-    const int info = sytrf_detail::sytrf_run<UL>(tier::Blocked<1>{}, ex, A, ipiv, ws);
+    const int info = detail::sytrf_run<UL>(tier::Blocked<1>{}, ex, A, ipiv, ws);
     if (info != 0) return info;
-    sytrs_detail::sytrs_run<UL>(tier::Blocked<1>{}, ex, A, B, ipiv, ws);
+    detail::sytrs_run<UL>(tier::Blocked<1>{}, ex, A, B, ipiv, ws);
     return 0;
 }
 
@@ -88,9 +88,9 @@ template <Uplo UL, int NB, class Ex, class MA, class MB>
     requires(NB > 1)
 BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
     // As Blocked<1>: both halves carve from offset 0 of both spaces; sytrf's ends on a barrier.
-    const int info = sytrf_detail::sytrf_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, ws);
+    const int info = detail::sytrf_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, ws);
     if (info != 0) return info;
-    sytrs_detail::sytrs_run<UL>(tier::Blocked<NB>{}, ex, A, B, ipiv, ws);
+    detail::sytrs_run<UL>(tier::Blocked<NB>{}, ex, A, B, ipiv, ws);
     return 0;
 }
 
@@ -99,7 +99,7 @@ constexpr WorkspaceSize sysv_max(const WorkspaceSize& a, const WorkspaceSize& b)
             a.global_bytes > b.global_bytes ? a.global_bytes : b.global_bytes, a.align > b.align ? a.align : b.align};
 }
 
-}  // namespace sysv_detail
+}  // namespace detail
 
 template <Uplo UL, class T> struct tiers<routine::sysv<UL>, T> {
     using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
@@ -108,20 +108,20 @@ template <Uplo UL, int N, class T> struct tier_info<routine::sysv<UL>, tier::Cta
     static_assert(N <= 32, "sysv tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int, int = 1) { return sysv_detail::sysv_cta_plan<N, T>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sysv_cta_plan<N, T>().size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<1>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_wg_max, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int, int = 1) {
-        return sysv_detail::sysv_max(sytrf_detail::sytrf_wg_plan<real_t<T>>().size, sytrs_detail::sytrs_wg_plan<real_t<T>>().size);
+        return detail::sysv_max(detail::sytrf_wg_plan<real_t<T>>().size, detail::sytrs_wg_plan<real_t<T>>().size);
     }
 };
 template <Uplo UL, int NB, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<NB>, T> {
-    static constexpr int wg_size = sytrf_detail::sytrf_blocked_wg, sg_size = 32;
+    static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) {
-        return sysv_detail::sysv_max(sytrf_detail::sytrf_blocked_plan<NB, T>(n).size, sytrs_detail::sytrs_blocked_plan<T>(n, nrhs).size);
+        return detail::sysv_max(detail::sytrf_blocked_plan<NB, T>(n).size, detail::sytrs_blocked_plan<T>(n, nrhs).size);
     }
 };
 
@@ -139,10 +139,10 @@ inline int sysv(const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspa
     using D = std::remove_cv_t<typename MA::value_type>;
     static_assert(std::is_same_v<D, std::remove_cv_t<typename MB::value_type>>, "sysv: A and B of one scalar type");
     using Tr = resolve_tier_t<routine::sysv<UL>, D, Tier>;
-    static_assert(sytrf_detail::sytrf_exec_ok<Ex>(), "sysv: an executor of whole 32-wide sub-groups");
-    const int chk = sytrs_detail::sytrs_check<Tr>(ex, A, B);
+    static_assert(detail::sytrf_exec_ok<Ex>(), "sysv: an executor of whole 32-wide sub-groups");
+    const int chk = detail::sytrs_check<Tr>(ex, A, B);
     if (chk != 0 || A.rows() == 0) return chk;
-    return sysv_detail::sysv_run<UL>(Tr{}, ex, A, B, ipiv, ws);
+    return detail::sysv_run<UL>(Tr{}, ex, A, B, ipiv, ws);
 }
 
 }  // namespace batchlas::device

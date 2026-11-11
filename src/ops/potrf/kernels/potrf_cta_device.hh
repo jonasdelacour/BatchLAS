@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The CTA kernel's body is device::potrf's tier::Cta body (lapack/potrf.hh, potrf_detail::cta_body).
+// The CTA kernel's body is device::potrf's tier::Cta body (lapack/potrf.hh, detail::potrf_cta_run).
 
 #include <batchlas/device/core.hh>
 #include <batchlas/device/lapack/potrf.hh>

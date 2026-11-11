@@ -2,7 +2,7 @@
 #pragma once
 // xLAED3: a deflated merge's roots (laed4) and eigenvectors Q(:, j) = z~ ./ (d - lambda_j),
 // z~ the Löwner-rescaled weights (Gu-Eisenstat). laed3 is the host fused merges' body and
-// device::stedc's; laed3_detail holds its steps (moved from src/ops/syev/stedc unchanged).
+// device::stedc's; detail holds its steps (moved from src/ops/syev/stedc unchanged).
 
 #include <cstdint>
 #include <limits>
@@ -14,7 +14,7 @@
 
 namespace batchlas::device {
 
-namespace laed3_detail {
+namespace detail {
 
 /// q(i) = (d(i) - origin) - tau, the root's denominators (at the origin pole exactly -tau; an
 /// exact zero is clamped to eps (|d(i)| + 1) to keep the Löwner reciprocal finite).
@@ -67,7 +67,7 @@ BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t 
             const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
             v(eid, bid) = sgn * sqrt_scaled(prod);
         }
-        if constexpr (laed4_detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
+        if constexpr (detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
     }
 }
 
@@ -88,11 +88,11 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
         // No barrier: nrm2 walks q with map's owner stride (each item reads what it wrote).
         const T nrm = nrm2<alg::Blue>(ex, q);
         map(ex, q, [=](T qi) { return qi / nrm; }, q);
-        if constexpr (laed4_detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
+        if constexpr (detail::is_group_v<Ex>) sync<scope::Group>(ex, Mem::Global);
     }
 }
 
-}  // namespace laed3_detail
+}  // namespace detail
 
 /// One merge's secular step, COLLECTIVE over the work-group wex. Roots k = first, first +
 /// stride, ... < dd are solved on pex (a partition of wex, or wex itself with (0, 1)); for each,
@@ -107,20 +107,20 @@ BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t f
     for (std::int32_t root_ix = first; root_ix < dd; root_ix += stride) {
         laed4_root<T> root;
         if (root_ix == dd - 1) {
-            root = laed4_detail::solve_last(pex, d_prob, z_prob, dd, abs_2rho, max_iter);
+            root = detail::solve_last(pex, d_prob, z_prob, dd, abs_2rho, max_iter);
         } else {
-            root = laed4_detail::solve_inner(pex, d_prob, z_prob, dd, root_ix, abs_2rho, max_iter);
+            root = detail::solve_inner(pex, d_prob, z_prob, dd, root_ix, abs_2rho, max_iter);
         }
         if (pex.leader()) on_root(root_ix, root);
-        laed3_detail::denominators(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
+        detail::denominators(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
     }
 
     sync<scope::Group>(wex, Mem::Global);
 
     // Rescale reads Q, writes v; form_vectors the reverse. On the group each step syncs itself.
-    laed3_detail::rescale<T>(do_rescale, pex, first, stride, dd, Q_bid, d_prob, v, bid);
-    if constexpr (!laed4_detail::is_group_v<PEx>) sync<scope::Group>(wex, Mem::Global);
-    laed3_detail::form_vectors<T>(pex, first, stride, dd, Q, v, bid);
+    detail::rescale<T>(do_rescale, pex, first, stride, dd, Q_bid, d_prob, v, bid);
+    if constexpr (!detail::is_group_v<PEx>) sync<scope::Group>(wex, Mem::Global);
+    detail::form_vectors<T>(pex, first, stride, dd, Q, v, bid);
 }
 
 }  // namespace batchlas::device

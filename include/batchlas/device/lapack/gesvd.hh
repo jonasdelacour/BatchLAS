@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // LAPACK xGESVD on the device, and the driver's own steps on the real upper bidiagonal B = (d, e)
-// of gebrd (gesvd_detail): bdgram forms B^T B or B B^T (the gesvd-via-tridiagonal route),
+// of gebrd (detail): bdgram forms B^T B or B B^T (the gesvd-via-tridiagonal route),
 // bdmv_div recovers a left singular vector B x / sigma, tridiag_abs_offdiag makes a tridiagonal's
 // off-diagonal non-negative by a diagonal sign similarity (Thread / Grid1D / WorkGroup executors
 // through core for_each_owned).
@@ -20,7 +20,7 @@
 #include <batchlas/device/lapack/ormbr.hh>
 #include <batchlas/device/level3/group.hh>
 
-namespace batchlas::device::gesvd_detail {
+namespace batchlas::device::detail {
 
 // The symmetric tridiagonal Gram matrix of the real upper bidiagonal B = (d, e), k = d.size():
 // Side::Right is B^T B (order k), Side::Left is B B^T padded with zero rows to order td.size().
@@ -94,7 +94,7 @@ template <class Ex, class E, class S> BATCHLAS_DEVICE_INLINE void tridiag_abs_of
     }
 }
 
-}  // namespace batchlas::device::gesvd_detail
+}  // namespace batchlas::device::detail
 
 namespace batchlas::device {
 
@@ -104,10 +104,10 @@ template <SvdVectors JU, SvdVectors JVT> struct gesvd {
 };
 }  // namespace routine
 
-namespace gesvd_detail {
+namespace detail {
 // One matrix's workspace for tier::Blocked<NB>; the sub-ops (gebrd, bdsqr) get their own slices,
 // each carved by that op's plan from offset 0 of its slice.
-template <class T> struct BlockedPlan {
+template <class T> struct GesvdBlockedPlan {
     ws::Slot<T> at, ub, vb;           // m < n: A^H (n x m), its U (n x vh_rows), its V^H (m x m)
     ws::Slot<real_t<T>> d, e;         // the bidiagonal: k, k - 1
     ws::Slot<T> tauq, taup;           // k each
@@ -115,7 +115,7 @@ template <class T> struct BlockedPlan {
     ws::Slot<std::byte> gebrd_local, gebrd_global, bdsqr_local, bdsqr_global;
     WorkspaceSize size;
 };
-template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr BlockedPlan<T> driver_plan(int m, int n) {
+template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr GesvdBlockedPlan<T> driver_plan(int m, int n) {
     using R = real_t<T>;
     constexpr bool wu = JU != SvdVectors::None, wv = JVT != SvdVectors::None;
     const bool flip = m < n;
@@ -123,7 +123,7 @@ template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr BlockedPlan<
     const std::size_t vh_rows = JVT == SvdVectors::All ? std::size_t(n) : std::size_t(k);
     const std::size_t kk = Arith<T>::is_complex && (wu || wv) ? std::size_t(k) * std::size_t(k) : 0;
     Plan p;
-    BlockedPlan<T> b{};
+    GesvdBlockedPlan<T> b{};
     b.at = p.take<T>(ws::Space::Global, flip ? std::size_t(n) * std::size_t(m) : 0);
     b.ub = p.take<T>(ws::Space::Global, flip && wv ? std::size_t(n) * vh_rows : 0);
     b.vb = p.take<T>(ws::Space::Global, flip && wu ? std::size_t(m) * std::size_t(m) : 0);
@@ -156,7 +156,7 @@ template <class M> BATCHLAS_DEVICE_INLINE auto flat_mat(const M& a) {
 // of U (m x U.cols()) and V^H (k x k); then U := Q U and V^H := V^H P^H.
 template <int NB, class T, class Ex, class MA, class SV>
 BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, const MA& U, const MA& Vh, bool want_u, bool want_vh,
-                                   const Workspace& ws, const BlockedPlan<T>& P) {
+                                   const Workspace& ws, const GesvdBlockedPlan<T>& P) {
     const int k = A.cols();
     const auto d = device::vec(carve_global(ws, P.d), k);
     const auto e = device::vec(carve_global(ws, P.e), k > 1 ? k - 1 : 0);
@@ -189,21 +189,21 @@ BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, co
     if (want_vh) (void)ormbr<'P', Side::Right, Transpose::ConjTrans>(ex, A, taup, Vh, Workspace{});
     return info;
 }
-}  // namespace gesvd_detail
+}  // namespace detail
 
 template <SvdVectors JU, SvdVectors JVT, class T> struct tiers<routine::gesvd<JU, JVT>, T> {
-    using type = tier::list<tier::Blocked<gebrd_detail::blocked_nb>>;
+    using type = tier::list<tier::Blocked<detail::blocked_nb>>;
 };
 // tier::Blocked<NB> (NB: gebrd's panel width): any m x n, every T, on a WorkGroup<256, 32>.
 // buffer_size(n) is the square problem's; gesvd_buffer_size<JU, JVT, Tier, T>(m, n) any other.
 template <SvdVectors JU, SvdVectors JVT, int NB, class A, class T> struct tier_info<routine::gesvd<JU, JVT>, tier::Blocked<NB, A>, T> {
-    static constexpr int wg_size = gebrd_detail::blocked_wg, sg_size = 32;
+    static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return gesvd_detail::driver_plan<JU, JVT, NB, T>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::driver_plan<JU, JVT, NB, T>(n, n).size; }
 };
 template <SvdVectors JU, SvdVectors JVT, class Tier, class T> constexpr WorkspaceSize gesvd_buffer_size(int m, int n) {
     using Tr = resolve_tier_t<routine::gesvd<JU, JVT>, T, Tier>;
-    return gesvd_detail::driver_plan<JU, JVT, Tr::nb, T>(m, n).size;
+    return detail::driver_plan<JU, JVT, Tr::nb, T>(m, n).size;
 }
 
 // xGESVD of ONE m x n matrix A (any m, n >= 1), host order (A, S, U, Vh, ws) with jobu / jobvh as
@@ -218,24 +218,24 @@ template <SvdVectors JU, SvdVectors JVT, class Tier, class Ex, class MA, class S
 BATCHLAS_DEVICE_INLINE int gesvd(const Ex& ex, const MA& A_, const SV& S, const MU& U_, const MV& Vh_, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::gesvd<JU, JVT>, T, Tier>;
-    static_assert(gebrd_detail::is_blocked_v<Tr>, "gesvd: tier::Blocked<NB>");
+    static_assert(tier::is_blocked_v<Tr>, "gesvd: tier::Blocked<NB>");
     constexpr bool wu = JU != SvdVectors::None, wv = JVT != SvdVectors::None;
-    const auto A = gesvd_detail::flat_mat(A_);
+    const auto A = detail::flat_mat(A_);
     const int m = A.rows(), n = A.cols(), k = m < n ? m : n;
-    const auto U = gesvd_detail::flat_mat(U_);
-    const auto Vh = gesvd_detail::flat_mat(Vh_);
+    const auto U = detail::flat_mat(U_);
+    const auto Vh = detail::flat_mat(Vh_);
     if (S.size() < k) return -2;
     if (wu && (U.rows() != m || U.cols() != (JU == SvdVectors::All ? m : k))) return -3;
     if (wv && (Vh.rows() != (JVT == SvdVectors::All ? n : k) || Vh.cols() != n)) return -4;
-    const auto P = gesvd_detail::driver_plan<JU, JVT, Tr::nb, T>(m, n);
-    if (m >= n) return gesvd_detail::gesvd_tall<Tr::nb, T>(ex, A, S, U, Vh, wu, wv, ws, P);
+    const auto P = detail::driver_plan<JU, JVT, Tr::nb, T>(m, n);
+    if (m >= n) return detail::gesvd_tall<Tr::nb, T>(ex, A, S, U, Vh, wu, wv, ws, P);
     // A^H = U' S V'^H: U = V' and V^H = U'^H.
     const auto At = device::mat(carve_global(ws, P.at), n, m, n);
     lacpy<Part::Full, Transpose::ConjTrans>(ex, A, At);
     ex.barrier(Mem::Global);
     const auto Ub = device::mat(carve_global(ws, P.ub), n, wv ? Vh.rows() : 0, n);
     const auto Vb = device::mat(carve_global(ws, P.vb), wu ? m : 0, wu ? m : 0, m);
-    const int info = gesvd_detail::gesvd_tall<Tr::nb, T>(ex, At, S, Ub, Vb, wv, wu, ws, P);
+    const int info = detail::gesvd_tall<Tr::nb, T>(ex, At, S, Ub, Vb, wv, wu, ws, P);
     if (wu) lacpy<Part::Full, Transpose::ConjTrans>(ex, Vb, U);
     if (wv) lacpy<Part::Full, Transpose::ConjTrans>(ex, Ub, Vh);
     ex.barrier(Mem::Global);

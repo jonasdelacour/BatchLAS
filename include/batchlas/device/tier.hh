@@ -50,6 +50,12 @@ template <class... Tiers> struct list {};
 
 template <class T> inline constexpr bool is_upto_v = false;
 template <int N> inline constexpr bool is_upto_v<upto<N>> = true;
+template <class T> inline constexpr bool is_reg_v = false;
+template <int N, bool E> inline constexpr bool is_reg_v<Reg<N, E>> = true;
+template <class T> inline constexpr bool is_cta_v = false;
+template <int N, class A> inline constexpr bool is_cta_v<Cta<N, A>> = true;
+template <class T> inline constexpr bool is_blocked_v = false;
+template <int NB, class A> inline constexpr bool is_blocked_v<Blocked<NB, A>> = true;
 }  // namespace tier
 
 namespace routine {}  // routine tags: device::routine::<op><modes...>, declared next to each op

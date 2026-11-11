@@ -154,7 +154,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // Relative threshold (LAWN 169 Remark 2.2); an absolute test would
         // forfeit the relative accuracy this kernel exists for.
-        const auto thr = device::jacobi_detail::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
+        const auto thr = device::detail::JacobiThreshold<Real>::relative(params.tol_multiplier, CC);
         const Real zero_mult = params.zero_sigma_multiplier;
 
         Real* S = s_ptr;
@@ -186,7 +186,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
-                    Pair_local[idx] = device::jacobi_detail::pack_pair(k < pairs_per_round ? device::jacobi_detail::round_robin_pair(mp, t, k) : device::jacobi_detail::PivotPair{kC, kC});
+                    Pair_local[idx] = device::detail::pack_pair(k < pairs_per_round ? device::detail::round_robin_pair(mp, t, k) : device::detail::PivotPair{kC, kC});
                 }
                 sycl::group_barrier(wg);
 
@@ -302,7 +302,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // Real T never names Rd_local, so the kernel does not capture it.
                         std::conditional_t<kNeedPhase, decltype(device::vec(Rd_local, 0)), device::None> rd{};
                         if constexpr (kNeedPhase) rd = device::vec(Rd_local, K, base_r + ch * K);
-                        const auto rnd = device::jacobi_detail::rot_round<T>(device::vec(Rcs_local, K, base_r + ch * K), rd,
+                        const auto rnd = device::detail::rot_round<T>(device::vec(Rcs_local, K, base_r + ch * K), rd,
                                                           device::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
                         // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
@@ -316,7 +316,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         device::Frag<T, K> g;
 BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < K; ++k) {
-                            const device::jacobi_detail::PivotPair pqk = rnd.pair(k);
+                            const device::detail::PivotPair pqk = rnd.pair(k);
                             pk[k] = pqk.p;
                             qk[k] = pqk.q;
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
@@ -333,12 +333,12 @@ BATCHLAS_UNROLL_FULL
                         const int32_t k_of_lane = lane >> 1;
                         const int32_t slot = ch * K + k_of_lane;
                         // Re-read from LDS: a runtime index into pq[] would spill it.
-                        const device::jacobi_detail::PivotPair kpq = rnd.pair(k_of_lane);
+                        const device::detail::PivotPair kpq = rnd.pair(k_of_lane);
 
                         bool active = (slot < pairs_per_round) && (kpq.p < CC) && (kpq.q < CC);
                         Real app = Real(0);
                         Real aqq = Real(0);
-                        device::jacobi_detail::JacobiRotation<T> jr = device::jacobi_detail::identity_rotation<T>();
+                        device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
                         if (active) {
                             app = nrm(kpq.p);
                             aqq = nrm(kpq.q);
@@ -351,7 +351,7 @@ BATCHLAS_UNROLL_FULL
                         // only. BOTH sides clamp at zero: a negative q side NaNs
                         // the rank sort into an out-of-bounds LDS index.
                         if (active && (lane % 2 == 0)) {
-                            const auto n2 = device::jacobi_detail::rotated_norms2(jr, app, aqq);
+                            const auto n2 = device::detail::rotated_norms2(jr, app, aqq);
                             nrm(kpq.p) = n2.p;
                             nrm(kpq.q) = n2.q;
                         }
@@ -370,12 +370,12 @@ BATCHLAS_UNROLL_FULL
                             const sycl::vec<Real, 2> cs = rnd.coef(k);
                             // Warp-uniform skip: converged pairs are free.
                             if (cs[1] == Real(0)) continue;
-                            const device::jacobi_detail::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
+                            const device::detail::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
                             device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
-                                const device::jacobi_detail::Pair2<T> r = device::jacobi_detail::rot_right(u, ap[k][rr], aq[k][rr]);
+                                const device::detail::Pair2<T> r = device::detail::rot_right(u, ap[k][rr], aq[k][rr]);
                                 A(row, pk[k]) = r.x;
                                 A(row, qk[k]) = r.y;
-                                if constexpr (ComputeV) device::jacobi_detail::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
+                                if constexpr (ComputeV) device::detail::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
                             });
                         }
                         group_barrier(ex.part);

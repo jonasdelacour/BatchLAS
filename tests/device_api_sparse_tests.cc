@@ -11,7 +11,7 @@
 // block; complex data with Im != 0 and ConjTrans on both operands; beta == 0 over NaN C and
 // alpha == 0 over NaN A; ILU n = 150 > the work-group (one level split over items, several levels);
 // WG 1024 is the launch at the ceiling; with_tier, upto and buffer_size per routine.
-// iluk_factorize runs the host route's row elimination (iluk_detail::eliminate_row): its factor in
+// iluk_factorize runs the host route's row elimination (detail::eliminate_row): its factor in
 // the plan's symbolic pattern is BIT-IDENTICAL to the host route's (device path, batch 1024) slot
 // by slot, +0 where every item dropped; drop tolerance and fill quota straddled (both kept and
 // dropped fill), padded item strides with poison, info = the first unusable pivot row (the host

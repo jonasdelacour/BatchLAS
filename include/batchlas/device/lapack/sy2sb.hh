@@ -23,24 +23,24 @@
 
 namespace batchlas::device {
 
-namespace sy2sb_detail {
+namespace detail {
 
-template <class Tier, class T> struct cfg_of;  // only tier::Blocked<NB> is a sy2sb tier
-template <int NB, class A, class T> struct cfg_of<tier::Blocked<NB, A>, T> {
+template <class Tier, class T> struct sy2sb_cfg_of;  // only tier::Blocked<NB> is a sy2sb tier
+template <int NB, class A, class T> struct sy2sb_cfg_of<tier::Blocked<NB, A>, T> {
     static_assert(NB == 32 || NB == 64, "sy2sb: tier::Blocked<NB> with NB = 32 or 64 (the Level 3 tile)");
     using type = l3::cfg::RegTiled<T, NB, NB, 8, NB / 16, NB / 16>;
 };
-template <class Tier, class T> using cfg_t = typename cfg_of<Tier, T>::type;
+template <class Tier, class T> using cfg_t = typename sy2sb_cfg_of<Tier, T>::type;
 
 // One matrix's workspace (kd > 0 and n > kd; else none), sized for the first panel (pn0 x pk0),
 // which bounds every later one: the tile staging (local), then (global) the panel's tau, its
 // unit-lower V, P = V T, Y = A22 P, T, and the pk x kd products M1, M2.
-template <class T> struct Layout {
+template <class T> struct Sy2sbLayout {
     ws::Slot<T> smem, taup, v, p, y, tf, m1, m2;
     WorkspaceSize size;
 };
-template <class Tier, class T> constexpr Layout<T> panel_layout(int n, int kd) {
-    Layout<T> l{};
+template <class Tier, class T> constexpr Sy2sbLayout<T> panel_layout(int n, int kd) {
+    Sy2sbLayout<T> l{};
     Plan p;
     if (kd > 0 && n > kd) {
         constexpr ws::Space g = ws::Space::Global;
@@ -102,13 +102,13 @@ BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const
     else syr2k<Uplo::Lower, NT, Cfg>(ex, w, ym, a22, NegOne{}, One{}, sm);
 }
 
-}  // namespace sy2sb_detail
+}  // namespace detail
 
 // Bytes of ONE matrix's workspace for sy2sb<UL, Tier> at (n, kd); zero when nothing is reduced
 // (kd == 0 or n <= kd).
 template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sy2sb_buffer_size(int n, int kd) {
     static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
-    return sy2sb_detail::panel_layout<Tier, std::remove_cv_t<T>>(n, kd).size;
+    return detail::panel_layout<Tier, std::remove_cv_t<T>>(n, kd).size;
 }
 
 namespace routine {
@@ -122,7 +122,7 @@ template <Uplo UL, int KDMax = 32> struct sy2sb {
 }  // namespace routine
 
 template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sy2sb<UL, KDMax>, tier::Blocked<NB, A>, T> {
-    static constexpr int wg_size = sy2sb_detail::cfg_t<tier::Blocked<NB, A>, T>::threads, sg_size = 32;
+    static constexpr int wg_size = detail::cfg_t<tier::Blocked<NB, A>, T>::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return sy2sb_buffer_size<UL, tier::Blocked<NB, A>, T>(n, routine::sy2sb<UL, KDMax>::kd_at(n)); }
 };
@@ -145,7 +145,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
     const auto ag = l3::global_of(A);
     const auto bg = l3::global_of(AB);
     using T = std::remove_cv_t<std::remove_reference_t<decltype(ag(0, 0))>>;
-    using Cfg = sy2sb_detail::cfg_t<Tier, T>;
+    using Cfg = detail::cfg_t<Tier, T>;
     static_assert(Ex::size == Cfg::threads && Ex::sg_size == 32, "sy2sb: ex is a WorkGroup<tier_info::wg_size, 32>");
     const int n = ag.m;
     if (kd < 0) return -4;
@@ -162,13 +162,13 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
     ex.barrier(Mem::Global);
     if (kd == 0 || n <= kd) {
         for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY {
-            sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, j), j);
+            detail::copy_band_col(Thread{}, a, ab, detail::band_len(kd, n, j), j);
         });
         ex.barrier(Mem::Global);
         return 0;
     }
 
-    const auto lay = sy2sb_detail::panel_layout<Tier, T>(n, kd);
+    const auto lay = detail::panel_layout<Tier, T>(n, kd);
     const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
     T* const taup = carve_global(ws, lay.taup);
     T* const vp = carve_global(ws, lay.v);
@@ -181,7 +181,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
         ex.barrier(Mem::Global);
         // Columns [i, i + pk) are final; the strip and A22 below write columns >= i + pk only.
         for_each_owned(ex, pk, [&](int c) BATCHLAS_DEVICE_BODY {
-            sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, i + c), i + c);
+            detail::copy_band_col(Thread{}, a, ab, detail::band_len(kd, n, i + c), i + c);
             tau(i + c) = taup[c];
         });
         const auto w = mat(vp, pn, pk, pn);
@@ -190,12 +190,12 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
         const auto tf = mat(tfp, pk, pk, pk);
         larft(ex, w, tf, vec(taup, pk));
         ex.barrier(Mem::Global);
-        sy2sb_detail::two_sided_lower<Cfg>(ex, a.sub(i + kd, i + pk, pn, kd - pk), a.sub(i + kd, i + kd, pn, pn), w, tf,
+        detail::two_sided_lower<Cfg>(ex, a.sub(i + kd, i + pk, pn, kd - pk), a.sub(i + kd, i + kd, pn, pn), w, tf,
                                            carve_global(ws, lay.p), carve_global(ws, lay.y), carve_global(ws, lay.m1),
                                            carve_global(ws, lay.m2), sm);
     }
     for_each_owned(ex, kd, [&](int c) BATCHLAS_DEVICE_BODY {
-        sy2sb_detail::copy_band_col(Thread{}, a, ab, sy2sb_detail::band_len(kd, n, n - kd + c), n - kd + c);
+        detail::copy_band_col(Thread{}, a, ab, detail::band_len(kd, n, n - kd + c), n - kd + c);
     });
     ex.barrier(Mem::Global);
     return 0;

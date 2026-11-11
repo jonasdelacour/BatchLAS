@@ -2,8 +2,8 @@
 #pragma once
 // Device LA sparse operands, CSR row products (Sparse BLAS naming: us*) and the public in-kernel
 // sparse ops: spmm, iluk_factorize and iluk_apply (v22 design C, decision F-D5). Each op runs one
-// batch item on one executor for any extent; the host routes launch the same bodies (spmm_detail
-// units, the iluk_detail row elimination, the iluk_apply solve). Element expressions match the
+// batch item on one executor for any extent; the host routes launch the same bodies (detail
+// units, the detail row elimination, the iluk_apply solve). Element expressions match the
 // hand kernels they replaced (int64 offsets where those used them), so the host kernels keep
 // their SASS.
 //   spmm<TA, TB, Tier>(ex, A, B, C, alpha, beta[, ws])     C := alpha op(A) op(B) + beta C
@@ -250,7 +250,7 @@ template <Transpose TA, Transpose TB, class Tier, class T> constexpr WorkspaceSi
     return tier_info<R, resolve_tier_t<R, T, Tier>, T>::buffer_size(n);
 }
 
-namespace spmm_detail {
+namespace detail {
 // One gather unit (A NoTrans): row r of A times op(B)'s column block c0 .. c0 + NC into C(r, :).
 // Arguments in the order the body reads them: a launcher's capture layout follows it.
 template <class Ar, int NC, class Ops = arith::Fma, class Row, class OB, class T, class CM>
@@ -299,7 +299,7 @@ BATCHLAS_DEVICE_INLINE void scatter_row(int width, T alpha, const OB& b, int i, 
         }
     }
 }
-}  // namespace spmm_detail
+}  // namespace detail
 
 // C := alpha op(A) op(B) + beta C for one batch item on executor ex (any size, any extents).
 //   A  CsrItem (csr_item(view, b)); op(A) is m x k.   B  matrix operand, op(B) k x n.
@@ -323,7 +323,7 @@ BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM
         for_each_owned(ex, m * ((width + NC - 1) / NC), [&](int u) BATCHLAS_DEVICE_BODY {
             const int cb = u / m;
             const int r = u - cb * m;
-            spmm_detail::gather_unit<Ar, NC>(alpha_zero, A.row(r), opB, cb * NC, width, alpha, MaybeZero<T>{beta, beta_zero}, C, r);
+            detail::gather_unit<Ar, NC>(alpha_zero, A.row(r), opB, cb * NC, width, alpha, MaybeZero<T>{beta, beta_zero}, C, r);
         });
     } else {
         const int rows_out = A.cols();
@@ -334,9 +334,9 @@ BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM
         });
         sync(ex, Mem::Global);
         if (!alpha_zero) {
-            const spmm_detail::RefPtr<CM> dst{C};
+            const detail::RefPtr<CM> dst{C};
             for_each_owned(ex, A.rows(), [&](int i) BATCHLAS_DEVICE_BODY {
-                spmm_detail::scatter_row<Ar, 4>(width, alpha, opB, i, A.ro[A.ro_base + i], A.ro[A.ro_base + i + 1], A.val, A.nz_base,
+                detail::scatter_row<Ar, 4>(width, alpha, opB, i, A.ro[A.ro_base + i], A.ro[A.ro_base + i + 1], A.val, A.nz_base,
                                                 TA == Transpose::ConjTrans, A.col, rows_out, dst);
             });
         }
@@ -404,7 +404,7 @@ template <class Tier, class T> constexpr WorkspaceSize iluk_apply_buffer_size(in
     return tier_info<routine::iluk_apply, resolve_tier_t<routine::iluk_apply, T, Tier>, T>::buffer_size(n);
 }
 
-namespace iluk_detail {
+namespace detail {
 // |x| for the drop and pivot tests of the factorization and the solve: std::abs for a real T,
 // hypot of the parts read through the reference for complex (not std::abs: a libm cabs call the
 // native_cpu device link cannot resolve). sass_parity strict: core modulus's sycl::fabs folds
@@ -430,7 +430,7 @@ template <class T> inline T shifted_pivot(const T& pivot, const T& diagonal_shif
     if (status != nullptr) *status = 1;
     return T(1);
 }
-}  // namespace iluk_detail
+}  // namespace detail
 
 // out := U^{-1} L^{-1} rhs for one column of one batch item, level by level (a barrier between
 // levels), on a work-group executor; rhs and out are vectors (v(i)), distinct. Collective; returns
@@ -458,7 +458,7 @@ BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, cons
             const T sum = y(i);
             const int diag_abs = M.diag[M.diag_base + i];
             const int re = M.ro[M.ro_base + i + 1];
-            const T diag = iluk_detail::shifted_pivot(M.vals.p[diag_abs], M.diag_shift, nullptr);
+            const T diag = detail::shifted_pivot(M.vals.p[diag_abs], M.diag_shift, nullptr);
             const auto row = sp_row(M.vals, M.cols, diag_abs - M.vals.base + 1, re);
             T acc = sum;
             for (int p = row.begin; p < row.end; ++p) Ar::msub(acc, row.val(p), y(row.idx(p)));
@@ -527,7 +527,7 @@ template <class Tier, class T> constexpr WorkspaceSize iluk_factorize_buffer_siz
     return tier_info<routine::iluk_factorize, resolve_tier_t<routine::iluk_factorize, T, Tier>, T>::buffer_size(n);
 }
 
-namespace iluk_detail {
+namespace detail {
 // A usable pivot (kernel-safe: an unusable one sets *status and returns 1, nothing throws): the
 // pivot when it clears max(|shift|, diag_pivot_threshold * max(scale, 1)) and is nonzero, else
 // pivot + shift, else the shift, else the threshold itself.
@@ -623,7 +623,7 @@ BATCHLAS_DEVICE_INLINE void eliminate_row(const W& at, int i, const int* step_pt
     }
     at(dg) = stabilize_pivot(at(dg), final_scale, diagonal_shift, diag_pivot_threshold, st);
 }
-}  // namespace iluk_detail
+}  // namespace detail
 
 // M := the ILU(k) factor of one batch item's A in plan's pattern, on executor ex (any n).
 //   A  the item's values in A's own CSR order (A(p), p < plan.a_nnz; the pattern is plan's).
@@ -631,7 +631,7 @@ BATCHLAS_DEVICE_INLINE void eliminate_row(const W& at, int i, const int* step_pt
 // Zeroes M, scatters A, then one level per barrier: the rows of a level split over the items.
 // Every slot of the pattern is written; a dropped entry is +0, so M is the host route's factor
 // expanded to the symbolic pattern (the host keeps the union of the items' survivors), bit for
-// bit: both run iluk_detail::eliminate_row. Returns the smallest 1-based row whose pivot was
+// bit: both run detail::eliminate_row. Returns the smallest 1-based row whose pivot was
 // unusable (no shift and a zero pivot: the host route throws convergence_error), else 0,
 // uniform across the executor; elimination continues past it with pivot 1. Collective.
 template <class Tier, class Ex, class AV, class MV, class T>
@@ -652,7 +652,7 @@ BATCHLAS_DEVICE_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukP
         for_each_owned(ex, plan.level_ptr[lv + 1] - begin, [&](int t) {
             const int i = plan.level_rows[begin + t];
             std::int32_t st = 0;
-            iluk_detail::eliminate_row(M, i, plan.step_ptr, plan.step_target, plan.step_pivot, plan.step_upd_ptr, plan.upd_dst,
+            detail::eliminate_row(M, i, plan.step_ptr, plan.step_target, plan.step_pivot, plan.step_upd_ptr, plan.upd_dst,
                                        plan.upd_src, plan.ro, plan.diag, opts.drop_tolerance, opts.modified_ilu, opts.fill_factor,
                                        plan.row_nnz, opts.diagonal_shift, opts.diag_pivot_threshold, &st);
             if (st != 0 && i + 1 < bad) bad = i + 1;

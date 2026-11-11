@@ -25,9 +25,9 @@ template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;
 
 template <typename D>
-using Pack = device::sygst_detail::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
+using Pack = device::detail::Pack16<D>;  // F is read as aligned 16-byte packs (diag_ldf pads its lines)
 template <typename D>
-constexpr int kVec = device::sygst_detail::pack16_elems<D>;
+constexpr int kVec = device::detail::pack16_elems<D>;
 
 template <bool Inverse, int KB, typename T, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
@@ -100,7 +100,7 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
             // H = the Hermitian A, real diagonal. H is named first: the capture order is the kernel's
             // parameter order (hp, then ap), as in the hand kernel.
             const auto H = device::mat(hp + itm * stride_f, kb, kb, ldf);
-            device::lacpy(device::ElemAt<true>{i, c}, device::sygst_detail::herm(device::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
+            device::lacpy(device::ElemAt<true>{i, c}, device::detail::herm(device::mat(ap + itm * stride_a, kb, kb, lda), uplo), H);
         });
     });
     return ctx.get_event();

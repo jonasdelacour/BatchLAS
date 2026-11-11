@@ -8,7 +8,7 @@
 //                            laed2_merge_vector, a rank sort, laed2 (deflation), laed3 (roots on
 //                            one sub-group each, rescale, vectors), then the back-transform
 //                            Q[:, map] * Q' on the in-group level 3 gemm
-//   stedc_detail::dc_layout  the workspace plan: the gemm's staging and one slot in local
+//   detail::dc_layout  the workspace plan: the gemm's staging and one slot in local
 //                            memory; per-matrix vectors and two n x n blocks in global memory
 // Eigenvalues are returned ascending, Z(:, j) the vector of w(j). Real T only.
 
@@ -30,10 +30,10 @@
 
 namespace batchlas::device {
 
-namespace stedc_detail {
+namespace detail {
 
 // max_sec_iter: the secular iteration cap per root (StedcParams::max_sec_iter, >= 1).
-template <class R> struct Params {
+template <class R> struct stedc_params {
     std::int32_t max_sec_iter = 50;
 };
 
@@ -45,7 +45,7 @@ template <class R> using gemm_cfg = l3::cfg::RegTiled<R, 64, 64, 16, 4, 4>;
 // count. Global, per matrix: the poles and weights before (A) and after (B) the sort, the roots,
 // |.| scratch, the column maps and deflation scans (n each), the secular vectors Q' and the
 // gathered columns (n x n each), and Z itself when no vectors are wanted.
-template <class R> struct Layout {
+template <class R> struct StedcLayout {
     ws::Slot<R> smem;
     ws::Slot<std::int32_t> reduced;
     ws::Slot<R> d_a, z_a, d_b, z_b, lam, absx;
@@ -53,7 +53,7 @@ template <class R> struct Layout {
     ws::Slot<R> qp, tmp, z;
     WorkspaceSize size;
 };
-template <class R> constexpr Layout<R> dc_layout(int n, bool own_z) {
+template <class R> constexpr StedcLayout<R> dc_layout(int n, bool own_z) {
     Plan p;
     const std::size_t un = std::size_t(n), nn = un * un;
     const auto smem = p.take<R>(ws::Space::Local, std::size_t(l3::smem_elems<gemm_cfg<R>>()));
@@ -96,7 +96,7 @@ template <class R> struct Ptrs {
     local_mptr<std::int32_t> reduced;
     l3::Smem<gemm_cfg<R>> smem;
 };
-template <class R> BATCHLAS_DEVICE_INLINE Ptrs<R> ptrs(const Workspace& ws, const Layout<R>& L) {
+template <class R> BATCHLAS_DEVICE_INLINE Ptrs<R> ptrs(const Workspace& ws, const StedcLayout<R>& L) {
     return {carve_global(ws, L.d_a),     carve_global(ws, L.z_a),      carve_global(ws, L.d_b),      carve_global(ws, L.z_b),
             carve_global(ws, L.lam),     carve_global(ws, L.absx),     carve_global(ws, L.qp),       carve_global(ws, L.tmp),
             carve_global(ws, L.map_a),   carve_global(ws, L.map_b),    carve_global(ws, L.keep),     carve_global(ws, L.perm),
@@ -230,7 +230,7 @@ template <class Ex, class D, class R> constexpr void assert_types() {
     static_assert(is_work_group_v<Ex> && Ex::size == wg_size && Ex::sg_size == sg_size, "stedc: executor WorkGroup<256, 32>");
 }
 
-}  // namespace stedc_detail
+}  // namespace detail
 
 namespace routine {
 template <JobType J = JobType::EigenVectors> struct stedc {
@@ -245,9 +245,9 @@ template <JobType J, class T> struct tiers<routine::stedc<J>, T> {
 // WorkGroup<256, 32> (the gemm's item count) at sub-group size 32 (one root per sub-group).
 template <JobType J, class T> struct tier_info<routine::stedc<J>, tier::Blocked<1>, T> {
     static_assert(std::is_floating_point_v<T>, "stedc: a real T");
-    static constexpr int wg_size = stedc_detail::wg_size, sg_size = stedc_detail::sg_size;
+    static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return stedc_detail::dc_layout<T>(n, J == JobType::NoEigenVectors).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::dc_layout<T>(n, J == JobType::NoEigenVectors).size; }
 };
 
 template <JobType J, class Tier, class T> constexpr WorkspaceSize stedc_buffer_size(int n) {
@@ -261,28 +261,28 @@ template <JobType J, class Tier, class T> constexpr WorkspaceSize stedc_buffer_s
 /// return. Returns xSTEDC's info, uniform: 0, or 1 when a secular root ran out of
 /// params.max_sec_iter. Workspace: stedc_buffer_size<J, Tier, T>(n), ws.global this matrix's slice.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p,
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const detail::stedc_params<R>& p,
                               const Z& z) {
     static_assert(J == JobType::EigenVectors, "stedc: J = NoEigenVectors takes no Z (its Z lives in the workspace)");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
-    stedc_detail::assert_types<Ex, D, R>();
+    detail::assert_types<Ex, D, R>();
     const int n = d.size();
     if (n <= 0) return 0;
     const auto g = l3::global_of(z);
-    const auto L = stedc_detail::dc_layout<R>(n, false);
-    return stedc_detail::bottom_up(ex, d, e, w, l3::Global<R>{g.p, g.ld, n, n}, stedc_detail::ptrs(ws, L), p.max_sec_iter);
+    const auto L = detail::dc_layout<R>(n, false);
+    return detail::bottom_up(ex, d, e, w, l3::Global<R>{g.p, g.ld, n, n}, detail::ptrs(ws, L), p.max_sec_iter);
 }
 
 /// Eigenvalues only (J = NoEigenVectors): the merges still form the vectors, in the workspace.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class R>
-BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const stedc_detail::Params<R>& p) {
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const detail::stedc_params<R>& p) {
     static_assert(J == JobType::NoEigenVectors, "stedc: J = EigenVectors takes Z");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
-    stedc_detail::assert_types<Ex, D, R>();
+    detail::assert_types<Ex, D, R>();
     const int n = d.size();
     if (n <= 0) return 0;
-    const auto L = stedc_detail::dc_layout<R>(n, true);
-    return stedc_detail::bottom_up(ex, d, e, w, l3::Global<R>{carve_global(ws, L.z), n, n, n}, stedc_detail::ptrs(ws, L), p.max_sec_iter);
+    const auto L = detail::dc_layout<R>(n, true);
+    return detail::bottom_up(ex, d, e, w, l3::Global<R>{carve_global(ws, L.z), n, n, n}, detail::ptrs(ws, L), p.max_sec_iter);
 }
 
 }  // namespace batchlas::device

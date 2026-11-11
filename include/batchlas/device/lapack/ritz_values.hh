@@ -18,14 +18,14 @@
 
 namespace batchlas::device {
 
-namespace ritz_values_detail {
+namespace detail {
 // The one workspace plan of the Blocked form (buffer_size and the carve): the Level 3 stages
 // (local) and A V(:, blk), n x min(k, NB) at ld n (global).
-template <class T> struct BlockedPlan {
+template <class T> struct RitzValuesBlockedPlan {
     ws::Slot<T> smem;
     ws::Slot<T> av;
     WorkspaceSize size;
-    template <class Tier, class Cfg> static constexpr BlockedPlan make(int n, int k) {
+    template <class Tier, class Cfg> static constexpr RitzValuesBlockedPlan make(int n, int k) {
         static_assert(Tier::n_max < 0, "ritz_values: the workspace form takes tier::Blocked<NB> (the tier-free form needs no workspace)");
         static_assert(l3::Config<Cfg>, "ritz_values: tier::Blocked runs on the in-group gemm, Cfg is an l3::cfg preset");
         if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, T>, "ritz_values: Cfg::value_type is A's T");
@@ -36,7 +36,7 @@ template <class T> struct BlockedPlan {
         return {s, av, p.size()};
     }
 };
-}  // namespace ritz_values_detail
+}  // namespace detail
 
 /// @brief One Ritz value from a given product: \f$\mathrm{Re}(v^H a_v) / (v^H v)\f$.
 /// @param[in] ex  the executor (collective)
@@ -77,7 +77,7 @@ template <class Ex, class MA, class MV, class W> BATCHLAS_DEVICE_INLINE int ritz
 /// @param[in] k  the number of columns of V
 /// @return local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of T)
 template <class Tier, class T, class Cfg> constexpr WorkspaceSize ritz_values_buffer_size(int n, int k) {
-    return ritz_values_detail::BlockedPlan<T>::template make<Tier, Cfg>(n, k).size;
+    return detail::RitzValuesBlockedPlan<T>::template make<Tier, Cfg>(n, k).size;
 }
 
 /// @brief The host ritz_values() inside a kernel on the in-group gemm, the host route's
@@ -95,7 +95,7 @@ BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, c
     using T = typename MA::value_type;
     constexpr int NB = Tier::nb;
     const int n = a.rows(), k = v.cols();
-    const auto pl = ritz_values_detail::BlockedPlan<T>::template make<Tier, Cfg>(n, k);
+    const auto pl = detail::RitzValuesBlockedPlan<T>::template make<Tier, Cfg>(n, k);
     const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
     T* const p = carve_global(ws, pl.av);
     for (int c0 = 0; c0 < k; c0 += NB) {

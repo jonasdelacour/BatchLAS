@@ -1999,7 +1999,7 @@ TYPED_TEST(DeviceBlasV2Test, PartitionBcastAndSelectAreExact) {
                   "SgpPartition<8, Masked>");
 }
 
-// potrf_detail::potf2_reg on a padded RowFrag: n = 13 in a 16-lane partition, ld = 19, batch 1024,
+// detail::potf2_reg on a padded RowFrag: n = 13 in a 16-lane partition, ld = 19, batch 1024,
 // representative 1 indefinite at column 5 (info 5, the rows above it still factored).
 template <class T, bool UseSlm> void potf2_case(Dev& dev) {
     using D = typename sycl_device::DevMap<T>::type;
@@ -2026,15 +2026,15 @@ template <class T, bool UseSlm> void potf2_case(Dev& dev) {
         const int b = static_cast<int>(it.get_group_linear_id()) * kMpw + pidx, lane = ex.lid();
         D* Ab = reinterpret_cast<D*>(a) + std::ptrdiff_t(b) * n * ld;
         device::Frag<D, N> rA;
-        device::potrf_detail::reg_load_lower<D, N>(rA.v, Ab, ld, lane, lane < n, is_cplx<T>);
+        device::detail::reg_load_lower<D, N>(rA.v, Ab, ld, lane, lane < n, is_cplx<T>);
         std::int32_t r;
         if constexpr (UseSlm) {
-            r = device::potrf_detail::potf2_reg<D, N, N, device::potrf_detail::OrderGuard::Skip>(
+            r = device::detail::potf2_reg<D, N, N, device::detail::OrderGuard::Skip>(
                 ex, rA, n, true, device::bcast_policy::Slm<kMpw, R4*>{reinterpret_cast<R4*>(lm), pidx});
         } else {
-            r = device::potrf_detail::potf2_reg<D, N, N>(ex, rA, n, true, device::bcast_policy::Shuffle{});
+            r = device::detail::potf2_reg<D, N, N>(ex, rA, n, true, device::bcast_policy::Shuffle{});
         }
-        device::potrf_detail::reg_store_lower<D, N>(rA.v, Ab, ld, lane, lane < n);
+        device::detail::reg_store_lower<D, N>(rA.v, Ab, ld, lane, lane < n);
         if (ex.leader()) info[b] = r;
     });
     const auto got = dev.down(a, ha.size());

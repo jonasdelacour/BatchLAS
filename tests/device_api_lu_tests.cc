@@ -435,7 +435,7 @@ TYPED_TEST(DeviceApiLuTest, WithTierSwitchesToBlockedAndAnyConfigurationFactors)
         std::int32_t* info = d.template alloc<std::int32_t>(6, -12345);
         std::string picked;
         batchlas::device::with_tier<batchlas::device::routine::getrf, T, List>(lim, n, [&]<class Tr>(Tr) {
-            picked = batchlas::device::getrf_detail::is_blocked_v<Tr> ? "Blocked" : "Cta";
+            picked = batchlas::device::tier::is_blocked_v<Tr> ? "Blocked" : "Cta";
             device_getrf<Tr>(d, a, i32(piv), info);
         });
         const bool cta = n <= 128 && batchlas::device::getrf_buffer_size<batchlas::device::tier::Cta<128>, T>(n).local_bytes <= lim.local_mem_bytes;

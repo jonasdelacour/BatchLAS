@@ -4,9 +4,9 @@
 // the perfect-shuffled Golub-Kahan matrix [0 B^T; B 0] is tridiagonal with zero diagonal and
 // off-diagonal (d0, e0, d1, ..., d(n-1)), eigenvalues +/- sigma. Nothing is squared; an
 // eigenvector's even rows are v, its odd rows u. ONE body for every executor:
-//   bdsdc_detail::build_gk        the Golub-Kahan tridiagonal on one item (a prefix product)
-//   bdsdc_detail::extract_column  sigma_i, row i of V^H, column i of U (a work-group)
-//   bdsdc_detail::repair          the vectors of the numerically zero sigma (a work-group)
+//   detail::build_gk        the Golub-Kahan tridiagonal on one item (a prefix product)
+//   detail::extract_column  sigma_i, row i of V^H, column i of U (a work-group)
+//   detail::repair          the vectors of the numerically zero sigma (a work-group)
 //   bdsdc<tier::Blocked<1>>       all three around the in-group stedc on one WorkGroup<256, 32>;
 //                                 the host route (gesvd/bdsdc/bdsdc.cc) launches each step as its
 //                                 own kernel around the host stedc
@@ -33,7 +33,7 @@ struct bdsdc {
 };
 }  // namespace routine
 
-namespace bdsdc_detail {
+namespace detail {
 
 // gd := 0 (2n), ge := (d0, e0, d1, ..., d(n-1)) made non-negative (2n - 1), gs := the signs
 // (2n) that undo it; one item: f(2k) = d(k) couples v(k), u(k); f(2k + 1) = e(k) u(k), v(k + 1).
@@ -43,7 +43,7 @@ BATCHLAS_DEVICE_INLINE void build_gk(const D& d, const E& e, const GD& gd, const
     const Thread th{};
     map(th, gd, [] { return T(0); });
     interleave(th, d, e, ge);
-    gesvd_detail::tridiag_abs_offdiag(th, ge, gs);
+    detail::tridiag_abs_offdiag(th, ge, gs);
 }
 
 // Eigenvector z (2n) of the Golub-Kahan matrix with eigenvalue lam(src): sig(i) := max(lam, 0),
@@ -171,16 +171,16 @@ BATCHLAS_DEVICE_INLINE void repair(const Ex& wg, const MU& U, const MV& Vh, cons
 
 // tier::Blocked<1>'s plan of one matrix: the Golub-Kahan (gd, ge, gs), its eigenvalues w and
 // vectors Z (2n x 2n) in global memory, then the nested stedc's slices.
-template <class R> struct Layout {
+template <class R> struct BdsdcLayout {
     ws::Slot<R> gd, ge, gs, w, z;
     ws::Slot<std::byte> stedc_local, stedc_global;
     WorkspaceSize size;
 };
-template <class R> constexpr Layout<R> plan(int n) {
+template <class R> constexpr BdsdcLayout<R> plan(int n) {
     const int N = 2 * (n > 0 ? n : 1);
     const WorkspaceSize q = stedc_buffer_size<JobType::EigenVectors, tier::Blocked<1>, R>(N);
     Plan p(q.align > 16 ? q.align : 16);
-    Layout<R> L{};
+    BdsdcLayout<R> L{};
     L.gd = p.take<R>(ws::Space::Global, std::size_t(N));
     L.ge = p.take<R>(ws::Space::Global, std::size_t(N - 1));
     L.gs = p.take<R>(ws::Space::Global, std::size_t(N));
@@ -192,7 +192,7 @@ template <class R> constexpr Layout<R> plan(int n) {
     return L;
 }
 
-}  // namespace bdsdc_detail
+}  // namespace detail
 
 template <class T> struct tiers<routine::bdsdc, T> {
     using type = tier::list<tier::Blocked<1>>;
@@ -200,9 +200,9 @@ template <class T> struct tiers<routine::bdsdc, T> {
 // stedc's executor (WorkGroup<256, 32>) at order 2n; real T only (B is real for every gebrd T).
 template <class T> struct tier_info<routine::bdsdc, tier::Blocked<1>, T> {
     static_assert(std::is_floating_point_v<T>, "bdsdc: a real T");
-    static constexpr int wg_size = stedc_detail::wg_size, sg_size = stedc_detail::sg_size;
+    static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return bdsdc_detail::plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<T>(n).size; }
 };
 template <class Tier, class T> constexpr WorkspaceSize bdsdc_buffer_size(int n) {
     return tier_info<routine::bdsdc, resolve_tier_t<routine::bdsdc, T, Tier>, T>::buffer_size(n);
@@ -221,21 +221,21 @@ BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& 
     using R = std::remove_cv_t<elem_t<D>>;
     static_assert(std::is_floating_point_v<R>, "bdsdc: a real T");
     static_assert(std::is_same_v<resolve_tier_t<routine::bdsdc, R, Tier>, tier::Blocked<1>>, "bdsdc: tier::Blocked<1>");
-    static_assert(is_work_group_v<Ex> && Ex::size == stedc_detail::wg_size && Ex::sg_size == stedc_detail::sg_size,
+    static_assert(is_work_group_v<Ex> && Ex::size == detail::wg_size && Ex::sg_size == detail::sg_size,
                   "bdsdc: executor WorkGroup<256, 32>");
     const int n = d.size();
     if (n <= 0) return 0;
     const int N = 2 * n;
-    const auto L = bdsdc_detail::plan<R>(n);
+    const auto L = detail::plan<R>(n);
     const auto gd = device::vec(carve_global(ws, L.gd), N);
     const auto ge = device::vec(carve_global(ws, L.ge), N - 1);
     const auto gs = device::vec(carve_global(ws, L.gs), N);
     const auto w = device::vec(carve_global(ws, L.w), N);
     const auto Z = device::mat(carve_global(ws, L.z), N, N, N);
-    if (ex.leader()) bdsdc_detail::build_gk(d, e, gd, ge, gs);
+    if (ex.leader()) detail::build_gk(d, e, gd, ge, gs);
     ex.barrier(Mem::Global);
     const int info = stedc<JobType::EigenVectors, tier::Blocked<1>>(
-        ex, gd, ge, w, gesvd_detail::nested_workspace(ws, L.stedc_local, L.stedc_global), stedc_detail::Params<R>{}, Z);
+        ex, gd, ge, w, detail::nested_workspace(ws, L.stedc_local, L.stedc_global), detail::stedc_params<R>{}, Z);
     ex.barrier(Mem::Global);
     const bool wu = U.rows() >= n && U.cols() >= n;
     const bool wv = Vh.rows() >= n && Vh.cols() >= n;
@@ -248,10 +248,10 @@ BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& 
     const auto Vn = Vh.sub(0, 0, wv ? n : 0, wv ? n : 0);
     for (int i = 0; i < n; ++i) {
         const int src = sort_desc ? N - 1 - i : n + i;
-        bdsdc_detail::extract_column(ex, Z.col(src), gs, n, w, src, s, i, Vn.row(wv ? i : 0), Un.col(wu ? i : 0), wu, wv);
+        detail::extract_column(ex, Z.col(src), gs, n, w, src, s, i, Vn.row(wv ? i : 0), Un.col(wu ? i : 0), wu, wv);
     }
     ex.barrier(Mem::Global);
-    bdsdc_detail::repair(ex, Un, Vn, s, n, wu, wv);
+    detail::repair(ex, Un, Vn, s, n, wu, wv);
     ex.barrier(Mem::Global);
     return info;
 }

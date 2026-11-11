@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // ?GETF2, GETRF's own routine: by row interchanges (getf2) or lazy relabel (getf2_relabel), with a
-// fused pivot search (one butterfly, one slot barrier); arith::Fma. getf2_detail: the policies and
+// fused pivot search (one butterfly, one slot barrier); arith::Fma. detail: the policies and
 // the steps core has no SASS-identical form of yet. evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
 // The public op getrf<Tier>(ex, A, ipiv, ws): Reg and Cta are the bodies the host tiny and cta
-// routes launch; Blocked (any n) runs ?GETRF's panel loop on the in-group Level 3. getrf_detail
+// routes launch; Blocked (any n) runs ?GETRF's panel loop on the in-group Level 3. detail
 // holds the plans, sinks and tier bodies, and the LU family's Blocked configuration and plan,
 // which getrs, gesv, getri and inv share (one executor and local layout for a fused kernel).
 
@@ -29,7 +29,7 @@
 
 namespace batchlas::device {
 
-namespace getf2_detail {
+namespace detail {
 
 // ---- pivot search ---------------------------------------------------------------------------
 template <class R> struct MaxLoc {
@@ -262,7 +262,7 @@ BATCHLAS_UNROLL_FULL
 };
 template <class Px> BATCHLAS_DEVICE_INLINE BcastShuffle<Px> bcast_shuffle(const Px& px) { return {px}; }
 
-}  // namespace getf2_detail
+}  // namespace detail
 
 // ---- ?GETF2, explicit row interchanges ----------------------------------------------------------
 // In place on A (mat_wide: legacy 64-bit addressing) for kmax steps (NOT min(m, n)): iamax, ipiv,
@@ -278,7 +278,7 @@ BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, I
     const int m = a.rows();
     const int lanes = detail::team_size_of(ex);  // read once, as the hand kernel did
     for (int k = 0; k < kmax; ++k) {
-        int p = getf2_detail::iamax_col(ex, a, k, k, lanes, vs, is);
+        int p = detail::iamax_col(ex, a, k, k, lanes, vs, is);
         if (p >= m) p = k;  // unreachable: k < m, so column k always has a row
         if (ex.leader()) ipiv.set(k, p);
         if (p != k) swap(ex, a.row(k), a.row(p));
@@ -287,10 +287,10 @@ BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, I
         if (Arith<D>::is_zero(d)) {
             if (ex.leader() && info == 0) info = static_cast<std::int32_t>(ipiv.base + k + 1);
         } else {
-            getf2_detail::rscl_col(ex, d, a, k + 1, k);
+            detail::rscl_col(ex, d, a, k + 1, k);
         }
         ex.barrier(fence);  // B3
-        getf2_detail::ger_trailing(ex, a, k);
+        detail::ger_trailing(ex, a, k);
         ex.barrier(fence);  // B4
     }
     return info;
@@ -309,7 +309,7 @@ inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_ite
 // Each item holds one matrix row in rA and its logical row index in `rowid`; an interchange swaps
 // two labels and moves no data. After the relabel the winner of column j is the item with
 // rowid == j, so `act = rowid > j` keeps it from writing rA while others read its row. Policies
-// (getf2_detail has the stock ones):
+// (detail has the stock ones):
 //   Piv: argmax(j, mag, rowid) -> PivotWinner (NaN mapped by the policy), record(j, w) (ipiv),
 //        on_zero(zero, j) (info)
 //   Bc:  publish(j, rA, rowid, w) (make the pivot row readable), pivot(j, rA, w) -> T,
@@ -324,7 +324,7 @@ BATCHLAS_DEVICE_INLINE void getf2_relabel(Frag<T, NC>& rA, int& rowid, int kmax,
 BATCHLAS_UNROLL_FULL
     for (int j = 0; j < NC; ++j) {
         if (j >= kmax) continue;
-        const getf2_detail::PivotWinner w = piv.argmax(j, abs1<T>(rA[j]), rowid);  // ?IAMAX
+        const detail::PivotWinner w = piv.argmax(j, abs1<T>(rA[j]), rowid);  // ?IAMAX
         piv.record(j, w);
         if (rowid == w.row) rowid = j;  // ?SWAP as two labels
         else if (rowid == j) rowid = w.row;
@@ -354,7 +354,7 @@ struct getrf {
 };
 }  // namespace routine
 
-namespace getrf_detail {
+namespace detail {
 
 inline constexpr int kRedSlots = 32;  // pivot-search slots: one per sub-group, WG <= 1024 at SG 32
 
@@ -375,14 +375,14 @@ constexpr int leaf_wg(int n) {
 
 // The Cta tier's local memory: the tile at an ODD ld (the row interchange walks a row at
 // stride ld; an even ld puts the whole walk in one bank), then the pivot-search slots.
-template <class T> struct CtaPlan {
+template <class T> struct GetrfCtaPlan {
     ws::Slot<T> tile;
     ws::Slot<real_t<T>> vs;
     ws::Slot<int> is;
     int ld;
     WorkspaceSize size;
 };
-template <class T> constexpr CtaPlan<T> cta_plan(int m, int n) {
+template <class T> constexpr GetrfCtaPlan<T> getrf_cta_plan(int m, int n) {
     Plan p;
     const int ld = m | 1;
     const auto tile = p.take<T>(ws::Space::Local, static_cast<std::size_t>(ld) * static_cast<std::size_t>(n));
@@ -391,12 +391,6 @@ template <class T> constexpr CtaPlan<T> cta_plan(int m, int n) {
     return {tile, vs, is, ld, p.size()};
 }
 
-template <class X> inline constexpr bool is_reg_v = false;
-template <int N, bool E> inline constexpr bool is_reg_v<tier::Reg<N, E>> = true;
-template <class X> inline constexpr bool is_cta_v = false;
-template <int N, class A> inline constexpr bool is_cta_v<tier::Cta<N, A>> = true;
-template <class X> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
 
 // An operand's scalar: its value_type, or what its (i, j) names (l3::Global has no value_type).
 template <class M> struct lu_value {
@@ -452,7 +446,7 @@ template <class D, class MA> inline D load_pad_identity(const MA& a, int r, int 
 }
 
 // The Reg tier: lane r of an N-lane Partition owns row r of a compile-time Frag<D, NC>, ?GETF2
-// by lazy relabel, the pivot row through Bc (getf2_detail::bcast_shuffle, or a launcher's local
+// by lazy relabel, the pivot row through Bc (detail::bcast_shuffle, or a launcher's local
 // memory policy). THREE INVARIANTS, each breaking SILENTLY: rA is never dynamically indexed;
 // N divides the sub-group; every lane of the SUB-GROUP reaches every collective (a dead
 // partition passes live = false and factors an identity; n is sub-group uniform).
@@ -460,7 +454,7 @@ template <class D, class MA> inline D load_pad_identity(const MA& a, int r, int 
 // `lane` is px.lid(), read by the caller before it builds the operands (the host route's order).
 // evidence: docs/perf/lu.md#lu-the-tiny-tier
 template <int NC, class Px, class MA, class PV, class Bc, class Sink>
-BATCHLAS_DEVICE_INLINE std::int32_t reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
+BATCHLAS_DEVICE_INLINE std::int32_t getrf_reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
                                          const Bc& bc, const Sink& sink) {
     using D = typename MA::value_type;
     Frag<D, NC> rA;
@@ -469,7 +463,7 @@ BATCHLAS_UNROLL_FULL
     int rowid = lane;   // WHICH matrix row this lane currently owns
     int my_piv = lane;  // lane j accumulates ipiv[j]
     std::int32_t linfo = 0;
-    const getf2_detail::PivotPartition<Px::size, Px> piv{px, n, lane, my_piv, linfo};
+    const detail::PivotPartition<Px::size, Px> piv{px, n, lane, my_piv, linfo};
     getf2_relabel(rA, rowid, n, n, piv, bc);
     if (live) {
 BATCHLAS_UNROLL_FULL
@@ -486,7 +480,7 @@ BATCHLAS_UNROLL_FULL
 // The Cta tier: stage A into the padded local tile, ?GETF2, store back; info at the leader
 // (getf2_panel_device's contract: *info_item is read, first failure wins).
 template <class Ex, class MG, class MT, class VS, class IS>
-BATCHLAS_DEVICE_INLINE void cta_run(const Ex& ex, const MG& ag, const MT& at, int kmax, int* piv_item, int piv_base,
+BATCHLAS_DEVICE_INLINE void getrf_cta_run(const Ex& ex, const MG& ag, const MT& at, int kmax, int* piv_item, int piv_base,
                                  std::int32_t* info_item, const VS& vs, const IS& is) {
     lacpy<Part::Full, Transpose::NoTrans, alg::DivMod>(ex, ag, at);  // stage into the padded ld
     ex.barrier();                                                    // B0
@@ -530,35 +524,35 @@ BATCHLAS_DEVICE_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in,
     return ex.uniform(info);
 }
 
-}  // namespace getrf_detail
+}  // namespace detail
 
 /// getrf's Reg<N>: an N-lane (or wider) Partition, n <= N (complex<double>: N <= 16), no workspace.
 template <int N, bool Exact, class T>
-    requires(N <= getrf_detail::reg_cap<T>())
+    requires(N <= detail::reg_cap<T>())
 struct tier_info<routine::getrf, tier::Reg<N, Exact>, T> {
-    static constexpr int part_size = getrf_detail::reg_lanes(N);
+    static constexpr int part_size = detail::reg_lanes(N);
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1 && (Exact ? n == N : n <= N); }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 /// getrf's Cta<N>: one WorkGroup (or RtGroup) per matrix; the tile and 32 slots in local memory.
 template <int N, class T> struct tier_info<routine::getrf, tier::Cta<N>, T> {
-    static constexpr int wg_size = getrf_detail::leaf_wg(N), sg_size = 32;
+    static constexpr int wg_size = detail::leaf_wg(N), sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return getrf_detail::cta_plan<T>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::getrf_cta_plan<T>(n, n).size; }
 };
 /// getrf's Blocked<NB>: any m x n; one WorkGroup of the L3 configuration's items (256 by
 /// default); A in global memory, the L3 stages and 32 slots in local memory, no global workspace.
 template <int NB, class Alg, class T> struct tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {
-    using cfg = getrf_detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
+    using cfg = detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
     static_assert(std::is_same_v<typename cfg::value_type, T>, "getrf: tier::Blocked's l3 configuration is for another scalar type");
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int) { return getrf_detail::lu_blocked_plan<T, cfg>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::lu_blocked_plan<T, cfg>().size; }
 };
 template <class T> struct tiers<routine::getrf, T> {
     using type = std::conditional_t<
-        (getrf_detail::reg_cap<T>() >= 32),
+        (detail::reg_cap<T>() >= 32),
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>,
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>>;
 };
@@ -592,26 +586,26 @@ template <class Tier, class T> constexpr WorkspaceSize getrf_buffer_size(int n) 
 template <class Tier, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE std::int32_t getrf(const Ex& ex, const MA& a, std::int32_t* ipiv, const Workspace& ws = {},
                                        bool live = true) {
-    using D = getrf_detail::lu_value_t<MA>;
+    using D = detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getrf, D, Tier>;
     static_assert(HasTier<routine::getrf, Tr, D>, "getrf: this tier is not offered for this scalar type");
-    if constexpr (getrf_detail::is_reg_v<Tr>) {
+    if constexpr (tier::is_reg_v<Tr>) {
         static_assert(Tr::n_max <= Ex::size, "getrf: tier::Reg<N> needs a Partition of at least N lanes");
-        return getrf_detail::reg_run<Tr::n_max>(ex, ex.lid(), a, getrf_detail::PivPtr{ipiv}, a.cols(), live,
-                                                getf2_detail::bcast_shuffle(ex), getrf_detail::NoInfo{});
-    } else if constexpr (getrf_detail::is_cta_v<Tr>) {
+        return detail::getrf_reg_run<Tr::n_max>(ex, ex.lid(), a, detail::PivPtr{ipiv}, a.cols(), live,
+                                                detail::bcast_shuffle(ex), detail::NoInfo{});
+    } else if constexpr (tier::is_cta_v<Tr>) {
         if (!live) return 0;
         const int m = a.rows(), n = a.cols();
-        const auto pl = getrf_detail::cta_plan<D>(m, n);
+        const auto pl = detail::getrf_cta_plan<D>(m, n);
         const auto at = mat_wide<Mem::Local>(carve_local(ws, pl.tile).get_raw(), m, n, pl.ld);
         std::int32_t info = 0;
-        getrf_detail::cta_run(ex, a, at, m < n ? m : n, ipiv, 0, &info, carve_local(ws, pl.vs), carve_local(ws, pl.is));
+        detail::getrf_cta_run(ex, a, at, m < n ? m : n, ipiv, 0, &info, carve_local(ws, pl.vs), carve_local(ws, pl.is));
         return ex.uniform(info);
     } else {
-        using Cfg = getrf_detail::lu_blocked_cfg_t<D, Tr>;
+        using Cfg = detail::lu_blocked_cfg_t<D, Tr>;
         static_assert(Ex::size == Cfg::threads, "getrf: tier::Blocked runs on a WorkGroup of tier_info::wg_size items");
         if (!live) return 0;
-        return getrf_detail::factor_blocked<Tr::nb, Cfg>(ex, a, ipiv, ws);
+        return detail::factor_blocked<Tr::nb, Cfg>(ex, a, ipiv, ws);
     }
 }
 

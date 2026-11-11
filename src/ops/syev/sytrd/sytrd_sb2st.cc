@@ -90,7 +90,7 @@ Event kd0_extract(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            device::sb2st_detail::extract_narrow<0>(n, AB, Db, Eb, Taub);
+            device::detail::extract_narrow<0>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -127,7 +127,7 @@ Event kd1_extract_lower(Queue& q,
             auto Eb = ev.batch_item(b);
             auto Taub = tauv.batch_item(b);
 
-            device::sb2st_detail::extract_narrow<1>(n, AB, Db, Eb, Taub);
+            device::detail::extract_narrow<1>(n, AB, Db, Eb, Taub);
         });
     });
     return q.get_event();
@@ -204,7 +204,7 @@ Event btrd_lower_inplace(Queue& q,
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
             auto rseq = [&](int cnt, auto at) BATCHLAS_DEVICE_BODY {
-                return device::sb2st_detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+                return device::detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
             };
@@ -271,7 +271,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
+                                        device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
                                                      device::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
                                     }
                                 }
@@ -296,7 +296,7 @@ Event btrd_lower_inplace(Queue& q,
                                 if (k > 2) {
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
-                                    device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                    device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
                                                  device::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
                                 }
                             }
@@ -344,7 +344,7 @@ Event btrd_lower_inplace(Queue& q,
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, j1inc - 1), kdm1),
+                                            device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, j1inc - 1), kdm1),
                                                          device::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
                                         }
                                     }
@@ -352,7 +352,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    device::sb2st_detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, last - 1), lend),
+                                    device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, last - 1), lend),
                                                  device::vec(AB + idx(1, last), lend), C[last], WORK[last]);
                                 }
                             }
@@ -388,7 +388,7 @@ Event btrd_lower_inplace(Queue& q,
             }
 
             if (ex.leader()) {
-                device::sb2st_detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
+                device::detail::finalize_tridiag(n, ABv(int32_t(0), Slice{}), ABv(int32_t(1), Slice{}), D, E, TAU);
             }
         });
     });

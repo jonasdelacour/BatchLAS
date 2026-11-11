@@ -40,10 +40,10 @@ template <typename T> class SytrfBlockedTrailKernel;
 
 namespace {
 
-template <typename D> using Tile = device::sytrf_detail::RevMat<D>;
-template <typename D> using Vec = device::sytrf_detail::RevVec<D>;
-using device::sytrf_detail::ArgMaxScratch;
-using device::sytrf_detail::rev_mat;
+template <typename D> using Tile = device::detail::RevMat<D>;
+template <typename D> using Vec = device::detail::RevVec<D>;
+using device::detail::ArgMaxScratch;
+using device::detail::rev_mat;
 
 template <typename T>
 using Dev = typename sycl_device::DevMap<T>::type;
@@ -125,7 +125,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Tile<D> S = rev_mat(tp, kLdt, n, false);
                 int* const gp = piv + b * n;
-                device::sytrf_detail::sytrf_cta_factor(
+                device::detail::sytrf_cta_run(
                     all, g, sgid == 0, G, S, n, upper, ArgMaxScratch<R>{&red[0], &redi[0]},
                     [&](int k, int v) {
                         gp[k] = v;
@@ -138,8 +138,8 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 if (bp == nullptr) return;
                 device::sync<device::scope::Group>(all, device::Mem::Global);
                 if (pp[4 * kN + 1] != 0) return;
-                const device::sytrs_detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
-                device::sytrs_detail::sytrs_cta_solve<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
+                const device::detail::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
+                device::detail::sytrs_cta_run<1>(all, sg, lane, sgid, nsg, L, pp, upper, pp + 4 * kN, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();
@@ -256,7 +256,7 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Vec<D> x{bp + b * strb + c * ldb, n, upper};
                 const int* const gp = piv + b * n;
-                device::sytrs_col(G, n, upper, x, g, device::sytrf_detail::SumScratch<R>{&red[0], &red[wg / 32]},
+                device::sytrs_col(G, n, upper, x, g, device::detail::SumScratch<R>{&red[0], &red[wg / 32]},
                                         [&](int k) { return gp[k]; });
             });
     });
@@ -341,7 +341,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                     }) : 0;
                     if (st == 0 && t > 0) st = t + off;
                 } else {
-                    const Tile<D> W = device::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                    const Tile<D> W = device::detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
                     const int e = device::lasyf(S, W, n, k0, nb, end, upper, g, am, st,
                                                           [&](int k, int v) { gp[k] = v; });
                     if (lid == 0) {
@@ -377,7 +377,7 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                 const int t = static_cast<int>(grp % nblk);
                 const device::RtGroup<> ex(it);
                 const Tile<D> S = rev_mat(ap + b * stra, lda, n, upper);
-                const Tile<D> W = device::sytrf_detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
+                const Tile<D> W = device::detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
                 const int rank = state[2 * b + 1] - k0;
                 // C(i, j) -= sum_l L(i, l) W(j, l), one term at a time from C (?gemmt, alpha -1).
                 auto upd = [&](int i, int j) {

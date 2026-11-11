@@ -2,7 +2,7 @@
 #pragma once
 // Device LA, the gesvd / ormbr / bdsdc operand adaptors over device::item() operands, waiting for
 // core (item(v, b, n) in interop.hh; row / col / sub members on ItemMat). The gesvd driver's
-// bidiagonal steps are public (batchlas/device/lapack/gesvd.hh, gesvd_detail).
+// bidiagonal steps are public (batchlas/device/lapack/gesvd.hh, detail).
 
 #include <type_traits>
 

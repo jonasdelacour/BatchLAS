@@ -3,7 +3,7 @@
 // LAPACK xGEBRD's unblocked step xGEBD2 (bidiagonal reduction Q^H A P = B, B upper bidiagonal):
 // gebd2_real / gebd2_complex on one matrix per work-item (the unblocked route), gebd2_tile on one
 // problem's n x n tile in local memory (the CTA route, GebrdCTAKernel).
-// gebd2_detail::larfg_lanes is xLARFG on a lane-held vector whose leader forms the scalars and
+// detail::larfg_lanes is xLARFG on a lane-held vector whose leader forms the scalars and
 // broadcasts them (core larfg's lane form replicates the scalars instead). labrd is xLABRD on one
 // matrix (real d, e: ZLARFG's real beta), on core gemv_acc: the host's complex panel (labrd_panel)
 // and the panel of gebrd<tier::Blocked<NB>>, whose trailing update is the in-group L3 gemm.
@@ -26,7 +26,7 @@
 
 namespace batchlas::device {
 
-namespace gebd2_detail {
+namespace detail {
 // larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
 // The leader forms the scalars (conv::Phase: tau = 0, beta = alpha for len <= 1); on return lane
 // `head` holds beta, the x lanes v (x * scale when tau != 0), and every lane gets tau.
@@ -49,7 +49,7 @@ inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bo
     }
     return tau;
 }
-}  // namespace gebd2_detail
+}  // namespace detail
 
 // dgebd2 on one matrix (one work-item): H(i) from the left, then G(i) from the right. A function,
 // not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
@@ -163,7 +163,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
             x_l = tile(lane, i);
         }
 
-        const T tau_l = gebd2_detail::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
+        const T tau_l = detail::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
         if (lane == i) {
             tile(i, i) = alpha_l;
             if (live) {
@@ -193,7 +193,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
             x_r = tile(i, lane);
         }
 
-        const T tau_r = gebd2_detail::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
+        const T tau_r = detail::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
         if (lane == i + 1) {
             tile(i, i + 1) = alpha_r;
             if (live) {
@@ -229,12 +229,12 @@ struct gebrd {
 };
 }  // namespace routine
 
-namespace gebrd_detail {
-template <class T> struct CtaPlan {
+namespace detail {
+template <class T> struct GebrdCtaPlan {
     ws::Slot<T> tile;  // the matrix's P x P tile, ld = P
     WorkspaceSize size;
 };
-template <int P, class T> constexpr CtaPlan<T> cta_plan() {
+template <int P, class T> constexpr GebrdCtaPlan<T> gebrd_cta_plan() {
     Plan p;
     const ws::Slot<T> tile = p.take<T>(ws::Space::Local, std::size_t(P) * std::size_t(P));
     return {tile, p.size()};
@@ -244,49 +244,47 @@ template <int P> inline constexpr bool cta_width_v = P == 4 || P == 8 || P == 16
 // tier::Blocked<NB>: one matrix per WorkGroup<256>; the trailing update's L3 configuration (its
 // threads fix the work-group), labrd's two NB-long products and the trailing gemm's tiles in local
 // memory, X (m x NB) and Y (n x NB) in the caller's global slice.
-template <class T> using BlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+template <class T> using GebrdBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 inline constexpr int blocked_wg = 256;
 inline constexpr int blocked_nb = 16;  // the default panel width (the host's gebrd_block_size)
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
-template <class T> struct BlockedPlan {
+template <class T> struct GebrdBlockedPlan {
     ws::Slot<T> work;  // local: wa (NB), wx (NB)
     ws::Slot<T> smem;  // local: l3::Smem<BlockedCfg<T>>
     ws::Slot<T> x, y;  // global: X (ld m), Y (ld n)
     WorkspaceSize size;
 };
-template <int NB, class T> constexpr BlockedPlan<T> labrd_plan(int m, int n) {
+template <int NB, class T> constexpr GebrdBlockedPlan<T> labrd_plan(int m, int n) {
     Plan p;
     const ws::Slot<T> work = p.take<T>(ws::Space::Local, std::size_t(2) * NB);
-    const ws::Slot<T> smem = p.take<T>(ws::Space::Local, std::size_t(l3::smem_elems<BlockedCfg<T>>()));
+    const ws::Slot<T> smem = p.take<T>(ws::Space::Local, std::size_t(l3::smem_elems<GebrdBlockedCfg<T>>()));
     const ws::Slot<T> x = p.take<T>(ws::Space::Global, std::size_t(m) * NB);
     const ws::Slot<T> y = p.take<T>(ws::Space::Global, std::size_t(n) * NB);
     return {work, smem, x, y, p.size()};
 }
-}  // namespace gebrd_detail
+}  // namespace detail
 
 // tier::Cta<P>, P in {4, 8, 16, 32}: one matrix per P-lane partition (SgpPartition<P>) of a
 // sub-group-32 launch, its P x P tile in local memory; the work-group size is any multiple of 32
 // (32 / P matrices per sub-group). Real T only.
 template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
-    static_assert(gebrd_detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
+    static_assert(detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr int matrices_per_sub_group = 32 / P;
     static constexpr bool admits(int n) { return !Arith<T>::is_complex && n >= 1 && n <= P; }
-    static constexpr WorkspaceSize buffer_size(int) { return gebrd_detail::cta_plan<P, T>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::gebrd_cta_plan<P, T>().size; }
 };
 // tier::Blocked<NB> (1 <= NB <= 64, the panel width): any m >= n, every T, on a WorkGroup<256, 32>.
 // buffer_size(n) is the square problem's; gebrd_buffer_size<Tier, T>(m, n) any other.
 template <int NB, class A, class T> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, T> {
     static_assert(NB >= 1 && NB <= 64, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64 (the host panel's bound)");
-    static constexpr int wg_size = gebrd_detail::blocked_wg, sg_size = 32;
+    static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return gebrd_detail::labrd_plan<NB, T>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::labrd_plan<NB, T>(n, n).size; }
 };
 template <class T> struct tiers<routine::gebrd, T> {
-    using type = std::conditional_t<Arith<T>::is_complex, tier::list<tier::Blocked<gebrd_detail::blocked_nb>>,
+    using type = std::conditional_t<Arith<T>::is_complex, tier::list<tier::Blocked<detail::blocked_nb>>,
                                     tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>,
-                                               tier::Blocked<gebrd_detail::blocked_nb>>>;
+                                               tier::Blocked<detail::blocked_nb>>>;
 };
 
 // Local / global bytes of ONE matrix for gebrd<Tier> at order n (Cta: the work-group's local
@@ -296,8 +294,8 @@ template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int n) 
 }
 template <class Tier, class T> constexpr WorkspaceSize gebrd_buffer_size(int m, int n) {
     using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
-    static_assert(gebrd_detail::is_blocked_v<Tr>, "gebrd_buffer_size(m, n): tier::Blocked (Cta is square)");
-    return gebrd_detail::labrd_plan<Tr::nb, T>(m, n).size;
+    static_assert(tier::is_blocked_v<Tr>, "gebrd_buffer_size(m, n): tier::Blocked (Cta is square)");
+    return detail::labrd_plan<Tr::nb, T>(m, n).size;
 }
 
 // xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
@@ -318,7 +316,7 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const
     constexpr int P = Tr::n_max;
     static_assert(!Arith<T>::is_complex, "gebrd: tier::Cta is real only");
     static_assert(Ex::size == P, "gebrd: tier::Cta<P> runs on a P-lane partition");
-    constexpr auto plan = gebrd_detail::cta_plan<P, T>();
+    constexpr auto plan = detail::gebrd_cta_plan<P, T>();
     constexpr int slice = static_cast<int>(plan.size.local_bytes / sizeof(T));
     static_assert(plan.tile.offset == 0 && slice * sizeof(T) == plan.size.local_bytes, "gebrd: a slice is whole T");
     const int part = static_cast<int>(it.get_sub_group().get_group_linear_id()) * static_cast<int>(ex.part.get_group_linear_range()) +
@@ -444,17 +442,17 @@ BATCHLAS_DEVICE_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, co
 // gebrd_buffer_size<Tier, T>(m, n), ws.global this matrix's slice. Returns 0, or -1 when m < n
 // (the host's rows >= cols precondition; nothing is written).
 template <class Tier, class Ex, class MA, class RV, class TV>
-    requires gebrd_detail::is_blocked_v<resolve_tier_t<routine::gebrd, typename MA::value_type, Tier>>
+    requires tier::is_blocked_v<resolve_tier_t<routine::gebrd, typename MA::value_type, Tier>>
 BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::gebrd, T, Tier>;
-    using Cfg = gebrd_detail::BlockedCfg<T>;
+    using Cfg = detail::GebrdBlockedCfg<T>;
     constexpr int NB = Tr::nb;
     static_assert(HasTier<routine::gebrd, Tr, T>, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64");
     static_assert(is_work_group_v<Ex> && Ex::size == Cfg::threads, "gebrd: tier::Blocked runs on a WorkGroup<256, 32>");
     const int m = A.rows(), n = A.cols();
     if (m < n) return -1;
-    const auto plan = gebrd_detail::labrd_plan<NB, T>(m, n);
+    const auto plan = detail::labrd_plan<NB, T>(m, n);
     const auto Xb = device::mat(carve_global(ws, plan.x), m, NB, m);
     const auto Yb = device::mat(carve_global(ws, plan.y), n, NB, n);
     const local_mptr<T> work = carve_local(ws, plan.work);

@@ -2,7 +2,7 @@
 #pragma once
 // xSTEQR on a tridiagonal (d, e), e(i) coupling d(i) and d(i+1): steqr<J, tier::Cta<N>>, one
 // problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
-// steqr_detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
+// detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
 // lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
 // the forms core does not reproduce bit for bit yet (serial dlanst 'M', LaneVec scal, the
 // two-window reversal, the strict-tie 2x2 shift).
@@ -22,7 +22,7 @@
 
 namespace batchlas::device {
 
-namespace steqr_detail {
+namespace detail {
 
 // dsteqr's split tolerances: e(i) is negligible when |e(i)|^2 <= eps2 |d(i)| |d(i+1)| + safmin.
 template <class R> struct SplitTol {
@@ -319,7 +319,7 @@ struct QSharedCache<T, P, LDQ, true, LocalAcc> {
     inline void reverse_columns(int32_t bb, int32_t be, bool rev) {
         if (!rev) return;
         const int32_t pN = static_cast<int32_t>(LDQ);
-        device::steqr_detail::reverse(device::Thread{}, bb, be + 1,
+        device::detail::reverse(device::Thread{}, bb, be + 1,
                           [&](int32_t col) -> T& { return Q_local[base_q + lane + col * pN]; });
     }
 };
@@ -364,7 +364,7 @@ inline void reverse_block(const Partition& partition,
                           int32_t be,
                           bool rev) {
     const auto ex = device::wrap(partition);
-    steqr_detail::reverse(ex, device::lane_vec(diag, bb, be + 1), device::lane_vec(offdiag, bb, be), rev);
+    detail::reverse(ex, device::lane_vec(diag, bb, be + 1), device::lane_vec(offdiag, bb, be), rev);
     qcache.reverse_columns(bb, be, rev);
 }
 
@@ -500,7 +500,7 @@ inline void implicit_ql_step(const Partition& partition,
                 // This corresponds to LAPACK's QL inner-loop assignment E(i+1)=r.
                 const T e_hi_new = x * c1 - y * sigma; // only meaningful when !first
 
-                // Explicit similarity update (steqr_detail::tridiag_rot), virtual order.
+                // Explicit similarity update (detail::tridiag_rot), virtual order.
                 const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
                 const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
                 const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
@@ -671,7 +671,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Split the tail, then the block ends at its first zero E (n-1 if none).
         const auto tail_e = device::lane_vec(offdiag, block_begin, n - 1);
-        steqr_detail::tridiag_split(ex, diag, tail_e, tol);
+        detail::tridiag_split(ex, diag, tail_e, tol);
         const int32_t block_end = device::find_first(ex, tail_e, n - 1, is_zero);
         next_block_begin = block_end + 1;
         if (block_end <= block_begin) {
@@ -692,8 +692,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         const T inv_scale = T(1) / scale;
 
         if (scale != T(1)) {
-            steqr_detail::scal_lane(ex, scale, blk_d);
-            steqr_detail::scal_lane(ex, scale, blk_e);
+            detail::scal_lane(ex, scale, blk_d);
+            detail::scal_lane(ex, scale, blk_e);
         }
 
         // QL if |D(l)| <= |D(lend)|, QR otherwise (as dsteqr: the graded small end
@@ -716,7 +716,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
             for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                 // Split the active subproblem [l..lend]; m = its first zero E, else lend.
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
-                steqr_detail::tridiag_split(ex, diag, act_e, tol);
+                detail::tridiag_split(ex, diag, act_e, tol);
                 const int32_t m = device::find_first(ex, act_e, block_end, is_zero);
 
                 if (m == l) {
@@ -750,8 +750,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Rescale converged block back to the original magnitude.
         if (scale != T(1)) {
-            steqr_detail::scal_lane(ex, inv_scale, blk_d);
-            steqr_detail::scal_lane(ex, inv_scale, blk_e);
+            detail::scal_lane(ex, inv_scale, blk_d);
+            detail::scal_lane(ex, inv_scale, blk_e);
         }
 
         if (failed) break;
@@ -803,7 +803,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                     offdiag = T(0);
                 }
                 const auto tail_e = device::lane_vec(offdiag, bb, n - 1);
-                steqr_detail::tridiag_split(ex, diag, tail_e, tol);
+                detail::tridiag_split(ex, diag, tail_e, tol);
                 const int32_t be = device::find_first(ex, tail_e, n - 1, is_zero);
                 next_block_begin = be + 1;
                 if (be <= bb) {
@@ -825,8 +825,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 }
                 inv_scale = T(1) / scale;
                 if (scale != T(1)) {
-                    steqr_detail::scal_lane(ex, scale, blk_d);
-                    steqr_detail::scal_lane(ex, scale, blk_e);
+                    detail::scal_lane(ex, scale, blk_d);
+                    detail::scal_lane(ex, scale, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -849,7 +849,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 closing = true;
             } else {
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
-                steqr_detail::tridiag_split(ex, diag, act_e, tol);
+                detail::tridiag_split(ex, diag, act_e, tol);
                 m = device::find_first(ex, act_e, block_end, is_zero);
                 if (m == l) {
                     l += 1;
@@ -869,8 +869,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
             if (closing) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
                 if (scale != T(1)) {
-                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = true;
                 if (failed || next_block_begin >= n) {
@@ -929,7 +929,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                 if (opening && bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                     offdiag = T(0);
                 }
-                steqr_detail::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
+                detail::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
                 const int32_t be = device::find_first(ex, device::lane_vec(offdiag, bb, n - 1), n - 1,
                                                   [&](T x) { return opening && x == T(0); });
                 const bool opened = opening && be > bb;
@@ -944,8 +944,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                     sc = ssfmin<T>() / anorm;
                 }
                 if (opened && sc != T(1)) {
-                    steqr_detail::scal_lane(ex, sc, blk_d);
-                    steqr_detail::scal_lane(ex, sc, blk_e);
+                    detail::scal_lane(ex, sc, blk_d);
+                    detail::scal_lane(ex, sc, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -975,7 +975,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             const bool cap = testing && sweeps_at_l >= max_sweeps;
             const bool active = testing && !cap;
             if (lockstep_any(partition, active)) {
-                steqr_detail::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
+                detail::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
                 const int32_t mm = device::find_first(ex, device::lane_vec(offdiag, l, block_end), block_end,
                                                   [&](T x) { return active && x == T(0); });
                 const bool adv1 = active && mm == l;
@@ -999,8 +999,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             if (lockstep_any(partition, closing)) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
                 if (closing && scale != T(1)) {
-                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    steqr_detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = need_block || closing;
                 done = done || (closing && (failed || next_block_begin >= n));
@@ -1091,10 +1091,10 @@ BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, 
 }
 
 // The CTA tier's workspace: Q (N x N, ld N) in local memory with vectors, nothing otherwise.
-template <bool Vecs, int N, class T> struct cta_plan {
+template <bool Vecs, int N, class T> struct steqr_cta_plan {
     Plan plan{};
     ws::Slot<T> q{};
-    constexpr cta_plan() : q(plan.take<T>(ws::Space::Local, Vecs ? static_cast<std::size_t>(N) * N : 0)) {}
+    constexpr steqr_cta_plan() : q(plan.take<T>(ws::Space::Local, Vecs ? static_cast<std::size_t>(N) * N : 0)) {}
 };
 
 // ---- the Blocked tier: one problem per work-group, any n ------------------------------------------
@@ -1104,8 +1104,6 @@ struct WgBlock {
     std::int32_t lo, hi, qr, run, rot;
 };
 
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class A> inline constexpr bool is_blocked_v<tier::Blocked<NB, A>> = true;
 
 // The Blocked tier's workspace, all global: one sweep's rotations (n - 1, with vectors) and the
 // block table (at most n / 2 + 1 blocks of length >= 2).
@@ -1214,7 +1212,7 @@ BATCHLAS_DEVICE_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, con
     return ex.group_reduce(left);
 }
 
-}  // namespace steqr_detail
+}  // namespace detail
 
 namespace routine {
 // xSTEQR, jobz J (EigenVectors: Q := Q * the rotations, LAPACK compz = 'V').
@@ -1238,7 +1236,7 @@ template <JobType J, int N, class Alg, class T> struct tier_info<routine::steqr<
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) {
-        return steqr_detail::cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size();
+        return detail::steqr_cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size();
     }
 };
 // tier::Blocked<1>: no panel (the chase is serial per block, z's rows parallel), any n.
@@ -1248,7 +1246,7 @@ template <JobType J, int NB, class Alg, class T> struct tier_info<routine::steqr
     static constexpr int wg_size = 256;  // one problem per work-group, the size sytrd's Blocked tier runs at
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return steqr_detail::wg_plan<J == JobType::EigenVectors, T>(n).plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::wg_plan<J == JobType::EigenVectors, T>(n).plan.size(); }
 };
 template <JobType J, class T> struct tiers<routine::steqr<J>, T> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<1>>;
@@ -1278,12 +1276,12 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
     using Tr = resolve_tier_t<R, T, Tier>;
     static_assert(HasTier<R, Tr, T>, "steqr: the routine has no such tier (tier::Cta<N>, tier::Blocked<1>)");
     constexpr bool kVecs = J == JobType::EigenVectors;
-    if constexpr (steqr_detail::is_blocked_v<Tr>) {
+    if constexpr (tier::is_blocked_v<Tr>) {
         constexpr int WG = tier_info<R, Tr, T>::wg_size;
         static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "steqr: tier::Blocked<1> runs on device::WorkGroup<256> (one problem per work-group)");
         const int n = d.size();
         if (n < 1) return -2;
-        return steqr_detail::steqr_wg_run<kVecs, WG, T>(ex, d, e, z, n, opts.max_sweeps, ws);
+        return detail::steqr_wg_run<kVecs, WG, T>(ex, d, e, z, n, opts.max_sweeps, ws);
     } else {
         constexpr int N = Tr::n_max;
         constexpr std::size_t P = N;
@@ -1292,9 +1290,9 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
         const int n = d.size();
         if (n < 1 || n > N) return -2;
         using LP = typename local_mptr<T>::pointer;  // decorated: a generic pointer costs generic LD/ST
-        const steqr_detail::cta_plan<kVecs, N, T> plan{};
-        steqr_detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
-        const bool failed = steqr_detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
+        const detail::steqr_cta_plan<kVecs, N, T> plan{};
+        detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
+        const bool failed = detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
                                                                      opts.shift, opts.update, true);
         return failed ? 1 : 0;
     }

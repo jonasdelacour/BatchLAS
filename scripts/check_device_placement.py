@@ -9,7 +9,7 @@ Rules, each a (rule, file, name) finding:
   src-device     src/ defines a name in namespace batchlas::device (any sub-namespace): src/ops/<op>/
                  keeps host code, kernel functors and launchers; device code is public.
   lapack-header  include/batchlas/device/lapack/<r>.hh defines a name that is not one of its routines
-                 (ROUTINES[<r>], default {<r>}), a `<routine>_...` name, or inside `<routine>_detail`.
+                 (ROUTINES[<r>], default {<r>}), a `<routine>_...` name, or in its `detail` (merged: the file owns it).
   lapack-core    a public device header outside lapack/ defines a LAPACK routine (LAPACK_NAMES, or a
                  `<routine>_...` name): it belongs in lapack/<routine>.hh.
   duplicate      one unqualified namespace-scope function name defined in two device files with
@@ -51,6 +51,7 @@ ROUTINES = {"potri": ("potri", "trtri", "lauum"), "jacobi": ("jacobi", "syevj", 
             "potrf": ("potrf", "potf2"), "getrf": ("getrf", "getf2"), "geqrf": ("geqrf", "geqr2"),
             "sytrf": ("sytrf", "sytf2", "lasyf"), "sytrs": ("sytrs", "syconv"),
             "orgtr": ("orgtr", "org2l"), "ormtr": ("ormtr", "orm2l"), "stebz": ("stebz", "laebz"),
+            "syev": ("syev", "org2l", "orm2l"),  # the Cta tier's column-owner xORG2L / xORM2L
             "stedc": ("stedc", "laed4"), "sygst": ("sygst", "sygs2")}
 # The LAPACK routines of v22 design C.1 and A.3 (core auxiliaries such as lartg, larfg, lascl are not).
 LAPACK_NAMES = frozenset({
@@ -275,7 +276,7 @@ def findings(root):
             if rel.startswith(LAPACK_DIR):
                 stem = os.path.splitext(rel[len(LAPACK_DIR):])[0].replace("/", "_")
                 rs = ROUTINES.get(stem, (stem,))
-                det = any(seg.startswith(tuple(r + "_" for r in rs)) for seg in d.ns.split("::"))
+                det = d.ns == "batchlas::device::detail" or any(seg.startswith(tuple(r + "_" for r in rs)) for seg in d.ns.split("::"))
                 if not (routine_of(d.name, rs) or det):
                     add("lapack-header", rel, qual, d.line)
             elif public and d.kind in ("function", "type") and routine_of(d.name, LAPACK_NAMES):

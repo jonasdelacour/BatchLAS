@@ -194,10 +194,10 @@ BATCHLAS_UNROLL_FULL
             // map is load-bearing, an unmapped NaN leaves lanes disagreeing.
             const R mag = device::abs1<D>(rA[j]);
             const bool cand = (rowid >= j) && (rowid < n);
-            device::getf2_detail::MaxLoc<R> best{(cand && (mag == mag)) ? mag : R(-1), device::getf2_detail::pivot_key(cand ? rowid : (rowid + N), lane)};
-            device::getf2_detail::maxloc_bfly_up(px, best);
-            const int p = device::getf2_detail::pivot_key_order(best.i);
-            const uint32_t pl = device::getf2_detail::pivot_key_lane(best.i);
+            device::detail::MaxLoc<R> best{(cand && (mag == mag)) ? mag : R(-1), device::detail::pivot_key(cand ? rowid : (rowid + N), lane)};
+            device::detail::maxloc_bfly_up(px, best);
+            const int p = device::detail::pivot_key_order(best.i);
+            const uint32_t pl = device::detail::pivot_key_lane(best.i);
 
             // THE INVERSE PERMUTATION, FOR FREE. The winner sets rowid = j below
             // and no later step touches a rowid < j, so lane `pl` holds row j for
@@ -267,8 +267,8 @@ BATCHLAS_UNROLL_FULL
                     }
                 }
             } else {
-                device::gesv_detail::ger_frag_bcast(px, rA[j], rA, pl, j + 1, n, act);
-                device::gesv_detail::ger_frag_bcast(px, rA[j], rB, pl, 0, nrhs, act);   // nrhs: kernel-uniform
+                device::detail::ger_frag_bcast(px, rA[j], rA, pl, j + 1, n, act);
+                device::detail::ger_frag_bcast(px, rA[j], rB, pl, 0, nrhs, act);   // nrhs: kernel-uniform
             }
         }
 

@@ -22,7 +22,7 @@
 
 namespace batchlas::device {
 
-namespace potrs_detail {
+namespace detail {
 
 // The Blocked plan: the L3 stage slot alone, at potrf's offset.
 template <class T> struct BlockedSolvePlan {
@@ -30,18 +30,18 @@ template <class T> struct BlockedSolvePlan {
     WorkspaceSize size;
     static constexpr BlockedSolvePlan make() {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(potrf_detail::BlockedCfg<T>::smem_elems));
+        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
         return {s, p.size()};
     }
 };
-static_assert(BlockedSolvePlan<float>::make().smem.offset == potrf_detail::BlockedPlan<float, 32>::make().smem.offset);
+static_assert(BlockedSolvePlan<float>::make().smem.offset == detail::PotrfBlockedPlan<float, 32>::make().smem.offset);
 
 // B := A^-1 B from the factor: Lower L (L^H X = Y after L Y = B), Upper U^H then U. Arguments
 // already checked; n, nrhs >= 1.
 template <Uplo UL, int NB, int WG, int SG, class MA, class MB>
 BATCHLAS_DEVICE_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
     using T = typename MA::value_type;
-    using Cfg = potrf_detail::BlockedCfg<T>;
+    using Cfg = detail::PotrfBlockedCfg<T>;
     constexpr BlockedSolvePlan<T> pl = BlockedSolvePlan<T>::make();
     const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
     const int n = a.rows(), nrhs = b.cols();
@@ -62,7 +62,7 @@ template <class MA, class MB> BATCHLAS_DEVICE_INLINE int potrs_blocked_args(cons
     const int n = a.rows();
     if (n < 0 || a.cols() != n) return -2;
     if (b.rows() != n || b.cols() < 0) return -3;
-    if (n > 0 && b.cols() > 0 && !potrf_detail::blocked_ws_ok(ws, false)) return -4;
+    if (n > 0 && b.cols() > 0 && !detail::blocked_ws_ok(ws, false)) return -4;
     return 0;
 }
 
@@ -71,14 +71,14 @@ BATCHLAS_DEVICE_INLINE int potrs_blocked_op(const WorkGroup<WG, SG>& ex, const M
     using T = typename MA::value_type;
     static_assert(std::is_same_v<Alg, alg::Default>, "potrs: tier::Blocked has one algorithm");
     static_assert(NB >= 1, "potrs: tier::Blocked<NB> needs NB >= 1");
-    static_assert(WG == potrf_detail::BlockedCfg<T>::threads && SG == 32, "potrs: tier::Blocked runs on WorkGroup<256, 32>");
+    static_assert(WG == detail::PotrfBlockedCfg<T>::threads && SG == 32, "potrs: tier::Blocked runs on WorkGroup<256, 32>");
     const int bad = potrs_blocked_args(a, b, ws);
     if (bad != 0) return bad;
     if (a.rows() == 0 || b.cols() == 0) return 0;
     potrs_blocked_solve<UL, NB>(ex, a, b, ws);
     return 0;
 }
-}  // namespace potrs_detail
+}  // namespace detail
 
 namespace routine {
 template <Uplo UL> struct potrs {
@@ -88,10 +88,10 @@ template <Uplo UL> struct potrs {
 }  // namespace routine
 
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrs<UL>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = potrf_detail::kBlockedWg;
+    static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int) { return potrs_detail::BlockedSolvePlan<T>::make().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::BlockedSolvePlan<T>::make().size; }
 };
 template <Uplo UL, class T> struct tiers<routine::potrs<UL>, T> {
     using type = tier::list<tier::Blocked<32>>;
@@ -109,8 +109,8 @@ template <Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int potrs(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potrs<UL>, T, Tier>;
-    static_assert(potrf_detail::is_blocked_v<Tr>, "potrs: tier::Blocked<NB> (the small tiers land with WP7)");
-    return potrs_detail::potrs_blocked_op<UL, Tr::nb, typename Tr::alg_type>(ex, A, B, ws);
+    static_assert(tier::is_blocked_v<Tr>, "potrs: tier::Blocked<NB> (the small tiers land with WP7)");
+    return detail::potrs_blocked_op<UL, Tr::nb, typename Tr::alg_type>(ex, A, B, ws);
 }
 
 }  // namespace batchlas::device

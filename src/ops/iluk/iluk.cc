@@ -30,7 +30,7 @@ template <typename T>
 using RealT = typename base_type<T>::type;
 
 // |x| of every drop and pivot test, host and device (std::abs, or hypot for complex).
-using device::iluk_detail::pivot_modulus;
+using device::detail::pivot_modulus;
 
 template <typename T>
 inline T real_scalar(RealT<T> value) {
@@ -86,7 +86,7 @@ bool u_diagonals_are_usable(const T* vals,
         if (host_mask != nullptr && host_mask[b] == 0) continue;  // an inactive item's factor is scratch
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
-            (void)device::iluk_detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
+            (void)device::detail::shifted_pivot(vals[diag_positions[b * n + i]], diagonal_shift, &status);
             if (status != 0) return false;
         }
     }
@@ -887,7 +887,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             // Item b's slots of the slot-major working values; row i as the device op runs it
             // (operands in the body's first-use order: the capture layout is unchanged).
             const device::InterleavedVec<T> at{work, batch, b};
-            device::iluk_detail::eliminate_row(at, i, step_ptr, step_target, step_pivot, step_upd_ptr, upd_dst, upd_src, sym_ro, diag_abs,
+            device::detail::eliminate_row(at, i, step_ptr, step_target, step_pivot, step_upd_ptr, upd_dst, upd_src, sym_ro, diag_abs,
                                            drop_tolerance, modified_ilu, fill_factor, orig_nnz, diagonal_shift, diag_pivot_threshold, st);
         });
     }
@@ -968,7 +968,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         if (masked && mask[b] == 0) return;  // neutral: an inactive item counts as usable
         const int slot = c2s[diag_off[i]];
         int32_t local = 0;
-        (void)device::iluk_detail::stabilize_pivot(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0), diagonal_shift,
+        (void)device::detail::stabilize_pivot(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0), diagonal_shift,
                                                RealT<T>(0), &local);
         if (local != 0) *df = 1;
     });

@@ -127,7 +127,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
 }
 template <class T> T nan_t() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
 
-// Host view of lower band storage s (ld, kd): the same mirror / zero rule as device::sb2st_detail::HermBandLower.
+// Host view of lower band storage s (ld, kd): the same mirror / zero rule as device::detail::HermBandLower.
 template <class T> struct HostBand {
     const T* s;
     int ld, kd;
@@ -167,7 +167,7 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
         const device::Teams<WG, 8, O> rows{it};
         T* vl = reinterpret_cast<T*>(lm);
         T* wl = vl + m;
-        const device::sb2st_detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        const device::detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
         device::for_each_owned(ex, m, [&](int i) {
             vl[i] = x[std::ptrdiff_t(b) * m + i];
             wl[i] = T(std::numeric_limits<real_of<T>>::quiet_NaN());
@@ -176,7 +176,7 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
         const auto W = A.sub(a, a, m, m);
         const auto v = device::vec<device::Mem::Local>(vl, m);
         const auto w = device::vec<device::Mem::Local>(wl, m);
-        device::sb2st_detail::hemv_band<Uplo::Lower>(rows, device::One{}, W, device::assume_published(v), device::Zero{}, w);
+        device::detail::hemv_band<Uplo::Lower>(rows, device::One{}, W, device::assume_published(v), device::Zero{}, w);
         device::sync(ex, device::Mem::Global);
         device::for_each_owned(ex, m, [&](int i) { p[std::ptrdiff_t(b) * m + i] = wl[i]; });
         device::her2<device::Part::Lower, device::alg::TeamPerRow, device::arith::Native>(rows, device::NegOne{}, device::assume_published(w),
@@ -269,8 +269,8 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfOnBandWindows) {
         T* vl = reinterpret_cast<T*>(lm);
         device::copy(ex, device::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), device::vec(vl, nc + mr1));
         device::sync(ex, device::Mem::Global);
-        const device::sb2st_detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
-        device::sb2st_detail::larf_right(rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
+        const device::detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
+        device::detail::larf_right(rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
         device::sync(ex, device::Mem::Global);
         device::larf<Side::Left, device::arith::Native, device::larf_form::ScaleW, device::loop::Lockstep>(
             rows, tau1, device::assume_published(device::vec<device::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
@@ -341,7 +341,7 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfColumnTeamsOnTilesAndGlobal) {
     this->dev.template run<32>(kBatch, rows * C * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<32> ex{it};
-        const device::sb2st_detail::StridedTeams<C> cols{it};
+        const device::detail::StridedTeams<C> cols{it};
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z + std::ptrdiff_t(b) * rows * C;
         device::for_each_owned(ex, rows * C, [&](int i) { zl[i] = zb[i]; });
@@ -359,7 +359,7 @@ TYPED_TEST(DeviceBlasV2BandTest, LarfColumnTeamsOnTilesAndGlobal) {
     this->dev.template run<128>(kBatch, rows * C2 * sizeof(T), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<128> ex{it};
-        const device::sb2st_detail::StridedTeams<C2, 128> cols{it};
+        const device::detail::StridedTeams<C2, 128> cols{it};
         const int g = static_cast<int>(it.get_local_linear_id()) / 32;
         T* zl = reinterpret_cast<T*>(lm);
         T* zb = z2 + std::ptrdiff_t(b) * rows * C2;
@@ -473,11 +473,11 @@ TYPED_TEST(DeviceBlasV2BandTest, PlaneRotationsDistributeOverStrides) {
         device::lartv<TestRot<T>>(ex, device::vec(x2 + o, nr, ix), device::vec(y2 + o, nr, iy), device::vec(c + o, nr, ic), device::vec(sv + o, nr, is));
         device::lar2v<TestRot<T>>(ex, device::vec(x4 + o, nr, ix), device::vec(y4 + o, nr, iy), device::vec(z4 + o, nr), device::vec(c + o, nr, ic),
                               device::vec(sv + o, nr, is));
-        device::sb2st_detail::rot_by<TestRot<T>>(ex, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy), c1, s1);
+        device::detail::rot_by<TestRot<T>>(ex, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy), c1, s1);
         // the Thread pass reaches x3 / y3 through fn_vec index maps returning references
-        const auto xs = device::sb2st_detail::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
-        const auto ys = device::sb2st_detail::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
-        if (ex.leader()) device::sb2st_detail::rot_by<TestRot<T>>(device::Thread{}, xs, ys, c1, s1);
+        const auto xs = device::detail::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
+        const auto ys = device::detail::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
+        if (ex.leader()) device::detail::rot_by<TestRot<T>>(device::Thread{}, xs, ys, c1, s1);
     });
     const auto gx = this->dev.down(x, hx.size()), gy = this->dev.down(y, hy.size()), gx2 = this->dev.down(x2, hx.size()),
                gy2 = this->dev.down(y2, hy.size()), gx3 = this->dev.down(x3, hx.size()), gy3 = this->dev.down(y3, hy.size()),

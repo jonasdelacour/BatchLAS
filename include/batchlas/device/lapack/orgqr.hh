@@ -21,15 +21,15 @@ struct orgqr {
 };
 }  // namespace routine
 
-namespace orgqr_detail {
+namespace detail {
 template <class T> struct OrgqrSlots {
     ws::Slot<T> q;
-    ormqr_detail::OrmqrSlots<T> apply;
+    detail::OrmqrSlots<T> apply;
 };
 template <int NB, class Cfg, class T> constexpr OrgqrSlots<T> orgqr_take(Plan& p, int m, int n) {
     OrgqrSlots<T> s{};
     s.q = p.take<T>(ws::Space::Global, static_cast<std::size_t>(m > 0 ? m : 0) * static_cast<std::size_t>(n > 0 ? n : 0));
-    s.apply = ormqr_detail::ormqr_take<Side::Left, NB, Cfg, T>(p, m, n);
+    s.apply = detail::ormqr_take<Side::Left, NB, Cfg, T>(p, m, n);
     return s;
 }
 template <int NB, class Cfg, class T> constexpr WorkspaceSize orgqr_size(int m, int n) {
@@ -37,13 +37,13 @@ template <int NB, class Cfg, class T> constexpr WorkspaceSize orgqr_size(int m, 
     (void)orgqr_take<NB, Cfg, T>(p, m, n);
     return p.size();
 }
-}  // namespace orgqr_detail
+}  // namespace detail
 
 template <int NB, class A, class T> struct tier_info<routine::orgqr, tier::Blocked<NB, A>, T> {
     using cfg = larfb_cfg_t<A, T>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return orgqr_detail::orgqr_size<NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::orgqr_size<NB, cfg, T>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
 template <class T> struct tiers<routine::orgqr, T> {
@@ -72,7 +72,7 @@ BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, cons
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::orgqr, T, Tier>;
     static_assert(HasTier<routine::orgqr, Tr, T>, "orgqr: this tier is not offered for this scalar type");
-    static_assert(ormqr_detail::ormqr_is_blocked_v<Tr>, "orgqr: only tier::Blocked<NB> is offered");
+    static_assert(tier::is_blocked_v<Tr>, "orgqr: only tier::Blocked<NB> is offered");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
     larfb_check_ex<Cfg, Ex>();
     const auto a = l3::global_of(A);
@@ -84,12 +84,12 @@ BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, cons
     if (ws.global == nullptr) return -3;
     if (n <= 0) return 0;
     Plan p;
-    const auto s = orgqr_detail::orgqr_take<Tr::nb, Cfg, T>(p, m, n);
+    const auto s = detail::orgqr_take<Tr::nb, Cfg, T>(p, m, n);
     T* const qb = carve_global(ws, s.q);
     const l3::Global<T> q{qb, m, m, n};
     laset(ex, Zero{}, One{}, mat(qb, m, n, m));
     ex.barrier(Mem::Global);  // the identity complete before the first block stages it
-    ormqr_detail::ormqr_wy_blocks<Side::Left, Transpose::NoTrans, Tr::nb, Cfg>(ex, a, q, n, static_cast<const T*>(larfb_tau_base(tau)),
+    detail::ormqr_wy_blocks<Side::Left, Transpose::NoTrans, Tr::nb, Cfg>(ex, a, q, n, static_cast<const T*>(larfb_tau_base(tau)),
                                                                               s.apply, ws);
     lacpy(ex, mat(qb, m, n, m), mat(a.p, m, n, a.ld));
     ex.barrier(Mem::Global);  // Q visible on return

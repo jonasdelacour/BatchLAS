@@ -2,9 +2,9 @@
 // Family-private device LA ops of the syev CTA trio against host references:
 //   src/ops/syev/kernels/syev_drivers_v2.hh  (herm_load, ElemAt, dgmm, similarities, repack,
 //                                             column-owner larf / org2l / orm2l)
-//   include/batchlas/device/lapack/sytrd.hh  (sytd2; sytrd_detail Fit ops, lacpy_herm) and core
+//   include/batchlas/device/lapack/sytrd.hh  (sytd2; detail Fit ops, lacpy_herm) and core
 //                                             larfg (the row-fragment form sytd2 calls)
-//   include/batchlas/device/lapack/steqr.hh  (steqr_detail lanst_max, tridiag_split, scal_lane,
+//   include/batchlas/device/lapack/steqr.hh  (detail lanst_max, tridiag_split, scal_lane,
 //                                             reverse, tridiag_rot) and core lanst / find_first
 //                                             (the LaneVec forms the CTA solver calls)
 // Shared ops (operands, item(), mirror, laset, lacpy, rot, lasr, Frag moves) are core's and are
@@ -733,7 +733,7 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
             const auto v = device::vec(lm, n, base + LDA * P), w = device::vec(lm, n, base + LDA * P + P);
             T* eb = e + std::ptrdiff_t(b) * n;
             T* tb = tu + std::ptrdiff_t(b) * n;
-            device::sytrd_detail::lacpy_herm<UL, device::arith::Native>(device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
+            device::detail::lacpy_herm<UL, device::arith::Native>(device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
             device::sync<device::scope::Part>(ex);
             const T tl = device::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
                 if constexpr (UL == Uplo::Lower) {
@@ -870,19 +870,19 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
         const device::Mat<T, device::Ext<NT>, device::Ext<NT>, device::Ext<LDT>, device::Mem::Local, device::Cyclic, Local> t1{lm, {}, {}, {}, base};
         const auto xl = device::vec(lm, m, base + LDT * NT), yl = device::vec(lm, m, base + LDT * NT + m);
         T* ob = out + std::ptrdiff_t(b) * per_out;
-        device::sytrd_detail::lacpy_herm<UL, device::arith::Native>(fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
+        device::detail::lacpy_herm<UL, device::arith::Native>(fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
         device::copy(fx, device::vec(x + std::ptrdiff_t(b) * m, m), xl);
         device::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
         device::sync<device::scope::Part>(ex);
         const auto B1 = t1.sub(o, o, m, m);
-        device::sytrd_detail::gemv_rows<device::arith::Native>(fx, alpha, B1, device::assume_published(xl), yl);  // reads t1 rows of others
-        const T s = device::sytrd_detail::dotc<device::arith::Native>(fx, xl, yl);
+        device::detail::gemv_rows<device::arith::Native>(fx, alpha, B1, device::assume_published(xl), yl);  // reads t1 rows of others
+        const T s = device::detail::dotc<device::arith::Native>(fx, xl, yl);
         device::axpy<device::arith::Native>(fx, device::Scalar<T>{device::Arith<T>::neg(s)}, xl, yl);
         device::sync<device::scope::Part>(ex);
         if (ex.lid() == 0) ob[NT * NT + 2 * m] = s;
         device::copy(fx, yl, device::vec(ob + NT * NT + m, m));
         device::copy(fx, xl, device::vec(ob + NT * NT, m));
-        device::sytrd_detail::her2_full_sub<device::arith::Native>(fx, device::assume_published(xl), device::assume_published(yl), B1);
+        device::detail::her2_full_sub<device::arith::Native>(fx, device::assume_published(xl), device::assume_published(yl), B1);
         device::sync<device::scope::Part>(ex);
         device::lacpy(ex, t1, device::mat(ob, NT, NT, NT));
     });
@@ -938,7 +938,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioTest, FitOpsOnBlock) {
 TYPED_TEST(DeviceBlasV2SyevTrioRealTest, LanstMaxAndSplitOnThread) {
     using T = TypeParam;
     constexpr int n = 9, inc = 2;
-    const device::steqr_detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
+    const device::detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
                               std::numeric_limits<T>::min()};
     std::vector<T> hd(std::size_t(kBatch) * n * inc, T(1e3)), he(std::size_t(kBatch) * n * inc, T(1e3));
     for (int b = 0; b < kBatch; ++b) {
@@ -964,8 +964,8 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, LanstMaxAndSplitOnThread) {
         const device::Thread th{};
         const auto dvv = device::vec(d + std::ptrdiff_t(b) * n * inc, n, inc);
         const auto ev = device::vec(e + std::ptrdiff_t(b) * n * inc, n - 1, inc);
-        out[2 * b] = device::steqr_detail::lanst_max(th, dvv, ev);
-        out[2 * b + 1] = device::steqr_detail::tridiag_split(th, dvv, ev, tol) ? T(1) : T(0);
+        out[2 * b] = device::detail::lanst_max(th, dvv, ev);
+        out[2 * b + 1] = device::detail::tridiag_split(th, dvv, ev, tol) ? T(1) : T(0);
     });
     const auto go = this->dev.down(out, 2 * kBatch), ge = this->dev.down(e, he.size());
     int bad = 0;
@@ -1015,7 +1015,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
         const int q = static_cast<int>(it.get_group_linear_id());
         const int i = q % (n - 1);
         const bool fwd = (q / (n - 1)) % 2 == 0;
-        bo[q] = device::steqr_detail::tridiag_rot(device::Thread{}, device::vec(d + std::ptrdiff_t(q) * n, n), device::vec(e + std::ptrdiff_t(q) * (n - 1), n - 1),
+        bo[q] = device::detail::tridiag_rot(device::Thread{}, device::vec(d + std::ptrdiff_t(q) * n, n), device::vec(e + std::ptrdiff_t(q) * (n - 1), n - 1),
                                 bo[q], i, i + 1, g[q], fwd);
     });
     const auto gd = this->dev.down(d, hd.size()), ge = this->dev.down(e, he.size()), gb = this->dev.down(bo, hb.size());
@@ -1056,7 +1056,7 @@ TYPED_TEST(DeviceBlasV2SyevTrioRealTest, TridiagRotMatchesDenseSimilarity) {
 // reverse of d[2, n-1) with e (e only on even problems).
 template <class T, int P, bool Masked> void lane_case(Dev& dev) {
     constexpr int WG = 32, chunks = WG / P, n = P - 1, nprob = kBatch;
-    const device::steqr_detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
+    const device::detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
                               std::numeric_limits<T>::min()};
     std::vector<T> hd(std::size_t(nprob) * n), he(std::size_t(nprob) * n, T(0));
     for (int q = 0; q < nprob; ++q) {
@@ -1083,11 +1083,11 @@ template <class T, int P, bool Masked> void lane_case(Dev& dev) {
         T dl = l < n ? d[std::ptrdiff_t(q) * n + l] : T(0);
         T el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : T(0);
         const T an = device::lanst<NormType::Max>(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 1, n - 2));
-        device::steqr_detail::tridiag_split(ex, dl, device::lane_vec(el, 0, n - 1), tol);
+        device::detail::tridiag_split(ex, dl, device::lane_vec(el, 0, n - 1), tol);
         const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
-        device::steqr_detail::scal_lane(ex, T(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
-        device::steqr_detail::reverse(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 0, 0), true);
-        device::steqr_detail::reverse(ex, device::lane_vec(dl, 2, n - 1), device::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
+        device::detail::scal_lane(ex, T(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
+        device::detail::reverse(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 0, 0), true);
+        device::detail::reverse(ex, device::lane_vec(dl, 2, n - 1), device::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
         if (l < n) d[std::ptrdiff_t(q) * n + l] = dl;
         if (l < n - 1) e[std::ptrdiff_t(q) * n + l] = el;
         if (l == 0) {

@@ -7,8 +7,8 @@
 // sums over the executor (shuffles on a partition, work-group reductions on a group).
 //   laed4                    the public op: root k as origin + tau (origin a pole, so the
 //                            caller forms d_i - x as (d_i - origin) - tau without cancellation)
-//   laed4_detail::solve_inner / solve_last   the two root forms (the host merges' bodies)
-//   laed4_detail::uniform    the leader's value in every item (a loop exit on a reduced value)
+//   detail::solve_inner / solve_last   the two root forms (the host merges' bodies)
+//   detail::uniform    the leader's value in every item (a loop exit on a reduced value)
 // Moved from src/ops/syev/stedc/stedc_merge_cta.cc unchanged: the host's fused merges and
 // device::stedc run this code. evidence: docs/perf/stedc.md#stedc-the-dd--1-secular-solve-fault
 
@@ -32,7 +32,7 @@ template <class T> struct laed4_root {
     bool converged;
 };
 
-namespace laed4_detail {
+namespace detail {
 
 template <class Ex> inline constexpr bool is_group_v = is_work_group_v<Ex>;
 template <int SG> inline constexpr bool is_group_v<RtGroup<Scope::Group, SG>> = true;
@@ -389,7 +389,7 @@ BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_pro
     return {origin, tau, converged};
 }
 
-}  // namespace laed4_detail
+}  // namespace detail
 
 /// Root k (0-based) of the dd-pole secular equation 1/rho + sum_i z_i^2 / (d_i - x) = 0, d
 /// ascending and distinct, z without zeros, rho > 0 (a deflated merge: laed2). COLLECTIVE over
@@ -397,8 +397,8 @@ BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_pro
 /// uniform. max_iter >= 1 caps the iteration (StedcParams::max_sec_iter).
 template <class Ex, class DV, class T>
 BATCHLAS_DEVICE_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho, std::int32_t max_iter) {
-    if (k == dd - 1) return laed4_detail::solve_last<T>(ex, d, z, dd, rho, max_iter);
-    return laed4_detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
+    if (k == dd - 1) return detail::solve_last<T>(ex, d, z, dd, rho, max_iter);
+    return detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
 }
 
 }  // namespace batchlas::device

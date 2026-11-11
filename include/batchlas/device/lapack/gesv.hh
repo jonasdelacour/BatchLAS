@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // ?GESV's tiny-tier step: the rank-1 row update by the broadcast pivot row (two roundings, a
-// source lane, a start column), in gesv_detail until core ger_row takes them.
+// source lane, a start column), in detail until core ger_row takes them.
 // The public op gesv<Tier>(ex, A, B, ipiv, ws): getrf<Tier> then getrs<NoTrans, Tier> on one
 // executor and one workspace (the host blocked route's composition); tier::Blocked, any n.
 
@@ -13,7 +13,7 @@
 #include <batchlas/device/lapack/getrf.hh>
 #include <batchlas/device/lapack/getrs.hh>
 
-namespace batchlas::device::gesv_detail {
+namespace batchlas::device::detail {
 
 // x[k] -= m * x[k]@src, k0 <= k < min(N, kend), where act; collective: every lane reaches every k.
 template <int N, class Px, class T>
@@ -27,7 +27,7 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-}  // namespace batchlas::device::gesv_detail
+}  // namespace batchlas::device::detail
 
 // ==== the public op: gesv<Tier>(ex, A, B, ipiv, ws [, live]) (v22 design C.2-C.7) ================
 namespace batchlas::device {
@@ -68,7 +68,7 @@ template <class Tier, class T> constexpr WorkspaceSize gesv_buffer_size(int n, i
 template <class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE std::int32_t gesv(const Ex& ex, const MA& a, const MB& b, std::int32_t* ipiv, const Workspace& ws = {},
                                       bool live = true) {
-    using D = getrf_detail::lu_value_t<MA>;
+    using D = detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::gesv, D, Tier>;
     static_assert(HasTier<routine::gesv, Tr, D>, "gesv: this tier is not offered for this scalar type");
     const std::int32_t info = getrf<Tr>(ex, a, ipiv, ws, live);

@@ -10,7 +10,7 @@
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: A stays in global memory; per NB-wide
 //                 panel potf2 (SgSlm) on the local diagonal block, then the in-group L3 trsm and
 //                 herk (level3/group.hh); ws.local = L3 stages + the block, no global bytes
-// The host tiny and CTA routes launch the SAME bodies (potrf_reg, cta_body) with a run-time uplo.
+// The host tiny and CTA routes launch the SAME bodies (potrf_reg_run, potrf_cta_run) with a run-time uplo.
 // Collective: every item of ex calls with the same arguments; the op ends with a barrier (the
 // output is visible to every item). info = k > 0: the leading minor of order k is not positive
 // definite; -2: n > the tier's bound or A not square; -3: ws.local missing or misaligned.
@@ -49,12 +49,12 @@
 
 namespace batchlas::device {
 
-namespace potrf_detail {
+namespace detail {
 struct Potf2Result {
     std::int32_t info;  // 1-based first failing column, 0: success
     bool alive;         // live and no failure
 };
-}  // namespace potrf_detail
+}  // namespace detail
 
 // Column k. A macro, not a function: the sticky state must stay SSA in the function that holds
 // the loop (a by-value step function changes PotrfTiny's SASS), and the two loop headers differ
@@ -75,7 +75,7 @@ struct Potf2Result {
     d.scale(k, akk, act);                                                                 \
     d.update(k, act);
 
-template <Uplo UL, class Dist> BATCHLAS_DEVICE_INLINE potrf_detail::Potf2Result potf2(const Dist& d, bool live = true) {
+template <Uplo UL, class Dist> BATCHLAS_DEVICE_INLINE detail::Potf2Result potf2(const Dist& d, bool live = true) {
     static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
     using R = typename Dist::R;
     bool alive = live;
@@ -94,7 +94,7 @@ BATCHLAS_UNROLL_FULL
 }
 #undef BATCHLAS_POTF2_COLUMN
 
-namespace potrf_detail {
+namespace detail {
 
 // potf2's Rsqrt policy for the SLM forms: core inv_sqrt (rsqrt.approx + one Newton step on NVPTX
 // float, decision 10).
@@ -178,7 +178,7 @@ BATCHLAS_UNROLL_FULL
                 rA[k] = ::batchlas::device::select(act && k < n && k <= lane, upd, rA[k]);
             }
         } else {
-            static_assert(skips, "potrf_reg: the Slm broadcast skips columns >= n");
+            static_assert(skips, "potrf: the Slm broadcast skips columns >= n");
             using R4 = std::remove_cvref_t<decltype(bc.slm[0])>;  // a 16-byte vector of R
             constexpr int kCpx = static_cast<int>(sizeof(D) / sizeof(R));
             constexpr int kW = A::is_complex ? 2 : 4;
@@ -270,7 +270,7 @@ BATCHLAS_UNROLL_FULL
 // the partition `part` (lane = its lane, live = this partition's matrix exists). Upper at run
 // time: the host route launches one kernel for both triangles.
 template <class D, int N, class Part>
-BATCHLAS_DEVICE_INLINE std::int32_t potrf_reg(const Part& part, D* a, int ld, int lane, int n, bool live, bool upper) {
+BATCHLAS_DEVICE_INLINE std::int32_t potrf_reg_run(const Part& part, D* a, int ld, int lane, int n, bool live, bool upper) {
     constexpr bool real_diag = Arith<D>::is_complex;
     const bool row_live = live && (lane < n);
     Frag<D, N> rA;
@@ -387,7 +387,7 @@ template <class Rsqrt, class PM, class Bar> struct PanelRows {
         bar();
     }
 };
-}  // namespace potrf_detail
+}  // namespace detail
 
 // potf2 of the ib x ib local block `a` on one sub-group (SgSlm above). Real T: the body is a
 // by-value phase op the inliner takes after simplifying it alone (its column-0..3 reciprocal
@@ -396,9 +396,9 @@ template <int NB, class Rsqrt, int SG, class MA, class DV>
 BATCHLAS_DEVICE_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info,
                                       int info_base) {
     if constexpr (arith_t<arith::Fma, typename MA::value_type>::is_complex) {
-        [[clang::always_inline]] potrf_detail::potf2_sg_slm_body<NB, Rsqrt>(ex, a, ib, diag, info, info_base);
+        [[clang::always_inline]] detail::potf2_sg_slm_body<NB, Rsqrt>(ex, a, ib, diag, info, info_base);
     } else {
-        potrf_detail::potf2_sg_slm_body<NB, Rsqrt>(ex, a, ib, diag, info, info_base);
+        detail::potf2_sg_slm_body<NB, Rsqrt>(ex, a, ib, diag, info, info_base);
     }
 }
 
@@ -408,7 +408,7 @@ template <class Rsqrt, class Ex, class PM, class Bar>
 BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info,
                                           Bar&& bar) {
     using B = std::remove_reference_t<Bar>;
-    const potrf_detail::PanelRows<Rsqrt, PM, B> dist{p, c0, kb, n, bar, ex.lid(), ex.leader(), info};
+    const detail::PanelRows<Rsqrt, PM, B> dist{p, c0, kb, n, bar, ex.lid(), ex.leader(), info};
     return potf2<Uplo::Lower>(dist, ok).alive;
 }
 
@@ -417,7 +417,7 @@ BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, 
 // bit-equal to the src/sycl/device_scalar.hh forms, and sub(mul()) stays two roundings.
 // The BLAS / auxiliary ones (herk_tiles, trsm_rowfrag, gemv_n_slm_bcast, lacpy_*, HermLower,
 // slm_mat, TriTilePrefix, frag_*_row_herm_lower) wait here for their core forms (v22 core requests).
-namespace potrf_detail {
+namespace detail {
 
 // A Hermitian matrix read through its lower triangle (i >= c), uplo at run time: p[i + c ld], or
 // conj(p[c + i ld]) when upper. A = U^H U is the lower recurrence on this view.
@@ -661,7 +661,7 @@ constexpr int cta_items(int n, int nb, int ts) {
 
 // The public tier's local memory, one plan for size and carve: the lda x n tile (lda = n | 1,
 // odd: conflict-free row reads), the NB diagonal, the info cell and the tile prefix table.
-template <class D> struct CtaPlan {
+template <class D> struct PotrfCtaPlan {
     int lda;
     int rt0;
     ws::Slot<D> tile;
@@ -669,7 +669,7 @@ template <class D> struct CtaPlan {
     ws::Slot<int> fail;
     ws::Slot<int> off;
     WorkspaceSize size;
-    static constexpr CtaPlan make(int n) {
+    static constexpr PotrfCtaPlan make(int n) {
         using C = CtaConst<D>;
         const int lda = n | 1;
         const int m2_0 = (n > C::nb) ? (n - C::nb) : 0;
@@ -694,7 +694,7 @@ template <Scope SC> inline void cta_barrier(const sycl::nd_item<1>& it) {
 // ONE matrix (S, diag, fail, off, Ag already offset). `upper` is a load/store transform: A = U^H U
 // is the same recurrence on S(i,c) = conj(A(c,i)). The scope's items are the executor.
 template <typename D, typename R, int NB, int TS, Scope SC>
-inline void cta_body(const sycl::nd_item<1>& it, const sycl::sub_group& sg, bool p1_active, D* __restrict S, int lda,
+inline void potrf_cta_run(const sycl::nd_item<1>& it, const sycl::sub_group& sg, bool p1_active, D* __restrict S, int lda,
                      R* __restrict diag, int* __restrict fail, int* __restrict off, D* __restrict Ag, int ldg, int n,
                      bool upper) {
     const RtGroup<SC> ex(it);
@@ -760,10 +760,6 @@ template <class MA> BATCHLAS_DEVICE_INLINE int ld_of(const MA& a) { return stati
 // The register tier's order ceiling per type (complex<double>: a 32-row RowFrag spills).
 template <class T> inline constexpr int reg_max_n = (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32;
 
-template <class Tier> inline constexpr bool is_reg_v = false;
-template <int N, bool E> inline constexpr bool is_reg_v<tier::Reg<N, E>> = true;
-template <class Tier> inline constexpr bool is_cta_v = false;
-template <int N, class Alg> inline constexpr bool is_cta_v<tier::Cta<N, Alg>> = true;
 
 template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a) {
     using T = typename MA::value_type;
@@ -772,7 +768,7 @@ template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_r
     const int n = a.rows();
     if (n < 0 || n > N || a.cols() != n) return -2;
     if (n == 0) return 0;
-    const std::int32_t info = potrf_reg<dev_scalar_t<T>, N>(ex, base_ptr(a), ld_of(a), ex.lid(), n, true, UL == Uplo::Upper);
+    const std::int32_t info = potrf_reg_run<dev_scalar_t<T>, N>(ex, base_ptr(a), ld_of(a), ex.lid(), n, true, UL == Uplo::Upper);
     ex.barrier();
     return info;
 }
@@ -788,11 +784,11 @@ BATCHLAS_DEVICE_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a
     if (n == 0) return 0;
     std::byte* const lb = ws.local.get_raw();
     if (lb == nullptr || reinterpret_cast<std::uintptr_t>(lb) % 16 != 0) return -3;
-    const CtaPlan<D> pl = CtaPlan<D>::make(n);
+    const PotrfCtaPlan<D> pl = PotrfCtaPlan<D>::make(n);
     int* const fl = carve_local(ws, pl.fail).get_raw();
     constexpr Scope kScope = (WG == SG) ? Scope::Sub : Scope::Group;
     const bool p1_active = (WG == SG) || ex.sub().get_group_linear_id() == 0;
-    cta_body<D, real_t<D>, C::nb, C::ts, kScope>(ex.it, ex.sub(), p1_active, carve_local(ws, pl.tile).get_raw(), pl.lda,
+    potrf_cta_run<D, real_t<D>, C::nb, C::ts, kScope>(ex.it, ex.sub(), p1_active, carve_local(ws, pl.tile).get_raw(), pl.lda,
                                                  carve_local(ws, pl.diag).get_raw(), fl, carve_local(ws, pl.off).get_raw(),
                                                  base_ptr(a), ld_of(a), n, UL == Uplo::Upper);
     ex.barrier(Mem::Global);
@@ -802,25 +798,23 @@ BATCHLAS_DEVICE_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a
 // ---- the Blocked tier (and potrs / posv / potri's): any n on the in-group L3 -------------------
 // The L3 configuration of every Cholesky-family Blocked tier: 32 x 32 tiles, 8-deep slabs, 2 x 2
 // per item, so the executor is WorkGroup<256, 32>. Compile-time from T only (design B.3).
-template <class T> using BlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+template <class T> using PotrfBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 inline constexpr int kBlockedWg = 256;
-static_assert(BlockedCfg<float>::threads == kBlockedWg);
+static_assert(PotrfBlockedCfg<float>::threads == kBlockedWg);
 
-template <class Tier> inline constexpr bool is_blocked_v = false;
-template <int NB, class Alg> inline constexpr bool is_blocked_v<tier::Blocked<NB, Alg>> = true;
 
 // One plan for size and carve. The L3 stage slot is first in every Cholesky-family plan, so
 // posv's potrs carves the same bytes potrf did (potrs.hh static_asserts it).
-template <class T, int NB> struct BlockedPlan {
+template <class T, int NB> struct PotrfBlockedPlan {
     using D = dev_scalar_t<T>;
     ws::Slot<T> smem;     // BlockedCfg<T>'s stages
     ws::Slot<D> blk;      // the NB x NB diagonal block, ld NB
     ws::Slot<real_t<D>> diag;
     ws::Slot<int> fail;   // info of the current panel, written by lane 0 of sub-group 0
     WorkspaceSize size;
-    static constexpr BlockedPlan make() {
+    static constexpr PotrfBlockedPlan make() {
         Plan p;
-        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(BlockedCfg<T>::smem_elems));
+        const auto s = p.take<T>(ws::Space::Local, static_cast<std::size_t>(PotrfBlockedCfg<T>::smem_elems));
         const auto b = p.take<D>(ws::Space::Local, static_cast<std::size_t>(NB) * NB);
         const auto d = p.take<real_t<D>>(ws::Space::Local, static_cast<std::size_t>(NB));
         const auto f = p.take<int>(ws::Space::Local, 1);
@@ -846,7 +840,7 @@ BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const M
     using T = typename MA::value_type;
     using D = dev_scalar_t<T>;
     using R = real_t<D>;
-    using Cfg = BlockedCfg<T>;
+    using Cfg = PotrfBlockedCfg<T>;
     static_assert(std::is_same_v<Alg, alg::Default>, "potrf: tier::Blocked has one algorithm");
     static_assert(NB >= 1 && NB <= reg_max_n<T>, "potrf: tier::Blocked<NB> needs 1 <= NB <= 32 (complex<double>: 16)");
     static_assert(WG == Cfg::threads && SG == 32, "potrf: tier::Blocked runs on WorkGroup<256, 32>");
@@ -855,7 +849,7 @@ BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const M
     if (n < 0 || a.cols() != n) return -2;
     if (n == 0) return 0;
     if (!blocked_ws_ok(ws, false)) return -3;
-    constexpr BlockedPlan<T, NB> pl = BlockedPlan<T, NB>::make();
+    constexpr PotrfBlockedPlan<T, NB> pl = PotrfBlockedPlan<T, NB>::make();
     const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
     D* const S = carve_local(ws, pl.blk).get_raw();
     int* const fl = carve_local(ws, pl.fail).get_raw();
@@ -892,7 +886,7 @@ BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const M
     }
     return info;
 }
-}  // namespace potrf_detail
+}  // namespace detail
 
 // ---- the public op -----------------------------------------------------------------------------
 namespace routine {
@@ -905,24 +899,24 @@ template <Uplo UL> struct potrf {
 template <Uplo UL, int N, bool Exact, class T> struct tier_info<routine::potrf<UL>, tier::Reg<N, Exact>, T> {
     static constexpr int wg_size = 32;  // one sub-group: 32 / N matrices
     static constexpr int sg_size = 32;
-    static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= potrf_detail::reg_max_n<T>; }
+    static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= detail::reg_max_n<T>; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::potrf<UL>, tier::Cta<N, Alg>, T> {
-    using D = potrf_detail::dev_scalar_t<T>;
-    static constexpr int wg_size = potrf_detail::cta_items(N, potrf_detail::CtaConst<D>::nb, potrf_detail::CtaConst<D>::ts);
+    using D = detail::dev_scalar_t<T>;
+    static constexpr int wg_size = detail::cta_items(N, detail::CtaConst<D>::nb, detail::CtaConst<D>::ts);
     static constexpr int sg_size = 32;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return potrf_detail::CtaPlan<D>::make(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::PotrfCtaPlan<D>::make(n).size; }
 };
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrf<UL>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = potrf_detail::kBlockedWg;
+    static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
-    static constexpr bool admits(int n) { return n >= 0 && NB <= potrf_detail::reg_max_n<T>; }
-    static constexpr WorkspaceSize buffer_size(int) { return potrf_detail::BlockedPlan<T, NB>::make().size; }
+    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<T>; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<T, NB>::make().size; }
 };
 template <Uplo UL, class T> struct tiers<routine::potrf<UL>, T> {
-    using type = std::conditional_t<(potrf_detail::reg_max_n<T> >= 32),
+    using type = std::conditional_t<(detail::reg_max_n<T> >= 32),
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<32>>,
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<16>>>;
 };
@@ -938,14 +932,14 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrf_buffer_siz
 template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potrf<UL>, T, Tier>;
-    if constexpr (potrf_detail::is_reg_v<Tr>) {
+    if constexpr (tier::is_reg_v<Tr>) {
         (void)ws;
-        return potrf_detail::potrf_reg_op<UL, Tr::n_max>(ex, A);
-    } else if constexpr (potrf_detail::is_cta_v<Tr>) {
-        return potrf_detail::potrf_cta_op<UL, Tr::n_max, typename Tr::alg_type>(ex, A, ws);
+        return detail::potrf_reg_op<UL, Tr::n_max>(ex, A);
+    } else if constexpr (tier::is_cta_v<Tr>) {
+        return detail::potrf_cta_op<UL, Tr::n_max, typename Tr::alg_type>(ex, A, ws);
     } else {
-        static_assert(potrf_detail::is_blocked_v<Tr>, "potrf: tier::Reg<N>, tier::Cta<N> or tier::Blocked<NB>");
-        return potrf_detail::potrf_blocked_op<UL, Tr::nb, typename Tr::alg_type>(ex, A, ws);
+        static_assert(tier::is_blocked_v<Tr>, "potrf: tier::Reg<N>, tier::Cta<N> or tier::Blocked<NB>");
+        return detail::potrf_blocked_op<UL, Tr::nb, typename Tr::alg_type>(ex, A, ws);
     }
 }
 

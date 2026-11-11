@@ -159,7 +159,7 @@ template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead 
     std::int32_t* info = p.info_dev.data();
     const int n = p.n, ld = p.ld, stride = p.stride, batch = kBatch;
     sycl::queue& q = sycl_queue(ctx);
-    if constexpr (device::getrf_detail::is_reg_v<Tier>) {
+    if constexpr (device::tier::is_reg_v<Tier>) {
         constexpr int P = I::part_size, WG = 64, per = WG / P;
         const int groups = (batch + per - 1) / per;
         q.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -251,8 +251,8 @@ template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Rout
 }
 
 template <class Tier> std::string tier_name() {
-    if constexpr (device::getrf_detail::is_reg_v<Tier>) return "Reg<" + std::to_string(Tier::n_max) + ">";
-    else if constexpr (device::getrf_detail::is_blocked_v<Tier>) return "Blocked<" + std::to_string(Tier::nb) + ">";
+    if constexpr (device::tier::is_reg_v<Tier>) return "Reg<" + std::to_string(Tier::n_max) + ">";
+    else if constexpr (device::tier::is_blocked_v<Tier>) return "Blocked<" + std::to_string(Tier::nb) + ">";
     else return "Cta<" + std::to_string(Tier::n_max) + ">";
 }
 template <class T> std::string picked(const device::DeviceLimits& lim, int n) {
@@ -281,7 +281,7 @@ TYPED_TEST_SUITE(DeviceApiGetrfTest, Types);
 // and n = 5 also runs on Reg<32> (a tier wider than the order).
 TYPED_TEST(DeviceApiGetrfTest, RegTierIsTheTinyRouteBitForBit) {
     using T = TypeParam;
-    constexpr int cap = device::getrf_detail::reg_cap<T>();
+    constexpr int cap = device::detail::reg_cap<T>();
     for (int n : {3, 4, 5, 8}) expect_thin_launcher<device::tier::Reg<8>, T>(this->ctx, n, Route::Tiny, "Reg<8>");
     for (int n : {9, 15, 16}) expect_thin_launcher<device::tier::Reg<16>, T>(this->ctx, n, Route::Tiny, "Reg<16>");
     if constexpr (cap >= 32) {
@@ -315,7 +315,7 @@ TYPED_TEST(DeviceApiGetrfTest, WithTierLaunchesThePickedTier) {
     using T = TypeParam;
     for (int n : {13, 40}) {
         Prob<T> p(n, 0x7e11u + n);
-        const Route r = n <= 32 && n <= device::getrf_detail::reg_cap<T>() ? Route::Tiny : Route::Cta;
+        const Route r = n <= 32 && n <= device::detail::reg_cap<T>() ? Route::Tiny : Route::Cta;
         const bool host = host_runs<T>(this->ctx, n, r);
         if (host) run_host(this->ctx, p, r);
         device::with_tier<device::routine::getrf, T>(sycl_queue(this->ctx).get_device(), n,

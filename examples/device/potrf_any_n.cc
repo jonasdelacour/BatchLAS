@@ -24,7 +24,7 @@ struct alignas(16) Slab {
 template <class Tier> void factor(sycl::queue& q, T* a, int n, int ld, int batch, int* info) {
     constexpr int wg = batchlas::device::tier_info<Routine, Tier, T>::wg_size;
     const long stride = long(ld) * n;
-    if constexpr (batchlas::device::potrf_detail::is_reg_v<Tier>) {
+    if constexpr (batchlas::device::tier::is_reg_v<Tier>) {
         constexpr int N = Tier::n_max, per = wg / N;  // matrices per work-group
         const int groups = batch / per;  // batch is a multiple of 32: no partition idles
         q.parallel_for(sycl::nd_range<1>(std::size_t(groups) * wg, wg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -64,7 +64,7 @@ int run(sycl::queue& q, int n, int batch) {
 
     const char* tier = "";
     batchlas::device::with_tier<Routine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
-        tier = batchlas::device::potrf_detail::is_reg_v<Tier> ? "Reg" : batchlas::device::potrf_detail::is_cta_v<Tier> ? "Cta" : "Blocked";
+        tier = batchlas::device::tier::is_reg_v<Tier> ? "Reg" : batchlas::device::tier::is_cta_v<Tier> ? "Cta" : "Blocked";
         factor<Tier>(q, a, n, ld, batch, info);
     });
 
