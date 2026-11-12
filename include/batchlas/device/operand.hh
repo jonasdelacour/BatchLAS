@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include <batchlas/device/core.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/workspace.hh>
 
@@ -104,6 +105,15 @@ template <class T, int R, int C> struct Tile {
     BATCHLAS_DEVICE_INLINE T& operator()(int i, int j) { return v[i][j]; }
     BATCHLAS_DEVICE_INLINE const T& operator()(int i, int j) const { return v[i][j]; }
 };
+
+// f(i0 + x, j0 + y, t(x, y)) at every tile entry, row by row (the tile's global coordinates).
+template <class T, int R, int C, class F> BATCHLAS_DEVICE_INLINE void for_each(const Thread&, Tile<T, R, C>& t, int i0, int j0, F&& f) {
+BATCHLAS_UNROLL_FULL
+    for (int x = 0; x < R; ++x) {
+BATCHLAS_UNROLL_FULL
+        for (int y = 0; y < C; ++y) f(i0 + x, j0 + y, t(x, y));
+    }
+}
 
 // ---- Frag / Tile moves (compile-time-unrolled; a live bound masks the tail) ----------------
 // f[k] := x(k) for k < live, else zero (x(k) is not read past live).

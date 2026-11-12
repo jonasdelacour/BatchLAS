@@ -121,17 +121,17 @@ inline constexpr std::uint32_t pivot_key_lane(int key) {
 }
 
 // ---- level 1/2 steps of ?GETF2 ------------------------------------------------------------------
-// A(r0:m-1, c) /= d with ?GETF2's arms: one reciprocal and a multiply when 1/d is finite and
-// nonzero, else a division per element (the sfmin arm), the arm chosen OUTSIDE the loop (core
-// rscl selects per element). d != 0 is the caller's test.
+// A(r0:m-1, c) /= d with ?GETF2's arms (SafeRecip: one reciprocal and a multiply when 1/d is
+// finite and nonzero, else a division per element, the sfmin arm), the arm chosen OUTSIDE the
+// loop (core rscl selects per element). d != 0 is the caller's test.
 template <class Ex, class MA>
 BATCHLAS_DEVICE_INLINE void rscl_col(const Ex& ex, typename MA::value_type d, const MA& a, int r0, int c) {
-    using Ar = arith_t<arith::Fma, typename MA::value_type>;
-    const auto r = Ar::recip(d);
-    const bool use_mul = Ar::isfinite(r) && !Ar::is_zero(r);
+    using T = typename MA::value_type;
+    using Ar = arith_t<arith::Fma, T>;
+    const auto s = SafeRecip<T>::make(d);
     const Range rows{r0, a.rows()};
-    if (use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::mul(a(i, c), r); });
-    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::div(a(i, c), d); });
+    if (s.use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::mul(a(i, c), s.r); });
+    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::div(a(i, c), s.d); });
 }
 
 // A(k+1:, k+1:) -= A(k+1:, k) A(k, k+1:), flattened (docs/perf/lu.md#lu-negative-results), two
@@ -329,15 +329,12 @@ BATCHLAS_UNROLL_FULL
         if (rowid == w.row) rowid = j;  // ?SWAP as two labels
         else if (rowid == j) rowid = w.row;
         bc.publish(j, rA, rowid, w);
-        const T d = bc.pivot(j, rA, w);
-        const bool zero = Ar::is_zero(d);  // EXACT zero, no epsilon
-        piv.on_zero(zero, j);
-        const T rc = Ar::recip(d);
-        const bool use_mul = !zero && Ar::isfinite(rc) && !Ar::is_zero(rc);
+        const auto sr = SafeRecip<T>::make(bc.pivot(j, rA, w));  // zero: EXACT, no epsilon
+        piv.on_zero(sr.zero, j);
         const bool act = (rowid > j);
-        if (act) {
-            if (use_mul) rA[j] = Ar::mul(rA[j], rc);
-            else if (!zero) rA[j] = Ar::div(rA[j], d);  // ?GETF2's sfmin arm
+        if (act) {  // the arms written out: apply()'s value form adds a spill (cfloat n = 24)
+            if (sr.use_mul) rA[j] = Ar::mul(rA[j], sr.r);
+            else if (!sr.zero) rA[j] = Ar::div(rA[j], sr.d);  // ?GETF2's sfmin arm
         }
         // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled; unguarded by `zero`: a
         // zero pivot WAS the argmax, so every multiplier is 0 (?GER as a no-op).

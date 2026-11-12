@@ -159,7 +159,6 @@ public:
             "include/batchlas/util/group-collectives.hh",
             "src/ops/trsm/kernels/trsm_native.cc",
             "src/ops/trsm/trsm_native.hh",
-            "src/ops/trsm/trsm_v2.hh",
             // family: sg_left
             "src/ops/trsm/kernels/trsm_sg_left.cc",
             // common

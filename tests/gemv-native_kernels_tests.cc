@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Native gemv's five body shapes as the kernels write them: core MaybeZero + store<MacChain, Fma>,
-// conj_if view, Slot, dot_partial and shift_reduce, plus gemv's last private op fold_down
-// (src/ops/gemv/gemv_native_v2.hh), against host references. Every result is
+// conj_if view, Slot, dot_partial and shift_reduce (with a run-time lane stride: body 4's
+// fold), against host references. Every result is
 // checked twice: bit for bit against a host emulation of the documented rounding (std::fma chain,
 // shift-down tree) and with EXPECT_VERIFY against a long-double reference, so a rounding slip and
 // a wrong formula fail separately. Guards (agent-guide section 8): ld = rows + 5, batch strides
@@ -25,7 +25,6 @@
 
 #include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
-#include <src/ops/gemv/gemv_native_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -226,7 +225,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int i = lane % m, jsub = lane / m;
             D acc{};
             if (!al.zero && jsub < P) acc = device::dot_partial<false, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
-            acc = ops::gemv::dla::fold_down<P>(sg, acc, device::Dyn{m});
+            acc = device::shift_reduce<P>(sg, acc, AddOf{}, device::Dyn{m});
             if (lane < m) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::ColSubGroup) {
@@ -317,9 +316,9 @@ TYPED_TEST(GemvNativeKernelsTest, GemvBodiesComposeBitExact) {
     body_case<T, Shape::ColPartition>(d, C, false, true, "ColPartition C beta=0");
 }
 
-// fold_down over runtime strides the bodies do not use, and core shift_reduce (the leader fold of
+// shift_reduce over run-time strides the bodies do not use, and its unit stride (the leader fold of
 // bodies 3 and 5) on both team kinds.
-TYPED_TEST(GemvNativeKernelsTest, FoldDownStridesAndLeaderSum) {
+TYPED_TEST(GemvNativeKernelsTest, ShiftReduceStridesAndLeaderSum) {
     using T = TypeParam;
     using D = Dv<T>;
     constexpr int kCases = 7, kItemsF = 64;
@@ -333,11 +332,11 @@ TYPED_TEST(GemvNativeKernelsTest, FoldDownStridesAndLeaderSum) {
         const int l = int(sg.get_local_linear_id());
         const D x = v[b * kSg + l];
         D* ob = o + b * kCases * kSg + l;
-        ob[0 * kSg] = ops::gemv::dla::fold_down<2>(sg, x, device::Dyn{13});
-        ob[1 * kSg] = ops::gemv::dla::fold_down<4>(sg, x, device::Dyn{7});
-        ob[2 * kSg] = ops::gemv::dla::fold_down<8>(sg, x, device::Dyn{3});
-        ob[3 * kSg] = ops::gemv::dla::fold_down<16>(sg, x, device::Dyn{2});
-        ob[4 * kSg] = ops::gemv::dla::fold_down<32>(sg, x);
+        ob[0 * kSg] = device::shift_reduce<2>(sg, x, AddOf{}, device::Dyn{13});
+        ob[1 * kSg] = device::shift_reduce<4>(sg, x, AddOf{}, device::Dyn{7});
+        ob[2 * kSg] = device::shift_reduce<8>(sg, x, AddOf{}, device::Dyn{3});
+        ob[3 * kSg] = device::shift_reduce<16>(sg, x, AddOf{}, device::Dyn{2});
+        ob[4 * kSg] = device::shift_reduce<32>(sg, x, AddOf{});
         ob[5 * kSg] = device::shift_reduce<4>(device::Partition<4>{sg}.part, x, AddOf{});
         ob[6 * kSg] = device::shift_reduce<32>(device::SubGroup<32>{sg}.sg, x, AddOf{});
     });
@@ -356,7 +355,7 @@ TYPED_TEST(GemvNativeKernelsTest, FoldDownStridesAndLeaderSum) {
             }
         }
     EXPECT_EQ(checked, kItemsF * (13 + 7 + 3 + 2 + 1 + 8 + 1));
-    EXPECT_EQ(diff, 0) << "fold_down / shift_reduce is not the shift-down tree bit for bit";
+    EXPECT_EQ(diff, 0) << "shift_reduce is not the shift-down tree bit for bit";
     // The tree is a sum: every head equals its members' total to the blas bound.
     double worst = 0;
     for (int l = 0; l < 13; ++l) {

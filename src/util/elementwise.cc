@@ -9,7 +9,7 @@
 #include <complex>
 #include <stdexcept>
 
-#include <src/kernels/common/elementwise_glue_v2.hh>
+#include <batchlas/device.hh>
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
@@ -80,7 +80,7 @@ Event elementwise_into(Queue& ctx,
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
     return launch_2d<ElementwiseBinaryKernel<T, Op>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
-        device::glue::map2d(ex, device::item(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, device::item(Av, b, m, n),
+        device::map2d(ex, device::item(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, device::item(Av, b, m, n),
                         device::item(Bv, b, m, n));
     });
 }
@@ -102,7 +102,7 @@ Event axpby_into(Queue& ctx,
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
     return launch_2d<AxpbyKernel<T>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
-        device::glue::geam(ex, alpha, device::item(Av, b, m, n), beta, device::item(Bv, b, m, n), device::item(Cv, b, m, n));
+        device::geam(ex, alpha, device::item(Av, b, m, n), beta, device::item(Bv, b, m, n), device::item(Cv, b, m, n));
     });
 }
 
@@ -125,10 +125,10 @@ Event triangular_mask_into(Queue& ctx,
     const auto run = [&](auto uplo_tag) {
         return launch_2d<TriangularMaskKernel<T, decltype(uplo_tag)::value>>(ctx, m, n, A.batch_size(), mask,
                                                                             [=](const auto& ex, int b) {
-            device::glue::trimask(ex, device::glue::tri(uplo_tag, kc), device::item(Av, b, m, n), device::item(Cv, b, m, n));
+            device::trimask(ex, device::tri(uplo_tag, kc), device::item(Av, b, m, n), device::item(Cv, b, m, n));
         });
     };
-    return uplo == Uplo::Upper ? run(device::glue::UpperC{}) : run(device::glue::LowerC{});
+    return uplo == Uplo::Upper ? run(device::UpperC{}) : run(device::LowerC{});
 }
 
 template <typename T>

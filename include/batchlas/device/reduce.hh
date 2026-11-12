@@ -107,14 +107,14 @@ BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi)
     return v;
 }
 
-// Shift fold of Count lanes: lane 0 of each aligned Count-lane block ends with
-// op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partial values (the
-// result is LEADER-ONLY: broadcast it if every lane needs it). Count <= the partition width.
-template <int Count, class Part, class T, class Op = sycl::plus<T>>
-BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}) {
+// Shift fold of lanes {l + s t : t < Count} onto head lane l (stride s: Unit, Ext or a run-time
+// Dyn), op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partials (LEADER-ONLY
+// result: broadcast it if every lane needs it). Count * s <= the partition width.
+template <int Count, class Part, class T, class Op = sycl::plus<T>, class Stride = Unit>
+BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}, Stride stride = {}) {
     static_assert(detail::is_pow2(Count), "shift_reduce: Count is a power of two");
 #pragma unroll
-    for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(d)));
+    for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(int(stride) * d)));
     return v;
 }
 

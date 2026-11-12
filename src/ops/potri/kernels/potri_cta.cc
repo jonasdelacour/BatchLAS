@@ -3,8 +3,8 @@
 // its upper one P = diag(L) L^-1 transposed, so neither overwrites the other; Upper runs the same
 // code on L = U^H. Both O(m^3) phases accumulate TS x TS register tiles (one or two per work-item)
 // and read 2 TS local values per TS^2 multiply-adds. evidence: docs/perf/potri.md#potri-the-algorithm
-// The body is written on device LA core (include/batchlas/device.hh) and the
-// potri-private tile ops of src/ops/potri/potri_v2.hh.
+// The body is written on device LA core (include/batchlas/device.hh): the register-tile trsm /
+// gemm_sub / ger / for_each on the Thread executor, for_each_owned_2d_batched, trttp and PackedTri.
 //
 // Invariants: acc[] tiles are indexed only by unrolled constants (a dynamic index moves them to
 // local memory); every barrier is at the top level or under a work-group-uniform condition.
@@ -16,7 +16,7 @@
 #include <src/sycl/impl.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/arith.hh>
-#include <src/ops/potri/potri_v2.hh>
+#include <batchlas/device.hh>
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/batch_mask.hh>
@@ -126,7 +126,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                     z = 0;
                 }
                 if (z >= 0) { // work-group uniform; no other group of this launch writes these columns
-                    tpcopy(ex, lower, md == 1, sn, Af, slots + item * tri, md == 1 ? j0 : 0, md == 1 ? j0 + m : sn);
+                    device::trttp(ex, lower ? Uplo::Lower : Uplo::Upper, md == 1, sn, Af, slots + item * tri, md == 1 ? j0 : 0,
+                                  md == 1 ? j0 + m : sn);
                     return;
                 }
             }
@@ -141,7 +142,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 int i, j;
                 D v, dg;
             };
-            for_each_owned_2d_batched<4>(
+            device::for_each_owned_2d_batched<4>(
                 ex, mpw, mpw,
                 [&](bool live, int r, int c) {
                     Staged e;
@@ -183,9 +184,9 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
             for (int q = 0; q < NT; ++q) {
                 const int t = tid + q * wg;
                 has[q] = t < ntile;
-                const RowCol rc = tri_index(t);
-                ti[q] = rc.r * TS;
-                tj[q] = rc.c * TS;
+                const auto rc = device::PackedTri<Uplo::Lower, device::PackOrder::ByRows>::decode(t, 0);
+                ti[q] = rc.i * TS;
+                tj[q] = rc.j * TS;
             }
             device::Tile<D, TS, TS> acc[NT];
 
@@ -199,8 +200,9 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                     BATCHLAS_UNROLL_FULL
                     for (int q = 0; q < NT; ++q) {
                         if (!has[q] || ti[q] != kb) continue;
-                        reg::trsm_llnu(th, [&](int x, int c) { return s(kb + x, kb + c); }, acc[q]);
-                        reg::for_each(th, acc[q], kb, tj[q], [&](int i, int j, const D& v) {
+                        device::trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::Unit, device::arith::FmaSplit>(
+                            th, device::One{}, [&](int x, int c) { return s(kb + x, kb + c); }, acc[q]);
+                        device::for_each(th, acc[q], kb, tj[q], [&](int i, int j, const D& v) {
                             if (j < i) s(j, i) = v;
                         });
                     }
@@ -209,7 +211,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                     for (int q = 0; q < NT; ++q) {
                         if (!has[q] || ti[q] <= kb || tj[q] > kb) continue;
                         const bool diag = tj[q] == kb; // P(K, K) is unit lower: zero above, one on it
-                        reg::gemm_sub<TS>(
+                        device::gemm_sub<TS, device::arith::FmaSplit>(
                             th, [&](int x, int c) { return s(ti[q] + x, kb + c); },
                             [&](int c, int y) { return !diag || y <= c ? s(tj[q] + y, kb + c) : D{}; }, acc[q]);
                     }
@@ -218,7 +220,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < NT; ++q) {
                     if (!has[q]) continue;
-                    reg::for_each(th, acc[q], ti[q], tj[q], [&](int i, int j, const D& v) {
+                    device::for_each(th, acc[q], ti[q], tj[q], [&](int i, int j, const D& v) {
                         if (i > j) {
                             s(j, i) = dev_mul_real(v, rd[i]);
                             s(i, j) = D{};
@@ -248,7 +250,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                     device::Frag<D, TS> xi, xj;
                     device::load(xi, [&](int x) { return dev_conj(s(ti[q] + x, k)); });
                     device::load(xj, [&](int y) { return s(tj[q] + y, k); });
-                    reg::ger(th, xi, xj, acc[q]);
+                    device::ger<device::arith::Fma>(th, xi, xj, acc[q]);
                 }
             }
             ex.barrier();
@@ -256,7 +258,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
             BATCHLAS_UNROLL_FULL
             for (int q = 0; q < NT; ++q) {
                 if (!has[q]) continue;
-                reg::for_each(th, acc[q], ti[q], tj[q], [&](int i, int j, const D& v) {
+                device::for_each(th, acc[q], ti[q], tj[q], [&](int i, int j, const D& v) {
                     if (i > j) s(i, j) = v;
                     else if (i == j) rd[i] = dev_real(v);
                 });

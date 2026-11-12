@@ -201,7 +201,7 @@ TYPED_TEST(DeviceLapackLuTest, SafeRecipIsGetf2ScalingBitForBit) {
 // ---- views and the row gather on a run-time width ------------------------------------------
 
 // Per item: src (ldA x NA) with the view at (i0, j0), m x n. out regions (each poisoned):
-// [lapmr_copy | core lacpy of conj_if(trans(src))], ld ldB / ldT.
+// [lapmr (0-based) | core lacpy of conj_if(trans(src))], ld ldB / ldT.
 template <class T, int WG> void gather_case(Dev& dev) {
     using D = DevT<T>;
     constexpr int m = 37, n = 5, i0 = 2, j0 = 1, ldA = m + 6, NA = n + 2, ldB = m + 5, ldT = n + 2;
@@ -216,7 +216,7 @@ template <class T, int WG> void gather_case(Dev& dev) {
         const device::RtGroup<> ex(it);  // the width is the launch's, a run-time value
         const auto src = device::mat_wide(reinterpret_cast<const D*>(s) + std::size_t(b) * kSrc, m + i0, NA, ldA).sub(i0, j0, m, n);
         D* ob = reinterpret_cast<D*>(o) + std::size_t(b) * kOut;
-        device::detail::lapmr_copy(ex, src, perm, device::mat_wide(ob, m, n, ldB));
+        device::lapmr<device::Direct::Forward, device::alg::Stepped, 0>(ex, src, perm, device::mat_wide(ob, m, n, ldB));
         device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, device::conj_if(device::op_view<Transpose::Trans>(src), true),
                                                                      device::mat_wide(ob + ldB * n, n, m, ldT));
     });
@@ -240,7 +240,7 @@ template <class T, int WG> void gather_case(Dev& dev) {
                 else bad += !same_bits(v, conj_h(A(i, j)));
             }
     }
-    EXPECT_EQ(bad, 0) << "WG " << WG << ": lapmr_copy / conj_if(trans) values";
+    EXPECT_EQ(bad, 0) << "WG " << WG << ": lapmr / conj_if(trans) values";
     EXPECT_EQ(pad, 0) << "WG " << WG << ": a write outside the view";
 }
 

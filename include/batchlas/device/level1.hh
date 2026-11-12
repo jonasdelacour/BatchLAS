@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/reduce.hh>
 #include <batchlas/device/scalar.hh>
@@ -178,6 +179,40 @@ BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f)
     }
 }
 
+namespace detail {
+// (e % m, e / m) for e = start, start + step, ... with no division per step.
+struct Walk2d {
+    int r, c, dr, dc, m;
+    BATCHLAS_DEVICE_INLINE Walk2d(int start, int step, int m_) : r(start % m_), c(start / m_), dr(step % m_), dc(step / m_), m(m_) {}
+    BATCHLAS_DEVICE_INLINE void next() {
+        r += dr;
+        c += dc;
+        if (r >= m) {
+            r -= m;
+            ++c;
+        }
+    }
+};
+}  // namespace detail
+// for_each_owned_2d's column-major walk (alg::Walk), U positions per round: load(live, r, c) for
+// all U (their loads overlap), then use(item) for all U. A dead slot (past the grid) still gets
+// load(false, ...) and use().
+template <int U, class Ex, class Load, class Use>
+BATCHLAS_DEVICE_INLINE void for_each_owned_2d_batched(const Ex& ex, int rows, int cols, Load&& load, Use&& use) {
+    using Item = decltype(load(true, 0, 0));
+    for (detail::Walk2d w(ex.lid(), ex.width(), rows); w.c < cols;) {
+        Item e[U];
+BATCHLAS_UNROLL_FULL
+        for (int u = 0; u < U; ++u) {
+            const bool live = w.c < cols;
+            e[u] = load(live, w.r, w.c);
+            if (live) w.next();
+        }
+BATCHLAS_UNROLL_FULL
+        for (int u = 0; u < U; ++u) use(e[u]);
+    }
+}
+
 // ElemAt (exec.hh): the item's one element; Exact drops the extent test. ElemIn: the
 // element relative to its block origin, column test first.
 template <class Alg = alg::Walk, class Idx = int, bool E, class F>
@@ -192,6 +227,12 @@ BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const ElemIn& ex, int m, int n, F&
     }
 }
 
+// 2-D elementwise (Grid2D or any Cyclic executor, for_each_owned_2d):
+// out(i, j) = f(ins(i, j)...)
+template <class Ex, class Out, class F, class... In>
+BATCHLAS_DEVICE_INLINE void map2d(const Ex& ex, const Out& out, F&& f, const In&... ins) {
+    for_each_owned_2d(ex, out.rows(), out.cols(), [&](int i, int j) { out(i, j) = f(ins(i, j)...); });
+}
 // out(i) = f(ins(i)...)
 template <class Ex, class Out, class F, class... In>
 BATCHLAS_DEVICE_INLINE void map(const Ex& ex, const Out& out, F&& f, const In&... ins) {

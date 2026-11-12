@@ -8,7 +8,6 @@
 
 #include <src/ops/trsm/trsm_native.hh>
 #include <src/ops/trsm/trsm_canonical.hh>
-#include <src/ops/trsm/trsm_v2.hh>
 
 #include <src/linalg-impl.hh>
 #include <src/util/resident_capacity.hh>
@@ -153,7 +152,7 @@ Event trsm_native_v1(Queue& ctx,
 
                 D* Bb = b_ptr + static_cast<std::ptrdiff_t>(b) * stride_b;
                 // ConjTrans conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
-                const dla::CanonTri<const D, kLeft> L{a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a, lda, n,
+                const device::CanonTri<const D, kLeft> L{a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a, lda, n,
                                                       fwd, do_trans, do_conj};
 
                 D* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
@@ -162,7 +161,7 @@ Event trsm_native_v1(Queue& ctx,
                 D* sTile = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 if (lane == 0) sDiv[0] = 0;
-                dla::tp_pack_lower<N>(ex, L, n, sLc);
+                device::tp_pack_lower<N>(ex, L, n, sLc);
                 // REQUIRED; without it the solve returns WRONG ANSWERS: sLc is
                 // written strided by lane and read by a different lane, and lane 0
                 // zeroes sDiv[0] while any lane may store 1. The race cannot show
@@ -171,23 +170,23 @@ Event trsm_native_v1(Queue& ctx,
                 // Mem::Global fences both spaces, as the legacy sycl::group_barrier did.
                 ex.barrier(device::Mem::Global);
                 // A non-finite 1/Lc(s,s) flips the group-uniform flag back to division.
-                dla::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
+                device::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
                 ex.barrier(device::Mem::Global);
-                const dla::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
+                const device::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
 
                 device::Frag<D, N> x;
                 if constexpr (kStageLeft) {
                     constexpr int ROUNDS = (N + TILE_ROWS - 1) / TILE_ROWS;
-                    const dla::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
+                    const device::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
                     D* my_col = sTile + lane * (TILE_ROWS + 1);
 BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
                         // Barrier BEFORE overwriting the tile (last round's reads); no
                         // barrier sits under `live`: one only some lanes reach is undefined.
                         ex.barrier(device::Mem::Global);
-                        dla::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
+                        device::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
                         ex.barrier(device::Mem::Global);
-                        dla::trsv_lower_rows<N, TILE_ROWS, Ar>(x, k * TILE_ROWS, sLc, dg, [&](int s) {
+                        device::trsv_lower_rows<N, TILE_ROWS, Ar>(x, k * TILE_ROWS, sLc, dg, [&](int s) {
                             D rhs{};
                             if (live && s < n) rhs = Ar::mul(alpha_d, my_col[s - k * TILE_ROWS]);
                             return rhs;
@@ -197,13 +196,13 @@ BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
                         // A non-live lane's column is one lacpy_tile_out refuses to write.
                         ex.barrier(device::Mem::Global);
-                        dla::frag_copy_out<TILE_ROWS>(x, k * TILE_ROWS, my_col);
+                        device::frag_copy_out<TILE_ROWS>(x, k * TILE_ROWS, my_col);
                         ex.barrier(device::Mem::Global);
-                        dla::lacpy_tile_out<TILE_ROWS, TILE_ROWS + 1>(ex, sTile, Bc, k * TILE_ROWS, u0);
+                        device::lacpy_tile_out<TILE_ROWS, TILE_ROWS + 1>(ex, sTile, Bc, k * TILE_ROWS, u0);
                     }
                 } else {
-                    const auto bu = dla::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(u);
-                    dla::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+                    const auto bu = device::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(u);
+                    device::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
                         D rhs{};
                         if (live && s < n) rhs = Ar::mul(alpha_d, bu(s));
                         return rhs;

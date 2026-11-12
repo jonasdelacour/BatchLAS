@@ -5,10 +5,8 @@ duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand
 duplicate include/batchlas/device/lapack/sb2st.hh fn_vec/include/batchlas/device/view.hh
 duplicate include/batchlas/device/lapack/sytrd.hh dotc/include/batchlas/device/level1.hh
 duplicate include/batchlas/device/level1.hh dotc/include/batchlas/device/lapack/sytrd.hh
-duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
 duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
 duplicate include/batchlas/device/view.hh fn_vec/include/batchlas/device/lapack/sb2st.hh
-duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::abs2_scaled
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::colsum_colperlane
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::frag_rank1
@@ -48,7 +46,6 @@ layout-detail-use src/ops/getrf/kernels/getrf_tiny.cc device::detail::PivotWinne
 layout-detail-use src/ops/getrf/kernels/getrf_tiny.cc device::detail::bcast_shuffle
 layout-detail-use src/ops/getrs/kernels/getrs_fused.cc device::detail::gemm_nr
 layout-detail-use src/ops/getrs/kernels/getrs_fused.cc device::detail::trsm_lane
-layout-detail-use src/ops/getrs/kernels/getrs_native.cc device::detail::lapmr_copy
 layout-detail-use src/ops/iluk/iluk.cc device::detail::eliminate_row
 layout-detail-use src/ops/iluk/iluk.cc device::detail::pivot_modulus
 layout-detail-use src/ops/iluk/iluk.cc device::detail::shifted_pivot
@@ -145,12 +142,8 @@ layout-detail-use src/ops/sytrs/kernels/sytrs_kernels.cc device::detail::ldl_dso
 layout-detail-use src/ops/sytrs/kernels/sytrs_kernels.cc device::detail::logical_piv
 layout-detail-use src/ops/sytrs/kernels/sytrs_kernels.cc device::detail::piv_list_valid
 layout-detail-use src/ops/sytrs/kernels/sytrs_kernels.cc device::detail::rev_mat
-layout-detail-use src/ops/trsm/trsm_v2.hh device::detail::size_of
 layout-ns include/batchlas/device/level3/mma.hh batchlas::device::l3::detail
 layout-ns include/batchlas/device/level3/schedule.hh batchlas::device::l3::detail
-layout-ns src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue
-layout-ns src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::impl
-layout-ns src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::alignas
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::kTinySubGroupSize
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::tiny_bcast
@@ -167,7 +160,6 @@ layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::tiny_r4_p
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::tiny_r4_width
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::tiny_select
 layout-src-ns src/kernels/common/tiny_device.hh batchlas::tiny_native::tiny_store_full
-layout-src-ns src/ops/gemv/gemv_native_v2.hh batchlas::ops::gemv::dla::fold_down
 layout-src-ns src/ops/geqrf/geqrf_panel_reg_device.hh batchlas::geqrf_native::GeqrfPanelRegPlan
 layout-src-ns src/ops/geqrf/geqrf_panel_reg_device.hh batchlas::geqrf_native::geqrf_panel_reg_max_rows
 layout-src-ns src/ops/geqrf/geqrf_panel_reg_device.hh batchlas::geqrf_native::geqrf_panel_reg_real_slots
@@ -202,22 +194,6 @@ layout-src-ns src/ops/geqrf/kernels/geqrf_tiny_device.hh batchlas::geqrf_native:
 layout-src-ns src/ops/geqrf/kernels/geqrf_tiny_device.hh batchlas::geqrf_native::kGeqrfTinyThreadsPerSm
 layout-src-ns src/ops/getrf/kernels/getrf_panel_reg_device.hh batchlas::getrf_native::getf2_panel_reg_device
 layout-src-ns src/ops/potrf/kernels/potrf_lpanel_device.hh batchlas::potrf_native::potrf_lpanel_body
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::CanonRhs
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::CanonTri
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::ColsFrom
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::FlipRows
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::GuardedRecip
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::MapCols
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::TpDiag
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::frag_copy_out
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::guarded_recip
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::lacpy_tile_in
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::lacpy_tile_out
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::tp_diag_recip
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::tp_idx
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::tp_pack_lower
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::trsm_lower_rowfrag
-layout-src-ns src/ops/trsm/trsm_v2.hh batchlas::ops::trsm::dla::trsv_lower_rows
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::Cx
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::DevMap
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::IsDevComplex
@@ -236,33 +212,3 @@ layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::dev_real
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::dev_recip
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::dev_sub
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::fma_acc
-layout-v2 src/kernels/common/elementwise_glue_v2.hh file name
-layout-v2 src/ops/gemv/gemv_native_v2.hh file name
-layout-v2 src/ops/gesvd/gesvd-ormbr_v2.hh file name
-layout-v2 src/ops/potri/potri_v2.hh file name
-layout-v2 src/ops/trsm/trsm_v2.hh file name
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::DiagC
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::LowerC
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::Tri
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::UploC
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::UpperC
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::geam
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::impl::is_lower
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::impl::is_unit
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::impl::tile_cols
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::map2d
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tile_load
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tile_load_trans
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tile_store
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tile_store_diag
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tile_store_pair
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tri
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::tri_expand
-src-device src/kernels/common/elementwise_glue_v2.hh batchlas::device::glue::trimask
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::ColOf
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::RowOf
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::SubOf
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::col_of
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::item_n
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::row_of
-src-device src/ops/gesvd/gesvd-ormbr_v2.hh batchlas::device::gesvd_glue::sub_of

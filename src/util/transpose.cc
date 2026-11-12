@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include <src/kernels/common/elementwise_glue_v2.hh>
+#include <batchlas/device.hh>
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 
@@ -41,10 +41,10 @@ namespace batchlas {
                     // B = A^T through a padded SLM tile that holds the A tile transposed.
                     const auto t = device::mat<device::Mem::Local>(util::get_raw_ptr(tile), TILE, TILE, TILE + 1);
                     const int row0 = static_cast<int>(item.get_group(2)) * TILE, col0 = static_cast<int>(item.get_group(1)) * TILE;
-                    device::glue::tile_load_trans<TILE>(ex, device::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
+                    device::tile_load_trans<TILE>(ex, device::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
                                                     row0, col0, t);
                     ex.barrier();
-                    device::glue::tile_store<TILE>(ex, t, device::mat(dst + static_cast<size_t>(b) * stride_dst, cols, rows, ld_dst),
+                    device::tile_store<TILE>(ex, t, device::mat(dst + static_cast<size_t>(b) * stride_dst, cols, rows, ld_dst),
                                                col0, row0);
                 });
         });

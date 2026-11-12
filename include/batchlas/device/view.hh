@@ -235,6 +235,87 @@ template <class T, class... U> BATCHLAS_DEVICE_INLINE Refs<T, 1 + int(sizeof...(
 }
 
 // ---- packed triangles ----------------------------------------------------------------------
+// ---- trsm's canonical-order views (one kernel serves all 24 trsm cases) --------------------
+// Element (s, t) of the canonical lower factor Lc of a stored triangle: rho(s) = fwd ? s :
+// n-1-s maps canonical to stored indices, Left keeps (row, col) and Right swaps them, trans
+// reads A(c, r), conj conjugates (the diagonal too). Offsets are 64-bit; Ld is the ld's type.
+template <class T, bool Left, class Ld = int> struct CanonTri {
+    using value_type = std::remove_cv_t<T>;
+    T* a;
+    Ld ld;
+    int n;
+    bool fwd, trans, conj;
+    BATCHLAS_DEVICE_INLINE value_type operator()(int s, int t) const {
+        const int rs = fwd ? s : (n - 1 - s);
+        const int rt = fwd ? t : (n - 1 - t);
+        const int r = Left ? rs : rt;
+        const int c = Left ? rt : rs;
+        value_type v = trans ? a[c + static_cast<std::ptrdiff_t>(r) * ld] : a[r + static_cast<std::ptrdiff_t>(c) * ld];
+        if (conj) v = Arith<value_type>::conj(v);
+        return v;
+    }
+    // Lc(s, s), addressed as rho(s) * (ld + 1). A kernel body calls this, never operator():
+    // see scripts/check_kernel_entry_calls.py (the SemaSYCL kernel-body quirk).
+    BATCHLAS_DEVICE_INLINE value_type diag(int s) const {
+        const std::ptrdiff_t rs = fwd ? s : (n - 1 - s);
+        value_type v = a[rs + rs * static_cast<std::ptrdiff_t>(ld)];
+        if (conj) v = Arith<value_type>::conj(v);
+        return v;
+    }
+};
+
+// Right-hand side u in canonical order: element s is p[b0 + s*ds + u*du]. Left: column u of
+// B, rows flipped when !fwd; Right: row u of B, columns flipped.
+template <class T, bool Left> struct CanonRhs {
+    T* p;
+    std::ptrdiff_t b0, ds, du;
+    struct Col {
+        T* p;
+        std::ptrdiff_t b0, ds, udu;
+        BATCHLAS_DEVICE_INLINE T& operator()(int s) const { return p[b0 + static_cast<std::ptrdiff_t>(s) * ds + udu]; }
+    };
+    BATCHLAS_DEVICE_INLINE CanonRhs(T* p_, int n, int ld, bool fwd) : p(p_) {
+        const std::ptrdiff_t unit_s = Left ? 1 : static_cast<std::ptrdiff_t>(ld);
+        du = Left ? static_cast<std::ptrdiff_t>(ld) : 1;
+        b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
+        ds = fwd ? unit_s : -unit_s;
+    }
+    BATCHLAS_DEVICE_INLINE Col rhs(int u) const { return {p, b0, ds, u * du}; }
+};
+
+// An m x q column-major matrix with its rows read in canonical order: (s, c) is
+// p[rho(s) + c*ld], rho(s) = fwd ? s : m-1-s.
+template <class T, class Ld = int> struct FlipRows {
+    T* p;
+    Ld ld;
+    int m, q;
+    bool fwd;
+    BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    BATCHLAS_DEVICE_INLINE int cols() const { return q; }
+    BATCHLAS_DEVICE_INLINE T& operator()(int s, int c) const {
+        const int row = fwd ? s : (m - 1 - s);
+        return p[static_cast<std::ptrdiff_t>(row) + static_cast<std::ptrdiff_t>(c) * ld];
+    }
+};
+
+// Columns c0.. of v: (r, j) is v(r, c0 + j), a reference (the core store_row target).
+template <class V> struct ColsFrom {
+    V v;
+    int c0;
+    BATCHLAS_DEVICE_INLINE auto& operator()(int r, int j) const { return v(r, c0 + j); }
+};
+template <class V> ColsFrom(V, int) -> ColsFrom<V>;
+
+// Columns c0.. of v read through f: (r, j) is f(v(r, c0 + j)), a value (the core load_row
+// source; f scales by alpha or negates, so the product is formed only for a live element).
+template <class V, class F> struct MapCols {
+    V v;
+    int c0;
+    F f;
+    BATCHLAS_DEVICE_INLINE auto operator()(int r, int j) const { return f(v(r, c0 + j)); }
+};
+template <class V, class F> MapCols(V, int, F) -> MapCols<V, F>;
+
 // The element map of an n x n triangle stored packed (no padding), LAPACK's AP for ByCols:
 // Upper (i <= j): i + j (j + 1) / 2; Lower (i >= j): i + j (2n - j - 1) / 2. ByRows is the
 // transposed traversal: Lower row i holds (i, 0..i): i (i + 1) / 2 + j; Upper row i holds
@@ -256,15 +337,16 @@ template <Uplo UL, PackOrder OR = PackOrder::ByCols> struct PackedTri {
     struct RowCol {
         int i, j;
     };
-    static RowCol decode(int k, int n) {
+    // Exact for k < 2^30: a float sqrt estimate, then at most a step each way.
+    BATCHLAS_DEVICE_INLINE static RowCol decode(int k, [[maybe_unused]] int n) {
         constexpr bool cols = OR == PackOrder::ByCols;
         constexpr bool head = (UL == Uplo::Upper) == cols;
         int b, a;
         if constexpr (head) {
             // largest b with b (b + 1) / 2 <= k
             b = static_cast<int>((sycl::sqrt(8.0f * static_cast<float>(k) + 1.0f) - 1.0f) * 0.5f);
-            while (b * (b + 1) / 2 > k) --b;
             while ((b + 1) * (b + 2) / 2 <= k) ++b;
+            while (b * (b + 1) / 2 > k) --b;
             a = k - b * (b + 1) / 2;
         } else {
             // line b starts at s(b) = b (2n - b + 1) / 2; count from the end: r = size - 1 - k
@@ -288,6 +370,18 @@ template <Uplo UL, PackOrder OR, class P> struct PackedMat {
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
 template <Uplo UL, PackOrder OR = PackOrder::ByCols, class P> BATCHLAS_DEVICE_INLINE PackedMat<UL, OR, P> packed(P p, int n) { return {p, n}; }
+
+// v / L(s, s) for a packed L: v * rd(s), or a true division once any reciprocal was
+// non-finite (divide is group-uniform); unit leaves v.
+template <class T> struct TpDiag {
+    const T* ap;
+    const T* rd;
+    bool unit, divide;
+    template <class Ar> BATCHLAS_DEVICE_INLINE T apply(int s, T v) const {
+        if (!unit) v = divide ? Ar::div(v, ap[PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, s, 0)]) : Ar::mul(v, rd[s]);
+        return v;
+    }
+};
 
 // ---- Packet: one vector-width unit as a plain struct ---------------------------------------
 // Bytes / sizeof(T) elements loaded or stored through a pointer the caller guarantees is

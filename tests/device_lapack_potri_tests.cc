@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// potri-private device LA ops (src/ops/potri/potri_v2.hh) against host references; the shared
+// The device LA core ops potri_cta runs (Thread trsm / gemm_sub / ger / for_each on register tiles,
+// for_each_owned_2d_batched, the column-range trttp, PackedTri decode) against host references; the shared
 // ops they sit on (RtGroup, for_each_owned, find_first, Tile, Frag, load, fill, arith::Fma) are
 // covered by device_core_ops_tests. Guards (docs/developer/agent-guide.md section 8): non-natural
 // ld / inc, rectangular tiles and grids (R != C, a work-group stride that is no multiple of rows),
@@ -21,9 +22,9 @@
 #include <string>
 #include <vector>
 
+#include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/arith.hh>
-#include <src/ops/potri/potri_v2.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 
@@ -169,8 +170,8 @@ using Types = ::testing::Types<float, double, std::complex<float>, std::complex<
 TYPED_TEST_SUITE(DeviceLapackPotriTest, Types);
 
 bool tri_ok(int t) {
-    const ops::potri::RowCol rc = ops::potri::tri_index(t);
-    return rc.c >= 0 && rc.c <= rc.r && static_cast<long long>(rc.r) * (rc.r + 1) / 2 + rc.c == t;
+    const auto rc = device::PackedTri<Uplo::Lower, device::PackOrder::ByRows>::decode(t, 0);
+    return rc.j >= 0 && rc.j <= rc.i && static_cast<long long>(rc.i) * (rc.i + 1) / 2 + rc.j == t;
 }
 
 // ---- register tiles on the Thread executor -----------------------------------------------------
@@ -242,7 +243,8 @@ TYPED_TEST(DeviceLapackPotriTest, RegisterTileOps) {
         store(0, false);
 
         load_b();
-        ops::potri::reg::trsm_llnu(th, [&](int i, int j) { return a[i + j * lda]; }, t);
+        device::trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::Unit, device::arith::FmaSplit>(
+            th, device::One{}, [&](int i, int j) { return a[i + j * lda]; }, t);
         BATCHLAS_UNROLL_FULL
         for (int x = 1; x < R; ++x)
             BATCHLAS_UNROLL_FULL
@@ -255,7 +257,7 @@ TYPED_TEST(DeviceLapackPotriTest, RegisterTileOps) {
         store(4, true);
 
         load_b();
-        ops::potri::reg::gemm_sub<K>(th, [&](int x, int k) { return g[x + k * ldg]; }, hb, t);
+        device::gemm_sub<K, device::arith::FmaSplit>(th, [&](int x, int k) { return g[x + k * ldg]; }, hb, t);
         BATCHLAS_UNROLL_FULL
         for (int k = 0; k < K; ++k)
             BATCHLAS_UNROLL_FULL
@@ -271,7 +273,7 @@ TYPED_TEST(DeviceLapackPotriTest, RegisterTileOps) {
             device::Frag<D, C> yj;
             device::load(xi, [&](int x) { return dev_conj(xs[x + k * ldx]); });
             device::load(yj, [&](int y) { return ys[y + k * ldy]; });
-            ops::potri::reg::ger(th, xi, yj, t);
+            device::ger<device::arith::Fma>(th, xi, yj, t);
             BATCHLAS_UNROLL_FULL
             for (int x = 0; x < R; ++x)
                 BATCHLAS_UNROLL_FULL
@@ -279,7 +281,7 @@ TYPED_TEST(DeviceLapackPotriTest, RegisterTileOps) {
         }
         store(3, false);
         store(6, true);
-        ops::potri::reg::for_each(th, t, I0, J0, [&](int i, int j, const D& v) { o[7 * RC + i + j * OR] = v; });
+        device::for_each(th, t, I0, J0, [&](int i, int j, const D& v) { o[7 * RC + i + j * OR] = v; });
     });
     const auto got = this->dev.down(dO, std::size_t(kBatch) * nout);
     EXPECT_EQ(twin_diffs(got, nout), 0) << "items differ from their representative";
@@ -336,7 +338,7 @@ TYPED_TEST(DeviceLapackPotriTest, RegisterTileOps) {
 // The 4-deep batched column-major walk over rows != cols with a stride (96, 1024) that is no
 // multiple of rows (dead slots must not write), trttp / tpttr of a column range for both uplos
 // (packed slots outside the range stay NaN, entries outside the triangle keep their sentinel),
-// tri_index over 4096 t per item plus the 2^29 end of its exact range.
+// PackedTri<Lower, ByRows>::decode over 4096 t per item plus the 2^29 end of its exact range.
 TYPED_TEST(DeviceLapackPotriTest, LaunchSizedGroupAuxOps) {
     using T = TypeParam;
     using D = Dv<T>;
@@ -375,17 +377,17 @@ TYPED_TEST(DeviceLapackPotriTest, LaunchSizedGroupAuxOps) {
                 D v;
             };
             D* ub = dm(dU, szM);
-            ops::potri::for_each_owned_2d_batched<4>(
+            device::for_each_owned_2d_batched<4>(
                 ex, n, cols, [&](bool live, int r, int c) { return Slot{live, r, c, live ? Ab[r + c * lda] : D{}}; },
                 [&](const Slot& e) {
                     if (e.live) ub[e.r + e.c * lda] = Ar::add(e.v, e.v);
                 });
 
             auto m_of = [&](D* p) { return [p](int r, int c) -> D& { return p[r + std::ptrdiff_t(c) * lda]; }; };
-            ops::potri::tpcopy(ex, true, true, n, m_of(Ab), dm(dPl, np), c0, c1);
-            ops::potri::tpcopy(ex, false, true, n, m_of(Ab), dm(dPu, np), c0, c1);
-            ops::potri::tpcopy(ex, true, false, n, m_of(dm(dWl, szM)), dm(dQl, np), c0, c1);
-            ops::potri::tpcopy(ex, false, false, n, m_of(dm(dWu, szM)), dm(dQu, np), c0, c1);
+            device::trttp(ex, Uplo::Lower, true, n, m_of(Ab), dm(dPl, np), c0, c1);
+            device::trttp(ex, Uplo::Upper, true, n, m_of(Ab), dm(dPu, np), c0, c1);
+            device::trttp(ex, Uplo::Lower, false, n, m_of(dm(dWl, szM)), dm(dQl, np), c0, c1);
+            device::trttp(ex, Uplo::Upper, false, n, m_of(dm(dWu, szM)), dm(dQu, np), c0, c1);
 
             int bad = 0;
             device::for_each_owned(ex, kTri, [&](int k) { bad += !tri_ok(static_cast<int>(b) * kTri + k); });
@@ -405,7 +407,7 @@ TYPED_TEST(DeviceLapackPotriTest, LaunchSizedGroupAuxOps) {
         int tbad = 0;
         for (int b = 0; b < kBatch; ++b)
             tbad += Bad[b] != 0;
-        EXPECT_EQ(tbad, 0) << where << ": tri_index";
+        EXPECT_EQ(tbad, 0) << where << ": PackedTri decode";
         EXPECT_EQ(twin_diffs(gU, szM) + twin_diffs(gPl, np) + twin_diffs(gPu, np) + twin_diffs(gWl, szM) +
                       twin_diffs(gWu, szM),
                   0)

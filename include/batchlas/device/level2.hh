@@ -14,7 +14,9 @@
 
 #include <type_traits>
 
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level1.hh>
+#include <batchlas/device/view.hh>
 
 namespace batchlas::device {
 
@@ -266,6 +268,88 @@ BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, 
         if (j >= live) continue;
         const T yj = tag_mul(alpha, Conj ? Ar::conj(static_cast<T>(y(j))) : static_cast<T>(y(j)));
         Ar::mac(arow[j], xr, yj);
+    }
+}
+
+// Register-tile form on the Thread executor: A := x y^T + A, one Ops::mac per entry, row by row
+// (x, y register Frags: the memory-operand forms above read y per column).
+template <class Ops = arith::Explicit, class T, int R, int C, class L1, class L2>
+BATCHLAS_DEVICE_INLINE void ger(const Thread&, const Frag<T, R, L1>& x, const Frag<T, C, L2>& y, Tile<T, R, C>& a) {
+    using Ar = arith_t<Ops, T>;
+BATCHLAS_UNROLL_FULL
+    for (int i = 0; i < R; ++i) {
+BATCHLAS_UNROLL_FULL
+        for (int j = 0; j < C; ++j) Ar::mac(a(i, j), x[i], y[j]);
+    }
+}
+
+// ---- per-item forward substitution ----------------------------------------------------------
+// x(s) := (b(s) - L(s, 0:s) x(0:s)) / L(s, s) for s in [s0, s0+STEP), s < N; b(s) is read
+// after the row's dot product. Not core trsv: the dot is accumulated then subtracted (core
+// msubs into x(s)), the diagonal is TpDiag's guarded reciprocal, and b is read lazily.
+template <int N, int STEP, class Ar, class T, class Rhs>
+BATCHLAS_DEVICE_INLINE void trsv_lower_rows(Frag<T, N>& x, int s0, const T* ap, const TpDiag<T>& d, Rhs&& b) {
+    BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < STEP; ++j) {
+        const int s = s0 + j;
+        if (s >= N) continue;
+        T acc = Ar::zero();
+        BATCHLAS_UNROLL_FULL
+        for (int t = 0; t < N; ++t) {
+            if (t < s) Ar::mac(acc, ap[PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, t, 0)], x[t]);
+        }
+        const T rhs = b(s);
+        x[s] = d.template apply<Ar>(s, Ar::sub(rhs, acc));
+    }
+}
+
+// ---- partition (RowFrag) forward substitution -------------------------------------------------
+// The diagonal of row lid(): its reciprocal, and divide = any reciprocal in the partition is
+// non-finite (a bit_or team_reduce, shuffles only).
+template <class T> struct GuardedRecip {
+    T d, rinv;
+    bool divide;
+};
+template <class Ar, int P, class T> BATCHLAS_DEVICE_INLINE GuardedRecip<T> guarded_recip(const Partition<P>& ex, T d) {
+    const T rinv = Ar::recip(d);
+    int bad = Ar::isfinite(rinv) ? 0 : 1;
+    bad = ex.team_reduce(bad, sycl::bit_or<int>());
+    return {d, rinv, bad != 0};
+}
+
+// X := L^{-1} X for X (P x QC, row r in lane r) on the partition; nl holds -L(r, 0:r) (the
+// AXPY multipliers), d the row's diagonal. Rows n..P-1 are identity padding. Step s scales
+// row s by 1/L(s, s), then every lane does x += nl[s] * x_s (x_s = ex.bcast from lane s). The
+// division branch is sub-group-uniform. Unroll = 1 keeps the step loop rolled (nl indexed at
+// run time: local memory, fewer registers). A distributed trsv: core trsv is Thread-only.
+template <int Unroll, class Ar, int P, int QC, class T>
+BATCHLAS_DEVICE_INLINE void trsm_lower_rowfrag(const Partition<P>& ex, const Frag<T, P>& nl, const GuardedRecip<T>& d,
+                                            int n, bool unit, Frag<T, QC>& x) {
+    // lane % P, not ex.lid() (lane & (P-1)): the AND form shifts ptxas' register allocation in
+    // the unrolled P=16 kernels by 3-4% of the instructions.
+    const int r = static_cast<int>(ex.part.get_local_linear_id()) % P;
+    const bool any_divide = sycl::any_of_group(ex.part, d.divide);
+#pragma unroll Unroll
+    for (int s = 0; s < P; ++s) {
+        if (s >= n) {
+            if constexpr (Unroll == 1) break;
+            else continue;
+        }
+        if (r == s && !unit) {
+            if (any_divide) [[unlikely]] {
+                BATCHLAS_UNROLL_FULL
+                for (int j = 0; j < QC; ++j) x[j] = d.divide ? Ar::div(x[j], d.d) : Ar::mul(x[j], d.rinv);
+            } else {
+                BATCHLAS_UNROLL_FULL
+                for (int j = 0; j < QC; ++j) x[j] = Ar::mul(x[j], d.rinv);
+            }
+        }
+        const T l = nl[s];
+        BATCHLAS_UNROLL_FULL
+        for (int j = 0; j < QC; ++j) {
+            const T xs = ex.bcast(x[j], static_cast<std::uint32_t>(s));
+            Ar::mac(x[j], l, xs);
+        }
     }
 }
 

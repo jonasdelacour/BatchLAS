@@ -4,7 +4,7 @@
 #include <src/expansion_budget.hh>
 #include <src/queue.hh>
 #include <src/math-helpers.hh>
-#include <src/kernels/common/elementwise_glue_v2.hh>
+#include <batchlas/device.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -70,7 +70,7 @@ Event expand_triangular(Queue& ctx,
     ctx->parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
         const device::Grid2D<0, 0, 1> ex{item};
         const int b = ex.batch();
-        device::glue::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
+        device::tri_expand(ex, lower ? Uplo::Lower : Uplo::Upper, unit ? Diag::Unit : Diag::NonUnit,
                              device::mat_wide(src + static_cast<std::size_t>(b) * stride_a, n, n, lda),
                              device::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo));
     });
@@ -131,14 +131,14 @@ Event expand_mirrored(Queue& ctx,
             const auto o_b = device::mat_wide(dst + static_cast<std::size_t>(b) * stride_o, n, n, ldo);
             const auto t = device::mat<device::Mem::Local>(::batchlas::util::get_raw_ptr(tile), kMirrorTile, kMirrorTile, kMirrorTile + 1);
 
-            device::glue::tile_load<kMirrorTile>(ex, a_b, src_row0, src_col0, t);
+            device::tile_load<kMirrorTile>(ex, a_b, src_row0, src_col0, t);
             sycl::group_barrier(item.get_group());
             // A diagonal tile writes the referenced member of each pair (the two writes would collide).
             if (ti == tj) {
-                device::glue::tile_store_diag<Conjugate, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
+                device::tile_store_diag<Conjugate, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
                 return;
             }
-            device::glue::tile_store_pair<Conjugate, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
+            device::tile_store_pair<Conjugate, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
         });
     });
 
