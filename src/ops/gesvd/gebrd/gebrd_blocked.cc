@@ -3,7 +3,6 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
-#include <batchlas/util/group-collectives.hh>
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/gebrd.hh>
 
@@ -105,24 +104,38 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
 }
 
 
-// The complex labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
+// The labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
 constexpr int32_t kPanelWG = 128;
 using PanelEx = device::WorkGroup<kPanelWG>;
 
-// One panel launch of the complex path (one work-group of kPanelWG per item).
+// device::labrd on panel columns j0 .. j0+ib-1 of item b of the host's batched views (A, X, Y
+// rebased by b, d / e / tau through item(), the host view's address). A function, not the kernel
+// lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
+template <typename T, typename AV, typename RV, typename TV>
+BATCHLAS_DEVICE_INLINE void labrd_item(const PanelEx& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D, const RV& E,
+                                       const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work, int32_t m, int32_t n,
+                                       int32_t nb, int32_t j0, int32_t ib) {
+    const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
+    const auto Xb = device::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
+    const auto Yb = device::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
+    device::labrd<T>(ex, Ab, Xb, Yb, device::item(D, b), device::item(E, b), device::item(TAUQ, b), device::item(TAUP, b),
+                     device::vec(work, nb, 0), device::vec(work, nb, nb), j0, ib);
+}
+
+// One panel launch (one work-group of kPanelWG per item), every T.
 template <typename T>
-void labrd_panel_complex(Queue& ctx,
-                         MatrixView<T, MatrixFormat::Dense>& a,
-                         const VectorView<typename base_type<T>::type>& d_out,
-                         const VectorView<typename base_type<T>::type>& e_out,
-                         const VectorView<T>& tauq_out,
-                         const VectorView<T>& taup_out,
-                         const MatrixView<T, MatrixFormat::Dense>& x_mat,
-                         const MatrixView<T, MatrixFormat::Dense>& y_mat,
-                         const std::uint8_t* mask,
-                         int32_t nb, int32_t j0, int32_t ib) {
+void labrd_panel(Queue& ctx,
+                 MatrixView<T, MatrixFormat::Dense>& a,
+                 const VectorView<typename base_type<T>::type>& d_out,
+                 const VectorView<typename base_type<T>::type>& e_out,
+                 const VectorView<T>& tauq_out,
+                 const VectorView<T>& taup_out,
+                 const MatrixView<T, MatrixFormat::Dense>& x_mat,
+                 const MatrixView<T, MatrixFormat::Dense>& y_mat,
+                 const std::uint8_t* mask,
+                 int32_t nb, int32_t j0, int32_t ib) {
     if (static_cast<int64_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()) < kPanelWG) {
-        throw batchlas::unsupported("gebrd_blocked: the complex panel kernel needs a work-group of 128");
+        throw batchlas::unsupported("gebrd_blocked: the labrd panel kernel needs a work-group of 128");
     }
     const int32_t m = static_cast<int32_t>(a.rows());
     const int32_t n = static_cast<int32_t>(a.cols());
@@ -141,14 +154,13 @@ void labrd_panel_complex(Queue& ctx,
                                      [=](sycl::nd_item<1> item) {
             const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
             if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
-            device::labrd_panel<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
+            labrd_item<T>(PanelEx{item}, b, A, X, Y, D, E, TAUQ, TAUP, work_local, m, n, nb, j0, ib);
         });
     });
 }
 
-// LAPACK ?labrd + the trailing gemm. Complex follows zlabrd: rows hold conj(u) on exit (unmbr 'P'
-// order), d and e are real, and between generating and storing a right reflector its row is
-// conjugated. For real T every conj() below is the identity.
+// LAPACK xGEBRD: a device::labrd panel (zlabrd's conventions: rows hold conj(u) on exit, unmbr 'P'
+// order; d and e real; for real T every conj is the identity), then the trailing gemm.
 template <Backend B, typename T>
 Event gebrd_blocked_impl(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& a_in,
@@ -159,10 +171,6 @@ Event gebrd_blocked_impl(Queue& ctx,
                          const Span<std::byte>& ws,
                          int32_t block_size,
                          Span<const std::uint8_t> mask_span) {
-    using Real = typename base_type<T>::type;
-    using device::conj;
-    constexpr bool kComplex = detail::is_complex<T>::value;
-
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
 
     if (!ctx.in_order()) {
@@ -189,7 +197,6 @@ Event gebrd_blocked_impl(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> x_mat = ws_layout.x.with_batch_mask(mask_span);
     MatrixView<T, MatrixFormat::Dense> y_mat = ws_layout.y.with_batch_mask(mask_span);
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
-    const int32_t panel_wg = std::min<int32_t>(128, static_cast<int32_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()));
 
     for (int32_t j0 = 0; j0 < k_total; j0 += nb) {
         const int32_t ib = std::min(nb, k_total - j0);
@@ -200,218 +207,7 @@ Event gebrd_blocked_impl(Queue& ctx,
         (void)x_panel.fill_zeros(ctx);
         (void)y_panel.fill_zeros(ctx);
 
-        // Complex panels run on the device core (explicit complex arithmetic, 1.3x faster); real
-        // panels keep the legacy kernel below (the device port cost float REG 64 -> 80 and 4%).
-        if constexpr (kComplex)
-            labrd_panel_complex<T>(ctx, a, d_out, e_out, tauq_out, taup_out, x_mat, y_mat, mask, nb, j0, ib);
-        else ctx->submit([&](sycl::handler& h) {
-            auto A = a.kernel_view();
-            auto D = d_out;
-            auto E = e_out;
-            auto TAUQ = tauq_out;
-            auto TAUP = taup_out;
-            auto X = x_mat.kernel_view();
-            auto Y = y_mat.kernel_view();
-            auto work_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(2 * nb)), h);
-
-            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(panel_wg)),
-                                             sycl::range<1>(static_cast<size_t>(panel_wg))),
-                           [=](sycl::nd_item<1> item) {
-                const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
-
-                const int32_t lid = static_cast<int32_t>(item.get_local_linear_id());
-                const int32_t local_size = static_cast<int32_t>(item.get_local_range(0));
-                const auto g = item.get_group();
-
-                for (int32_t ii = 0; ii < ib; ++ii) {
-                    const int32_t gi = j0 + ii;
-
-                    for (int32_t r = gi + lid; r < m; r += local_size) {
-                        T val = A(r, gi, b);
-                        for (int32_t k = 0; k < ii; ++k) {
-                            const int32_t gk = j0 + k;
-                            val -= A(r, gk, b) * conj(Y(gi, k, b));
-                            val -= X(r, k, b) * A(gk, gi, b);
-                        }
-                        A(r, gi, b) = val;
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-
-                    Real sigma_partial = Real(0);
-                    for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
-                        const T ari = A(r, gi, b);
-                        sigma_partial += detail::norm_squared(ari);
-                    }
-                    const Real sigma = batchlas::portable::reduce_over_group(g, sigma_partial, sycl::plus<Real>());
-
-                    T alpha = T(0);
-                    if (lid == 0) {
-                        alpha = A(gi, gi, b);
-                    }
-                    alpha = batchlas::portable::group_broadcast(g, alpha);
-                    T tau_q = T(0);
-                    T beta_q = alpha;
-                    T scale_q = T(0);
-                    if (lid == 0) {
-                        const auto scalars = device::larfg_scalars<device::alg::RealBeta>(alpha, sycl::sqrt(sigma), m - gi);
-                        beta_q = scalars.beta;
-                        tau_q = scalars.tau;
-                        scale_q = scalars.scale;
-                    }
-                    tau_q = batchlas::portable::group_broadcast(g, tau_q);
-                    beta_q = batchlas::portable::group_broadcast(g, beta_q);
-                    scale_q = batchlas::portable::group_broadcast(g, scale_q);
-
-                    if (lid == 0) {
-                        D(gi, b) = detail::real_part(beta_q);
-                        TAUQ(gi, b) = tau_q;
-                    }
-
-                    if (lid == 0) {
-                        A(gi, gi, b) = T(1);
-                    }
-                    if (tau_q != T(0)) {
-                        for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
-                            A(r, gi, b) *= scale_q;
-                        }
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-
-                    if (gi >= n - 1) {
-                        continue;
-                    }
-
-                    for (int32_t k = 0; k < ii; ++k) {
-                        const int32_t gk = j0 + k;
-                        T sum_a_partial = T(0);
-                        T sum_x_partial = T(0);
-                        for (int32_t r = gi + lid; r < m; r += local_size) {
-                            const T argi = A(r, gi, b);
-                            sum_a_partial += conj(A(r, gk, b)) * argi;
-                            sum_x_partial += conj(X(r, k, b)) * argi;
-                        }
-                        const T sum_a = batchlas::portable::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
-                        const T sum_x = batchlas::portable::reduce_over_group(g, sum_x_partial, sycl::plus<T>());
-                        if (lid == 0) {
-                            work_local[k] = sum_a;
-                            work_local[nb + k] = sum_x;
-                        }
-                    }
-                    item.barrier(sycl::access::fence_space::local_space);
-
-                    for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                        T y = T(0);
-                        for (int32_t r = gi; r < m; ++r) {
-                            y += conj(A(r, c, b)) * A(r, gi, b);
-                        }
-                        for (int32_t k = 0; k < ii; ++k) {
-                            y -= Y(c, k, b) * work_local[k];
-                            y -= conj(A(j0 + k, c, b)) * work_local[nb + k];
-                        }
-                        Y(c, ii, b) = tau_q * y;
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-
-                    for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                        // The conjugated row: zlabrd's lacgv before the right reflector.
-                        T val = conj(A(gi, c, b));
-                        for (int32_t k = 0; k <= ii; ++k) {
-                            val -= Y(c, k, b) * conj(A(gi, j0 + k, b));
-                        }
-                        for (int32_t k = 0; k < ii; ++k) {
-                            val -= conj(A(j0 + k, c, b)) * conj(X(gi, k, b));
-                        }
-                        A(gi, c, b) = val;
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-
-                    Real sigma_r_partial = Real(0);
-                    for (int32_t c = gi + 2 + lid; c < n; c += local_size) {
-                        const T aic = A(gi, c, b);
-                        sigma_r_partial += detail::norm_squared(aic);
-                    }
-                    const Real sigma_r = batchlas::portable::reduce_over_group(g, sigma_r_partial, sycl::plus<Real>());
-
-                    T alpha_r = T(0);
-                    if (lid == 0) {
-                        alpha_r = A(gi, gi + 1, b);
-                    }
-                    alpha_r = batchlas::portable::group_broadcast(g, alpha_r);
-                    T tau_p = T(0);
-                    T beta_p = alpha_r;
-                    T scale_p = T(0);
-                    if (lid == 0) {
-                        const auto scalars = device::larfg_scalars<device::alg::RealBeta>(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
-                        beta_p = scalars.beta;
-                        tau_p = scalars.tau;
-                        scale_p = scalars.scale;
-                    }
-                    tau_p = batchlas::portable::group_broadcast(g, tau_p);
-                    beta_p = batchlas::portable::group_broadcast(g, beta_p);
-                    scale_p = batchlas::portable::group_broadcast(g, scale_p);
-
-                    if (lid == 0) {
-                        E(gi, b) = detail::real_part(beta_p);
-                        TAUP(gi, b) = tau_p;
-                        A(gi, gi + 1, b) = T(1);
-                    }
-                    if (tau_p != T(0)) {
-                        for (int32_t c = gi + 2 + lid; c < n; c += local_size) {
-                            A(gi, c, b) *= scale_p;
-                        }
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-
-                    for (int32_t k = 0; k <= ii; ++k) {
-                        T sum_y_partial = T(0);
-                        for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                            sum_y_partial += conj(Y(c, k, b)) * A(gi, c, b);
-                        }
-                        const T sum_y = batchlas::portable::reduce_over_group(g, sum_y_partial, sycl::plus<T>());
-                        if (lid == 0) {
-                            work_local[k] = sum_y;
-                        }
-                    }
-                    for (int32_t k = 0; k < ii; ++k) {
-                        T sum_a_partial = T(0);
-                        for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                            sum_a_partial += A(j0 + k, c, b) * A(gi, c, b);
-                        }
-                        const T sum_a = batchlas::portable::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
-                        if (lid == 0) {
-                            work_local[nb + k] = sum_a;
-                        }
-                    }
-                    item.barrier(sycl::access::fence_space::local_space);
-
-                    for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
-                        T x = T(0);
-                        for (int32_t c = gi + 1; c < n; ++c) {
-                            x += A(r, c, b) * A(gi, c, b);
-                        }
-                        for (int32_t k = 0; k <= ii; ++k) {
-                            x -= A(r, j0 + k, b) * work_local[k];
-                        }
-                        for (int32_t k = 0; k < ii; ++k) {
-                            x -= X(r, k, b) * work_local[nb + k];
-                        }
-                        X(r, ii, b) = tau_p * x;
-                    }
-                    item.barrier(sycl::access::fence_space::global_space);
-                    if constexpr (kComplex) {
-                        for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                            A(gi, c, b) = conj(A(gi, c, b));
-                        }
-                        item.barrier(sycl::access::fence_space::global_space);
-                    }
-                }
-
-                if (lid == 0 && n > 0) {
-                    TAUP(n - 1, b) = T(0);
-                }
-            });
-        });
+        labrd_panel<T>(ctx, a, d_out, e_out, tauq_out, taup_out, x_mat, y_mat, mask, nb, j0, ib);
 
         const int32_t j2 = j0 + ib;
         if (j2 < n) {

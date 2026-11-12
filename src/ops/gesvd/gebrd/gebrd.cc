@@ -16,17 +16,16 @@ namespace batchlas {
 namespace {
 
 
-// One work-item per matrix. The launch sits in a function per type, as in the legacy file, so
-// the kernels keep their names.
+// One work-item per matrix, every T (device::gebd2). The launch sits in a function per type, so
+// each scalar type compiles one kernel whatever the Backend.
 template <typename T>
-Event gebrd_unblocked_real(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& a,
-                           const VectorView<typename base_type<T>::type>& d,
-                           const VectorView<typename base_type<T>::type>& e,
-                           const VectorView<T>& tauq,
-                           const VectorView<T>& taup,
-                           const std::uint8_t* mask) {
-    static_assert(!detail::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
+Event gebd2_launch(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& a,
+                   const VectorView<typename base_type<T>::type>& d,
+                   const VectorView<typename base_type<T>::type>& e,
+                   const VectorView<T>& tauq,
+                   const VectorView<T>& taup,
+                   const std::uint8_t* mask) {
     const int32_t m = static_cast<int32_t>(a.rows());
     const int32_t n = static_cast<int32_t>(a.cols());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
@@ -41,37 +40,10 @@ Event gebrd_unblocked_real(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
-            device::gebd2_real<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
+            device::gebd2<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
         });
     });
 
-    return ctx.get_event();
-}
-
-template <typename T>
-Event gebrd_unblocked_complex(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& a,
-                              const VectorView<typename base_type<T>::type>& d,
-                              const VectorView<typename base_type<T>::type>& e,
-                              const VectorView<T>& tauq,
-                              const VectorView<T>& taup,
-                              const std::uint8_t* mask) {
-    const int32_t m = static_cast<int32_t>(a.rows());
-    const int32_t n = static_cast<int32_t>(a.cols());
-    const int32_t batch = static_cast<int32_t>(a.batch_size());
-
-    ctx->submit([&](sycl::handler& cgh) {
-        auto A = a.kernel_view();
-        auto D = d;
-        auto E = e;
-        auto TAUQ = tauq;
-        auto TAUP = taup;
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
-            const int32_t b = static_cast<int32_t>(tid[0]);
-            if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
-            device::gebd2_complex<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
-        });
-    });
     return ctx.get_event();
 }
 
@@ -91,11 +63,7 @@ Event gebrd_unblocked(Queue& ctx,
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
-    if constexpr (detail::is_complex<T>::value) {
-        return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup, mask);
-    } else {
-        return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup, mask);
-    }
+    return gebd2_launch<T>(ctx, a, d, e, tauq, taup, mask);
 }
 
 #define GEBRD_INSTANTIATE(back, fp) \
