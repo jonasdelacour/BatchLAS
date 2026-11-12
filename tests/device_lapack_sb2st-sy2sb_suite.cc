@@ -461,8 +461,8 @@ TYPED_TEST(DeviceLapackBandTest, PlaneRotationsDistributeOverStrides) {
         const device::Givens<R, T> g1{c1, s1};
         device::rot<device::alg::RotLapack, device::arith::Native>(ex, g1, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy));
         // the Thread pass reaches x3 / y3 through fn_vec index maps returning references
-        const auto xs = device::detail::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
-        const auto ys = device::detail::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
+        const auto xs = device::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
+        const auto ys = device::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
         if (ex.leader()) device::rot<device::alg::RotLapack, device::arith::Native>(device::Thread{}, g1, xs, ys);
     });
     const auto gx = this->dev.down(x, hx.size()), gy = this->dev.down(y, hy.size()), gx2 = this->dev.down(x2, hx.size()),

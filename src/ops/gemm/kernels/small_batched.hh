@@ -151,7 +151,7 @@ Event launch_small_batched(Queue& ctx,
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) device::store<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
+                        if (c < n) device::store_epi<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
                     }
                 }
             });
@@ -255,7 +255,7 @@ BATCHLAS_UNROLL_FULL
                             // acc.v, not acc(i, j): a direct operator() call in the kernel lambda
                             // would become SemaSYCL's force-inlined "body" (scripts/check_kernel_entry_calls.py).
                             if constexpr (PrefetchC) *dst = alpha * acc.v[i][j] + beta * prior[i][j];
-                            else device::store<device::epi::MulMac, device::arith::Fma>(alpha, acc.v[i][j], device::MaybeZero<T>{beta, beta_zero}, *dst);
+                            else device::store_epi<device::epi::MulMac, device::arith::Fma>(alpha, acc.v[i][j], device::MaybeZero<T>{beta, beta_zero}, *dst);
                         }
                     }
                 }

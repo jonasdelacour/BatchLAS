@@ -4,7 +4,7 @@
 // problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
 // detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
 // lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
-// the forms core does not reproduce bit for bit yet (LaneVec scal, the two-window reversal).
+// the form core does not reproduce bit for bit yet (the two-window reversal).
 // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 
 #include <algorithm>
@@ -28,11 +28,6 @@ template <class R> struct SplitTol {
     R eps2;
     R safmin;
 };
-
-// x := a x on the window [x.lo, x.hi) only.
-template <class Ex, class T> BATCHLAS_DEVICE_INLINE void scal_lane(const Ex& ex, const T& a, const LaneVec<T>& x) {
-    if (x.owns(ex)) x.v *= a;
-}
 
 // e(j) := 0 for each negligible j < e.size(), serial; true when one was (or already was) zero.
 template <class D, class E, class R> BATCHLAS_DEVICE_INLINE bool tridiag_split(const Thread& th, const D& d, const E& e, SplitTol<R> tol) {
@@ -659,8 +654,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         const T scale = bs.s, inv_scale = bs.inv;
 
         if (scale != T(1)) {
-            detail::scal_lane(ex, scale, blk_d);
-            detail::scal_lane(ex, scale, blk_e);
+            scal<arith::Native>(ex, scale, blk_d);
+            scal<arith::Native>(ex, scale, blk_e);
         }
 
         // QL if |D(l)| <= |D(lend)|, QR otherwise (as dsteqr: the graded small end
@@ -717,8 +712,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Rescale converged block back to the original magnitude.
         if (scale != T(1)) {
-            detail::scal_lane(ex, inv_scale, blk_d);
-            detail::scal_lane(ex, inv_scale, blk_e);
+            scal<arith::Native>(ex, inv_scale, blk_d);
+            scal<arith::Native>(ex, inv_scale, blk_e);
         }
 
         if (failed) break;
@@ -788,8 +783,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 scale = bs.s;
                 inv_scale = bs.inv;
                 if (scale != T(1)) {
-                    detail::scal_lane(ex, scale, blk_d);
-                    detail::scal_lane(ex, scale, blk_e);
+                    scal<arith::Native>(ex, scale, blk_d);
+                    scal<arith::Native>(ex, scale, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -832,8 +827,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
             if (closing) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
                 if (scale != T(1)) {
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = true;
                 if (failed || next_block_begin >= n) {
@@ -902,8 +897,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                 const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
                 const T sc = detail::block_scale(anorm).s;
                 if (opened && sc != T(1)) {
-                    detail::scal_lane(ex, sc, blk_d);
-                    detail::scal_lane(ex, sc, blk_e);
+                    scal<arith::Native>(ex, sc, blk_d);
+                    scal<arith::Native>(ex, sc, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -957,8 +952,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             if (lockstep_any(partition, closing)) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
                 if (closing && scale != T(1)) {
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = need_block || closing;
                 done = done || (closing && (failed || next_block_begin >= n));

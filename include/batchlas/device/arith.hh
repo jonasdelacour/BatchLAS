@@ -535,8 +535,9 @@ template <class Ops = arith::Explicit, class T, class S> BATCHLAS_DEVICE_INLINE 
 //   epi::Linear        beta == 0 ? alpha acc : alpha acc + beta y, beta compared at run time
 //                      (gemm LinearEpilogue)
 //   epi::LinearNegZero alpha acc + (beta == 0 ? -0 : beta) y (the wide kernels' lin_epi)
-// store<epi::MacChain, arith::Fma> is gemv's store_fma (a core store_fma would meet gemv's by ADL
-// until M4 deletes it). store(alpha, acc, beta, y) with no Shape is the core store.
+// store_epi<epi::MacChain, arith::Fma> is gemv's store_fma (a core store_fma would meet gemv's by ADL
+// until M4 deletes it). store_epi(alpha, acc, beta, y) with no Shape is the core store_epi; the
+// Frag / Tile spill is operand.hh store.
 namespace epi {
 struct Sum {};
 struct MacChain {};
@@ -546,7 +547,7 @@ struct LinearNegZero {};
 }  // namespace epi
 
 template <class Shape = epi::Sum, class Ops = arith::Explicit, class AS, class T, class BS, class Ref>
-BATCHLAS_DEVICE_INLINE void store(AS alpha_, T acc, BS beta_, Ref&& y) {
+BATCHLAS_DEVICE_INLINE void store_epi(AS alpha_, T acc, BS beta_, Ref&& y) {
     using Ar = ops_arith_t<Ops, T>;
     const auto alpha = as_tag(alpha_);
     const auto beta = as_tag(beta_);

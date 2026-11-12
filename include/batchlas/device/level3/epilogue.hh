@@ -4,7 +4,7 @@
 //   LinearEpilogue          C := alpha acc + beta C, beta compared with 0 at run time
 //   NoMask, TriMask         which elements of a tile the epilogue writes
 //   store_tile_staged       a register tile through local memory to C, coalesced at any ldc
-// C := alpha acc + beta C with a host beta_zero flag is core store<epi::MulMac, Ops> with
+// C := alpha acc + beta C with a host beta_zero flag is core store_epi<epi::MulMac, Ops> with
 // MaybeZero beta (arith.hh).
 
 #include <cstddef>

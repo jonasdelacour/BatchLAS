@@ -6,7 +6,7 @@
 // global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
 // replaced kernels' expression shapes. detail holds the CTA body (sytrd_cta_run, the host
 // sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
-// and the forms core does not reproduce bit for bit yet: Fit dotc / gemv / her2, lacpy_herm.
+// and the forms core does not reproduce bit for bit yet: Fit gemv / her2, lacpy_herm.
 
 #include <algorithm>
 #include <cstddef>
@@ -28,15 +28,6 @@ template <class Ops, class T> BATCHLAS_DEVICE_INLINE T her2_term(const T& x1, co
     using Ar = arith_t<Ops, T>;
     if constexpr (Ar::is_complex) return Ar::add(Ar::mul(x1, Ar::conj(y1)), Ar::mul(x2, Ar::conj(y2)));
     else return x1 * y1 + x2 * y2;
-}
-
-// x^H y, one product per item (no accumulator), then the chunk reduction.
-template <class Ops, class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE auto dotc(const Fit<Ex>& ex, const X& x, const Y& y) {
-    using T = elem_t<X>;
-    using Ar = arith_t<Ops, T>;
-    const int i = ex.lid();
-    const T p = (i >= 0 && i < x.size()) ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
-    return detail::scope_reduce<Scope::Own>(ex, p);
 }
 
 // y(r) := (A x)(r) * alpha with item r computing output row r (core gemv's RowOwner without
@@ -97,15 +88,6 @@ BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT&
     }
 }
 
-// B := A (m x n), item r copying row r (core lacpy owns elements 2-D; this is the row-owner
-// form the hand kernels wrote, one guarded row per item).
-template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void lacpy_rows(const Fit<Ex>& ex, const MA& a, const MB& b) {
-    const int n = a.cols();
-    for_each_owned(ex, a.rows(), [&](int r) {
-        for (int c = 0; c < n; ++c) b(r, c) = a(r, c);
-    });
-}
-
 // One sytd2 step on the active block blk: [alpha; x] = col one element per item (alpha on item
 // ar), row is col's conjugate mirror. Reflector; mirrored write-back; then, unless tau == 0,
 // v := reflector, w := A v tau, w += (-tau/2)(v^H w) v, A -= v w^H + w v^H.
@@ -145,7 +127,7 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
         sync<Scope::Own>(ex);
         detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
         sync<Scope::Own>(ex);
-        const T alpha2 = T(-0.5) * taui * detail::dotc<Ops>(fx, vm, wm);
+        const T alpha2 = T(-0.5) * taui * dotc<Scope::Own, Ops>(fx, vm, wm);
         axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
         sync<Scope::Own>(ex);
         detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
@@ -264,8 +246,8 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
 
     group_barrier(part);
 
-    // Write back A, one row per lane (core lacpy owns elements 2-D Cyclic, not rows).
-    if (live) lacpy_rows(Fit{ex}, tile.sub(0, 0, n, n), A);
+    // Write back A, one row per lane.
+    if (live) lacpy<Part::Full, Transpose::NoTrans, alg::RowOwner>(Fit{ex}, tile.sub(0, 0, n, n), A);
 }
 
 // The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.

@@ -204,7 +204,7 @@ Event btrd_lower_inplace(Queue& q,
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
             auto rseq = [&](int cnt, auto at) BATCHLAS_DEVICE_BODY {
-                return device::detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+                return device::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
             };

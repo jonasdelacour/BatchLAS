@@ -97,12 +97,6 @@ template <class Ops = arith::Native, class Ex, class T, class R> BATCHLAS_DEVICE
 }
 
 // ---- column-owner Householder (lane l holds column l in a ColPerLane Frag) -------------------
-// c(r) = beta at r == j, alpha elsewhere (xLASET on one register column).
-template <class T, int N, class L> BATCHLAS_DEVICE_INLINE void laset_col(Frag<T, N, L>& c, int j, T alpha, T beta) {
-#pragma unroll
-    for (int r = 0; r < N; ++r) c[r] = (r == j) ? beta : alpha;
-}
-
 // c(r) = d(r) * z(r) for r < n (z real, core lift): the dgmm Left lift on a register column.
 template <class Ops = arith::Native, class T, int N, class L, class Dv, class Zv>
 BATCHLAS_DEVICE_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z, const int& n) {
@@ -282,7 +276,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
 
         // Identity outside the leading (n-1)^2 block; pad columns defined (sweeps run on all P lanes).
         if (lane >= nn) fill(Qc, Real(0));
-        else if (lane == nn - 1) laset_col(Qc, nn - 1, Real(0), Real(1));
+        else if (lane == nn - 1) laset(Qc, Zero{}, One{}, nn - 1);
 
         // Hand the tile over: from here it is the accumulator.
         group_barrier(part);

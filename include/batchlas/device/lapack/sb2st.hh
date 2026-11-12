@@ -9,7 +9,7 @@
 // The rotations are core's lartg / largv / lartv / lar2v / rot in T's own operators
 // (alg::Promote, arith::Native). detail holds what core has no form for:
 //   StridedTeams<C>  C strided teams per sub-group (xor masks C, 2C, ...)
-//   win_of, fn_vec   an index-form window, and a vector of write-through references
+//   win_of           an index-form window
 //   HermBandLower    a writable Hermitian matrix in LAPACK lower band storage
 //   hemv_band        a team-per-row loop in lockstep, in T's own operators
 // Each element is the C++ expression of the kernel it was lifted from (std::complex operators,
@@ -81,18 +81,6 @@ template <class M> struct WinOf {
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
 template <class M> BATCHLAS_DEVICE_INLINE WinOf<M> win_of(const M& a, int i0, int j0, int m, int n) { return {a, i0, j0, m, n}; }
-
-// x(t) = f(t), t < n, f returning a reference to write through (core fn_vec returns values). Each
-// element keeps the caller's address expression, e.g. a band chase's rotation sequence
-// AB(r, j1 + t kd1 + dc).
-template <class F> struct FnVec {
-    using value_type = std::remove_cvref_t<decltype(std::declval<const F&>()(0))>;
-    F f;
-    int n;
-    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return f(i); }
-    BATCHLAS_DEVICE_INLINE int size() const { return n; }
-};
-template <class F> BATCHLAS_DEVICE_INLINE FnVec<F> fn_vec(int n, F f) { return {f, n}; }
 
 // A Hermitian (real: symmetric) matrix in LAPACK lower band storage, half-bandwidth kd:
 // A(i, j), i >= j, lives at p[(i - j) + j * ld]. A(i, j) above the diagonal reads conj(A(j, i));
@@ -178,7 +166,7 @@ BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, cons
             for (int j = ex.lid(); j < n; j += Ex::size) acc += static_cast<T>(a(r, j)) * static_cast<T>(x(j));
         }
         acc = ex.team_reduce(acc);
-        if (live && ex.leader()) store(alpha, acc, beta, y(r));
+        if (live && ex.leader()) store_epi(alpha, acc, beta, y(r));
     });
 }
 
@@ -206,7 +194,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
     // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the band
     // entries AB(r, j + dc), addressed as the scalar loops address them.
     auto rseq = [&](int cnt, auto at) {
-        return detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+        return fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
             return at(j1 + t * kd1);
         });
     };

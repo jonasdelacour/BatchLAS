@@ -50,17 +50,17 @@ TYPED_TEST(DeviceCoreArithTest, StoreShapesMatchTheirSourceExpressions) {
             f(y);
             out[c * kBatch + b] = y;
         };
-        put(kSumZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::Zero{}, y); });
-        put(kSumMaybeZeroSet, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
-        put(kSumMaybeZeroClear, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
-        put(kSumOne, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(batchlas::device::One{}, a, batchlas::device::One{}, y); });
-        put(kSumValue, [&](T& y) { batchlas::device::store<batchlas::device::epi::Sum>(alpha, a, beta, y); });
-        put(kMacChain, [&](T& y) { batchlas::device::store<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, beta, y); });
-        put(kMacChainMaybeZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
-        put(kMulMac, [&](T& y) { batchlas::device::store<batchlas::device::epi::MulMac, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
-        put(kLinear, [&](T& y) { batchlas::device::store<batchlas::device::epi::Linear>(alpha, a, beta, y); });
-        put(kLinearBetaZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::Linear>(alpha, a, T(0), y); });
-        put(kLinearNegZeroBetaZero, [&](T& y) { batchlas::device::store<batchlas::device::epi::LinearNegZero>(alpha, a, T(0), y); });
+        put(kSumZero, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Sum>(alpha, a, batchlas::device::Zero{}, y); });
+        put(kSumMaybeZeroSet, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
+        put(kSumMaybeZeroClear, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Sum>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
+        put(kSumOne, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Sum>(batchlas::device::One{}, a, batchlas::device::One{}, y); });
+        put(kSumValue, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Sum>(alpha, a, beta, y); });
+        put(kMacChain, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, beta, y); });
+        put(kMacChainMaybeZero, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::MacChain, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, true}, y); });
+        put(kMulMac, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::MulMac, batchlas::device::arith::Fma>(alpha, a, batchlas::device::MaybeZero<T>{beta, false}, y); });
+        put(kLinear, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Linear>(alpha, a, beta, y); });
+        put(kLinearBetaZero, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::Linear>(alpha, a, T(0), y); });
+        put(kLinearNegZeroBetaZero, [&](T& y) { batchlas::device::store_epi<batchlas::device::epi::LinearNegZero>(alpha, a, T(0), y); });
     });
     const auto got = d.down(out, std::size_t(kNumCases) * kBatch);
     for (int b = 0; b < kBatch; ++b) {
@@ -95,10 +95,10 @@ TYPED_TEST(DeviceCoreArithTest, MacChainAndSumDifferOnlyInTheSignOfZero) {
     d.template run<1>(1, 0, [=](sycl::nd_item<1>, unsigned char*) {
         const T negzero = batchlas::device::lift<T>(R(-0.0));
         T y0 = T(0), y1 = T(0), y2 = T(0), y3 = T(0);
-        batchlas::device::store<batchlas::device::epi::Sum>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y0);
-        batchlas::device::store<batchlas::device::epi::MacChain>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y1);
-        batchlas::device::store<batchlas::device::epi::MulMac>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y2);
-        batchlas::device::store<batchlas::device::epi::LinearNegZero>(T(1), batchlas::device::lift<T>(R(0)), T(0), y3);  // 1 * 0 + (-0) * 0 = +0
+        batchlas::device::store_epi<batchlas::device::epi::Sum>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y0);
+        batchlas::device::store_epi<batchlas::device::epi::MacChain>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y1);
+        batchlas::device::store_epi<batchlas::device::epi::MulMac>(batchlas::device::One{}, negzero, batchlas::device::Zero{}, y2);
+        batchlas::device::store_epi<batchlas::device::epi::LinearNegZero>(T(1), batchlas::device::lift<T>(R(0)), T(0), y3);  // 1 * 0 + (-0) * 0 = +0
         out[0] = y0;
         out[1] = y1;
         out[2] = y2;

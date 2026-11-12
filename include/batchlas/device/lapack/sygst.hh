@@ -46,31 +46,6 @@ template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(P
 
 BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
 
-template <class H> struct HermCol {
-    H h;
-    int j;
-    using value_type = typename H::value_type;
-    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return h(i, j); }
-    BATCHLAS_DEVICE_INLINE int size() const { return h.rows(); }
-};
-
-// The Hermitian (or symmetric) matrix whose uplo triangle M stores (uplo at run time): the
-// diagonal read as real, the other triangle as the conjugate of its mirror, one load.
-template <class M> struct HermView {
-    M a;
-    Uplo uplo;
-    using value_type = typename M::value_type;
-    BATCHLAS_DEVICE_INLINE value_type operator()(int i, int j) const {
-        const bool own = in_triangle(uplo, i, j);  // one load, its address selected
-        const value_type x = a(own ? i : j, own ? j : i);
-        return i == j ? force_real(x) : own ? x : Arith<value_type>::conj(x);
-    }
-    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
-    BATCHLAS_DEVICE_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
-};
-template <class M> BATCHLAS_DEVICE_INLINE HermView<M> herm(M a, Uplo uplo) { return {a, uplo}; }
-
 // A group of `size` items over `tiles` m x m tiles, column by column: item lid owns row lid % m
 // of tile columns lid / m, lid / m + size / m, ...; f(tile, row, col). When m does not divide
 // size, the last items revisit columns another item covers: f must be idempotent.
@@ -241,7 +216,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     sync(ex);
     // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
     Frag<D, NF> col{};
-    if (active) load(col, detail::herm(s, ul).col(j), live);
+    if (active) load(col, herm_view(s, ul).col(j), live);
     sync(ex);
     if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
@@ -256,7 +231,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
         const std::ptrdiff_t itm = first + gi;
         if (row >= kb || dead(itm)) return;
-        const D v = detail::herm(s_of(gi), ul)(row, c);
+        const D v = herm_view(s_of(gi), ul)(row, c);
         full(itm, row, c, v);
         if (detail::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
     });
