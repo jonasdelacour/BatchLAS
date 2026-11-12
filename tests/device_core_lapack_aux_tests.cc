@@ -244,7 +244,7 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LarfFormsLoopsAndLaneLarfg) {
         const batchlas::device::Partition<16> part{it.get_sub_group()};
         const int l = part.lid();
         T e = xl[l];
-        const T t = batchlas::device::larfg(part, 11, 0, e, e, l >= 1 && l < 11);
+        const T t = batchlas::device::larfg_lanes(part, 11, 0, e, e, l >= 1 && l < 11);
         if (g < 16) xl[l] = (l < 11) ? e : xl[l];
         if (g == 0) tau_out[0] = t;
     });

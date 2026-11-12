@@ -813,7 +813,7 @@ template <class T> void larfg_case(Dev& dev, int n, int ai) {
         const bool act = lane < n && lane != ai;
         T alpha = lane == ai ? xb[lane] : T(0);
         T xv = act ? xb[lane] : T(0);
-        const T tau = device::larfg<device::alg::Phase, device::arith::Native>(ex, n, ai, alpha, xv, act);
+        const T tau = device::larfg_lanes<device::alg::Phase, device::arith::Native>(ex, n, ai, alpha, xv, act);
         if (lane == ai) y[std::ptrdiff_t(b) * P + lane] = alpha;
         else if (act) y[std::ptrdiff_t(b) * P + lane] = xv;
         if (lane == 0) t[b] = tau;

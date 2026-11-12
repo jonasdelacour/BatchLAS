@@ -479,7 +479,7 @@ BATCHLAS_DEVICE_INLINE void larf(Frag<T, N, L>& c, const V& vp, T tau) {
 // default alg::Phase); on return alpha_item holds beta, the x items hold v (implicit unit head),
 // and every item gets tau. n <= 1: tau = 0. COLLECTIVE.
 template <class Conv = alg::Phase, class Ops = arith::Explicit, class Ex, class T>
-BATCHLAS_DEVICE_INLINE T larfg(const Ex& ex, int n, int alpha_item, T& alpha, T& x, bool x_active) {
+BATCHLAS_DEVICE_INLINE T larfg_lanes(const Ex& ex, int n, int alpha_item, T& alpha, T& x, bool x_active) {
     using Ar = arith_t<Ops, T>;
     using R = real_t<T>;
     const R xsq = x_active ? abs2(x) : R(0);

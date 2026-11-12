@@ -46,15 +46,6 @@ namespace batchlas {
             }
         }
 
-        template <typename T>
-        inline base_float_t<T> real_part(const T& x) {
-            if constexpr (is_complex<T>::value) {
-                return static_cast<base_float_t<T>>(x.real());
-            } else {
-                return static_cast<base_float_t<T>>(x);
-            }
-        }
-
         // re*re + im*im in explicit real arithmetic; not interchangeable with norm_squared bit for bit.
         template <typename T>
         inline base_float_t<T> abs2_if_complex(const T& x) {
