@@ -108,54 +108,6 @@ namespace batchlas {
         using ::batchlas::device::safmin;
         using ::batchlas::device::safmax;
 
-        template <RealScalar T>
-        inline constexpr T ssfmin(){
-            return std::sqrt(safmin<T>()) / (::batchlas::device::lamch<'P', T>() * ::batchlas::device::lamch<'P', T>());
-        }
-
-        template <RealScalar T>
-        inline constexpr T ssfmax(){
-            return std::sqrt(safmax<T>()) / T(3.0);
-        }
-
-        //Matches LAPACK's "eps2" used in DLAED2/DSTEQR: dlamch('E') squared
-        template <RealScalar T>
-        inline constexpr T eps2(){
-            return ::batchlas::device::lamch<'E', T>() * ::batchlas::device::lamch<'E', T>();
-        }
-
-        // Device LA scalar lartg; complex<float> works in double except on Metal (no fp64,
-        // chosen at JIT time) to cut rounding noise in the downstream bulge chase.
-        template <typename T>
-        __attribute__((always_inline)) inline ::batchlas::device::LartgResult<T> lartg(const T& f, const T& g)
-        {
-            if constexpr (is_complex<T>::value && std::is_same_v<base_float_t<T>, float>) {
-                if (sycl_impl::on_metal()) return ::batchlas::device::lartg<float>(f, g);
-                return ::batchlas::device::lartg<double>(f, g);
-            } else {
-                return ::batchlas::device::lartg(f, g);
-            }
-        }
-
-        template <typename T>
-        __attribute__((always_inline)) inline auto eigenvalues_2x2(const T& a, const T& b, const T& c) {
-            return ::batchlas::device::lae2(a, b, c);
-        }
-
-        // The eigenvalue of [[a, b], [b, c]] closest to c.
-        template <typename T>
-        inline T wilkinson_shift(const T& a, const T& b, const T& c) {
-            const auto [lambda1, lambda2] = eigenvalues_2x2(a, b, c);
-            return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
-        }
-
-        // Binds core laev2's operands by reference: a using-declaration (by value) costs the steqr
-        // legacy / wg Francis kernels 3 LDG and 4 REG on sm_89. Goes when core laev2 takes const R&.
-        template <typename T>
-        __attribute__((always_inline)) inline auto laev2(const T& a, const T& b, const T& c) {
-            return ::batchlas::device::laev2(a, b, c);
-        }
-
     }
 
 

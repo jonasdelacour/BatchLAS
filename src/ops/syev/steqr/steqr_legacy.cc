@@ -136,74 +136,25 @@ Event steqr_impl(Queue& ctx,
 
             if (store_givens) sweep_counts[gid] = 0;
             if (n == 1) continue; //Nothing to do for 1x1 blocks
-            if (n == 2) { //Analytically compute eigenvalues for 2x2 blocks
-                if (store_givens) {
-                    auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
-                    d_(0) = rt1;
-                    d_(1) = rt2;
-                    e_(0) = T(0);
-                    rotations_view(0, 0, gid) = {c, -s};
+            // The sweep bodies are steqr_wg's (device::detail::wg_*); this route also records the
+            // sweep count of each block for the rotation replay.
+            if (n == 2) {
+                device::detail::wg_solve_2x2<T>(d_, e_, store_givens, [&](const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
+                    rotations_view(0, 0, gid) = {g.c, g.s};
                     order_view[gid] = ApplyOrder::Forward;
                     sweep_counts[gid] = 1;
-                } else {
-                    auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
-                    d_(0) = rt1;
-                    d_(1) = rt2;
-                    e_(0) = T(0);
-                }
+                });
                 continue;
             }
-            // QL is QR on (d_, e_) viewed in reverse. The sweep converges the end the shift is taken
-            // from (virtual index n - 1), so orient that end at the SMALLER |d|, as dsteqr does.
-            bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
+            // QL is QR on (d_, e_) viewed in reverse (wg_forward: the shift end at the smaller |d|).
+            bool QR = device::detail::wg_forward(d_, n);
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
-            const device::Thread th{};
-            const device::detail::SplitTol<T> tol{detail::eps2<T>(), detail::safmin<T>()};
             for (size_t k = 0; k < max_sweeps; ++k) {
-                const T anorm = device::detail::lanst_max(th, d_, e_);
-                if (anorm > detail::ssfmax<T>()) {
-                    const T s = detail::ssfmax<T>() / anorm;
-                    device::scal(th, s, d_);
-                    device::scal(th, s, e_);
-                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                    const T s = detail::ssfmin<T>() / anorm;
-                    device::scal(th, s, d_);
-                    device::scal(th, s, e_);
-                }
-
-                // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = detail::wilkinson_shift(device::detail::virt_get<T, 1>(d_, QR, n, n - 2),
-                                                   device::detail::virt_get<T, 2>(e_, QR, n, n - 2),
-                                                   device::detail::virt_get<T, 1>(d_, QR, n, n - 1));
-
-                // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = detail::givens_rotation(device::detail::virt_get<T, 1>(d_, QR, n, 0) - shift, device::detail::virt_get<T, 2>(e_, QR, n, 0));
-                if (store_givens) {
-                    rotations_view(0, k, gid) = {c0, s0};
-                }
-                auto bulge = device::detail::tridiag_rot(th, d_, e_, T(0), size_t{0}, size_t{1}, device::Givens<T>{c0, s0}, QR);
-
-                // Chase the bulge across the block in virtual indexing
-                for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = detail::givens_rotation(device::detail::virt_get<T, 2>(e_, QR, n, j - 1), bulge);
+                const bool deflatable = device::detail::wg_sweep<T>(d_, e_, n, QR, [&](size_t j, const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
                     if (store_givens) {
-                        rotations_view(j, k, gid) = {cj, sj};
+                        rotations_view(j, k, gid) = {g.c, g.s};
                     }
-                    bulge = device::detail::tridiag_rot(th, d_, e_, bulge, j, j + 1, device::Givens<T>{cj, sj}, QR);
-                }
-
-                const bool deflatable = device::detail::tridiag_split(th, d_, e_, tol);
-
-                if (anorm > detail::ssfmax<T>()) {
-                    const T s = anorm / detail::ssfmax<T>();
-                    device::scal(th, s, d_);
-                    device::scal(th, s, e_);
-                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                    const T s = anorm / detail::ssfmin<T>();
-                    device::scal(th, s, d_);
-                    device::scal(th, s, e_);
-                }
-
+                });
                 if (store_givens) sweep_counts[gid] = static_cast<int32_t>(k + 1);
                 if (deflatable) break;
             }

@@ -9,21 +9,6 @@
 
 namespace batchlas {
 
-namespace detail {
-
-// {c, -s} of LAPACK lartg(a, b): the rotation convention of the work-group bulge chase.
-template <typename T>
-inline std::array<T, 2> givens_rotation(const T& a, const T& b) {
-    auto [c_l, s_l, r] = detail::lartg(a, b);
-    (void)r;
-    return std::array<T, 2>{c_l, -s_l};
-}
-
-// The bulge-chase similarity (formerly apply_givens_rotation) is device::detail::tridiag_rot
-// (include/batchlas/device/lapack/steqr.hh).
-
-} // namespace detail
-
 template <Backend B, typename T>
 Event steqr_legacy(Queue& ctx,
                    const VectorView<T>& d_in,

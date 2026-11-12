@@ -85,7 +85,7 @@ BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT&
             if (UL == Uplo::Upper ? r > c : r < c) continue;
             T v = a(r, c);
             if (r == c) {
-                if constexpr (Ar::is_complex) v = T(Ar::re(v), real_t<T>(0));
+                if constexpr (Ar::is_complex) v = Ar::make(Ar::re(v), real_t<T>(0));
             } else {
                 tile(c, r) = Ar::conj(v);
             }
@@ -350,38 +350,14 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         alpha = ::batchlas::portable::group_broadcast(g, alpha);
 
         T tau_i = T(0);
-        T beta = alpha;
         T scale = T(0);
 
         if (lid == 0) {
-            const Real xnorm = sycl::sqrt(sumsq);
-            if constexpr (Arith<T>::is_complex) {
-                if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                    tau_i = T(0);
-                    beta = alpha;
-                    scale = T(0);
-                } else {
-                    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                    const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                    beta = -alpha_sign * T(beta_abs);
-                    tau_i = (beta - alpha) / beta;
-                    scale = T(1) / (alpha - beta);
-                }
-            } else {
-                if (xnorm == Real(0)) {
-                    tau_i = T(0);
-                    beta = alpha;
-                    scale = T(0);
-                } else {
-                    // -sign(alpha) by its sign bit (never 0), as the hand kernel's sign_nonzero.
-                    beta = -T(sycl::signbit(static_cast<Real>(alpha)) ? Real(-1) : Real(1)) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                    tau_i = (beta - alpha) / beta;
-                    scale = T(1) / (alpha - beta);
-                }
-            }
-
-            on_reflector(i, beta, tau_i);
+            // xLARFG scalars, alg::PhaseN1: a complex alpha reflects at the last column too.
+            const auto h = larfg_scalars<alg::PhaseN1>(alpha, sycl::sqrt(sumsq), x.size() + 1);
+            tau_i = h.tau;
+            scale = h.scale;
+            on_reflector(i, h.beta, tau_i);
             Ab(i + 1, i) = T(1);
         }
 

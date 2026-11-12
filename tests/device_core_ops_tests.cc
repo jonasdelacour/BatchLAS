@@ -1336,7 +1336,7 @@ TYPED_TEST(DeviceCoreOpsTest, PodComplexArithMatchesStdComplexAndDeviceScalar) {
     }
 }
 
-// lartg (all types), larfg_scalars (three conventions), lae2 / laev2 / las2 / wilkinson_shift
+// lartg (all types), larfg_scalars (three conventions), lae2 / laev2 / las2 / lapack_shift
 // (real) on device, against reference LAPACK on the host; inputs straddle the scaling
 // thresholds (1e-30 .. 1e30 float, 1e-300 .. 1e300 double), zeros and both signs.
 template <class R> std::vector<R> scalar_inputs() {
@@ -1389,7 +1389,7 @@ TYPED_TEST(DeviceCoreOpsTest, ScalarLapackMatchesReferenceLapack) {
             const auto ev = device::laev2(f, g, h3);
             const auto s2 = device::las2(f, g, h3);
             ob[16] = e2[0], ob[17] = e2[1], ob[18] = ev[0], ob[19] = ev[1], ob[20] = ev[2], ob[21] = ev[3], ob[22] = s2[0], ob[23] = s2[1];
-            if (g != T(0)) ob[24] = device::wilkinson_shift(f, g, h3);
+            if (g != T(0)) ob[24] = device::lapack_shift(f, g, h3);
         }
         (void)nrm2;
     });
@@ -1471,7 +1471,7 @@ TYPED_TEST(DeviceCoreOpsTest, ScalarLapackMatchesReferenceLapack) {
     EXPECT_EQ(bad_lapack, 0) << "larfg_scalars<Lapack> vs ?larfg";
     EXPECT_EQ(bad_realbeta, 0) << "larfg_scalars<RealBeta> vs ?larfg";
     EXPECT_EQ(bad_phase, 0) << "larfg_scalars<Phase> reflects [alpha; x] onto [beta; 0]";
-    EXPECT_EQ(bad_2x2, 0) << "lae2 / laev2 / las2 / wilkinson_shift vs long-double closed forms; first: " << first_2x2;
+    EXPECT_EQ(bad_2x2, 0) << "lae2 / laev2 / las2 / lapack_shift vs long-double closed forms; first: " << first_2x2;
 }
 
 // ---- reductions --------------------------------------------------------------------------------

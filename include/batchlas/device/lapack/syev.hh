@@ -32,11 +32,6 @@ template <class Ex> BATCHLAS_DEVICE_INLINE void chunk_barrier(const Ex& ex) {
     else group_barrier(ex.part);  // ADL: SubGroupPartition
 }
 
-template <class U> BATCHLAS_DEVICE_INLINE real_t<U> real_part(const U& x) {
-    if constexpr (Arith<U>::is_complex) return x.real();
-    else return x;
-}
-
 // v := element (i, j) of the Hermitian matrix whose `upper` (else lower) triangle A stores,
 // Im(diag) dropped; assigned per branch so a caller's guard folds into one CFG.
 template <class Ops = arith::Native, class T, class M> BATCHLAS_DEVICE_INLINE void herm_load(T& v, const M& A, bool upper, int i, int j) {
@@ -53,7 +48,8 @@ template <class Ops = arith::Native, class T, class M> BATCHLAS_DEVICE_INLINE vo
 // Hermitian tridiagonal (d, e) -> real symmetric (dr, er = |e|) by T' = S^H T S:
 // S(0) = 1, S(i+1) = S(i) * f(e_i) / |e_i| (S(i) when e_i == 0), f = identity when e is the
 // subdiagonal (Uplo::Lower) and conj when it is the superdiagonal. want_s == false writes
-// dr and er only. Every step reads S(i) back from s.
+// dr and er only. Every step reads S(i) back from s. A real T is the +-1 similarity:
+// S(i+1) = S(i) sign(e_i) (+1 for e_i >= 0), er = |e| by fabs (dr / er may alias d / e).
 template <class Ops = arith::Native, class Dv, class Ev, class Drv, class Erv, class Sv>
 BATCHLAS_DEVICE_INLINE void phase_similarity(const Thread&, int n, const Dv& d, const Ev& e, const Drv& dr, const Erv& er, const Sv& s,
                                           Uplo uplo, bool want_s) {
@@ -62,17 +58,25 @@ BATCHLAS_DEVICE_INLINE void phase_similarity(const Thread&, int n, const Dv& d, 
     using R = real_t<T>;
     if (want_s) s(0) = AR::make(R(1), R(0));
     for (int i = 0; i < n; ++i) dr(i) = AR::re(d(i));
-    for (int i = 0; i < n - 1; ++i) {
-        const T ei = e(i);
-        const R abs_e = sycl::hypot(AR::re(ei), AR::im(ei));
-        er(i) = abs_e;
-        if (!want_s) continue;
-        if (abs_e == R(0)) {
-            s(i + 1) = s(i);
-        } else {
-            const T sub = (uplo == Uplo::Lower) ? ei : AR::make(AR::re(ei), -AR::im(ei));
-            const T f = AR::div_real(sub, abs_e);  // before s(i) is read, as `S(i) * (sub / |e|)` does
-            s(i + 1) = AR::mul(s(i), f);
+    if constexpr (!AR::is_complex) {
+        for (int i = 0; i < n - 1; ++i) {
+            const T ei = e(i);
+            if (want_s) s(i + 1) = s(i) * ((ei >= T(0)) ? T(1) : T(-1));
+            er(i) = sycl::fabs(ei);
+        }
+    } else {
+        for (int i = 0; i < n - 1; ++i) {
+            const T ei = e(i);
+            const R abs_e = sycl::hypot(AR::re(ei), AR::im(ei));
+            er(i) = abs_e;
+            if (!want_s) continue;
+            if (abs_e == R(0)) {
+                s(i + 1) = s(i);
+            } else {
+                const T sub = (uplo == Uplo::Lower) ? ei : AR::make(AR::re(ei), -AR::im(ei));
+                const T f = AR::div_real(sub, abs_e);  // before s(i) is read, as `S(i) * (sub / |e|)` does
+                s(i + 1) = AR::mul(s(i), f);
+            }
         }
     }
 }
@@ -93,22 +97,6 @@ template <class Ops = arith::Native, class Ex, class T, class R> BATCHLAS_DEVICE
 }
 
 // ---- column-owner Householder (lane l holds column l in a ColPerLane Frag) -------------------
-// A QL Householder vector of a P-long frame: element `head` is an implied 1, elements below it
-// are 0, elements above it are stored (LAPACK xORG2L / xORM2L convention; core UnitHead is QR's).
-template <class V> struct UnitHeadQL {
-    V v;
-    int head;
-    using value_type = elem_t<V>;
-    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const {
-        using A = Arith<value_type>;
-        value_type x = A::zero();
-        if (i < head) x = v(i);
-        else if (i == head) x = A::one();
-        return x;
-    }
-};
-template <class V> BATCHLAS_DEVICE_INLINE UnitHeadQL<V> unit_head_ql(V v, int head) { return {v, head}; }
-
 // c(r) = beta at r == j, alpha elsewhere (xLASET on one register column).
 template <class T, int N, class L> BATCHLAS_DEVICE_INLINE void laset_col(Frag<T, N, L>& c, int j, T alpha, T beta) {
 #pragma unroll
@@ -125,18 +113,6 @@ BATCHLAS_DEVICE_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z
     }
 }
 
-// larf, Side::Left, on a register column: c := (I - tau v v^H) c, with v read at every r < N
-// (zero outside its support: unpredicated) from an operand all lanes may read.
-template <class Ops = arith::Native, class T, int N, class L, class V>
-BATCHLAS_DEVICE_INLINE void larf_col(Frag<T, N, L>& c, const Published<V>& v, T tau) {
-    using AR = arith_t<Ops, T>;
-    T dot = AR::zero();
-#pragma unroll
-    for (int r = 0; r < N; ++r) AR::mac_conj(dot, v(r), c[r]);
-    const T gamma = AR::mul(tau, dot);
-#pragma unroll
-    for (int r = 0; r < N; ++r) AR::msub(c[r], v(r), gamma);
-}
 // c := H e_k = e_k - tau v for the QL vector v (v(k) = 1, v(r > k) = 0): column k of xORG2L.
 template <class Ops = arith::Native, class T, int N, class L, class V>
 BATCHLAS_DEVICE_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& v, T tau, int k) {
@@ -149,7 +125,7 @@ BATCHLAS_DEVICE_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& 
 // lane l owns column l; vs is the chunk's P-long scratch. Stage reflector k, zero-padded:
 template <class Ex, class Vs, class Rm> BATCHLAS_DEVICE_INLINE void stage_ql_reflector(const Ex& ex, const Vs& vs, const Rm& refl, int k) {
     const int lane = ex.lid();
-    vs(lane) = unit_head_ql(refl.col(k + 1), k)(lane);
+    vs(lane) = unit_head<Refl::QL>(refl.col(k + 1), k)(lane);
 }
 
 }  // namespace detail
@@ -165,7 +141,7 @@ BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, 
         const T tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
         detail::stage_ql_reflector(ex, vs, refl, k);
         detail::chunk_barrier(ex);
-        if (lane < k) detail::larf_col<Ops>(q, assume_published(vs), tau_k);
+        if (lane < k) larf<Side::Left, Ops>(q, assume_published(vs), tau_k);
         else if (lane == k) detail::larf_unit_col<Ops>(q, assume_published(vs), tau_k, k);
         detail::chunk_barrier(ex);  // every lane is done reading vs before it is rebuilt
     }
@@ -180,7 +156,7 @@ BATCHLAS_DEVICE_INLINE void orm2l(const Ex& ex, Frag<T, N, L>& c, const Vs& vs, 
         const T tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
         detail::stage_ql_reflector(ex, vs, refl, k);
         detail::chunk_barrier(ex);
-        if (lane < n && tau_k != arith_t<Ops, T>::zero()) detail::larf_col<Ops>(c, assume_published(vs), tau_k);
+        if (lane < n && tau_k != arith_t<Ops, T>::zero()) larf<Side::Left, Ops>(c, assume_published(vs), tau_k);
         detail::chunk_barrier(ex);
     }
 }
@@ -264,7 +240,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
     const T d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : T(0);
     const T e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : T(0);
 
-    Real diag = real_part(d_c);
+    Real diag = re(d_c);
     Real offdiag = Real(0);
     T phase = T(1);
 
@@ -273,7 +249,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
         offdiag = (lane < (nn - 1)) ? sycl::hypot(e_c.real(), e_c.imag()) : Real(0);
         phase = phase_replay<Ops>(pex, e_c, offdiag, nn);
     } else {
-        offdiag = real_part(e_c);
+        offdiag = re(e_c);
     }
 
     // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
@@ -542,19 +518,6 @@ template <class Tv, class TQv> BATCHLAS_DEVICE_INLINE void sytrd_tau_pack_at(con
     } else {
         if (j < (n - 1)) tauq(j) = tau(j);
         else tauq(j) = T(0);
-    }
-}
-
-// ---- tridiagonal similarities ------------------------------------------------------------------
-// Real symmetric tridiagonal: e := |e| by the +-1 similarity S (S(0) = 1, S(i+1) = S(i) sign(e_i)).
-template <class Ev, class Sv> BATCHLAS_DEVICE_INLINE void sign_similarity(const device::Thread&, int n, const Ev& e, const Sv& s) {
-    using T = std::remove_cvref_t<decltype(e(0))>;
-    s(0) = T(1);
-    for (int i = 0; i < n - 1; ++i) {
-        const T ei = e(i);
-        const T sgn = (ei >= T(0)) ? T(1) : T(-1);
-        s(i + 1) = s(i) * sgn;
-        e(i) = sycl::fabs(ei);
     }
 }
 

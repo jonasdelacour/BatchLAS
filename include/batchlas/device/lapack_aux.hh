@@ -492,16 +492,10 @@ BATCHLAS_DEVICE_INLINE T larfg(const Ex& ex, int n, int alpha_item, T& alpha, T&
 }
 
 // ---- vectors of plane rotations (LAPACK xLARGV / xLARTV / xLAR2V), elementwise over ex ----------
-// The first template argument is either core's (largv: lartg<W>'s W, e.g. alg::Promote; lartv /
-// lar2v: alg::RotLapack, with Ops = arith::Native for T's own operators) or a rotation kernel
-// class Rot supplying the scalar steps with its own arithmetic, c real: Rot::lartg(f, g, c&, s&,
-// r&), Rot::rot_pair(x&, y&, c, s), Rot::lar2v_pair(x&, y&, z&, c, s) (the band-reduction
-// kernels' btrd_givens_ops).
+// largv: lartg<W>'s W (e.g. alg::Promote); lartv / lar2v: alg::RotLapack, with Ops =
+// arith::Native for T's own operators (the band-reduction chase).
 namespace detail {
-template <class W> inline constexpr bool is_rot_kernel_v = !std::is_void_v<W> && !std::is_floating_point_v<W> && !is_rot_conv_v<W> &&
-                                                           !std::is_same_v<W, alg::LartgExact> && !std::is_same_v<W, alg::LartgFast> &&
-                                                           !std::is_same_v<W, alg::Promote>;
-// lartg<W> into out-parameters, plain inline (the rotation kernels' adaptor form).
+// lartg<W> into out-parameters, plain inline (the band-reduction chase's form).
 template <class W, class T, class R> inline void lartg_out(const T& f, const T& g, R& c, T& s, T& r) {
     auto [ct, st, rt] = lartg<W>(f, g);
     c = ct;
@@ -511,46 +505,27 @@ template <class W, class T, class R> inline void lartg_out(const T& f, const T& 
 }  // namespace detail
 // largv: rotation i from (x(i), y(i)) by lartg<W>: x(i) := r, y(i) := s, c(i) := c.
 template <class W = void, class Ex, class X, class Y, class C> BATCHLAS_DEVICE_INLINE void largv(const Ex& ex, const X& x, const Y& y, const C& c) {
-    if constexpr (detail::is_rot_kernel_v<W>) {
-        using T = typename X::value_type;
-        using R = real_t<T>;
-        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY {
-            const T f = x(t);
-            const T g = y(t);
-            R ct = R(0);
-            T st = T(0);
-            T rt = T(0);
-            W::lartg(f, g, ct, st, rt);
-            c(t) = ct;
-            y(t) = st;
-            x(t) = rt;
-        });
-    } else {
-        using T = elem_t<X>;
-        using R = real_t<T>;
-        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY {
-            const T f = x(t);
-            const T g = y(t);
-            R ct = R(0);
-            T st = T(0);
-            T rt = T(0);
-            detail::lartg_out<W>(f, g, ct, st, rt);
-            c(t) = ct;
-            y(t) = st;
-            x(t) = rt;
-        });
-    }
+    using T = elem_t<X>;
+    using R = real_t<T>;
+    for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY {
+        const T f = x(t);
+        const T g = y(t);
+        R ct = R(0);
+        T st = T(0);
+        T rt = T(0);
+        detail::lartg_out<W>(f, g, ct, st, rt);
+        c(t) = ct;
+        y(t) = st;
+        x(t) = rt;
+    });
 }
 // lartv: (x(i), y(i)) := rotation i applied (alg::RotLapack: x := c x + s y, y := c y - conj(s) x).
 template <class Rot = alg::RotLapack, class Ops = arith::Explicit, class Ex, class X, class Y, class C, class S>
 BATCHLAS_DEVICE_INLINE void lartv(const Ex& ex, const X& x, const Y& y, const C& c, const S& s) {
-    if constexpr (detail::is_rot_kernel_v<Rot>) {
-        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { Rot::rot_pair(x(t), y(t), c(t), s(t)); });
-    } else if constexpr (detail::is_native_v<Ops>) {
-        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lartv: arith::Native is alg::RotLapack");
+    static_assert(std::is_same_v<Rot, alg::RotLapack>, "lartv: alg::RotLapack");
+    if constexpr (detail::is_native_v<Ops>) {
         for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { detail::rot_native(x(t), y(t), c(t), s(t)); });
     } else {
-        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lartv: alg::RotLapack or a rotation kernel class");
         for_each_owned(ex, x.size(), [&](int i) {
             using T = elem_t<X>;
             T xi = x(i), yi = y(i);
@@ -635,13 +610,10 @@ template <class T, class R> inline void lar2v_native(T& x, T& y, T& z, R ci, con
 // arith::Explicit (explicit real arithmetic) or arith::Native (T's own operators).
 template <class Rot = alg::RotLapack, class Ops = arith::Explicit, class Ex, class X, class Y, class Z, class C, class S>
 BATCHLAS_DEVICE_INLINE void lar2v(const Ex& ex, const X& x, const Y& y, const Z& z, const C& c, const S& s) {
-    if constexpr (detail::is_rot_kernel_v<Rot>) {
-        for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { Rot::lar2v_pair(x(t), y(t), z(t), c(t), s(t)); });
-    } else if constexpr (detail::is_native_v<Ops>) {
-        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lar2v: arith::Native is alg::RotLapack");
+    static_assert(std::is_same_v<Rot, alg::RotLapack>, "lar2v: alg::RotLapack");
+    if constexpr (detail::is_native_v<Ops>) {
         for_each_owned(ex, x.size(), [&](int t) BATCHLAS_DEVICE_BODY { detail::lar2v_native(x(t), y(t), z(t), c(t), s(t)); });
     } else {
-        static_assert(std::is_same_v<Rot, alg::RotLapack>, "lar2v: alg::RotLapack or a rotation kernel class");
         detail::lar2v_lapack(ex, x, y, z, c, s);
     }
 }

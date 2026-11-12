@@ -200,13 +200,14 @@ BATCHLAS_DEVICE_INLINE void symm(const Ex& ex, const MA& A, const MB& B, const M
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::sym_product<SD, UL, true>(ex, A, B, C, alpha, beta, smem);
+    l3::sym_product<SD, UL, is_complex_v<typename Cfg::value_type>>(ex, A, B, C, alpha, beta, smem);
 }
 
 // ---- syrk, herk, syr2k, her2k: only the UL triangle of C is read or written --------------------
 // One body per rank: l3::rank_k<UL, TR, Herm> and l3::rank_2k<UL, TR, Herm> (Herm: the he* form,
 // op^H for the second factor, Im C(i, i) := 0); the four BLAS names are one-line wrappers. The he*
-// names take a real T too (Trans is ConjTrans there), with their own body.
+// names (and hemm) take a real T too: there they ARE the sy* body (ConjTrans read as Trans), so a
+// caller writes the zhe* name once for every T.
 
 namespace l3 {
 // C := alpha op(A) op(A)^T (Herm: ^H) + beta C. Herm maps Trans to ConjTrans (a real T only).
@@ -275,7 +276,8 @@ BATCHLAS_DEVICE_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alph
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::rank_k<UL, TR, true>(ex, A, C, alpha, beta, smem);
+    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_k<UL, TR, true>(ex, A, C, alpha, beta, smem);
+    else l3::rank_k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, A, C, alpha, beta, smem);
 }
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
@@ -287,7 +289,8 @@ BATCHLAS_DEVICE_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const 
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::rank_2k<UL, TR, true>(ex, A, B, C, alpha, beta, smem);
+    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_2k<UL, TR, true>(ex, A, B, C, alpha, beta, smem);
+    else l3::rank_2k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, A, B, C, alpha, beta, smem);
 }
 
 // ---- trmm (out of place, as the host op), trsm (in place) -------------------------------------

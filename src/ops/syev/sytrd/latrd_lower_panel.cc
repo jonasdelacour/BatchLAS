@@ -411,36 +411,11 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     // it with 1 (which happens after barrier 2).
                     const T alpha = (i + 1 < n) ? Ab(i + 1, i) : T(0);
 
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-                    {
-                        const Real xnorm = sycl::sqrt(sumsq_total);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-                    }
+                    // xLARFG scalars, alg::PhaseN1 (a complex alpha reflects at the last column too).
+                    const auto h = device::larfg_scalars<device::alg::PhaseN1>(alpha, sycl::sqrt(sumsq_total), n - i - 1);
+                    const T tau_i = h.tau;
+                    const T beta = h.beta;
+                    const T scale = h.scale;
 
                     if (tau_i != T(0)) {
                         for (int r = slo + lid; r < rhi; r += wg) {

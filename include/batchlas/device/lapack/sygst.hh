@@ -354,19 +354,10 @@ template <class T> BATCHLAS_DEVICE_INLINE l3::Global<T> gsub(const l3::Global<T>
     return {g.p + r0 + c0 * g.ld, g.ld, m, n};
 }
 
-// C := alpha X Y^H + conj(alpha) Y X^H + C (Tr: X^H Y + ...) on C's UL triangle: her2k, or syr2k
-// for a real T (the host route's sym_r2k).
-template <Uplo UL, bool Tr, class Cfg, class Ex, class X, class Y, class C, class AS>
-BATCHLAS_DEVICE_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, AS alpha, l3::Smem<Cfg> sm) {
-    if constexpr (Arith<typename Cfg::value_type>::is_complex)
-        her2k<UL, Tr ? Transpose::ConjTrans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
-    else syr2k<UL, Tr ? Transpose::Trans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
-}
-
 // LAPACK's dsygst / zhegst on the UL triangles of one matrix in global memory, the step order of
 // the host blocked route (kernels/sygst_blocked.cc) at nb = NB: per block the ?sygs2 diagonal
 // reduction (sygs2_group, one block, in `lmem`), then trsm (itype 1) or trmm (2, 3), the gemm
-// with the mirrored diagonal block H (LAPACK's hemm) and her2k / syr2k on the panel and trailing
+// with the mirrored diagonal block H (LAPACK's hemm) and her2k (syr2k for a real T) on the panel and trailing
 // parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
 template <Itype IT, Uplo UL, int NB, class Ex, class D, class DB>
 BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
@@ -411,7 +402,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const auto l21 = gsub(b, r, k, m, kb);
                 trsm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
-                r2k<UL, false>(ex, p, l21, a22, NegOne{}, sm);
+                her2k<UL, NT, Cfg>(ex, p, l21, a22, NegOne{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
                 trsm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
             } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
@@ -419,7 +410,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const auto u12 = gsub(b, k, r, kb, m);
                 trsm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
-                r2k<UL, true>(ex, p, u12, a22, NegOne{}, sm);
+                her2k<UL, TH, Cfg>(ex, p, u12, a22, NegOne{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
                 trsm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
             }
@@ -436,7 +427,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const l3::Global<D> wm{w, NB, kb, k};
                 trmm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
-                r2k<UL, true>(ex, wm, l21, a11, One{}, sm);
+                her2k<UL, TH, Cfg>(ex, wm, l21, a11, One{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
                 trmm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
             } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
@@ -445,7 +436,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const l3::Global<D> wm{w, n, k, kb};
                 trmm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
-                r2k<UL, false>(ex, wm, u12, a11, One{}, sm);
+                her2k<UL, NT, Cfg>(ex, wm, u12, a11, One{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
                 trmm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
             }

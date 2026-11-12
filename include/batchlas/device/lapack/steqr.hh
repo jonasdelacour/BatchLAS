@@ -4,8 +4,7 @@
 // problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
 // detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
 // lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
-// the forms core does not reproduce bit for bit yet (serial dlanst 'M', LaneVec scal, the
-// two-window reversal, the strict-tie 2x2 shift).
+// the forms core does not reproduce bit for bit yet (LaneVec scal, the two-window reversal).
 // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 
 #include <algorithm>
@@ -29,16 +28,6 @@ template <class R> struct SplitTol {
     R eps2;
     R safmin;
 };
-
-// max(|d(i)|, |e(i)|), dlanst 'M', serial on one item. fmax ignores a NaN entry (steqr's rule).
-template <class D, class E> BATCHLAS_DEVICE_INLINE auto lanst_max(const Thread&, const D& d, const E& e) {
-    using R = elem_t<D>;
-    static_assert(!Arith<R>::is_complex, "steqr_detail::lanst_max: d and e are real");
-    const int n = d.size();
-    R acc = sycl::fabs(d(n - 1));
-    for (int i = 0; i < n - 1; ++i) acc = sycl::fmax(acc, sycl::fmax(sycl::fabs(d(i)), sycl::fabs(e(i))));
-    return acc;
-}
 
 // x := a x on the window [x.lo, x.hi) only.
 template <class Ex, class T> BATCHLAS_DEVICE_INLINE void scal_lane(const Ex& ex, const T& a, const LaneVec<T>& x) {
@@ -128,39 +117,26 @@ BATCHLAS_DEVICE_INLINE T tridiag_rot(const Thread&, const D& d, const E& e, cons
     return -ej * s;
 }
 
-// ssfmin / ssfmax / eps2 and block_scale: scalar.hh.
+// ssfmin / ssfmax / eps2, block_scale and eig2x2_nearest: scalar.hh.
 
-// The eigenvalue of [[a, b], [b, c]] closest to c, a tie going to the second root (the CTA
-// Wilkinson strategy; core eig2x2_nearest ties to the first). Plain inline, as the form it replaced.
-template <class R> inline R eig2x2_closest(const R& a, const R& b, const R& c) {
-    const auto [l1, l2] = lae2(a, b, c);
-    return std::abs(l1 - c) < std::abs(l2 - c) ? l1 : l2;
-}
-
-// ---- the work-group solver's sweep (host steqr_wg and steqr<J, tier::Blocked<1>>) ---------------
-// Core lae2 / laev2 with the operands bound by reference: by value costs the wg Francis kernel 3
-// LDG and 4 REG on sm_89 (src/math-helpers.hh keeps the same binding).
-template <class R> BATCHLAS_DEVICE_INLINE auto lae2_cref(const R& a, const R& b, const R& c) { return lae2(a, b, c); }
-template <class R> BATCHLAS_DEVICE_INLINE auto laev2_cref(const R& a, const R& b, const R& c) { return laev2(a, b, c); }
-
+// ---- the work-group solver's sweep (host steqr_wg / steqr_legacy, steqr<J, tier::Blocked<1>>) ----
 // {c, -s} of lartg(a, b): the work-group chase's rotation convention.
-template <class R> inline std::array<R, 2> wg_givens(const R& a, const R& b) {
-    const auto [c_l, s_l, r] = lartg(a, b);
-    (void)r;
-    return std::array<R, 2>{c_l, -s_l};
+template <class R> inline Givens<R> wg_givens(const R& a, const R& b) {
+    const auto g = lartg(a, b);
+    return {g.c, -g.s};
 }
 
 // An unreduced 2 x 2 block (n_local == 2) in closed form, e(0) := 0. With vectors, rot(g) takes
 // the rotation {c, -s} of laev2's eigenvector (applied as rotation 0, forward order).
 template <class R, class D, class E, class Rot> BATCHLAS_DEVICE_INLINE void wg_solve_2x2(const D& d_, const E& e_, bool vecs, Rot&& rot) {
     if (vecs) {
-        auto [rt1, rt2, c, s] = laev2_cref(d_(0), e_(0), d_(1));
+        auto [rt1, rt2, c, s] = laev2(d_(0), e_(0), d_(1));
         d_(0) = rt1;
         d_(1) = rt2;
         e_(0) = R(0);
         rot(Givens<R>{c, -s});
     } else {
-        auto [rt1, rt2] = lae2_cref(d_(0), e_(0), d_(1));
+        auto [rt1, rt2] = lae2(d_(0), e_(0), d_(1));
         d_(0) = rt1;
         d_(1) = rt2;
         e_(0) = R(0);
@@ -178,7 +154,7 @@ template <class R, class D, class E, class N, class Rot>
 BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, Rot&& rot) {
     const Thread th{};
     const SplitTol<R> tol{eps2<R>(), safmin<R>()};
-    const R anorm = lanst_max(th, d_, e_);
+    const R anorm = lanst<NormType::Max>(th, d_, e_);
     if (anorm > ssfmax<R>()) {
         const R s = ssfmax<R>() / anorm;
         scal(th, s, d_);
@@ -189,16 +165,17 @@ BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool Q
         scal(th, s, e_);
     }
 
-    const auto shift = eig2x2_closest(virt_get<R, 1>(d_, QR, n_local, n_local - 2), virt_get<R, 2>(e_, QR, n_local, n_local - 2),
-                                      virt_get<R, 1>(d_, QR, n_local, n_local - 1));
+    const auto shift = eig2x2_nearest<alg::TieHighest>(virt_get<R, 1>(d_, QR, n_local, n_local - 2),
+                                                       virt_get<R, 2>(e_, QR, n_local, n_local - 2),
+                                                       virt_get<R, 1>(d_, QR, n_local, n_local - 1));
 
-    auto [c0, s0] = wg_givens(virt_get<R, 1>(d_, QR, n_local, 0) - shift, virt_get<R, 2>(e_, QR, n_local, 0));
-    rot(std::size_t{0}, Givens<R>{c0, s0});
-    auto bulge = tridiag_rot(th, d_, e_, R(0), std::size_t{0}, std::size_t{1}, Givens<R>{c0, s0}, QR);
+    const Givens<R> g0 = wg_givens(virt_get<R, 1>(d_, QR, n_local, 0) - shift, virt_get<R, 2>(e_, QR, n_local, 0));
+    rot(std::size_t{0}, g0);
+    auto bulge = tridiag_rot(th, d_, e_, R(0), std::size_t{0}, std::size_t{1}, g0, QR);
     for (std::size_t j = 1; j < n_local - 1; ++j) {
-        auto [cj, sj] = wg_givens(virt_get<R, 2>(e_, QR, n_local, j - 1), bulge);
-        rot(j, Givens<R>{cj, sj});
-        bulge = tridiag_rot(th, d_, e_, bulge, j, j + 1, Givens<R>{cj, sj}, QR);
+        const Givens<R> gj = wg_givens(virt_get<R, 2>(e_, QR, n_local, j - 1), bulge);
+        rot(j, gj);
+        bulge = tridiag_rot(th, d_, e_, bulge, j, j + 1, gj, QR);
     }
 
     const bool deflatable = tridiag_split(th, d_, e_, tol);
@@ -432,10 +409,10 @@ inline void implicit_ql_step(const Partition& partition,
 
         if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
             // For QL, the shift is formed from the leading 2x2 of the physical block (l,l+1).
-            // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
-            mu = eig2x2_closest(dlp1, e0, p0);
+            // eig2x2_nearest picks the eigenvalue nearest its 3rd argument; we want nearest D(l).
+            mu = eig2x2_nearest<alg::TieHighest>(dlp1, e0, p0);
         } else {
-            mu = device::wilkinson_shift(p0, e0, dlp1);
+            mu = device::lapack_shift(p0, e0, dlp1);
         }
 
         const int32_t nrot = Pad ? lockstep_max(partition, active ? m - l : 0) : m - l;
@@ -569,11 +546,11 @@ inline void implicit_ql_step(const Partition& partition,
     {
         T mu = T(0);
         if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
-            // Want eigenvalue closest to D(l); wilkinson_shift picks closest to its third arg.
-            mu = eig2x2_closest(dlp1, e0, p0);
+            // Want the eigenvalue nearest D(l); eig2x2_nearest picks the one nearest its third arg.
+            mu = eig2x2_nearest<alg::TieHighest>(dlp1, e0, p0);
         } else {
             // LAPACK-style stable implicit shift.
-            mu = device::wilkinson_shift(p0, e0, dlp1);
+            mu = device::lapack_shift(p0, e0, dlp1);
         }
         g = dm - mu;
     }
@@ -678,13 +655,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         const auto blk_e = device::lane_vec(offdiag, block_begin, block_end);
         const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
 
-        T scale = T(1);
-        if (anorm > ssfmax<T>()) {
-            scale = ssfmax<T>() / anorm;
-        } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-            scale = ssfmin<T>() / anorm;
-        }
-        const T inv_scale = T(1) / scale;
+        const auto bs = detail::block_scale(anorm);
+        const T scale = bs.s, inv_scale = bs.inv;
 
         if (scale != T(1)) {
             detail::scal_lane(ex, scale, blk_d);
@@ -812,13 +784,9 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 const auto blk_d = device::lane_vec(diag, bb, be + 1);
                 const auto blk_e = device::lane_vec(offdiag, bb, be);
                 const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
-                scale = T(1);
-                if (anorm > ssfmax<T>()) {
-                    scale = ssfmax<T>() / anorm;
-                } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-                    scale = ssfmin<T>() / anorm;
-                }
-                inv_scale = T(1) / scale;
+                const auto bs = detail::block_scale(anorm);
+                scale = bs.s;
+                inv_scale = bs.inv;
                 if (scale != T(1)) {
                     detail::scal_lane(ex, scale, blk_d);
                     detail::scal_lane(ex, scale, blk_e);
@@ -932,12 +900,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                 const auto blk_d = device::lane_vec(diag, bb, opened ? be + 1 : bb);  // empty unless opened
                 const auto blk_e = device::lane_vec(offdiag, bb, opened ? be : bb);
                 const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
-                T sc = T(1);
-                if (anorm > ssfmax<T>()) {
-                    sc = ssfmax<T>() / anorm;
-                } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-                    sc = ssfmin<T>() / anorm;
-                }
+                const T sc = detail::block_scale(anorm).s;
                 if (opened && sc != T(1)) {
                     detail::scal_lane(ex, sc, blk_d);
                     detail::scal_lane(ex, sc, blk_e);

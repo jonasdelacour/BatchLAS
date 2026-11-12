@@ -5,7 +5,7 @@
 //                                             orm2l)
 //   include/batchlas/device/lapack/sytrd.hh  (sytd2; detail Fit ops, lacpy_herm) and core
 //                                             larfg (the row-fragment form sytd2 calls)
-//   include/batchlas/device/lapack/steqr.hh  (detail lanst_max, tridiag_split, scal_lane,
+//   include/batchlas/device/lapack/steqr.hh  (detail tridiag_split, scal_lane,
 //                                             reverse, tridiag_rot) and core lanst / find_first
 //                                             (the LaneVec forms the CTA solver calls)
 // Shared ops (operands, item(), mirror, laset, lacpy, rot, lasr, Frag moves) are core's and are
@@ -279,8 +279,8 @@ TYPED_TEST(SyevCtaTrioKernelsTest, DgmmLeftAt) {
 }
 
 // phase_similarity, both Uplo: T' = S^H T S has the real off-diagonal |e|, |S| = 1, a zero e_i
-// carries S over bit for bit; want_s == false leaves NaN-poisoned S untouched. Real types:
-// sign_similarity gives e := |e| and S = +-1 exactly.
+// carries S over bit for bit; want_s == false leaves NaN-poisoned S untouched. Real types, in
+// place (dr / er aliasing d / e, as syev_blocked calls it): e := |e| and S = +-1 exactly.
 TYPED_TEST(SyevCtaTrioKernelsTest, TridiagonalSimilarities) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -309,7 +309,8 @@ TYPED_TEST(SyevCtaTrioKernelsTest, TridiagonalSimilarities) {
             device::detail::phase_similarity(device::Thread{}, n, dvv, ev, drv, erv, sv, u, /*want_s=*/k < 2);
         }
         if constexpr (!is_cplx<T>) {
-            device::detail::sign_similarity(device::Thread{}, n, device::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1), device::vec(s2 + std::ptrdiff_t(b) * n, n));
+            const auto e2v = device::vec(e2 + std::ptrdiff_t(b) * (n - 1), n - 1);
+            device::detail::phase_similarity(device::Thread{}, n, dvv, e2v, dvv, e2v, device::vec(s2 + std::ptrdiff_t(b) * n, n), Uplo::Lower, true);
         }
     });
     const auto gdr = this->dev.down(dr, hdr.size());
@@ -357,7 +358,7 @@ TYPED_TEST(SyevCtaTrioKernelsTest, TridiagonalSimilarities) {
             }
         }
     }
-    EXPECT_EQ(exact, 0) << "dr / S(0) / zero-e carry / unwritten S / sign_similarity";
+    EXPECT_EQ(exact, 0) << "dr / S(0) / zero-e carry / unwritten S / real in place";
     EXPECT_VERIFY(T, Check::blas, n, worst);
 }
 
@@ -575,7 +576,7 @@ TYPED_TEST(SyevCtaTrioKernelsTest, Org2lOrm2lPartition) {
     run_org2l_orm2l<TypeParam, 32>(this->dev, 32);
 }
 
-// Register-column ops on one work-item each: larf_col with both arithmetic policies,
+// Register-column ops on one work-item each: Frag larf (the org2l step) with both arithmetic policies,
 // larf_unit_col, laset_col, dgmm_lift (r < n only; the rest keeps the fill).
 TYPED_TEST(SyevCtaTrioKernelsTest, RegisterColumnOps) {
     using T = TypeParam;
@@ -598,9 +599,9 @@ TYPED_TEST(SyevCtaTrioKernelsTest, RegisterColumnOps) {
         device::Frag<T, N, device::ColPerLane> f, g;
         device::load(f, cv);
         device::load(g, cv);
-        device::detail::larf_col(f, vv, tau);
+        device::larf<Side::Left, device::arith::Native>(f, vv, tau);
         device::store(f, out(0));
-        device::detail::larf_col<device::arith::Explicit>(g, vv, tau);
+        device::larf<Side::Left, device::arith::Explicit>(g, vv, tau);
         device::store(g, out(1));
         device::detail::larf_unit_col(f, vv, tau, k);
         device::store(f, out(2));
@@ -941,7 +942,7 @@ TYPED_TEST(SyevCtaTrioKernelsTest, FitOpsOnBlock) {
 
 // ============================== steqr (lapack/steqr.hh) ===============================
 
-// lanst_max ignores a NaN and must read d(n-1); tridiag_split zeroes exactly the entries under
+// lanst<Max> (Thread) ignores a NaN and must read d(n-1); tridiag_split zeroes exactly the entries under
 // the threshold and reports whether it did; d and e have inc 2 with a poisoned gap.
 TYPED_TEST(SyevCtaTrioKernelsRealTest, LanstMaxAndSplitOnThread) {
     using T = TypeParam;
@@ -958,7 +959,7 @@ TYPED_TEST(SyevCtaTrioKernelsRealTest, LanstMaxAndSplitOnThread) {
         if (rep == 0) d[(n - 1) * inc] = T(9);  // the max is the element read before the loop
         if (rep == 1) e[0] = T(-9);
         if (rep == 2) d[3 * inc] = T(-9);
-        e[6 * inc] = std::numeric_limits<T>::quiet_NaN();  // ignored by lanst_max, kept by the split
+        e[6 * inc] = std::numeric_limits<T>::quiet_NaN();  // ignored by lanst<Max>, kept by the split
         const auto thr = [&](int i) { return std::sqrt(tol.eps2 * std::abs(d[i * inc]) * std::abs(d[(i + 1) * inc]) + tol.safmin); };
         e[2 * inc] = T(2) * thr(2);                                 // kept: 4x the threshold squared
         if (rep != 0) e[(3 + rep) * inc] = T(0.5) * thr(3 + rep);  // split: 1/4 of it
@@ -972,7 +973,7 @@ TYPED_TEST(SyevCtaTrioKernelsRealTest, LanstMaxAndSplitOnThread) {
         const device::Thread th{};
         const auto dvv = device::vec(d + std::ptrdiff_t(b) * n * inc, n, inc);
         const auto ev = device::vec(e + std::ptrdiff_t(b) * n * inc, n - 1, inc);
-        out[2 * b] = device::detail::lanst_max(th, dvv, ev);
+        out[2 * b] = device::lanst<NormType::Max>(th, dvv, ev);
         out[2 * b + 1] = device::detail::tridiag_split(th, dvv, ev, tol) ? T(1) : T(0);
     });
     const auto go = this->dev.down(out, 2 * kBatch), ge = this->dev.down(e, he.size());
@@ -1058,7 +1059,7 @@ TYPED_TEST(SyevCtaTrioKernelsRealTest, TridiagRotMatchesDenseSimilarity) {
     EXPECT_VERIFY(T, Check::blas, 4, worst) << "tridiag_rot";
 }
 
-// One problem of n = P - 1 per chunk (the last lane is padding): lanst_max on windows that exclude
+// One problem of n = P - 1 per chunk (the last lane is padding): lanst<Max> on windows that exclude
 // a planted extreme on each side, the split over the whole e, find_first (LaneVec) past a leading
 // zero, scal_lane on a window, then reverse of d (paired with an empty e window), and the paired
 // reverse of d[2, n-1) with e (e only on even problems).

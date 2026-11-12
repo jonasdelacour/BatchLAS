@@ -274,7 +274,8 @@ TYPED_TEST(DeviceLapackBandTest, LarfOnBandWindows) {
         device::copy(ex, device::vec(vg + std::ptrdiff_t(b) * (nc + mr1), nc + mr1), device::vec(vl, nc + mr1));
         device::sync(ex, device::Mem::Global);
         const device::detail::HermBandLower<T> A{s + std::ptrdiff_t(b) * ld * n, ld, kd};
-        device::detail::larf_right(rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
+        device::larf<Side::Right, device::arith::Native, device::alg::ScaleW, device::alg::Lockstep>(
+            rows, tau, device::assume_published(device::vec<device::Mem::Local>(vl, nc)), A.sub(r0, c0, mr, nc));
         device::sync(ex, device::Mem::Global);
         device::larf<Side::Left, device::arith::Native, device::alg::ScaleW, device::alg::Lockstep>(
             rows, tau1, device::assume_published(device::vec<device::Mem::Local>(vl, nc + mr1).tail(nc)), A.sub(r1, c1, mr1, nc1));
@@ -422,30 +423,10 @@ TYPED_TEST(DeviceLapackBandTest, LarfColumnTeamsOnTilesAndGlobal) {
 
 // ---- plane rotations -------------------------------------------------------------------------------
 
-// A deterministic stand-in for the caller's rotation kernels: the test checks the distribution and
-// the operand strides, and the reference evaluates the same formulas in long double.
-template <class T> struct TestRot {
-    using R = real_of<T>;
-    static void lartg(const T& f, const T& g, R& c, T& s, T& r) {
-        c = R(0.6);
-        s = g * R(0.8);
-        r = f + g;
-    }
-    static void rot_pair(T& x, T& y, R c, const T& s) {
-        const T xt = x, yt = y;
-        x = T(c) * xt + s * yt;
-        y = T(c) * yt - device::arith_t<device::arith::Native, T>::conj(s) * xt;
-    }
-    static void lar2v_pair(T& x, T& y, T& z, R c, const T& s) {
-        const T xo = x, yo = y, zo = z;
-        x = T(c) * xo + s * zo;
-        y = T(c) * yo - device::arith_t<device::arith::Native, T>::conj(s) * zo;
-        z = zo * T(c) + xo - yo;
-    }
-};
-
-// largv, lartv, lar2v over nrot = 150 rotations (more than the 64 lanes) with operand strides
-// 7, 5, 3, 2, 1, and rot_by with one (c, s) on a WorkGroup and, through fn_vec, on a Thread.
+// The band chase's rotation forms (alg::Promote, arith::Native): largv, lartv, lar2v over nr = 150
+// rotations (more than the 64 lanes) with operand strides 7, 5, 3, 2, 1, and rot with one (c, s)
+// on a WorkGroup and, through fn_vec, on a Thread. Reference: the defining identities in long
+// double (largv: G (f, g) = (r, 0), c^2 + |s|^2 = 1; lar2v: G [x z; conj(z) y] G^H, G = [c conj(s); -s c]).
 TYPED_TEST(DeviceLapackBandTest, PlaneRotationsDistributeOverStrides) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -471,17 +452,18 @@ TYPED_TEST(DeviceLapackBandTest, PlaneRotationsDistributeOverStrides) {
         const std::ptrdiff_t o = std::ptrdiff_t(it.get_group_linear_id()) * per;
         const device::WorkGroup<WG> ex{it};
         // largv: x (stride 7) <- r, y (stride 5) <- s, c (stride 3) <- c
-        device::largv<TestRot<T>>(ex, device::vec(x + o, nr, ix), device::vec(y + o, nr, iy), device::vec(c + o, nr, ic));
+        device::largv<device::alg::Promote>(ex, device::vec(x + o, nr, ix), device::vec(y + o, nr, iy), device::vec(c + o, nr, ic));
         device::sync(ex, device::Mem::Global);
         // lartv with the c just written and an independent s (stride 2) on fresh x2 / y2
-        device::lartv<TestRot<T>>(ex, device::vec(x2 + o, nr, ix), device::vec(y2 + o, nr, iy), device::vec(c + o, nr, ic), device::vec(sv + o, nr, is));
-        device::lar2v<TestRot<T>>(ex, device::vec(x4 + o, nr, ix), device::vec(y4 + o, nr, iy), device::vec(z4 + o, nr), device::vec(c + o, nr, ic),
-                              device::vec(sv + o, nr, is));
-        device::detail::rot_by<TestRot<T>>(ex, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy), c1, s1);
+        device::lartv<device::alg::RotLapack, device::arith::Native>(ex, device::vec(x2 + o, nr, ix), device::vec(y2 + o, nr, iy), device::vec(c + o, nr, ic), device::vec(sv + o, nr, is));
+        device::lar2v<device::alg::RotLapack, device::arith::Native>(ex, device::vec(x4 + o, nr, ix), device::vec(y4 + o, nr, iy),
+                                                                     device::vec(z4 + o, nr), device::vec(c + o, nr, ic), device::vec(sv + o, nr, is));
+        const device::Givens<R, T> g1{c1, s1};
+        device::rot<device::alg::RotLapack, device::arith::Native>(ex, g1, device::vec(x3 + o, nrot, ix), device::vec(y3 + o, nrot, iy));
         // the Thread pass reaches x3 / y3 through fn_vec index maps returning references
         const auto xs = device::detail::fn_vec(nrot, [=](int i) -> T& { return x3[o + 1 + std::ptrdiff_t(i) * ix]; });
         const auto ys = device::detail::fn_vec(nrot, [=](int i) -> T& { return y3[o + 1 + std::ptrdiff_t(i) * iy]; });
-        if (ex.leader()) device::detail::rot_by<TestRot<T>>(device::Thread{}, xs, ys, c1, s1);
+        if (ex.leader()) device::rot<device::alg::RotLapack, device::arith::Native>(device::Thread{}, g1, xs, ys);
     });
     const auto gx = this->dev.down(x, hx.size()), gy = this->dev.down(y, hy.size()), gx2 = this->dev.down(x2, hx.size()),
                gy2 = this->dev.down(y2, hy.size()), gx3 = this->dev.down(x3, hx.size()), gy3 = this->dev.down(y3, hy.size()),
@@ -501,14 +483,23 @@ TYPED_TEST(DeviceLapackBandTest, PlaneRotationsDistributeOverStrides) {
             tx[kx] = ty[ky] = tc[kc] = tz[t] = 1;
             const LD<T> f = W(hx, kx), gg = W(hy, ky);
             const long double sc = std::abs(f) + std::abs(gg);
-            worst = std::max({worst, rel(gx[o + kx], f + gg, sc), rel(gy[o + ky], gg * (long double)0.8, sc)});
-            worst = std::max(worst, rel(T(gc[o + kc]), LD<T>(R(0.6)), 1.0L));
+            {  // largv: c real in [0, 1], G (f, g) = (r, 0), c^2 + |s|^2 = 1
+                const long double cr = (long double)gc[o + kc];
+                const LD<T> sr = wide(gy[o + ky]), rr = wide(gx[o + kx]);
+                worst = std::max({worst, double(std::abs(cr * f + sr * gg - rr) / sc), double(std::abs(cr * gg - cj(sr) * f) / sc),
+                                  double(std::abs(cr * cr + std::norm(sr) - 1.0L)), (cr < 0 || cr > 1) ? 1e30 : 0.0});
+            }
             const LD<T> cc = LD<T>((long double)gc[o + kc]), ss = W(hs, ks);
             const LD<T> xx = W(hx, kx), yy = W(hy, ky), zz = W(hz, t);
             const long double s2 = std::abs(xx) + std::abs(yy) + std::abs(zz);
             worst = std::max({worst, rel(gx2[o + kx], cc * xx + ss * yy, s2), rel(gy2[o + ky], cc * yy - cj(ss) * xx, s2)});
-            worst = std::max({worst, rel(gx4[o + kx], cc * xx + ss * zz, s2), rel(gy4[o + ky], cc * yy - cj(ss) * zz, s2),
-                              rel(gz4[o + t], zz * cc + xx - yy, s2)});
+            {  // lar2v on [x z; conj(z) y], x and y the real parts of the stored diagonals
+                const LD<T> dx = LD<T>(std::real(xx)), dy = LD<T>(std::real(yy)), sh = cj(ss), zh = cj(zz);
+                const LD<T> n00 = cc * cc * dx + cc * sh * zh + cc * ss * zz + ss * sh * dy;
+                const LD<T> n11 = ss * sh * dx - cc * sh * zh - cc * ss * zz + cc * cc * dy;
+                const LD<T> n01 = -cc * sh * dx - sh * sh * zh + cc * cc * zz + cc * sh * dy;
+                worst = std::max({worst, rel(gx4[o + kx], n00, s2), rel(gy4[o + ky], n11, s2), rel(gz4[o + t], n01, s2)});
+            }
         }
         // rot: the WorkGroup pass on elements i * stride, the Thread pass on 1 + i * stride
         for (int i = 0; i < nrot; ++i)

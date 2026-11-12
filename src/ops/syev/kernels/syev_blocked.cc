@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <batchlas/settings.hh>
 #include <batchlas/device.hh>
 #include <batchlas/device/sg_partition.hh>
@@ -130,7 +131,7 @@ Event syev_blocked_part(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(a_in.rows());
     const int32_t batch = static_cast<int32_t>(a_in.batch_size());
-    const int32_t p = std::max<int32_t>(0, n - 1);
+    const int32_t p = std::max<int32_t>(0, n - 1);  // e / tau length
     const int32_t sytrd_block_size = sytrd_block_size_override<T>(n);
     const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
@@ -141,319 +142,170 @@ Event syev_blocked_part(Queue& ctx,
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
 
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
+    using Real = typename base_type<T>::type;
+    constexpr bool cplx = detail::is_complex<T>::value;
+    const std::size_t nb = static_cast<std::size_t>(batch);
+    const std::size_t nm1 = static_cast<std::size_t>(p);
+    const bool want_vectors = (jobz == JobType::EigenVectors);
 
-        // Allocate SYTRD outputs (complex Hermitian tridiagonal).
-        auto d_c_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        auto e_c_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
-        auto tau_c_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
+    // SYTRD outputs in T (Hermitian tridiagonal for a complex T).
+    auto d_t_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * nb);
+    auto e_t_span = pool.allocate<T>(ctx, nm1 * nb);
+    auto tau_span = pool.allocate<T>(ctx, nm1 * nb);
+    const VectorView<T> d_t_view = VectorView<T>(d_t_span, n, batch, 1, n).with_batch_mask(mask_span);
+    const VectorView<T> e_t_view = VectorView<T>(e_t_span, p, batch, 1, p).with_batch_mask(mask_span);
+    const VectorView<T> tau_view = VectorView<T>(tau_span, p, batch, 1, p).with_batch_mask(mask_span);
 
-        const VectorView<T> d_c_view = VectorView<T>(d_c_span, n, batch, 1, n).with_batch_mask(mask_span);
-        const VectorView<T> e_c_view =
-            VectorView<T>(e_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-        const VectorView<T> tau_c_view =
-            VectorView<T>(tau_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-
-        // Real tridiagonal, consumed by STEDC in eigenvector mode and by STEBZ otherwise.
-        auto d_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        auto e_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
-
-        const VectorView<Real> d_view = VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
-        const VectorView<Real> e_view =
-            VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-
-        // The phase chain S is read only by the eigenvector lift below; the Z
-        // buffers only by STEDC and that same lift. Neither is allocated in values
-        // mode. syev_blocked_buffer_size branches on jobz identically; keep the two in step.
-        const bool want_vectors = (jobz == JobType::EigenVectors);
-        auto phase_span = pool.allocate<T>(ctx,
-            want_vectors ? static_cast<std::size_t>(n) * static_cast<std::size_t>(batch) : 0);
-        VectorView<T> phase_view;
-        if (want_vectors) {
-            phase_view = VectorView<T>(phase_span, n, batch, 1, n);
+    // The real tridiagonal STEDC / STEBZ consume: its own storage for a complex T, SYTRD's
+    // (made non-negative in place) for a real T.
+    const auto real_tridiag = [&]() {
+        if constexpr (cplx) {
+            auto d_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * nb);
+            auto e_span = pool.allocate<Real>(ctx, nm1 * nb);
+            return std::pair{VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask_span),
+                             VectorView<Real>(e_span, p, batch, 1, p).with_batch_mask(mask_span)};
+        } else {
+            return std::pair{d_t_view, e_t_view};
         }
+    }();
+    const VectorView<Real>& d_view = real_tridiag.first;
+    const VectorView<Real>& e_view = real_tridiag.second;
 
-        // Sub-workspaces.
-        {
-            auto sytrd_ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx,
-                                                                 a,
-                                                                 d_c_view,
-                                                                 e_c_view,
-                                                                 tau_c_view,
-                                                                 uplo,
-                                                                 sytrd_block_size);
-            auto sytrd_ws = pool.allocate<std::byte>(ctx, sytrd_ws_bytes);
-            (void)sytrd_blocked<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo, sytrd_ws, sytrd_block_size);
-        }
+    // The similarity S is read only by the eigenvector lift below; the Z buffers only by
+    // STEDC and that same lift. Neither is allocated in values mode.
+    // syev_blocked_part_buffer_size branches on jobz identically; keep the two in step.
+    auto phase_span = pool.allocate<T>(ctx, want_vectors ? static_cast<std::size_t>(n) * nb : 0);
+    VectorView<T> phase_view;
+    if (want_vectors) {
+        phase_view = VectorView<T>(phase_span, n, batch, 1, n);
+    }
 
-        // Convert complex Hermitian tridiagonal to real symmetric tridiagonal via diagonal phase similarity.
+    {
+        auto sytrd_ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, a, d_t_view, e_t_view, tau_view, uplo, sytrd_block_size);
+        auto sytrd_ws = pool.allocate<std::byte>(ctx, sytrd_ws_bytes);
+        (void)sytrd_blocked<B, T>(ctx, a, d_t_view, e_t_view, tau_view, uplo, sytrd_ws, sytrd_block_size);
+    }
+
+    // T' = S^H T S, off-diagonal real and >= 0 (STEDC's merge assumes it); Z := S Z later.
+    // A complex T always needs Dr / Er; a real T makes e := |e| in place in vectors mode only
+    // (STEBZ reads e as e_i^2 and |e_i|: the +-1 similarity is a no-op for the eigenvalues).
+    // S is written in vectors mode only, a uniform branch (cheaper than a second kernel symbol).
+    if (cplx || want_vectors) {
         ctx->submit([&](sycl::handler& cgh) {
-            auto D = d_c_view;
-            auto E = e_c_view;
+            auto D = d_t_view;
+            auto E = e_t_view;
             auto Dr = d_view;
             auto Er = e_view;
             auto S = phase_view;
             const int32_t nn = n;
-            const int32_t nb = batch;
-            // Dr/Er are the conversion proper and are always needed; S is not. The
-            // branch is uniform over the work-item (one item per batch entry) and a
-            // second lambda would cost another device-link symbol, which is this
-            // build's bottleneck -- so gate inside the kernel rather than splitting it.
             const bool want_phase = want_vectors;
-
-            cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
+            cgh.parallel_for(sycl::range<1>(nb), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                // Lower: E is the subdiagonal.
-                device::detail::phase_similarity(device::Thread{}, nn, device::item(D, b), device::item(E, b), device::item(Dr, b), device::item(Er, b),
-                                     device::item(S, b), Uplo::Lower, want_phase);
+                // Lower: E is the subdiagonal. A real T runs in place (dr, er are d, e).
+                if constexpr (cplx) {
+                    device::detail::phase_similarity(device::Thread{}, nn, device::item(D, b), device::item(E, b), device::item(Dr, b),
+                                                     device::item(Er, b), device::item(S, b), Uplo::Lower, want_phase);
+                } else {
+                    const auto d = device::item(D, b);
+                    const auto e = device::item(E, b);
+                    device::detail::phase_similarity(device::Thread{}, nn, d, e, d, e, device::item(S, b), Uplo::Lower, true);
+                }
             });
         });
+    }
 
-        const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
+    const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
 
-        if (!want_vectors) {
-            // Eigenvalues only: bisection straight off the tridiagonal, instead of an
-            // eigenvector D&C whose Z is discarded (`blocked` owns 32 < n <= 320 in values
-            // mode, the jobz=N rows of tuned/syev.<device>.txt). STEDC cannot simply
-            // be asked for NoEigenVectors -- see the NOTE below. STEDC and STEBZ
-            // (order=Ascending) both return ascending eigenvalues.
-            // evidence: docs/perf/syev.md#syev-stebz-values-only-in-the-blocked-solver-wp1
-            BATCHLAS_KERNEL_TRACE_SCOPE("syev_blocked.stebz_evals");
-            auto m_span = pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-            StebzParams<Real> bp;
-            bp.range = EigenRangeType::Index;
-            bp.il = 0;
-            bp.iu = n - 1;
-            bp.order = SortOrder::Ascending;
-            const size_t stebz_ws_bytes = stebz_buffer_size<B, Real>(ctx,
-                                                                     static_cast<std::size_t>(n),
-                                                                     static_cast<std::size_t>(batch),
-                                                                     bp);
-            auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
-            // See the real branch below: bisection has no status of its own, but
-            // syev.hh's contract is that every tier clears `info`, and this is the
-            // default values-mode path for 32 < n <= 320.
-            detail::info_clear(ctx, info, batch, mask_span);
-            (void)stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
-
-            return ctx.get_event();
-        }
-
-        // STEDC eigenvectors (real) and lifted eigenvectors (complex).
-        auto z_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        auto zc_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-
-        const MatrixView<Real, MatrixFormat::Dense> z_view =
-            MatrixView<Real, MatrixFormat::Dense>(z_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
-        const MatrixView<T, MatrixFormat::Dense> zc_view =
-            MatrixView<T, MatrixFormat::Dense>(zc_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
-
-        // Solve tridiagonal eigenproblem in real arithmetic.
-        // NOTE: The current STEDC implementation relies on eigenvectors during
-        // recursion/merge, so we always run it in EigenVectors mode and only
-        // backtransform/store vectors when requested by the public API.
-        const JobType internal_jobz = JobType::EigenVectors;
-        {
-            auto stedc_ws_bytes = stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
-            auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-            // syev_blocked does not iterate: sytrd_blocked is direct and the
-            // back-transform is direct, so every convergence event in this tier is
-            // stedc's. Forward the span rather than reduce anything -- stedc clears
-            // it, and exactly one of the two arms runs.
-            (void)stedc<B, Real>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view, info);
-        }
-
-        if (jobz == JobType::EigenVectors) {
-            // Lift Z to complex and apply phase scaling: Zc = S * Z.
-            ctx->submit([&](sycl::handler& cgh) {
-                auto Z = z_view.kernel_view();
-                auto ZC = zc_view.kernel_view();
-                auto S = phase_view;
-                const int32_t nn = n;
-                const int32_t nb = batch;
-                const int64_t total = static_cast<int64_t>(nb) * nn * nn;
-
-                cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-                    const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = device::detail::batched_item(idx, nn);
-                    if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = device::detail::batched_rc(idx, b, nn);
-                    device::detail::dgmm_left_at(device::item(S, b), device::item(Z, b, nn, nn), device::item(ZC, b, nn, nn), row, col);
-                });
-            });
-
-            if (p > 0) {
-                // Apply Qsub directly from the SYTRD reflectors (no packed copy).
-                auto aq_view = sytrd_lower_qsub_reflector_view<T>(a, n);
-                auto zc_sub = zc_view({1, SliceEnd()}, Slice());
-                Span<T> tau_q_span_flat(tau_c_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-
-                auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
-                                                                      aq_view,
-                                                                      zc_sub,
-                                                                      Side::Left,
-                                                                      Transpose::NoTrans,
-                                                                      tau_q_span_flat,
-                                                                      ormqr_block_size);
-                auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
-
-                (void)ormqr_blocked<B, T>(ctx,
-                                    aq_view,
-                                    zc_sub,
-                                    Side::Left,
-                                    Transpose::NoTrans,
-                                    tau_q_span_flat,
-                                    ormqr_ws,
-                                    ormqr_block_size);
-            }
-
-            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
-        }
-
-        return ctx.get_event();
-    } else {
-        // Real symmetric case.
-        auto d_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        auto e_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
-        auto tau_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
-
-        const VectorView<T> d_view = VectorView<T>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
-        const VectorView<T> e_view =
-            VectorView<T>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-        const VectorView<T> tau_view =
-            VectorView<T>(tau_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
-
-        // S and Z are eigenvector-path only; see the complex branch. Z alone is
-        // n^2*batch, and syev_blocked_buffer_size branches on jobz to match.
-        const bool want_vectors = (jobz == JobType::EigenVectors);
-        auto phase_span = pool.allocate<T>(ctx,
-            want_vectors ? static_cast<std::size_t>(n) * static_cast<std::size_t>(batch) : 0);
-        VectorView<T> phase_view;
-        if (want_vectors) {
-            phase_view = VectorView<T>(phase_span, n, batch, 1, n);
-        }
-
-        {
-            auto sytrd_ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_block_size);
-            auto sytrd_ws = pool.allocate<std::byte>(ctx, sytrd_ws_bytes);
-            (void)sytrd_blocked<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_ws, sytrd_block_size);
-        }
-
-        // STEDC's recursive merge path uses the split off-diagonal value and
-        // currently assumes a non-negative coupling magnitude. Convert the
-        // tridiagonal to one with non-negative off-diagonals via a diagonal
-        // similarity transform S (entries +/-1):
-        //   T' = S * T * S  =>  e'_i = |e_i|
-        // and later recover eigenvectors by Z := S * Z.
-        //
-        // The whole pass is skipped in values mode, not just the S writes: STEBZ
-        // touches e only as e_i^2 and |e_i| (stebz.cc, the Sturm count), so the
-        // +/-1 similarity is a no-op for eigenvalues. That saves a kernel launch
-        // plus an n*batch read-modify-write of E.
-        if (want_vectors) {
-            ctx->submit([&](sycl::handler& cgh) {
-                auto E = e_view;
-                auto S = phase_view;
-                const int32_t nn = n;
-                const int32_t nb = batch;
-                cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
-                    const int32_t b = static_cast<int32_t>(tid[0]);
-                    if (mask != nullptr && mask[b] == 0) return;  // I3
-                    device::detail::sign_similarity(device::Thread{}, nn, device::item(E, b), device::item(S, b));
-                });
-            });
-        }
-
-        const VectorView<T> evals_view = VectorView<T>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
-
-        if (!want_vectors) {
-            // Values mode: bisection instead of a discarded eigenvector D&C, as in the
-            // complex branch. STEBZ and STEDC both return ascending eigenvalues.
-            BATCHLAS_KERNEL_TRACE_SCOPE("syev_blocked.stebz_evals");
-            auto m_span = pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-            StebzParams<T> bp;
-            bp.range = EigenRangeType::Index;
-            bp.il = 0;
-            bp.iu = n - 1;
-            bp.order = SortOrder::Ascending;
-            const size_t stebz_ws_bytes = stebz_buffer_size<B, T>(ctx,
-                                                                  static_cast<std::size_t>(n),
-                                                                  static_cast<std::size_t>(batch),
-                                                                  bp);
-            auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
-            // stebz is bisection: it has no iteration budget to exhaust and so no
-            // status of its own. Clear anyway -- syev.hh's contract says every
-            // tier below clears `info` itself, and this early return is the
-            // DEFAULT path for 32 < n <= 320 in values mode, so leaving the span
-            // untouched hands the caller whatever was in the buffer. Mirrors
-            // syev_two_stage.cc:276.
-            detail::info_clear(ctx, info, batch, mask_span);
-            (void)stebz<B, T>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
-
-            return ctx.get_event();
-        }
-
-        auto z_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        const MatrixView<T, MatrixFormat::Dense> z_view =
-            MatrixView<T, MatrixFormat::Dense>(z_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
-
-        const JobType internal_jobz = JobType::EigenVectors;
-        {
-            auto stedc_ws_bytes = stedc_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
-            auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-            (void)stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view, info);
-        }
-
-        if (jobz == JobType::EigenVectors) {
-            // Recover eigenvectors for the original (signed) tridiagonal.
-            ctx->submit([&](sycl::handler& cgh) {
-                auto Z = z_view.kernel_view();
-                auto S = phase_view;
-                const int32_t nn = n;
-                const int32_t nb = batch;
-                const int64_t total = static_cast<int64_t>(nb) * nn * nn;
-                cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-                    const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = device::detail::batched_item(idx, nn);
-                    if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const auto [row, col] = device::detail::batched_rc(idx, b, nn);
-                    const auto Zb = device::item(Z, b, nn, nn);
-                    device::detail::dgmm_left_at(device::item(S, b), Zb, Zb, row, col);  // in place
-                });
-            });
-
-            if (p > 0) {
-                // Apply Qsub directly from the SYTRD reflectors (no packed copy).
-                auto aq_view = sytrd_lower_qsub_reflector_view<T>(a, n);
-                auto z_sub = z_view({1, SliceEnd()}, Slice());
-                Span<T> tau_q_span_flat(tau_span.data(), static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-
-                auto ormqr_ws_bytes = ormqr_blocked_buffer_size<B, T>(ctx,
-                                                                      aq_view,
-                                                                      z_sub,
-                                                                      Side::Left,
-                                                                      Transpose::NoTrans,
-                                                                      tau_q_span_flat,
-                                                                      ormqr_block_size);
-                auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
-
-                (void)ormqr_blocked<B, T>(ctx,
-                                    aq_view,
-                                    z_sub,
-                                    Side::Left,
-                                    Transpose::NoTrans,
-                                    tau_q_span_flat,
-                                    ormqr_ws,
-                                    ormqr_block_size);
-            }
-
-            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
-        }
+    if (!want_vectors) {
+        // Eigenvalues only: bisection straight off the tridiagonal, instead of an
+        // eigenvector D&C whose Z is discarded (`blocked` owns 32 < n <= 320 in values
+        // mode, the jobz=N rows of tuned/syev.<device>.txt). STEDC cannot simply
+        // be asked for NoEigenVectors -- see the NOTE below. STEDC and STEBZ
+        // (order=Ascending) both return ascending eigenvalues.
+        // evidence: docs/perf/syev.md#syev-stebz-values-only-in-the-blocked-solver-wp1
+        BATCHLAS_KERNEL_TRACE_SCOPE("syev_blocked.stebz_evals");
+        auto m_span = pool.allocate<int32_t>(ctx, nb);
+        StebzParams<Real> bp;
+        bp.range = EigenRangeType::Index;
+        bp.il = 0;
+        bp.iu = n - 1;
+        bp.order = SortOrder::Ascending;
+        const size_t stebz_ws_bytes = stebz_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), nb, bp);
+        auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
+        // stebz is bisection: it has no iteration budget to exhaust and so no status of
+        // its own. Clear anyway -- syev.hh's contract says every tier below clears `info`
+        // itself, and this early return is the DEFAULT path for 32 < n <= 320 in values
+        // mode, so leaving the span untouched hands the caller whatever was in the buffer.
+        // Mirrors syev_two_stage.cc.
+        detail::info_clear(ctx, info, batch, mask_span);
+        (void)stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
         return ctx.get_event();
     }
+
+    // STEDC eigenvectors (real); a complex T lifts them into ZC, a real T scales Z in place.
+    auto z_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * nb);
+    const MatrixView<Real, MatrixFormat::Dense> z_view =
+        MatrixView<Real, MatrixFormat::Dense>(z_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
+    const MatrixView<T, MatrixFormat::Dense> zc_view = [&]() {
+        if constexpr (cplx) {
+            auto zc_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * nb);
+            return MatrixView<T, MatrixFormat::Dense>(zc_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
+        } else {
+            return z_view;
+        }
+    }();
+
+    // Solve tridiagonal eigenproblem in real arithmetic.
+    // NOTE: The current STEDC implementation relies on eigenvectors during
+    // recursion/merge, so we always run it in EigenVectors mode and only
+    // backtransform/store vectors when requested by the public API.
+    const JobType internal_jobz = JobType::EigenVectors;
+    {
+        auto stedc_ws_bytes = stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), nb, internal_jobz, stedc_params);
+        auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
+        // syev_blocked does not iterate: sytrd_blocked is direct and the
+        // back-transform is direct, so every convergence event in this tier is
+        // stedc's. Forward the span rather than reduce anything -- stedc clears
+        // it, and exactly one of the two arms runs.
+        (void)stedc<B, Real>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view, info);
+    }
+
+    // ZC = S Z (in place for a real T).
+    ctx->submit([&](sycl::handler& cgh) {
+        auto Z = z_view.kernel_view();
+        auto ZC = zc_view.kernel_view();
+        auto S = phase_view;
+        const int32_t nn = n;
+        const int64_t total = static_cast<int64_t>(batch) * nn * nn;
+        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+            const int64_t idx = static_cast<int64_t>(tid[0]);
+            const int32_t b = device::detail::batched_item(idx, nn);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
+            const auto [row, col] = device::detail::batched_rc(idx, b, nn);
+            if constexpr (cplx) {
+                device::detail::dgmm_left_at(device::item(S, b), device::item(Z, b, nn, nn), device::item(ZC, b, nn, nn), row, col);
+            } else {
+                const auto Zb = device::item(Z, b, nn, nn);
+                device::detail::dgmm_left_at(device::item(S, b), Zb, Zb, row, col);
+            }
+        });
+    });
+
+    if (p > 0) {
+        // Apply Qsub directly from the SYTRD reflectors (no packed copy).
+        auto aq_view = sytrd_lower_qsub_reflector_view<T>(a, n);
+        auto zc_sub = zc_view({1, SliceEnd()}, Slice());
+        Span<T> tau_q_span_flat(tau_span.data(), nm1 * nb);
+        auto ormqr_ws_bytes =
+            ormqr_blocked_buffer_size<B, T>(ctx, aq_view, zc_sub, Side::Left, Transpose::NoTrans, tau_q_span_flat, ormqr_block_size);
+        auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
+        (void)ormqr_blocked<B, T>(ctx, aq_view, zc_sub, Side::Left, Transpose::NoTrans, tau_q_span_flat, ormqr_ws, ormqr_block_size);
+    }
+
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
+    return ctx.get_event();
 }
 
 template <Backend B, typename T>
@@ -482,103 +334,53 @@ size_t syev_blocked_part_buffer_size(Queue& ctx,
     // that is merely generous is not correct.
     const bool want_vectors = (jobz == JobType::EigenVectors);
 
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
+    using Real = typename base_type<T>::type;
+    constexpr bool cplx = detail::is_complex<T>::value;
+    const int32_t p = std::max<int32_t>(0, n - 1);
+    const std::size_t d_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
+    const std::size_t e_count = static_cast<std::size_t>(p) * static_cast<std::size_t>(batch);
+    const std::size_t z_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
 
-        const int32_t p = std::max<int32_t>(0, n - 1);
-
-        const std::size_t d_c_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
-        const std::size_t e_c_count = static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch);
-        const std::size_t tau_c_count = e_c_count;
-        const std::size_t d_count = d_c_count;
-        const std::size_t e_count = e_c_count;
-        const std::size_t phase_count = d_c_count;
-        const std::size_t z_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
-        const std::size_t zc_count = z_count;
-
-        bytes += BumpAllocator::allocation_size<T>(ctx, d_c_count);
-        bytes += BumpAllocator::allocation_size<T>(ctx, e_c_count);
-        // tau is written by sytrd_blocked unconditionally, so it survives values mode
-        // even though only ormqr_blocked reads it.
-        bytes += BumpAllocator::allocation_size<T>(ctx, tau_c_count);
-
+    // SYTRD's d, e, tau in T (tau is written unconditionally, read only by ormqr_blocked).
+    bytes += BumpAllocator::allocation_size<T>(ctx, d_count);
+    bytes += BumpAllocator::allocation_size<T>(ctx, e_count);
+    bytes += BumpAllocator::allocation_size<T>(ctx, e_count);
+    if constexpr (cplx) {  // the real tridiagonal
         bytes += BumpAllocator::allocation_size<Real>(ctx, d_count);
         bytes += BumpAllocator::allocation_size<Real>(ctx, e_count);
-        if (want_vectors) {
-            bytes += BumpAllocator::allocation_size<T>(ctx, phase_count);
-            bytes += BumpAllocator::allocation_size<Real>(ctx, z_count);
-            bytes += BumpAllocator::allocation_size<T>(ctx, zc_count);
-        }
-
-        // Sub-workspaces.
-        VectorView<T> d_c_dummy(nullptr, n, batch, 1, n);
-        VectorView<T> e_c_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        VectorView<T> tau_c_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_c_dummy, e_c_dummy, tau_c_dummy, uplo, sytrd_block_size);
-
-        if (want_vectors) {
-            bytes += stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
-
-            MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
-            MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
-            Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-            bytes += ormqr_blocked_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy, ormqr_block_size);
-        } else {
-            // STEBZ: the per-item count m, plus its own workspace. The latter is 0
-            // today (bisection keeps its state in registers) but the term is kept so
-            // the two paths stay in step if that ever stops being true.
-            StebzParams<Real> bp;
-            bp.range = EigenRangeType::Index;
-            bp.il = 0;
-            bp.iu = n - 1;
-            bp.order = SortOrder::Ascending;
-            bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<std::size_t>(batch));
-            bytes += stebz_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), bp);
-        }
-
-        return bytes;
-    } else {
-        // Real.
-        const int32_t p = std::max<int32_t>(0, n - 1);
-        const std::size_t d_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
-        const std::size_t e_count = static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch);
-        const std::size_t tau_count = e_count;
-        const std::size_t phase_count = d_count;
-        const std::size_t z_count = static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch);
-
-        bytes += BumpAllocator::allocation_size<T>(ctx, d_count);
-        bytes += BumpAllocator::allocation_size<T>(ctx, e_count);
-        // tau: written unconditionally by sytrd_blocked, read only by ormqr_blocked.
-        bytes += BumpAllocator::allocation_size<T>(ctx, tau_count);
-        if (want_vectors) {
-            bytes += BumpAllocator::allocation_size<T>(ctx, phase_count);
-            bytes += BumpAllocator::allocation_size<T>(ctx, z_count);
-        }
-
-        VectorView<T> d_dummy(nullptr, n, batch, 1, n);
-        VectorView<T> e_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        VectorView<T> tau_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_dummy, e_dummy, tau_dummy, uplo, sytrd_block_size);
-
-        if (want_vectors) {
-            bytes += stedc_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
-
-            MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
-            MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
-            Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
-            bytes += ormqr_blocked_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy, ormqr_block_size);
-        } else {
-            StebzParams<T> bp;
-            bp.range = EigenRangeType::Index;
-            bp.il = 0;
-            bp.iu = n - 1;
-            bp.order = SortOrder::Ascending;
-            bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<std::size_t>(batch));
-            bytes += stebz_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), bp);
-        }
-
-        return bytes;
     }
+    if (want_vectors) {
+        bytes += BumpAllocator::allocation_size<T>(ctx, d_count);  // S
+        bytes += BumpAllocator::allocation_size<Real>(ctx, z_count);
+        if constexpr (cplx) bytes += BumpAllocator::allocation_size<T>(ctx, z_count);  // ZC
+    }
+
+    VectorView<T> d_dummy(nullptr, n, batch, 1, n);
+    VectorView<T> e_dummy(nullptr, p, batch, 1, p);
+    VectorView<T> tau_dummy(nullptr, p, batch, 1, p);
+    bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_dummy, e_dummy, tau_dummy, uplo, sytrd_block_size);
+
+    if (want_vectors) {
+        bytes += stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
+
+        MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
+        MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
+        Span<T> tau_q_dummy(nullptr, static_cast<std::size_t>(p) * static_cast<std::size_t>(batch));
+        bytes += ormqr_blocked_buffer_size<B, T>(ctx, aq_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau_q_dummy, ormqr_block_size);
+    } else {
+        // STEBZ: the per-item count m, plus its own workspace. The latter is 0
+        // today (bisection keeps its state in registers) but the term is kept so
+        // the two paths stay in step if that ever stops being true.
+        StebzParams<Real> bp;
+        bp.range = EigenRangeType::Index;
+        bp.il = 0;
+        bp.iu = n - 1;
+        bp.order = SortOrder::Ascending;
+        bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<std::size_t>(batch));
+        bytes += stebz_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), bp);
+    }
+
+    return bytes;
 }
 
 // Items per pass: sytrd_blocked, stedc and ormqr_blocked hand A, Z and stedc's merge matrix (three

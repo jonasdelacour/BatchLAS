@@ -106,7 +106,6 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                               sycl::range<1>(static_cast<size_t>(wg_size))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 using Real = typename base_type<T>::type;
-                using Ops = btrd_givens_ops<T>;
 
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
@@ -156,7 +155,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 // AB staged when the band fits, C/WORK local when they fit. On Metal each C/WORK storage
                 // is its own body (no pointer merged across address spaces; givens_on does the same for AB).
                 auto body = [&](std::pair<Real*, T*> cw) BATCHLAS_DEVICE_BODY {
-                    device::detail::givens_on<Ops>(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
+                    device::detail::givens_on(pex, n, kd, ABg, ABv.ld(), local_ab, use_local_ab, cw.first, cw.second);
                 };
                 if (sycl_impl::on_metal()) {
                     if (use_local_cw) body(local_cw());
