@@ -8,7 +8,9 @@
 #include <batchlas/util/minibench_structured.hh>
 
 #include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
 
+#include <algorithm>
 #include <complex>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
@@ -55,6 +57,24 @@
 #define BATCHLAS_BENCH_NETLIB(name, sizes)
 #define BATCHLAS_BENCH_NETLIB_ALL_TYPES(name, sizes)
 #endif
+
+// Copies the lower band of batch item 0 of the dense n x n A into AB, which is (kd+1) x n:
+// AB(r,j) = A(j+r, j), and rows past the matrix edge are zeroed.
+template <typename T>
+inline void fill_lower_band_from_dense(const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& A,
+                                       batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> AB,
+                                       int n,
+                                       int kd) {
+    for (int j = 0; j < n; ++j) {
+        const int rmax = std::min(kd, n - 1 - j);
+        for (int r = 0; r <= rmax; ++r) {
+            AB(r, j, 0) = A(j + r, j, 0);
+        }
+        for (int r = rmax + 1; r <= kd; ++r) {
+            AB(r, j, 0) = T(0);
+        }
+    }
+}
 
 // Backend::SYCL (AdaptiveCpp Metal) has double kernels only when the device has fp64.
 #if BATCHLAS_HAS_SYCL_BACKEND && BATCHLAS_HAS_DEVICE_FP64
