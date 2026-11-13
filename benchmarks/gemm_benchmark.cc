@@ -16,13 +16,8 @@ using namespace batchlas;
 // a beta == 0 measurement structurally cannot see that.
 //
 // Env rather than a fifth range arg so the registered size sets keep working
-// unchanged: BATCHLAS_BENCH_BETA=0 or 1 (default 1, the prior behaviour).
-static double bench_beta() {
-    if (const char* p = std::getenv("BATCHLAS_BENCH_BETA")) {
-        return std::atof(p);
-    }
-    return 1.0;
-}
+// unchanged: BATCHLAS_BENCH_BETA=0 or 1 (default 1, the prior behaviour), read by
+// bench_beta() in bench_utils.hh.
 
 // Pad added to every leading dimension, so the UNALIGNED-ld case is measurable.
 // It is not an exotic one: a panel is a sub-view carrying its parent's ld, so
