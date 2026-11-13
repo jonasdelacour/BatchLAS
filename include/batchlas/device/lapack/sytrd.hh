@@ -124,7 +124,7 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
         if (is_alpha) alpha = e;
         else x = e;
     }
-    const T taui = larfg<alg::Phase, Ops>(ex, m, ar, alpha, x, x_active);
+    const T taui = larfg_lanes<alg::Phase, Ops>(ex, m, ar, alpha, x, x_active);
     if (x_active) {  // both triangles: the block update reads the full block
         col(lane) = x;
         row(lane) = Ar::conj(x);

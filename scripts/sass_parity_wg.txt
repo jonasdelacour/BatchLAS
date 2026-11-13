@@ -23,8 +23,8 @@
 # src/kernels/common/triangular_expand.hh: expand_group_shape (rows * cols == 256), mirrored 32 x 8
 256  ::expand_(?:triangular|mirrored)<
 
-# src/ops/gesvd/gebrd/gebrd_blocked.cc labrd_panel_complex: sycl::range<1>(kPanelWG), kPanelWG = 128
-128  labrd_panel_complex<
+# src/ops/gesvd/gebrd/gebrd_blocked.cc labrd_panel: sycl::range<1>(kPanelWG), kPanelWG = 128
+128  labrd_panel<
 
 # src/ops/gemm/kernels/register_tiled_common.hh launch_register_tiled: local (1, TileM / TR,
 # TileN / TC); the reg_configs rows of src/ops/gemm/choice.hh (args: T, TileM, TileN, TileK, TR, TC)

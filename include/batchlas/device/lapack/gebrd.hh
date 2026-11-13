@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // LAPACK xGEBRD's unblocked step xGEBD2 (bidiagonal reduction Q^H A P = B, B upper bidiagonal):
-// gebd2_real / gebd2_complex on one matrix per work-item (the unblocked route), gebd2_tile on one
-// problem's n x n tile in local memory (the CTA route, GebrdCTAKernel).
-// detail::larfg_lanes is xLARFG on a lane-held vector whose leader forms the scalars and
-// broadcasts them (core larfg's lane form replicates the scalars instead). labrd is xLABRD on one
-// matrix (real d, e: ZLARFG's real beta), on core gemv_acc: the host's complex panel (labrd_panel)
-// and the panel of gebrd<tier::Blocked<NB>>, whose trailing update is the in-group L3 gemm.
+// gebd2 on one matrix per work-item, every T (the unblocked route); detail::gebd2_tile, its lane
+// form on one problem's n x n tile in local memory (gebrd<tier::Cta<P>>, on core larfg_lanes).
+// labrd is xLABRD on one matrix (real d, e: ZLARFG's real beta), on core gemv_acc: the host's
+// panel (gebrd_blocked.cc labrd_panel, every T) and the panel of gebrd<tier::Blocked<NB>>, whose
+// trailing update is the in-group L3 gemm.
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 
 #include <sycl/sycl.hpp>
 
@@ -26,49 +26,28 @@
 
 namespace batchlas::device {
 
-namespace detail {
-// larfg on [alpha; x] held one element per lane: lane `head` holds alpha, the x_active lanes x.
-// The leader forms the scalars (alg::Phase: tau = 0, beta = alpha for len <= 1); on return lane
-// `head` holds beta, the x lanes v (x * scale when tau != 0), and every lane gets tau.
-template <typename Ex, typename T>
-inline T larfg_lanes(const Ex& ex, int32_t len, int32_t head, T& alpha, T& x, bool x_active) {
-    const T sumsq = ex.team_reduce(x_active ? (x * x) : T(0));
-    T xnorm = T(0);
-    if (ex.leader()) xnorm = sycl::sqrt(sumsq);
-    xnorm = ex.bcast(xnorm, 0u);
-    const T alpha_h = ex.bcast(alpha, static_cast<std::uint32_t>(head));
-    device::LarfgScalars<T> s{};
-    if (ex.leader()) s = device::larfg_scalars<device::alg::Phase>(alpha_h, xnorm, len);
-    const T beta = ex.bcast(s.beta, 0u);
-    const T tau = ex.bcast(s.tau, 0u);
-    const T scale = ex.bcast(s.scale, 0u);
-    if (ex.lid() == head) {
-        alpha = beta;
-    } else if (x_active && tau != T(0)) {
-        x *= scale;
-    }
-    return tau;
-}
-}  // namespace detail
-
-// dgebd2 on one matrix (one work-item): H(i) from the left, then G(i) from the right. A function,
-// not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
-template <typename T, typename MA, typename RV, typename TV>
-BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
+// xGEBD2 on one matrix (one work-item), every T: H(i) from the left, then G(i) from the right.
+// d, e are real (ZLARFG's real beta); row i holds conj(u_i) on exit (unmbr 'P' order) and H(i) is
+// applied as H^H = I - conj(tau) v v^H (real T: every conj and lacgv is the identity). Norm is
+// sumsq's policy, chosen by T: Fused for real (dot(x, x)'s FFMA chain), Unfused for complex. A
+// function, not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL quirk).
+template <typename T, class Norm = std::conditional_t<Arith<T>::is_complex, alg::Unfused, alg::Fused>, typename MA, typename RV,
+          typename TV>
+BATCHLAS_DEVICE_INLINE void gebd2(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
+    using Ar = device::Arith<T>;
     const device::Thread th{};
     const int32_t m = Ab.rows(), n = Ab.cols(), k = std::min(m, n);
     for (int32_t i = 0; i < k; ++i) {
-        // H(i) annihilates A(i+1:m, i), then A(i:m, i+1:n) := H(i) A(i:m, i+1:n).
+        // H(i) annihilates A(i+1:m, i), then A(i:m, i+1:n) := H(i)^H A(i:m, i+1:n).
         const auto xq = Ab.col(i).tail(i + 1);
-        const T sigma = device::dot(th, xq, xq);
-        const auto hl = device::larfg_scalars<device::alg::Phase>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
+        const auto hl = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i)), sycl::sqrt(device::sumsq<Norm>(th, xq)), m - i);
         if (hl.tau != T(0)) {
             Ab(i, i) = T(1);
             device::scal(th, hl.scale, xq);
-            device::larf<Side::Left>(th, hl.tau, device::unit_head(Ab.col(i).tail(i), 0), Ab.sub(i, i + 1, m - i, n - i - 1));
+            device::larf<Side::Left>(th, Ar::conj(hl.tau), device::unit_head(Ab.col(i).tail(i), 0), Ab.sub(i, i + 1, m - i, n - i - 1));
         }
         Ab(i, i) = hl.beta;
-        D(i, b) = hl.beta;
+        D(i, b) = Ar::re(hl.beta);
         TAUQ(i, b) = hl.tau;
 
         if (i >= n - 1) {
@@ -76,17 +55,19 @@ BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, con
             continue;
         }
 
-        // G(i) annihilates A(i, i+2:n), then A(i+1:m, i+1:n) := A(i+1:m, i+1:n) G(i).
+        // Row i conjugated (lacgv); G(i) annihilates A(i, i+2:n), then A(i+1:m, i+1:n) := A G(i).
+        const auto row = Ab.row(i).tail(i + 1);
         const auto xp = Ab.row(i).tail(i + 2);
-        const T sigma_r = device::dot(th, xp, xp);
-        const auto hr = device::larfg_scalars<device::alg::Phase>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
+        device::lacgv(th, row);
+        const auto hr = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(device::sumsq<Norm>(th, xp)), n - (i + 1));
         if (hr.tau != T(0)) {
             Ab(i, i + 1) = T(1);
             device::scal(th, hr.scale, xp);
-            device::larf<Side::Right>(th, hr.tau, device::unit_head(Ab.row(i).tail(i + 1), 0), Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
+            device::larf<Side::Right>(th, hr.tau, device::unit_head(row, 0), Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
         }
+        device::lacgv(th, xp);
         Ab(i, i + 1) = hr.beta;
-        E(i, b) = hr.beta;
+        E(i, b) = Ar::re(hr.beta);
         TAUP(i, b) = hr.tau;
     }
 
@@ -98,47 +79,11 @@ BATCHLAS_DEVICE_INLINE void gebd2_real(const MA& Ab, int32_t b, const RV& D, con
     }
 }
 
-// zgebd2 on one matrix: d, e real (ZLARFG's real beta); row i holds conj(u_i) on exit (unmbr 'P'
-// order). H(i) is applied as H^H = I - conj(tau) v v^H, with v(0) = 1 stored.
-template <typename T, typename MA, typename RV, typename TV>
-BATCHLAS_DEVICE_INLINE void gebd2_complex(const MA& Ab, int32_t b, const RV& D, const RV& E, const TV& TAUQ, const TV& TAUP) {
-    using Real = device::real_t<T>;
-    const device::Thread th{};
-    const int32_t m = Ab.rows(), n = Ab.cols();
-    for (int32_t i = 0; i < n; ++i) {
-        const auto xq = Ab.col(i).tail(i + 1);
-        const Real sigma = device::sumsq<device::alg::Unfused>(th, xq);
-        const auto lq = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i)), sycl::sqrt(sigma), m - i);
-        device::scal(th, lq.scale, xq);
-        Ab(i, i) = T(1);
-        device::larf<Side::Left>(th, device::Arith<T>::conj(lq.tau), Ab.col(i).tail(i), Ab.sub(i, i + 1, m - i, n - i - 1));
-        D(i, b) = device::Arith<T>::re(lq.beta);
-        Ab(i, i) = lq.beta;
-        TAUQ(i, b) = lq.tau;
-        if (i >= n - 1) {
-            TAUP(i, b) = T(0);
-            continue;
-        }
-        // Row i conjugated (lacgv); G(i) annihilates A(i, i+2:n) (u(0) = 1 stored); A := A G.
-        const auto row = Ab.row(i).tail(i + 1);
-        const auto xp = Ab.row(i).tail(i + 2);
-        device::lacgv(th, row);
-        const Real sigma_r = device::sumsq<device::alg::Unfused>(th, xp);
-        const auto rp = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
-        device::scal(th, rp.scale, xp);
-        Ab(i, i + 1) = T(1);
-        device::larf<Side::Right>(th, rp.tau, row, Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
-        device::lacgv(th, xp);
-        E(i, b) = device::Arith<T>::re(rp.beta);
-        Ab(i, i + 1) = rp.beta;
-        TAUP(i, b) = rp.tau;
-    }
-}
-
-// sgebd2 on one problem's n x n tile in local memory, lane l of the P-lane partition owning row l
-// (column l in the left update). Every barrier is work-group wide: a dead partition runs a zero
-// tile and stores nothing. A function, not the kernel lambda's body, so the lambda calls no view
-// operator() (SemaSYCL entry quirk).
+namespace detail {
+// gebd2's lane form (real T): one problem's n x n tile in local memory, lane l of the P-lane
+// partition owning row l (column l in the left update), each reflector from larfg_lanes. Every
+// barrier is work-group wide: a dead partition runs a zero tile and stores nothing. A function,
+// not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
 template <typename T, typename Ex, typename TM, typename AV, typename RV, typename TV>
 BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& A_prob,
                                     const RV& D_prob, const RV& E_prob, const TV& TAUQ_prob, const TV& TAUP_prob,
@@ -163,7 +108,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
             x_l = tile(lane, i);
         }
 
-        const T tau_l = detail::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
+        const T tau_l = device::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
         if (lane == i) {
             tile(i, i) = alpha_l;
             if (live) {
@@ -193,7 +138,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
             x_r = tile(i, lane);
         }
 
-        const T tau_r = detail::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
+        const T tau_r = device::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
         if (lane == i + 1) {
             tile(i, i + 1) = alpha_r;
             if (live) {
@@ -221,6 +166,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
         }
     }
 }
+}  // namespace detail
 
 // ---- the public op (v22 design C.4-C.7): device::gebrd<Tier> ---------------------------------
 namespace routine {
@@ -323,7 +269,7 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const
                      static_cast<int>(ex.part.get_group_linear_id());
     const int n = A.rows();
     const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, part * slice};
-    gebd2_tile<T>(ex, it, tile, A, d, e, tauq, taup, n, live);
+    detail::gebd2_tile<T>(ex, it, tile, A, d, e, tauq, taup, n, live);
     return 0;
 }
 
@@ -332,7 +278,7 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const
 // every Cyclic loop strides by a constant. Rows hold conj(u) on exit, d and e are real (ZLARFG's
 // real beta; real T: every conj is the identity). wa / wx (nb each, local) hold the negated small
 // products, so every update below is one gemv_acc: y := y0 + alpha (sum of the terms). The body of
-// the host's complex panel (labrd_panel) and of gebrd<tier::Blocked>.
+// the host's panel (gebrd_blocked.cc labrd_panel, every T) and of gebrd<tier::Blocked>.
 template <typename T, typename Ex, typename MA, typename MX, typename MY, typename RV, typename TV, typename WV>
 BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const MY& Yb, const RV& d, const RV& e, const TV& tauq,
                                const TV& taup, const WV& wa, const WV& wx, int32_t j0, int32_t ib) {
@@ -418,19 +364,6 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
     if (ex.leader() && n > 0) {
         taup(n - 1) = T(0);
     }
-}
-
-// zlabrd on panel columns j0 .. j0+ib-1 of item b of the host's batched views: labrd over the
-// item's operands (A, X, Y rebased by b, d / e / tau through item(), the host view's address).
-template <typename T, typename Ex, typename AV, typename RV, typename TV>
-BATCHLAS_DEVICE_INLINE void labrd_panel(const Ex& ex, int32_t b, const AV& A, const AV& X, const AV& Y, const RV& D,
-                                     const RV& E, const TV& TAUQ, const TV& TAUP, const sycl::local_accessor<T, 1>& work,
-                                     int32_t m, int32_t n, int32_t nb, int32_t j0, int32_t ib) {
-    const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
-    const auto Xb = device::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
-    const auto Yb = device::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
-    labrd<T>(ex, Ab, Xb, Yb, device::item(D, b), device::item(E, b), device::item(TAUQ, b), device::item(TAUP, b),
-             device::vec(work, nb, 0), device::vec(work, nb, nb), j0, ib);
 }
 
 // xGEBRD of ONE m x n matrix A (m >= n, any n) on the work-group ex (WorkGroup<256, 32>), host
