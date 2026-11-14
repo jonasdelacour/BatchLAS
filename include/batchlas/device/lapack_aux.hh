@@ -821,11 +821,8 @@ template <class Ex, class X> BATCHLAS_DEVICE_INLINE void lacgv(const Ex& ex, con
 
 // ---- triangle masks, geam and the SLM tile moves of transpose / mirror (src/util/elementwise.cc,
 // transpose.cc, src/kernels/common/triangular_expand.hh) -----------------------------------------
-// Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
-// (the legacy spelling, so a 1:1 port stays 1:1).
-template <Uplo U> struct UploC {
-    static constexpr Uplo value = U;
-};
+// Uplo / Diag: a UploC (view.hh) / DiagC tag folds at compile time, a plain enum is read at run
+// time (the legacy spelling, so a 1:1 port stays 1:1).
 template <Diag D> struct DiagC {
     static constexpr Diag value = D;
 };
