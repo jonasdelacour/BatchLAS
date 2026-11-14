@@ -13,6 +13,7 @@ layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::pivot_key_or
 layout-detail-use src/ops/gesvd/bdsdc/bdsdc.cc device::detail::build_gk
 layout-detail-use src/ops/gesvd/bdsdc/bdsdc.cc device::detail::extract_column
 layout-detail-use src/ops/gesvd/bdsdc/bdsdc.cc device::detail::repair
+layout-detail-use src/ops/gesvd/bdsqr/bdsqr.cc device::detail::bdsqr_sweep
 layout-detail-use src/ops/gesvd/bdsqr/bdsqr.cc device::detail::params
 layout-detail-use src/ops/gesvd/kernels/gesvd_blocked.cc device::detail::bdgram
 layout-detail-use src/ops/gesvd/kernels/gesvd_blocked.cc device::detail::bdmv_div
@@ -77,6 +78,7 @@ layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::rot_ro
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::round_robin_pair
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::sym_schur2
 layout-detail-use src/ops/syev/stedc/stedc.cc device::detail::denominators
+layout-detail-use src/ops/syev/stedc/stedc.cc device::detail::laed2_merge_vector
 layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::denominators
 layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::rescale
 layout-detail-use src/ops/syev/steqr/steqr_cta.cc device::detail::QSharedCache
@@ -96,13 +98,14 @@ layout-detail-use src/ops/syev/sytrd/sytrd_sb2st_hh.cc device::detail::StridedTe
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st_hh.cc device::detail::win_of
 layout-detail-use src/ops/syev/sytrd/sytrd_sy2sb.cc device::detail::band_len
 layout-detail-use src/ops/syev/sytrd/sytrd_sy2sb.cc device::detail::copy_band_col
-layout-detail-use src/ops/syev/tridiag/stebz.cc device::detail::stebz_params
 layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::SteinScratch
 layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::iterate
 layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::reorthogonalize
-layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::stein_params
+layout-detail-use src/ops/syevx/kernels/syevx_direct.cc device::detail::syevx_select
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::Pack16
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::pack16_elems
+layout-detail-use src/ops/sygst/sygst_native.hh device::detail::sygs2_block_elems
+layout-detail-use src/ops/sygst/sygst_native.hh device::detail::sygs2_ldf
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::RevMat
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::RevVec
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::Staged
