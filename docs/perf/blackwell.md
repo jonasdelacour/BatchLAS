@@ -97,7 +97,7 @@ predicate. Its one use is the per-architecture register charge of the fused getr
 
 ## potrf LPanel vector sB
 
-`potrf_lpanel_body`'s left-looking update reads each sB column as 16-byte `sycl::vec<float,4>` loads
+`alg::LeftLooking`'s left-looking update reads each sB column as 16-byte `sycl::vec<float,4>` loads
 through a local-space pointer (it was one scalar shared load per FMA; cfloat compiled to generic
 `LD.E`). Each `rS[i]` still accumulates `kk` in ascending order, so the arithmetic is unchanged; the
 change is architecture-independent. LPanel pinned, vendor/LPanel BASE -> new: float n256 0.95 -> 1.15,

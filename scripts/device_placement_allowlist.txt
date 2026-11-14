@@ -57,12 +57,6 @@ layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::reg_store_lo
 layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::reg_store_upper
 layout-detail-use src/ops/potrf/kernels/potrf_cta.cc device::detail::CtaConst
 layout-detail-use src/ops/potrf/kernels/potrf_cta.cc device::detail::cta_items
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::InvSqrt
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::frag_load_row_herm_lower
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::frag_store_row_herm_lower
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::gemv_n_slm_bcast
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::slm_mat
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::slm_tile
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::ColPtr
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::gather_unit
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::scatter_row
@@ -184,7 +178,6 @@ layout-src-ns src/ops/geqrf/kernels/geqrf_tiny_device.hh batchlas::geqrf_native:
 layout-src-ns src/ops/geqrf/kernels/geqrf_tiny_device.hh batchlas::geqrf_native::kGeqrfTinyRegsPerSm
 layout-src-ns src/ops/geqrf/kernels/geqrf_tiny_device.hh batchlas::geqrf_native::kGeqrfTinyThreadsPerSm
 layout-src-ns src/ops/getrf/kernels/getrf_panel_reg_device.hh batchlas::getrf_native::getf2_panel_reg_device
-layout-src-ns src/ops/potrf/kernels/potrf_lpanel_device.hh batchlas::potrf_native::potrf_lpanel_body
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::Cx
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::DevMap
 layout-src-ns src/sycl/device_scalar.hh batchlas::sycl_device::IsDevComplex

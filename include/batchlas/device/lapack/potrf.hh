@@ -10,7 +10,10 @@
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: A stays in global memory; per NB-wide
 //                 panel potf2 (SgSlm) on the local diagonal block, then the in-group L3 trsm and
 //                 herk (level3/group.hh); ws.local = L3 stages + the block, no global bytes
-// The host tiny and CTA routes launch the SAME bodies (potrf_reg_run, potrf_cta_run) with a run-time uplo.
+//   tier::Blocked<NB, alg::LeftLooking>  Lower, one item per row of a work-group slot: each n x NB
+//                 panel is updated from its left in local memory, then potf2 on its rows (detail)
+// The host tiny, CTA and lpanel routes launch the SAME bodies (potrf_reg_run, potrf_cta_run,
+// potrf_blocked_run<alg::LeftLooking>) with a run-time uplo.
 // Collective: every item of ex calls with the same arguments; the op ends with a barrier (the
 // output is visible to every item). info = k > 0: the leading minor of order k is not positive
 // definite; -2: n > the tier's bound or A not square; -3: ws.local missing or misaligned.
@@ -816,21 +819,133 @@ BATCHLAS_DEVICE_INLINE bool blocked_ws_ok(const Workspace& ws, bool need_global)
     return !need_global || (ws.global != nullptr && reinterpret_cast<std::uintptr_t>(ws.global) % 16 == 0);
 }
 
-// Right-looking over NB-wide panels (LAPACK xPOTRF): the diagonal block is staged Hermitian-lower
-// into local memory and factored by potf2 on sub-group 0 (SgSlm, the CTA tier's leaf), written
-// back, then L21 := A21 L11^-H and A22 -= L21 L21^H on the in-group L3. Upper is the transposed
-// schedule: U12 := U11^-H A12, A22 -= U12^H U12. A failing panel stops the loop after its write
-// back (LAPACK: no later column changes); info is local, so it is uniform.
+// The blocked recurrence (LAPACK xPOTRF's loop over NB-wide panels), one loop for every panel
+// strategy S of tier::Blocked<NB, Alg>, `ok` sticky (no failed pivot yet): update_left(j, ib, ok)
+// brings the panel up to date from the columns to its left, factor(j, ib, ok) runs potf2, stores
+// the panel and returns the new ok, more(ok, m2) false ends the loop, update_right(j, ib, m2)
+// applies the panel to the trailing matrix. Returns s.info(). `ok` stays a local of this loop: as
+// a strategy member it is an i8 in memory, and the LPANEL kernels' registers move (double +4).
+template <int NB, class S> BATCHLAS_DEVICE_INLINE int potrf_blocked_loop(S& s, int n) {
+    bool ok = true;
+    for (int j = 0; j < n; j += NB) {
+        const int ib = n - j < NB ? n - j : NB;
+        const int m2 = n - j - ib;
+        s.update_left(j, ib, ok);
+        ok = s.factor(j, ib, ok);
+        if (!s.more(ok, m2)) break;
+        s.update_right(j, ib, m2);
+    }
+    return s.info();
+}
+
+// alg::Default, right-looking: the diagonal block is staged Hermitian-lower into local memory and
+// factored by potf2 on sub-group 0 (SgSlm, the CTA tier's leaf), written back, then L21 := A21
+// L11^-H and A22 -= L21 L21^H on the in-group L3. Upper is the transposed schedule: U12 := U11^-H
+// A12, A22 -= U12^H U12. A failing panel ends the loop after its write back (LAPACK: no later
+// column changes); info is local, so it is uniform.
+template <Uplo UL, int NB, class Ex, class Cfg, class D, class MG, class MD, class DV> struct BlockedRight {
+    const Ex& ex;
+    const l3::Smem<Cfg>& sm;
+    D* S;
+    int* fl;
+    const DV& dg;
+    const MG& G;
+    const MD& Gd;
+    int ld;
+    bool sg0;
+    int st = 0;
+    BATCHLAS_DEVICE_INLINE void update_left(int, int, bool) const {}
+    BATCHLAS_DEVICE_INLINE bool factor(int j, int ib, bool) {
+        const auto S11 = slm_mat(S, ib, ib, NB);
+        lacpy_herm_lower(ex, HermLower<D>{&Gd(j, j), ld, UL == Uplo::Upper}, slm_mat(S, NB, NB, NB), ib);
+        ex.barrier();
+        if (sg0) potf2_sg_slm<NB, InvSqrt>(SubGroup<32>{ex.sub()}, S11, ib, dg, fl, j);
+        ex.barrier();
+        st = *fl;
+        if constexpr (UL == Uplo::Upper) lacpy<Part::Upper, Transpose::ConjTrans>(ex, S11, Gd.sub(j, j, ib, ib));
+        else lacpy<Part::Lower>(ex, S11, Gd.sub(j, j, ib, ib));
+        ex.barrier(Mem::Global);
+        return st == 0;
+    }
+    BATCHLAS_DEVICE_INLINE static bool more(bool ok, int m2) { return ok && m2 != 0; }
+    BATCHLAS_DEVICE_INLINE void update_right(int j, int ib, int m2) const {
+        if constexpr (UL == Uplo::Upper) {
+            const auto U12 = G.sub(j, j + ib, ib, m2);
+            trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), U12, One{}, sm);
+            herk<Uplo::Upper, Transpose::ConjTrans, Cfg>(ex, U12, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
+        } else {
+            const auto L21 = G.sub(j + ib, j, m2, ib);
+            trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), L21, One{}, sm);
+            herk<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, L21, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
+        }
+    }
+    BATCHLAS_DEVICE_INLINE int info() const { return st; }
+};
+
+// alg::LeftLooking (Lower; the host lpanel route), one item per row (row = ex.lid(), ex's width
+// >= n). The panel P := A(:, j:j+ib) - L(:, 0:j) L(j:j+ib, 0:j)^H is built in local memory, the
+// columns to its left re-read from global against a zero-padded NB x NB broadcast block, then
+// factored by potf2 on its rows (PanelRows) and stored. `bar` spans the whole work-group: every
+// barrier is top-level and a failure is a predicated skip, never a `break`, so the schedule
+// depends on (n, NB) alone and several matrices may share a work-group (`store` false: a dead slot
+// runs every barrier, its stores suppressed). Every global access is guarded by row >= column;
+// B6 is required: the next panel reads the columns just stored, by other items.
+// evidence: docs/perf/potrf.md#the-lpanel-tier
+template <int NB, class Ex, class MA, class D, class Bar> struct BlockedLeft {
+    using Ar = arith_t<arith::Fma, D>;
+    const Ex& ex;
+    const MA& A;
+    SlmMat<D> P;
+    SlmTile<NB, NB, D> B;
+    D* sB;
+    int* fail;
+    Bar& bar;
+    int n;
+    int row;
+    bool store;
+    // ok is matrix-uniform: every item derives it from the same local pivot.
+    BATCHLAS_DEVICE_INLINE void update_left(int j, int ib, bool ok) const {
+        const bool live = (row < n) & ((row >= j) & ok);  // not `&&`: its branch survives inlining (double +4 REG)
+        Frag<D, NB> rp, rS;  // rp: row `row` of the panel's lower triangle; rS: its update
+        frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
+        device::fill(rS, Ar::zero());
+        for (int k = 0; k < j; k += NB) {
+            const int kb = ((j - k) < NB) ? (j - k) : NB;
+            device::lacpy<Part::Full, Transpose::NoTrans, alg::DivMod, alg::EdgeZeroPad>(ex, device::conj_view(A.sub(j, k, ib, kb)), B);
+            bar();  // B1
+            if (live) {
+                Frag<D, NB> rA;
+                device::load_row(rA, A.sub(0, k, n, kb), row, kb);
+                gemv_n_slm_bcast<NB>(rS, rA, sB);  // evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+            }
+            bar();  // B2: WAR on the block
+        }
+        if (live) {  // the strictly upper diagonal block is zeroed
+            frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) BATCHLAS_DEVICE_BODY { return Ar::sub(rp[i], rS[i]); });
+        }
+        bar();  // B3
+    }
+    BATCHLAS_DEVICE_INLINE bool factor(int j, int ib, bool panel_ok) const {
+        // B3b / B4 / B5 per column. evidence: docs/perf/potrf.md#the-pivot-cell-war-race
+        const bool ok = potf2_panel_rows<InvSqrt>(ex, P, j, ib, n, panel_ok, fail, bar);
+        if (store && panel_ok) device::lacpy<Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));  // a failed panel is finite
+        bar();  // B6
+        return ok;
+    }
+    BATCHLAS_DEVICE_INLINE static bool more(bool, int) { return true; }  // no `break`: uniform barriers
+    BATCHLAS_DEVICE_INLINE void update_right(int, int, int) const {}
+    BATCHLAS_DEVICE_INLINE int info() const { return *fail; }
+};
+
 template <Uplo UL, int NB, class Alg, int WG, int SG, class MA>
 BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
     using D = dev_scalar_t<T>;
     using R = real_t<D>;
     using Cfg = PotrfBlockedCfg<T>;
-    static_assert(std::is_same_v<Alg, alg::Default>, "potrf: tier::Blocked has one algorithm");
+    static_assert(std::is_same_v<Alg, alg::Default>, "potrf: tier::Blocked<NB> on a WorkGroup is alg::Default");
     static_assert(NB >= 1 && NB <= reg_max_n<T>, "potrf: tier::Blocked<NB> needs 1 <= NB <= 32 (complex<double>: 16)");
     static_assert(WG == Cfg::threads && SG == 32, "potrf: tier::Blocked runs on WorkGroup<256, 32>");
-    constexpr bool upper = UL == Uplo::Upper;
     const int n = a.rows();
     if (n < 0 || a.cols() != n) return -2;
     if (n == 0) return 0;
@@ -846,31 +961,28 @@ BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const M
     const auto Gd = mat(reinterpret_cast<D*>(p), n, n, ld);
     const bool sg0 = ex.sub().get_group_linear_id() == 0;
     if (ex.leader()) *fl = 0;
-    int info = 0;
-    for (int j = 0; j < n; j += NB) {
-        const int ib = n - j < NB ? n - j : NB;
-        const int m2 = n - j - ib;
-        const auto S11 = slm_mat(S, ib, ib, NB);
-        lacpy_herm_lower(ex, HermLower<D>{&Gd(j, j), ld, upper}, slm_mat(S, NB, NB, NB), ib);
-        ex.barrier();
-        if (sg0) potf2_sg_slm<NB, InvSqrt>(SubGroup<32>{ex.sub()}, S11, ib, dg, fl, j);
-        ex.barrier();
-        info = *fl;
-        if constexpr (upper) lacpy<Part::Upper, Transpose::ConjTrans>(ex, S11, Gd.sub(j, j, ib, ib));
-        else lacpy<Part::Lower>(ex, S11, Gd.sub(j, j, ib, ib));
-        ex.barrier(Mem::Global);
-        if (info != 0 || m2 == 0) break;
-        if constexpr (upper) {
-            const auto U12 = G.sub(j, j + ib, ib, m2);
-            trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), U12, One{}, sm);
-            herk<Uplo::Upper, Transpose::ConjTrans, Cfg>(ex, U12, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
-        } else {
-            const auto L21 = G.sub(j + ib, j, m2, ib);
-            trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), L21, One{}, sm);
-            herk<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, L21, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
-        }
-    }
-    return info;
+    BlockedRight<UL, NB, WorkGroup<WG, SG>, Cfg, D, decltype(G), decltype(Gd), decltype(dg)> s{ex, sm, S, fl, dg, G, Gd, ld, sg0};
+    return potrf_blocked_loop<NB>(s, n);
+}
+
+// tier::Blocked<NB, alg::LeftLooking> (BlockedLeft above; the host lpanel route's body) of the n x n
+// Ag (ld ldg, n >= 1) on item `tid` of an L-item slot (L >= n) of the work-group of `it`; `store`
+// false: a dead slot. The caller carves the slot's local memory: the n x NB panel sA (ld slda >= n),
+// the NB x NB broadcast block sB (16-byte aligned: read as vectors) and the info cell. Returns info.
+// Not forced inline, and one instance per kernel (Tag): inlined after it is simplified alone, as
+// the hand body was (forced inline moves float NB = 16 from 80 to 94 registers).
+template <Uplo UL, int NB, class Alg, bool Tag = false, class D>
+BATCHLAS_DEVICE_HELPER int potrf_blocked_run(const sycl::nd_item<1>& it, int tid, int L, bool store, D* __restrict sA, int slda,
+                                             D* __restrict sB, int* __restrict fail, D* __restrict Ag, int ldg, int n) {
+    const Slot<> ex{tid, L};
+    auto bar = [&]() BATCHLAS_DEVICE_BODY { sycl::group_barrier(it.get_group()); };
+    static_assert(std::is_same_v<Alg, alg::LeftLooking>, "potrf: potrf_blocked_run is tier::Blocked's alg::LeftLooking");
+    static_assert(UL == Uplo::Lower, "potrf: alg::LeftLooking is Lower only (its update reads the factored lower triangle)");
+    const auto A = mat_wide(Ag, n, n, ldg);
+    BlockedLeft<NB, Slot<>, decltype(A), D, decltype(bar)> s{ex, A, slm_mat(sA, n, NB, slda), slm_tile<NB, NB>(sB), sB, fail, bar, n, tid, store};
+    if (ex.leader()) *fail = 0;
+    bar();  // B0
+    return potrf_blocked_loop<NB>(s, n);
 }
 }  // namespace detail
 

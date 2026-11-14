@@ -108,8 +108,9 @@ struct Unfused {};              // sumsq: the running sum adds abs2(x), its own 
 struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: the legacy index math)
 struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
 struct Stepped {};              // one division per item, then r += size with a carry loop
-struct Walk {};
-struct Default {};             // a tier's own default algorithm (tier::Cta / Blocked)                 // one division per item, (dr, dc) = (size % m, size / m) per step
+struct Walk {};                 // one division per item, (dr, dc) = (size % m, size / m) per step
+struct Default {};              // a tier's own default algorithm (tier::Cta / Blocked)
+struct LeftLooking {};          // potrf tier::Blocked: each panel updated from the columns to its left
 }  // namespace alg
 
 // Butterfly order: xor masks P/2 .. 1 (BflyDown) or 1 .. P/2 (BflyAsc), two summation orders.

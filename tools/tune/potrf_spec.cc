@@ -96,7 +96,6 @@ public:
             "src/ops/potrf/kernels/potrf_cta.cc",
             // family: lpanel
             "src/ops/potrf/kernels/potrf_lpanel.cc",
-            "src/ops/potrf/kernels/potrf_lpanel_device.hh",
             // family: blocked
             "src/ops/potrf/kernels/potrf_blocked.cc",
             // common
