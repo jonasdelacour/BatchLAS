@@ -1,6 +1,6 @@
 # Device LA: BLAS and LAPACK inside your kernel {#design_device_la}
 
-> **Status:** current · checked 2026-11-06
+> **Status:** current · checked 2026-11-14
 
 `batchlas::device` is the public in-kernel linear-algebra layer: BLAS levels 1-3
 and the LAPACK routines BatchLAS ships, callable from a user's own SYCL kernel on one matrix per
@@ -155,7 +155,8 @@ device's local memory and sub-group sizes differ per runtime. `with_tier` reads 
 | `Plan` | a constexpr bump allocator over the two spaces (`carve_local`, `carve_global`) |
 | `global_slice(base, size, b)` | matrix b's global slice of one buffer of `size.global_bytes * batch` |
 
-The host sizes a launch with `<op>_buffer_size<modes..., Tier, T>(n...)`, which equals the plan the op
+The host sizes a launch with `device::buffer_size<routine::<op><modes...>, Tier, T>(extents...)` (the
+same value as `launch<R, Tier, T>::buffer_size`; there is no per-op sizer), which equals the plan the op
 carves its pointers with, so size and use cannot drift apart (`device_lapack_*` tests assert it per tier).
 Local bytes go into a 16-byte aligned `sycl::local_accessor` of the work-group; global bytes are one
 device allocation of `global_bytes * batch`. Reg tiers need none. A Blocked tier's global slice holds
@@ -181,22 +182,22 @@ Include the umbrella `<batchlas/device.hh>` (core, no LAPACK) or single headers.
 
 | Header (`include/batchlas/device/`) | Provides |
 | --- | --- |
-| `../device.hh` | umbrella (every header below except `sg_partition.hh`, `lapack/`, `level3/`, `sparse.hh` and `detail/`) |
+| `../device.hh` | umbrella (every header below except `lapack/`, `level3/`, `sparse.hh` and `detail/`) |
 | `core.hh` | inline macros, extents, `Scope`, layout tags (`OnePerItem`), `alg::Unroll*`, `Range`, `alg::*`, scalar tags, `MaybeZero`, `None` / `NoOp`, `static_for`, `static_extent_v`, `reduce_op::FMax` / `FMin`, `Scratch`, `Part`, `DiagFill`, `alg::Lockstep` / `Diverge`, `alg::Div` / `Recip` / `RealDiv` |
 | `arith.hh` | `Arith<T>` (real, `std::complex`, any POD `{re, im}` such as `Cx<R>`; the complex kinds share `ComplexArith<T, Parts>`), `is_complex_v`, `dev_scalar_t`, `re`, `arith::*` policies, `arith_t`, `arith::FmaSplit` (`ops_arith_t`), `abs1`, `abs2`, `abs_inf`, `conj`, `conj_if`, `force_real`, `lift`, `by_parts`, `scale_real`, `div_real`, `sub_scale_real`, `select`, `tag_mul`, `tag_mac`, `store_epi<Shape, Ops>` (`epi::Sum` default, `MacChain`, `MulMac`, `Linear`, `LinearNegZero`) |
 | `exec.hh` | `WorkGroup`, `Teams`, `SubGroup`, `Partition`, `Thread`, `RtGroup` (each `Ex{it}`; members `bcast`, `uniform`, `shuffle`, `shift`), `sync`, `sync<Scope>`, index-only `Slot<N>` / `Slot<>`, `ElemAt<Exact>` / `ElemIn`, `Grid1D<Exact>`, `Fit<Ex>`, `alg::BcastShuffle` / `BcastSlm<Mpw, Acc>` |
 | `grid.hh` | `Grid2D`, `batched2d_shape`, `batched2d` host launcher |
-| `operand.hh` | `Vec`, `Mat`, `mat`, `mat_wide`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill`, `load_row<Part, Herm>` / `store_row<Part>` (column window), `unit_head<Refl, DiagFill>` (`tail(k)`), `LaneVec` / `lane_vec`, `frag_bcast`, `neighbor_exchange`, `StridedMat` / `mat_strided`, `mat_local` / `tile_local`, `for_each(Thread, Tile, i0, j0, f)` |
+| `operand.hh` | `Vec`, `Mat`, `mat`, `mat_wide`, `Aligned`, `Frag`, `Tile`, `Published`, `load` / `store` / `fill`, `load_row<Part, TR>` / `store_row<Part>` (column window), `unit_head<Refl, DiagFill>` (`tail(k)`), `LaneVec` / `lane_vec`, `frag_bcast`, `neighbor_exchange`, `StridedMat` / `mat_strided`, `mat_local` / `tile_local`, `for_each(Thread, Tile, i0, j0, f)` |
 | `interop.hh` | `vec(VectorView)`, `mat(KernelMatrixView)`, `item(view, b)` (`item(v, b, n)`; `ItemMat` `col` / `row` / `sub`) |
-| `level1.hh` | `for_each_owned[_2d]` (`alg::RowOwner`), `for_each_owned_2d_batched<U>`, `map2d`, `for_each_team_owned<alg::Lockstep | Diverge>`, `for_each_owned_tiles<TR, TC>`, `axpy`, `scal`, `copy`, `swap`, `fill`, `map_many`, `interleave`, `reverse`, `upper_bound`, `rscl`, `dot[c]`, `dot_partial`, `dot_slab<N>`, `dotN<K>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax<NaN, Key>` (a `Range`, a tie, `ArgMaxSlots`, a skip index), `find_first` (also `none`, `LaneVec`), `prod_scaled` / `ScaledProd` / `sqrt_scaled` |
-| `level2.hh` | `gemv<TR, Alg, Ops, Shape, Side>` (`alg::TeamPerRow`, `alg::ColDot<W>`), `symv` / `hemv`, `ger[u,c]<Alg, Ops>` (`alg::Flat`), `ger_row`, `her2<UL, Alg, Ops>`, `trmv<UL, TR, DG, Ops, Alg>` (Thread; `alg::Serial`, `alg::SplitDot<W>`), one `trsv<UL, TR, DG, Div, Alg, Ops, Upd>` (Div `alg::Div | Recip | RealDiv | DiagApply`, a diagonal operand or step object (`TpDiag`, `guarded_recip`); Alg `alg::Serial`, `alg::SerialRows<R>`, `alg::SplitDot<W>`, `alg::LanePerRow` (lane register, Cyclic `Frag`, RowFrag block), `alg::LanePerRowRolled`; Upd `alg::Fused | Unfused | UnfusedRight | DotThenSub | Axpy`), `dgmm<Side>`, `gbmv<KL, KU>`, `ger<Ops>` on register `Frag`s into a `Tile` |
+| `level1.hh` | `for_each_owned[_2d]` (`alg::RowOwner`), `for_each_owned_2d_batched<U>`, `map2d`, `for_each_team_owned<alg::Lockstep | Diverge>`, `for_each_owned_tiles<TR, TC>`, `axpy`, `scal`, `copy`, `swap`, `fill`, `map_many`, `interleave`, `reverse`, `upper_bound`, `rscl`, `dot[c]`, `dot_partial<TR>`, `dot_slab<N>`, `dotN<K, TR>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax<NaN, Key>` (a `Range`, a tie, `ArgMaxSlots`, a skip index), `find_first` (also `none`, `LaneVec`), `prod_scaled` / `ScaledProd` / `sqrt_scaled` |
+| `level2.hh` | `gemv<TR, Alg, Ops, Shape, Side>` (`alg::TeamPerRow`, `alg::ColDot<W>`), `symv` / `hemv`, `ger[u,c]<Alg, Ops>` (`alg::Flat`), `ger_row<TR>`, `her2<UL, Alg, Ops>`, `trmv<UL, TR, DG, Ops, Alg>` (Thread; `alg::Serial`, `alg::SplitDot<W>`), one `trsv<UL, TR, DG, Div, Alg, Ops, Upd>` (Div `alg::Div | Recip | RealDiv | DiagApply`, a diagonal operand or step object (`TpDiag`, `guarded_recip`); Alg `alg::Serial`, `alg::SerialRows<R>`, `alg::SplitDot<W>`, `alg::LanePerRow` (lane register, Cyclic `Frag`, RowFrag block), `alg::LanePerRowRolled`; Upd `alg::Fused | Unfused | UnfusedRight | DotThenSub | Axpy`), `dgmm<Side>`, `gbmv<KL, KU>`, `ger<Ops>` on register `Frag`s into a `Tile` |
 | `level3.hh` | register tier: `gemm<TA, TB, Shape, Ops>`, `gemm_sub<K, Ops>`, `trsm<SD, UL, TR, DG, Ops>` into a `Tile` (`A`, `B` of `gemm_sub` and `A` of `trsm` may be any `a(i, j)` operand) |
-| `level3/` | the in-group Level 3 (`group.hh`: `gemm`, `symm` / `hemm`, `syrk` / `herk` (`l3::rank_k`), `syr2k` / `her2k` (`l3::rank_2k`), `trmm`, `trsm` on one matrix per work-group, any m, n, k) and the tuned gemm components it is built from: `cfg.hh` (`cfg::RegTiled`, `Smem`, `smem_elems`), `stage.hh`, `mma.hh`, `pipeline.hh`, `schedule.hh`, `epilogue.hh` (`LinearEpilogue`), `packet.hh` (`Vec4`, `Packet`), `copy_async.hh` (cp.async, target-guarded) |
+| `level3/` | the in-group Level 3 (`group.hh`: `gemm`, `symm` / `hemm`, `syrk` / `herk` (`l3::rank_k`), `syr2k` / `her2k` (`l3::rank_2k`), `trmm`, `trmm_out`, `trsm` on one matrix per work-group, alpha before its product and beta before the output, any m, n, k) and the tuned gemm components it is built from: `cfg.hh` (`cfg::RegTiled`, `Smem`, `smem_elems`), `stage.hh`, `mma.hh`, `pipeline.hh`, `schedule.hh`, `epilogue.hh` (`LinearEpilogue`), `packet.hh` (`Vec4`, `Packet`), `copy_async.hh` (cp.async, target-guarded) |
 | `lapack_aux.hh` | `lacpy<Part, OP, Alg, alg::Edge*, DiagFill>` (`alg::RowMirror`: the Hermitian completion, one row per item; `live`), `laset` (block offset, `Frag`, Cyclic `Frag`, `Tile`), `mirror`, `laswp<Direct>`, `laswp_index`, `laswp_gather`, `lapmr<Direct, Alg, Base>`, `IpivSink`, `rot<Conv, Ops>` (`alg::RotReflector2`), `lasr<Pivot, Direct, Conv>`, `largv` / `lartv<Rot, Ops>` / `lar2v<Rot, Ops>`, `larfg` (also one element per item), `larf<Side, Ops, alg::ScaleW | ScaleV, alg::Lockstep | Diverge>` (also on a `Frag` column), `lanst<NormType>`, `lange<NormType>`, `laqge`, `lascl<Part>`, `lacgv`, `trttp` / `tpttr` (also a column range with run-time uplo and direction), `trimask` / `tri_expand` (`Tri`, `UploC` / `DiagC`), `geam`, the SLM tile moves `tile_load[_trans]` / `tile_store[_pair, _diag]`, trsm's `tp_pack_lower` / `tp_diag_recip` / `lacpy_tile_in` / `lacpy_tile_out` / `frag_copy_out` |
 | `scalar.hh` | `Givens`, `lartg<W>` (`alg::LartgExact` / `LartgFast` / `Promote`), `lae2`, `laev2`, `las2`, `lapack_shift`, `eig2x2_nearest<alg::TieLowest | TieHighest>`, `detail::block_scale<alg::UnscaleRecip | UnscaleRatio>`, `larfg_scalars`, `lamch<C>`, `qnan`, `phase`, `sign_nonzero_real`, `SafeRecip` |
-| `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>` (a lane stride), `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `ArgMaxSlots`, `argmax_allreduce`, `allreduce(ex, Scratch, v, op)`, `AtomicMinSlot`, `alg::Tie*`, `alg::Nan*` |
+| `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>` (a lane stride), `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `ArgMaxSlots`, `argmax_allreduce`, `allreduce(ex, v, op)` / `allreduce(ex, scr, v, op, trailing_barrier)` (a `T` or a `std::array`), `AtomicMinSlot`, `alg::Tie*`, `alg::Nan*` |
 | `view.hh` | `row` / `col` / `window`, `flip<Axis>`, `conj_view`, `conj_if`, `op_view<TR>`, `herm_view<UL>`, `herm_view<UL, Storage, alg::OneLoad | TwoLoads>`, `herm_view<Load, Ops>(a, uplo)` (`alg::ThreeLoads`), `sym_view<UL>` (one `HermView`), `PackedTri<UL, PackOrder>`, `packed`, `TpDiag`, trsm's `CanonTri` / `CanonRhs` / `FlipRows` / `ColsFrom` / `MapCols`, `Packet<T, Bytes>`, `fn_vec`, `mapped`, `slice`, `gathered`, `shifted`, `refs` |
-| `sparse.hh` | CSR `spmm<TA, TB>` (Blocked), `iluk_factorize` / `iluk_apply` (Blocked<1>) |
+| `sparse.hh` | CSR `spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C, ws)` (Blocked), `iluk_factorize<Tier>(ex, A, plan, M, opts, ws)` / `iluk_apply<Tier>(ex, M, rhs, out, ws)` (Blocked<1>) |
 | `tier.hh` | `tier::Reg` / `Cta` / `Blocked` / `upto` / `list`, `tier_info` (`executor`, `per_group`), `tiers_t`, `resolve_tier_t`, `DeviceLimits`, `local_mem_bytes`, `with_tier` (host) |
 | `launch.hh` | `launch<R, Tier, T>` (`buffer_size`, `nd_range`, `exec`, `slot`, `workspace`, `sg_size`), `local_workspace<L>`, `buffer_size<R, Tier, T>`, `MatrixSlot` / `matrix_slot` |
 | `workspace.hh` | `WorkspaceSize`, `Workspace`, `Plan` (constexpr bump carve), `carve_local`, `carve_global`, `global_slice` |
@@ -211,23 +212,23 @@ op's contract, executor per tier, info values and workspace.
 
 | Family | Op (`lapack/<header>`) | Tiers | Tests |
 | --- | --- | --- | --- |
-| Cholesky | `potrf<UL, Tier>(ex, A, ws)` | `Reg<8>`, `Reg<16>`, `Reg<32>` (not complex<double>), `Cta<64>`, `Cta<128>`, `Blocked<32 / 16>` | `device_lapack_potrf`, `device_lapack_chol` |
+| Cholesky | `potrf<UL, Tier>(ex, A, ws, live)` | `Reg<8>`, `Reg<16>`, `Reg<32>` (not complex<double>), `Cta<64>`, `Cta<128>`, `Blocked<32 / 16>` | `device_lapack_potrf`, `device_lapack_chol` |
 | | `potrs`, `posv`, `potri` / `trtri` / `lauum` (`potri.hh`) | `Blocked<32 / 16>` | `device_lapack_chol` |
-| LU | `getrf<Tier>(ex, A, ipiv, ws)` | `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`, `Cta<96>`, `Cta<128>`, `Blocked<32>` | `device_lapack_getrf`, `device_lapack_lu` |
-| | `getrs`, `gesv`, `getri`, `inv` | `Blocked<32>` | `device_lapack_lu` |
-| LDL^T | `sytrf<UL, Tier>(ex, A, ipiv, ws)`, `sytrs`, `sysv` | `Cta<32>` (sytrs also `Cta<64>`, `Cta<128>`), `Blocked<1>`; `Blocked<NB>` by name | `device_lapack_sytrf` |
-| QR | `geqrf<Tier>(ex, A, tau, ws)`, `orgqr`, `ormqr<SD, TR, Tier>`; `larft`, `larfb` | `Blocked<NB, Alg>` (NB from `larfb_default_nb<T>`) | `device_lapack_qr` |
+| LU | `getrf<Tier>(ex, A, ipiv, ws, live)` (`ipiv` a `Vec<int>`) | `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`, `Cta<96>`, `Cta<128>`, `Blocked<32>` | `device_lapack_getrf`, `device_lapack_lu` |
+| | `getrs<TR, Tier>(ex, A, ipiv, B, ws, live)`, `gesv(ex, A, ipiv, B, ws, live)`, `getri(ex, A, ipiv, C, ws, live)`, `inv` | `Blocked<32>` | `device_lapack_lu` |
+| LDL^T | `sytrf<UL, Tier>(ex, A, ipiv, ws)`, `sytrs` / `sysv(ex, A, ipiv, B, ws)` | `Cta<32>` (sytrs also `Cta<64>`, `Cta<128>`), `Blocked<1>`; `Blocked<NB>` by name | `device_lapack_sytrf` |
+| QR | `geqrf<Tier>(ex, A, tau, ws)`, `orgqr`, `ormqr<SD, TR, Tier>(ex, A, tau, C, ws)`; `larft(ex, V, tau, T)`, `larfb` | `Blocked<NB, Alg>` (NB from `larfb_default_nb<T>`) | `device_lapack_qr` |
 | Generalized eigen | `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>` | `device_lapack_sygst` |
-| Symmetric eigen | `syev<J, UL, Tier>(ex, A, W, ws)`; `sytrd<UL, Tier>(ex, A, d, e, tau, ws)`; `steqr<J, Tier>(ex, d, e, z, ws)` (real d, e) | `Cta<4>` .. `Cta<32>`, `Blocked<32>` (sytrd: Lower only; steqr: `Blocked<1>`) | `device_lapack_syev`, `device_lapack_sytrd`, `device_lapack_steqr` |
+| Symmetric eigen | `syev<J, UL, Tier>(ex, A, W, ws, SyevOptions<R>{}, live)`; `sytrd<UL, Tier>(ex, A, d, e, tau, ws, live)`; `steqr<J, Tier>(ex, d, e, z, ws, SteqrOptions{}, live)` (real d, e) | `Cta<4>` .. `Cta<32>`, `Blocked<32>` (sytrd: Lower only; steqr: `Blocked<1>`) | `device_lapack_syev`, `device_lapack_sytrd`, `device_lapack_steqr` |
 | Band / tridiagonal | `sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws)` (dense to band) | `Blocked<32>`; `Blocked<64>` by name | `device_lapack_sy2sb` |
-| | `sb2st<UL, Tier>(pex, ab, d, e, tau, kd, ws)` | `Cta<4096>`, `Blocked<32>` | `device_lapack_sb2st` |
-| | `stebz`, `stein`, `stedc<J, Tier>` (real T) | `Blocked<1>` (one body for every n) | `device_lapack_stebz-stein`, `device_lapack_stedc` |
-| | `laed2`, `laed3`, `laed4`, `lagtf`, `lagts`, `syevx` selection, `jacobi` | building blocks of the above and of the host routes | `device_lapack_*` |
+| | `sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)` | `Cta<4096>`, `Blocked<32>` | `device_lapack_sb2st` |
+| | `stebz(ex, d, e, w, m, ws, StebzOptions<R>{})`, `stein(ex, d, e, w, kb, z, ws, SteinOptions<R>{})`, `stedc<J, Tier>(ex, d, e, w, z, ws, StedcOptions<R>{})` (real T) | `Blocked<1>` (one body for every n) | `device_lapack_stebz-stein`, `device_lapack_stedc` |
+| | `laed2`, `laed3`, `laed4` (returns info, the root through an out operand), `lagtf`, `lagts`, `syevx`, `jacobi` | building blocks of the above and of the host routes | `device_lapack_*` |
 | SVD | `gebrd<Tier>(ex, it, A, d, e, tauq, taup, ws)` (real T); `gesvd` steps | `Cta<4>` .. `Cta<32>` | `device_lapack_svd` |
-| | `gebrd<Tier>(ex, A, d, e, tauq, taup, ws)` (every T, m >= n), `ormbr<Vect, SD, TR>`, `bdsqr`, `bdsdc` (real B), `gesvd<JU, JVT, Tier>(ex, A, S, U, Vh, ws)` (any m x n) | `Blocked<16>` (gebrd, gesvd), `Blocked<1>` (ormbr, bdsqr, bdsdc) | `device_lapack_svd` |
+| | `gebrd<Tier>(ex, A, d, e, tauq, taup, ws)` (every T, m >= n), `ormbr<Vect, SD, TR>`, `bdsqr(ex, d, e, s, U, Vh, ws, BdsqrOptions<R>{})`, `bdsdc(ex, d, e, s, U, Vh, ws)` (real B), `gesvd<JU, JVT, Tier>(ex, A, S, U, Vh, ws)` (any m x n) | `Blocked<16>` (gebrd, gesvd), `Blocked<1>` (ormbr, bdsqr, bdsdc) | `device_lapack_svd` |
 | Level 3 | `level3/group.hh` ops, `level3.hh` register tier | one matrix per work-group, `Cfg` = `l3::cfg::RegTiled` preset | `device_lapack_l3`, `device_core_level3` |
-| Level 2, sparse | `gemv`; `spmm<TA, TB>`, `iluk_*` (`sparse.hh`) | Blocked | `device_lapack_gemv`, `device_lapack_sparse` |
-| Utilities | `ortho<TR, Algo, Tier>` (CGS2, Cholesky QR), `ritz_values`, `norm` | `Cta<N>`, `Blocked<NB>` | `device_lapack_util` |
+| Level 2, sparse | `gemv`; `spmm<TA, TB, Tier>`, `iluk_factorize` / `iluk_apply` (`sparse.hh`) | Blocked | `device_lapack_gemv`, `device_lapack_sparse` |
+| Utilities | `ortho<TR, Tier, Cfg, Alg>` (CGS2, Cholesky QR), `ritz_values`; a matrix norm is `lange<NormType>` (`lapack_aux.hh`) | `Cta<N>`, `Blocked<NB>` | `device_lapack_util` |
 
 Lanczos is not a device op (operator-based, decision F-D5).
 
@@ -241,20 +242,27 @@ start, `b` the matrix index. The host picks `Tier` with `with_tier` or names one
 int info = dv::potrf<Uplo::Lower, Tier>(ex, dv::item(A, b), w);
 
 // LDL^T solve, n <= 32 in one fused local tile (sysv `cta`'s bodies), else Blocked<1>
-int info = dv::sysv<Uplo::Lower, dv::tier::Cta<32>>(ex, dv::item(A, b), dv::item(B, b), ipiv + b * n, w);
+int info = dv::sysv<Uplo::Lower, dv::tier::Cta<32>>(ex, dv::item(A, b), dv::vec(ipiv + b * n, n), dv::item(B, b), w);
+
+// LU solve (ipiv a Vec<int>, 1-based): A = P L U, then op(A) X = B in place of B
+dv::getrf<Tier>(ex, dv::item(A, b), dv::vec(ipiv + b * n, n), w);
+dv::getrs<Transpose::NoTrans, Tier>(ex, dv::item(A, b), dv::vec(ipiv + b * n, n), dv::item(B, b), w);
 
 // QR then Q^H C, one matrix per WorkGroup<256, 32>; V, T, W1/W2 in this matrix's global slice
 using QR = dv::tier::Blocked<32>;
-const dv::Workspace w{local, dv::global_slice(gbuf, dv::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, QR, T>(m, n), b)};
+const dv::Workspace w{local, dv::global_slice(gbuf, dv::buffer_size<dv::routine::ormqr<Side::Left, Transpose::ConjTrans>, QR, T>(m, n), b)};
 dv::geqrf<QR>(ex, dv::item(A, b), dv::vec(tau + b * k, k), w);
 dv::ormqr<Side::Left, Transpose::ConjTrans, QR>(ex, dv::item(A, b), dv::vec(tau + b * k, k), dv::item(C, b), w);
 
 // generalized eigenproblem: B = L L^T (potrf), then C = L^-1 A L^-T in place of A
 dv::potrf<Uplo::Lower, dv::tier::Blocked<32>>(ex, dv::item(B, b), w);
-dv::sygst<1, Uplo::Lower, dv::tier::Blocked<32>>(ex, dv::item(A, b), dv::item(B, b), w);
+dv::sygst<dv::Itype::AinvB, Uplo::Lower, dv::tier::Blocked<32>>(ex, dv::item(A, b), dv::item(B, b), w);
 
 // tridiagonal eigenvectors by divide and conquer (real T, ascending w, Z(:, j) for w(j))
 dv::stedc<JobType::EigenVectors, dv::tier::Blocked<1>>(ex, d, e, lambda, Z, w, dv::StedcOptions<float>{});
+
+// dense symmetric eigenproblem (ascending W; A holds the eigenvectors); options after the workspace
+dv::syev<JobType::EigenVectors, Uplo::Lower, Tier>(ex, dv::item(A, b), dv::vec(W + b * n, n), w, dv::SyevOptions<float>{});
 
 // bidiagonal reduction of a small real matrix in local memory (the host GebrdCTAKernel's body)
 dv::gebrd<dv::tier::Cta<32>>(ex, it, dv::item(A, b), d, e, tauq, taup, w);
@@ -264,6 +272,9 @@ using Cfg = dv::l3::cfg::RegTiled<float, 32, 32, 8, 2, 2>;            // 256 ite
 sycl::local_accessor<float> smem(dv::l3::smem_elems<Cfg>(), h);        // in the command group
 dv::gemm<Transpose::NoTrans, Transpose::Trans, Cfg>(ex, dv::One{}, dv::item(A, b), dv::item(B, b), dv::Zero{},
                                                      dv::item(C, b), dv::l3::smem_of<Cfg>(smem));
+
+// CSR times dense, BLAS argument order: C = alpha A B + beta C (no workspace)
+dv::spmm<Transpose::NoTrans, Transpose::NoTrans, Tier>(ex, alpha, dv::csr_item(A, b), dv::item(B, b), beta, dv::item(C, b));
 ```
 
 ## Device LA: the SASS-parity gate

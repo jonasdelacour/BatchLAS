@@ -24,6 +24,7 @@
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/blas/functions/spmm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/sparse.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -183,7 +184,7 @@ void device_spmm(sycl::queue& q, const Spmm<T>& d, KernelMatrixView<T, MatrixFor
         const batchlas::device::WorkGroup<WG> ex{it};
         const batchlas::device::ItemMat<const T> B{bp, b, strb, ldb, brows, bcols};
         const batchlas::device::ItemMat<T> C{cp, b, strc, ldc, crows, nrhs};
-        (void)batchlas::device::spmm<TA, TB, Tier>(ex, batchlas::device::csr_item(akv, b), B, C, alpha, beta);
+        (void)batchlas::device::spmm<TA, TB, Tier>(ex, alpha, batchlas::device::csr_item(akv, b), B, beta, C);
     });
 }
 
@@ -782,9 +783,11 @@ TYPED_TEST(DeviceApiSparse, WithTierPicksTheOneTierAndNoWorkspace) {
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<S, T, batchlas::device::tier::upto<1>>, Blk>);
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<S, T, batchlas::device::tier::upto<100000>>, Blk>);
     static_assert(batchlas::device::spmm_block_v<T> * sizeof(T) == 64);
-    static_assert(batchlas::device::spmm_buffer_size<N, Cj, batchlas::device::tier::upto<1>, T>(4096) == batchlas::device::WorkspaceSize{});
-    static_assert(batchlas::device::iluk_apply_buffer_size<batchlas::device::tier::Blocked<1>, T>(4096) == batchlas::device::WorkspaceSize{});
-    static_assert(batchlas::device::iluk_factorize_buffer_size<batchlas::device::tier::upto<100000>, T>(100000) == batchlas::device::WorkspaceSize{});
+    static_assert(batchlas::device::buffer_size<S, batchlas::device::tier::upto<1>, T>(4096) == batchlas::device::WorkspaceSize{});
+    static_assert(batchlas::device::buffer_size<batchlas::device::routine::iluk_apply, batchlas::device::tier::Blocked<1>, T>(4096) ==
+                  batchlas::device::WorkspaceSize{});
+    static_assert(batchlas::device::buffer_size<batchlas::device::routine::iluk_factorize, batchlas::device::tier::upto<100000>, T>(100000) ==
+                  batchlas::device::WorkspaceSize{});
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::iluk_factorize, T, batchlas::device::tier::upto<1>>, batchlas::device::tier::Blocked<1>>);
     for (int n : {0, 1, 150, 100000}) {
         std::string spmm_tier = "none", iluk_tier = "none", ilu_fac_tier = "none";
