@@ -59,7 +59,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
         // block, so the FMA loop is a fully unrolled NB x NB with no inner bound test.
         for (int k = 0; k < j; k += NB) {
             const int kb = ((j - k) < NB) ? (j - k) : NB;
-            device::detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+            device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod, device::alg::EdgeZeroPad>(ex, device::conj_view(A.sub(j, k, ib, kb)), B);
             bar();  // B1
             if (live) {
                 device::Frag<D, NB> rA;

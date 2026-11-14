@@ -462,20 +462,6 @@ template <class Ex, class MS, class MD> BATCHLAS_DEVICE_INLINE void lacpy_herm_l
     }
 }
 
-// dst := conj(src) zero-padded to dst's static NB x NB (src r x c, r, c <= NB); the NB*NB
-// elements are distributed flat (e -> (e mod NB, e / NB)).
-template <int NB, class Ex, class MS, class MD> BATCHLAS_DEVICE_INLINE void lacpy_conj_pad(const Ex& ex, const MS& src, const MD& dst) {
-    using D = typename MD::value_type;
-    const int r = src.rows(), c = src.cols();
-    for_each_owned(ex, NB * NB, [&](int e) BATCHLAS_DEVICE_BODY {
-        const int i = e % NB;
-        const int kk = e / NB;
-        D v{};
-        if (i < r && kk < c) v = arith_t<arith::Fma, D>::conj(src(i, kk));
-        dst(i, kk) = v;
-    });
-}
-
 // X := X L^{-H} for the m x kb block X, one row at a time in a Frag<NB> (rows Cyclic over ex, no
 // barrier); L is kb x kb lower (kb <= NB) whose diagonal is read from the real vector `ldiag`.
 // Divides by the diagonal, as reference trsm does (potf2 scales by a reciprocal).

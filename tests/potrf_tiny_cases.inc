@@ -590,8 +590,8 @@ TEST(PotrfTinySource, IsBarrierAndLocalMemoryFree) {
                "and nothing to synchronise. Offending line: " << offending;
     }
     // Anti-vacuity: the scan must be able to find something that IS there. The kernel body is
-    // device::potrf's tier::Reg steps now (detail::potf2_reg, Shuffle broadcast, barrier-free).
-    EXPECT_FALSE(FirstTinySourceLineWith(path, "detail::potf2_reg").empty())
+    // device::potrf's tier::Reg body now (detail::potrf_reg_run, Shuffle broadcast, barrier-free).
+    EXPECT_FALSE(FirstTinySourceLineWith(path, "detail::potrf_reg_run").empty())
         << "the source scan found nothing at all -- check BATCHLAS_POTRF_TINY_CC_PATH";
 }
 #endif  // BATCHLAS_POTRF_TINY_CC_PATH

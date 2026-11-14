@@ -494,7 +494,7 @@ TYPED_TEST(DeviceLapackPotrfCtaTest, HerkTilesLowerThroughRescaledPrefix) {
     herk_case<T, 4>(this->dev, 3, 8);  // one tile, trimmed both ways
 }
 
-// ---- LPANEL: frag_load_row_herm_lower, lacpy_conj_pad, gemv_n_slm_bcast,
+// ---- LPANEL: frag_load_row_herm_lower, lacpy<DivMod, EdgeZeroPad> of conj_view, gemv_n_slm_bcast,
 // frag_store_row_herm_lower, potf2_panel_rows, composed as potrf_lpanel_body does on a Slot<>
 // slot narrower than the work-group (the packed-G case) --------------------------------------
 
@@ -533,7 +533,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
             device::fill(rS, Ar::zero());
             for (int k = 0; k < j; k += NB) {
                 const int kb = std::min(NB, j - k);
-                device::detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
+                device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod, device::alg::EdgeZeroPad>(ex, device::conj_view(A.sub(j, k, ib, kb)), B);
                 bar();
                 if (live) {
                     device::Frag<D, NB> rA;

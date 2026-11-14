@@ -63,14 +63,8 @@ layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::I
 layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::frag_load_row_herm_lower
 layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::frag_store_row_herm_lower
 layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::gemv_n_slm_bcast
-layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::lacpy_conj_pad
 layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::slm_mat
 layout-detail-use src/ops/potrf/kernels/potrf_lpanel_device.hh device::detail::slm_tile
-layout-detail-use src/ops/potrf/kernels/potrf_tiny.cc device::detail::potf2_reg
-layout-detail-use src/ops/potrf/kernels/potrf_tiny.cc device::detail::reg_load_lower
-layout-detail-use src/ops/potrf/kernels/potrf_tiny.cc device::detail::reg_load_upper
-layout-detail-use src/ops/potrf/kernels/potrf_tiny.cc device::detail::reg_store_lower
-layout-detail-use src/ops/potrf/kernels/potrf_tiny.cc device::detail::reg_store_upper
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::ColPtr
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::gather_unit
 layout-detail-use src/ops/spmm/kernels/spmm_native.cc device::detail::scatter_row
