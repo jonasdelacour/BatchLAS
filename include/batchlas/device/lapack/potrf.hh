@@ -743,14 +743,14 @@ template <class MA> BATCHLAS_DEVICE_INLINE int ld_of(const MA& a) { return stati
 template <class T> inline constexpr int reg_max_n = (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32;
 
 
-template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a) {
+template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a, bool live) {
     using T = typename MA::value_type;
     static_assert(Ex::size == N, "potrf: tier::Reg<N> runs on a Partition<N> (one lane per row)");
     static_assert(N <= reg_max_n<T>, "potrf: tier::Reg<32> does not hold a complex<double> row; use Reg<16> or Cta");
     const int n = a.rows();
     if (n < 0 || n > N || a.cols() != n) return -2;
     if (n == 0) return 0;
-    const std::int32_t info = potrf_reg_run<dev_scalar_t<T>, N>(ex, base_ptr(a), ld_of(a), ex.lid(), n, true, UL == Uplo::Upper);
+    const std::int32_t info = potrf_reg_run<dev_scalar_t<T>, N>(ex, base_ptr(a), ld_of(a), ex.lid(), n, live, UL == Uplo::Upper);
     ex.barrier();
     return info;
 }
@@ -864,12 +864,12 @@ template <Uplo UL, int NB, class Ex, class Cfg, class D, class MG, class MD, cla
     BATCHLAS_DEVICE_INLINE void update_right(int j, int ib, int m2) const {
         if constexpr (UL == Uplo::Upper) {
             const auto U12 = G.sub(j, j + ib, ib, m2);
-            trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), U12, One{}, sm);
-            herk<Uplo::Upper, Transpose::ConjTrans, Cfg>(ex, U12, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
+            trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, G.sub(j, j, ib, ib), U12, sm);
+            herk<Uplo::Upper, Transpose::ConjTrans, Cfg>(ex, NegOne{}, U12, One{}, G.sub(j + ib, j + ib, m2, m2), sm);
         } else {
             const auto L21 = G.sub(j + ib, j, m2, ib);
-            trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, G.sub(j, j, ib, ib), L21, One{}, sm);
-            herk<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, L21, G.sub(j + ib, j + ib, m2, m2), NegOne{}, One{}, sm);
+            trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, G.sub(j, j, ib, ib), L21, sm);
+            herk<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, NegOne{}, L21, One{}, G.sub(j + ib, j + ib, m2, m2), sm);
         }
     }
     BATCHLAS_DEVICE_INLINE int info() const { return st; }
@@ -990,6 +990,8 @@ template <Uplo UL> struct potrf {
 template <Uplo UL, int N, bool Exact, class T> struct tier_info<routine::potrf<UL>, tier::Reg<N, Exact>, T> {
     static constexpr int wg_size = 32;  // one sub-group: 32 / N matrices
     static constexpr int sg_size = 32;
+    using executor = Partition<N>;
+    static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= detail::reg_max_n<T>; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
@@ -997,12 +999,16 @@ template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::potrf<UL
     using D = detail::dev_scalar_t<T>;
     static constexpr int wg_size = detail::cta_items(N, detail::CtaConst<D>::nb, detail::CtaConst<D>::ts);
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::PotrfCtaPlan<D>::make(n).size; }
 };
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrf<UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<T>; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<T, NB>::make().size; }
 };
@@ -1020,12 +1026,17 @@ template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrf_buffer_siz
 
 // A := L L^H (Lower) / U^H U (Upper) of the n x n Hermitian positive definite A (its UL triangle
 // read and overwritten, the other neither read nor written); returns info (see the file head).
-template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}) {
+// live = false (a dead slot of a packed launch, launch<>::slot) reads and writes nothing and
+// returns 0; every item of the executor still makes the call.
+template <Uplo UL, class Tier, class Ex, class MA>
+BATCHLAS_DEVICE_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}, bool live = true) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potrf<UL>, T, Tier>;
     if constexpr (tier::is_reg_v<Tr>) {
         (void)ws;
-        return detail::potrf_reg_op<UL, Tr::n_max>(ex, A);
+        return detail::potrf_reg_op<UL, Tr::n_max>(ex, A, live);
+    } else if (!live) {
+        return 0;  // per_group == 1: the whole work-group is the dead slot
     } else if constexpr (tier::is_cta_v<Tr>) {
         return detail::potrf_cta_op<UL, Tr::n_max, typename Tr::alg_type>(ex, A, ws);
     } else {

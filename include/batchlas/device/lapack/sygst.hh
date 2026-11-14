@@ -216,12 +216,16 @@ template <Itype IT, Uplo UL, class Tier, class T> constexpr WorkspaceSize sygst_
 template <Itype IT, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, T> {
     static_assert(N >= 1 && N <= 32, "sygst: tier::Cta<N>, N <= 32");
     static constexpr int wg_size = (N + 31) / 32 * 32, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Cta<N, Alg>, T>(n); }
 };
 template <Itype IT, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, T> {
     static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
     static constexpr int wg_size = detail::blocked_cfg_t<std::remove_cv_t<T>>::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Blocked<NB, Alg>, T>(n); }
 };
@@ -296,19 +300,19 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
             if constexpr (lower) {  // A21 := L22^-1 (A21 L11^-H - L21 C11), A22 -= P L21^H + L21 P^H
                 const auto p = gsub(a, r, k, m, kb);
                 const auto l21 = gsub(b, r, k, m, kb);
-                trsm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
-                her2k<UL, NT, Cfg>(ex, p, l21, a22, NegOne{}, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
-                trsm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
+                trsm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, One{}, f11, p, sm);
+                gemm<NT, NT, Cfg>(ex, mhalf, l21, hm, One{}, p, sm);
+                her2k<UL, NT, Cfg>(ex, NegOne{}, p, l21, One{}, a22, sm);
+                gemm<NT, NT, Cfg>(ex, mhalf, l21, hm, One{}, p, sm);
+                trsm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, One{}, f22, p, sm);
             } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
                 const auto p = gsub(a, k, r, kb, m);
                 const auto u12 = gsub(b, k, r, kb, m);
-                trsm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
-                her2k<UL, TH, Cfg>(ex, p, u12, a22, NegOne{}, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
-                trsm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
+                trsm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, One{}, f11, p, sm);
+                gemm<NT, NT, Cfg>(ex, mhalf, hm, u12, One{}, p, sm);
+                her2k<UL, TH, Cfg>(ex, NegOne{}, p, u12, One{}, a22, sm);
+                gemm<NT, NT, Cfg>(ex, mhalf, hm, u12, One{}, p, sm);
+                trsm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, One{}, f22, p, sm);
             }
             continue;
         }
@@ -321,20 +325,20 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const auto p = gsub(a, k, 0, kb, k);
                 const auto l21 = gsub(b, k, 0, kb, k);
                 const l3::Global<D> wm{w, NB, kb, k};
-                trmm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
-                her2k<UL, TH, Cfg>(ex, wm, l21, a11, One{}, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
-                trmm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
+                trmm_out<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, One{}, f11, p, wm, sm);
+                gemm<NT, NT, Cfg>(ex, half, hm, l21, One{}, wm, sm);
+                her2k<UL, TH, Cfg>(ex, One{}, wm, l21, One{}, a11, sm);
+                gemm<NT, NT, Cfg>(ex, half, hm, l21, One{}, wm, sm);
+                trmm_out<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, One{}, f22, wm, p, sm);
             } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
                 const auto p = gsub(a, 0, k, k, kb);
                 const auto u12 = gsub(b, 0, k, k, kb);
                 const l3::Global<D> wm{w, n, k, kb};
-                trmm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
-                her2k<UL, NT, Cfg>(ex, wm, u12, a11, One{}, One{}, sm);
-                gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
-                trmm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
+                trmm_out<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, One{}, f11, p, wm, sm);
+                gemm<NT, NT, Cfg>(ex, half, u12, hm, One{}, wm, sm);
+                her2k<UL, NT, Cfg>(ex, One{}, wm, u12, One{}, a11, sm);
+                gemm<NT, NT, Cfg>(ex, half, u12, hm, One{}, wm, sm);
+                trmm_out<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, One{}, f22, wm, p, sm);
             }
         }
         diag(k, kb, false);

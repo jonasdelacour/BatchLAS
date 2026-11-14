@@ -34,6 +34,8 @@ template <Vect VT, Side SD, Transpose TR, class T> struct tiers<routine::ormbr<V
 // No workspace (C is updated in place); any work-group width runs it.
 template <Vect VT, Side SD, Transpose TR, class T> struct tier_info<routine::ormbr<VT, SD, TR>, tier::Blocked<1>, T> {
     static constexpr int wg_size = 256, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };

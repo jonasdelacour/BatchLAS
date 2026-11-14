@@ -100,7 +100,7 @@ BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, c
     T* const p = carve_global(ws, pl.av);
     for (int c0 = 0; c0 < k; c0 += NB) {
         const int nb = k - c0 < NB ? k - c0 : NB;
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, a, v.sub(0, c0, n, nb), mat(p, n, nb, n), One{}, Zero{}, sm);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, a, v.sub(0, c0, n, nb), Zero{}, mat(p, n, nb, n), sm);
         for (int j = 0; j < nb; ++j) {
             const auto q = ritz_values_quotient(ex, v.col(c0 + j), vec(p + static_cast<std::ptrdiff_t>(j) * n, n));
             if (ex.leader()) w(c0 + j) = q;

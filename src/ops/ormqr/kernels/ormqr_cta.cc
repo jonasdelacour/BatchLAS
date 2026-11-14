@@ -16,6 +16,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/launch.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 
@@ -143,12 +144,13 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
-                const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, static_cast<int32_t>(batch_size));
+                const int32_t prob_id = ms.b;
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
                 // batch, or an inactive item: I2) applies tau = 0 reflectors to nothing and
                 // stores nothing.
                 // if constexpr, never a call taking mask: the unmasked kernel must not capture it.
-                bool live = prob_id < static_cast<int32_t>(batch_size);
+                bool live = ms.live;
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const int32_t pid = live ? prob_id : 0;
 
@@ -293,10 +295,11 @@ BATCHLAS_UNROLL_FULL
                     const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
 
                     const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
-                    const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                    const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, static_cast<int32_t>(batch_size));
+                    const int32_t prob_id = ms.b;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
                     // inactive item) carries a zero tile and tau = 0, and stores nothing.
-                    bool live = prob_id < static_cast<int32_t>(batch_size);
+                    bool live = ms.live;
                     if constexpr (Masked) live = live && mask[prob_id] != 0;
                     const int32_t pid = live ? prob_id : 0;
                     const bool row_live = live && (lane < n);

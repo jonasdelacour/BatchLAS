@@ -85,18 +85,18 @@ BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const
     const int pn = w.rows(), pk = w.cols(), sw = strip.cols();
     if (sw > 0) {
         const auto m1 = mat(m1p, pk, sw, pk), m2 = mat(m2p, pk, sw, pk);
-        gemm<CT, NT, Cfg>(ex, w, strip, m1, One{}, Zero{}, sm);
-        gemm<CT, NT, Cfg>(ex, tf, m1, m2, One{}, Zero{}, sm);
-        gemm<NT, NT, Cfg>(ex, w, m2, strip, NegOne{}, One{}, sm);
+        gemm<CT, NT, Cfg>(ex, One{}, w, strip, Zero{}, m1, sm);
+        gemm<CT, NT, Cfg>(ex, One{}, tf, m1, Zero{}, m2, sm);
+        gemm<NT, NT, Cfg>(ex, NegOne{}, w, m2, One{}, strip, sm);
     }
     const auto pm = mat(pp, pn, pk, pn), ym = mat(yp, pn, pk, pn);
     const auto m1 = mat(m1p, pk, pk, pk), m2 = mat(m2p, pk, pk, pk);
-    gemm<NT, NT, Cfg>(ex, w, tf, pm, One{}, Zero{}, sm);
-    hemm<Side::Left, Uplo::Lower, Cfg>(ex, a22, pm, ym, One{}, Zero{}, sm);
-    gemm<CT, NT, Cfg>(ex, w, ym, m1, One{}, Zero{}, sm);
-    gemm<CT, NT, Cfg>(ex, tf, m1, m2, One{}, Zero{}, sm);
-    gemm<NT, NT, Cfg>(ex, w, m2, ym, minus_half<T>(), One{}, sm);
-    her2k<Uplo::Lower, NT, Cfg>(ex, w, ym, a22, NegOne{}, One{}, sm);
+    gemm<NT, NT, Cfg>(ex, One{}, w, tf, Zero{}, pm, sm);
+    hemm<Side::Left, Uplo::Lower, Cfg>(ex, One{}, a22, pm, Zero{}, ym, sm);
+    gemm<CT, NT, Cfg>(ex, One{}, w, ym, Zero{}, m1, sm);
+    gemm<CT, NT, Cfg>(ex, One{}, tf, m1, Zero{}, m2, sm);
+    gemm<NT, NT, Cfg>(ex, minus_half<T>(), w, m2, One{}, ym, sm);
+    her2k<Uplo::Lower, NT, Cfg>(ex, NegOne{}, w, ym, One{}, a22, sm);
 }
 
 }  // namespace detail
@@ -120,6 +120,8 @@ template <Uplo UL, int KDMax = 32> struct sy2sb {
 
 template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sy2sb<UL, KDMax>, tier::Blocked<NB, A>, T> {
     static constexpr int wg_size = detail::cfg_t<tier::Blocked<NB, A>, T>::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return sy2sb_buffer_size<UL, tier::Blocked<NB, A>, T>(n, routine::sy2sb<UL, KDMax>::kd_at(n)); }
 };

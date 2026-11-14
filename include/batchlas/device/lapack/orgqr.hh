@@ -42,6 +42,8 @@ template <int NB, class Cfg, class T> constexpr WorkspaceSize orgqr_size(int m, 
 template <int NB, class A, class T> struct tier_info<routine::orgqr, tier::Blocked<NB, A>, T> {
     using cfg = larfb_cfg_t<A, T>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::orgqr_size<NB, cfg, T>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }

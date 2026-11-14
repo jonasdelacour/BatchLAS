@@ -65,6 +65,8 @@ BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a
 template <Side SD, Transpose TR, int NB, class A, class T> struct tier_info<routine::ormqr<SD, TR>, tier::Blocked<NB, A>, T> {
     using cfg = larfb_cfg_t<A, T>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     /// C of m x n (Q of order m for Left, n for Right); k never changes the workspace.
     static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::ormqr_size<SD, NB, cfg, T>(m, n); }
@@ -88,14 +90,14 @@ template <Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize or
 /// (with_tier<routine::ormqr<SD, TR>, T> on the host).
 /// @param ex   the executor
 /// @param A    this matrix's reflectors (l3::Global, a global Mat or device::item)
-/// @param C    this matrix's C, overwritten
 /// @param tau  k scalars: a T* or a unit-stride vector operand
+/// @param C    this matrix's C, overwritten
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
 ///             ormqr_buffer_size<SD, TR, Tier, T>(C.rows(), C.cols())
 /// @return 0, or -i for a bad i-th argument after the executor (1: A.rows() is not Q's order,
-///         3: tau shorter than k, 4: no global workspace), uniform
-template <Side SD, Transpose TR, class Tier, class Ex, class MA, class MC, class Tau>
-BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const Tau& tau, const Workspace& ws) {
+///         2: tau shorter than k, 4: no global workspace), uniform
+template <Side SD, Transpose TR, class Tier, class Ex, class MA, class Tau, class MC>
+BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const Tau& tau, const MC& C, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(A(0, 0))>;
     using Tr = resolve_tier_t<routine::ormqr<SD, TR>, T, Tier>;
     static_assert(HasTier<routine::ormqr<SD, TR>, Tr, T>, "ormqr: this tier is not offered for this scalar type");
@@ -108,7 +110,7 @@ BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const MC& C, const T
     const int k = a.m < a.n ? a.m : a.n;
     if (a.m != (SD == Side::Left ? c.m : c.n)) return -1;
     if constexpr (requires { tau.size(); }) {
-        if (static_cast<int>(tau.size()) < k) return -3;
+        if (static_cast<int>(tau.size()) < k) return -2;
     }
     if (ws.global == nullptr) return -4;
     if (k <= 0 || c.m <= 0 || c.n <= 0) return 0;

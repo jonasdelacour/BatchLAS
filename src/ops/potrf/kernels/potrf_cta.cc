@@ -17,6 +17,7 @@
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/launch.hh>
 
 #include <batchlas/util/mempool.hh>
 
@@ -218,13 +219,14 @@ Event potrf_cta_launch(Queue& ctx,
                 bool p1_active;
                 if constexpr (SC == device::Scope::Sub) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
-                    matrix_id = wg_id * G + sg_id;
+                    const device::MatrixSlot ms = device::matrix_slot(wg_id, G, sg_id, batch);
+                    matrix_id = ms.b;
                     slot = sg_id;
                     tid = static_cast<int>(sg.get_local_linear_id());
                     p1_active = true;
                     // Sub-group-uniform, and this scope uses only sub-group barriers; one matrix per
                     // sub-group, so the mask return (I1) is uniform too.
-                    if (matrix_id >= batch || (mask != nullptr && mask[matrix_id] == 0)) return;
+                    if (!ms.live || (mask != nullptr && mask[matrix_id] == 0)) return;
                 } else {
                     matrix_id = wg_id;   // G == 1 => num_wg == batch, cannot exceed
                     slot = 0;

@@ -18,6 +18,7 @@
 #include <numeric>
 #include <array>
 #include <batchlas/device/lapack/sytrd.hh>
+#include <batchlas/device/launch.hh>
 
 
 namespace batchlas {
@@ -110,8 +111,9 @@ namespace batchlas {
                     const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
 
-                    const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
+                    const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, static_cast<int32_t>(batch_size));
+                    const int32_t prob_id = ms.b;
+                    if (!ms.live) return;
                     // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
                     // const, and no capture of the mask when unmasked: a mutable flag the nested lambdas
                     // take by reference lands in local memory.

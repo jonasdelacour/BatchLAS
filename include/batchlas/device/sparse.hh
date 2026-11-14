@@ -242,6 +242,8 @@ template <Transpose TA, Transpose TB, class T> struct tiers<routine::spmm<TA, TB
 // wg_size / sg_size: the launch the tier is tested at; the body runs on any executor.
 template <Transpose TA, Transpose TB, int NC, class T> struct tier_info<routine::spmm<TA, TB>, tier::Blocked<NC>, T> {
     static constexpr int wg_size = 128, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
@@ -397,6 +399,8 @@ template <class T> struct tiers<routine::iluk_apply, T> {
 };
 template <class T> struct tier_info<routine::iluk_apply, tier::Blocked<1>, T> {
     static constexpr int wg_size = 128, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
@@ -520,6 +524,8 @@ template <class T> struct tiers<routine::iluk_factorize, T> {
 };
 template <class T> struct tier_info<routine::iluk_factorize, tier::Blocked<1>, T> {
     static constexpr int wg_size = 128, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };

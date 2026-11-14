@@ -372,7 +372,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
             w(i) = ::batchlas::device::conj(tau) * static_cast<T>(w(i)) - coef * static_cast<T>(v(i));
         sync(ex, Mem::Global);
 
-        her2<Part::Lower, alg::TeamPerRow, arith::Native>(rows, NegOne{}, assume_published(w), assume_published(v), W);
+        her2<Uplo::Lower, alg::TeamPerRow, arith::Native>(rows, NegOne{}, assume_published(w), assume_published(v), W);
         sync(ex, Mem::Global);
     };
 
@@ -616,11 +616,15 @@ template <Uplo UL, int KDMax = 32> struct sb2st {
 
 template <Uplo UL, int KDMax, int N, class A, class T> struct tier_info<routine::sb2st<UL, KDMax>, tier::Cta<N, A>, T> {
     static constexpr int wg_size = 32, sg_size = 32;
+    using executor = SgpPartition<wg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return sb2st_buffer_size<UL, tier::Cta<N, A>, T>(n, routine::sb2st<UL, KDMax>::kd_at(n)); }
 };
 template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sb2st<UL, KDMax>, tier::Blocked<NB, A>, T> {
     static constexpr int wg_size = 32, sg_size = 32;
+    using executor = SgpPartition<wg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return sb2st_buffer_size<UL, tier::Blocked<NB, A>, T>(n, routine::sb2st<UL, KDMax>::kd_at(n)); }
 };

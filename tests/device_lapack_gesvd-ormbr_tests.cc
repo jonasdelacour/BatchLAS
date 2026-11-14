@@ -144,7 +144,7 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, Elem2DrivesCoreCopies) {
         device::lacpy(device::ElemAt<true>{i, j}, device::item(rk, b, m, n), device::mat(wp + off(b, sa), m, n, lda));
         device::lacpy<device::Part::Full, Transpose::ConjTrans>(device::ElemAt<true>{j, i}, device::item(ak, b, m, n), device::item(ck, b, n, m));
     });
-    this->dev.grid(nh, nh, [=](int b, int i, int j) { device::mirror<Uplo::Lower, true>(device::ElemAt<true>{j, i}, device::item(hk, b, nh, nh)); });
+    this->dev.grid(nh, nh, [=](int b, int i, int j) { device::mirror<Uplo::Lower, Transpose::ConjTrans>(device::ElemAt<true>{j, i}, device::item(hk, b, nh, nh)); });
     const auto gl = this->dev.down(lp, std::size_t(kBatch) * sa), gw = this->dev.down(wp, std::size_t(kBatch) * sa);
     const auto gc = this->dev.down(cp, std::size_t(kBatch) * sc), gh = this->dev.down(hp, hh.size());
     int bad = 0, pad = 0, bad_h = 0;

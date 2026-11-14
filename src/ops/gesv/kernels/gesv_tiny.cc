@@ -30,6 +30,7 @@
 
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/lapack/gesv.hh>
+#include <batchlas/device/launch.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -141,12 +142,13 @@ BATCHLAS_UNROLL_FULL
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
         const int pidx = tiny_native::tiny_partition_id(sg, part);
-        const int prob_id = wg_id * kMpw + pidx;
+        const device::MatrixSlot ms = device::matrix_slot(wg_id, kMpw, pidx, batch);
+        const int prob_id = ms.b;
 
         // CLAMP, DO NOT RETURN: tiny_device.hh's third invariant -- an
         // early-exited lane still sits in the shuffle mask. A masked-off item is dead the
         // same way (I2): it solves an identity pad and stores nothing.
-        bool live = (prob_id < batch);
+        bool live = ms.live;
         if constexpr (Masked) live = live && mask[prob_id] != 0;
         const int b = live ? prob_id : 0;
         const D* const srcA = ap + static_cast<std::ptrdiff_t>(b) * strap;

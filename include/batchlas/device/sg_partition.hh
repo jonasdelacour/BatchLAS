@@ -16,4 +16,10 @@ BATCHLAS_DEVICE_INLINE SgpPartition<static_cast<int>(P), Masked> wrap(SubGroupPa
     return {typename SgpPartition<static_cast<int>(P), Masked>::Wrap{}, part};
 }
 
+// The executor of this item's P-lane chunk of sg: SgpPartition<P, Masked>{it} from a sub-group.
+template <int P, bool Masked = sgp::kMaskedByDefault>
+BATCHLAS_DEVICE_INLINE SgpPartition<P, Masked> make_partition(sycl::sub_group sg) {
+    return wrap(batchlas::make_partition<static_cast<size_t>(P), Masked>(sg));
+}
+
 }  // namespace batchlas::device

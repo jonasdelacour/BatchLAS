@@ -484,7 +484,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
     sync<Scope::Group>(ex, Mem::Global);
     constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
     const l3::Global<D> L{lw, n, n, n}, Y{y, n, n, nrhs};
-    trsm<Side::Left, tri, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
+    trsm<Side::Left, tri, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, One{}, L, Y, sm);
     for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY {
         const int t = e % n;  // logical: x reads through the reversal
         const int kd = kind[t];
@@ -499,7 +499,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
         x(t + 1) = ldl_dsolve_row(2, x1, x0, d1, d0, off);
     });
     sync<Scope::Group>(ex, Mem::Global);
-    trsm<Side::Left, tri, Transpose::Trans, Diag::Unit, Cfg, NB>(ex, L, Y, One{}, sm);
+    trsm<Side::Left, tri, Transpose::Trans, Diag::Unit, Cfg, NB>(ex, One{}, L, Y, sm);
     for_each_owned(ex, total, [&](int e) BATCHLAS_DEVICE_BODY { bb[src(e % n) + (e / n) * ldb] = y[e]; });
     sync<Scope::Group>(ex, Mem::Global);
 }
@@ -512,17 +512,23 @@ template <Uplo UL, class T> struct tiers<routine::sytrs<UL>, T> {
 template <Uplo UL, int N, class T> struct tier_info<routine::sytrs<UL>, tier::Cta<N>, T> {
     static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
     static constexpr int wg_size = 32, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n, int = 1) { return detail::sytrs_cta_plan<T>(n).size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, T> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sytrs_wg_plan<real_t<T>>().size; }
 };
 // Its local part does not depend on nrhs, so with_tier's buffer_size(n) filter is exact.
 template <Uplo UL, int NB, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, T> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return detail::sytrs_blocked_plan<T>(n, nrhs).size; }
 };

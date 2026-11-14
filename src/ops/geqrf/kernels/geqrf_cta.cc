@@ -15,6 +15,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/launch.hh>
 #include <src/util/batch_mask.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -132,13 +133,14 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                 int b, slot, tid, lwg;
                 if constexpr (SC == device::Scope::Sub) {
                     const int sg_id = static_cast<int>(sg.get_group_linear_id());
-                    b = wg_id * G + sg_id;
+                    const device::MatrixSlot ms = device::matrix_slot(wg_id, G, sg_id, batch);
+                    b = ms.b;
                     slot = sg_id;
                     tid = static_cast<int>(sg.get_local_linear_id());
                     lwg = static_cast<int>(sg.get_local_linear_range());
                     // Sub-group-uniform, and this scope executes only sub-group barriers: an
                     // inactive item (one per sub-group) returns as a tail sub-group does.
-                    if (b >= batch || (mask != nullptr && mask[b] == 0)) return;
+                    if (!ms.live || (mask != nullptr && mask[b] == 0)) return;
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;

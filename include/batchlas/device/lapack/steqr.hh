@@ -555,7 +555,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         // Split the tail, then the block ends at its first zero E (n-1 if none).
         const auto tail_e = device::lane_vec(offdiag, block_begin, n - 1);
         detail::tridiag_split(ex, diag, tail_e, tol);
-        const int32_t block_end = device::find_first(ex, tail_e, n - 1, is_zero);
+        const int32_t block_end = device::find_first(ex, tail_e, is_zero, n - 1);
         next_block_begin = block_end + 1;
         if (block_end <= block_begin) {
             continue;  // size-0/1 block
@@ -595,7 +595,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                 // Split the active subproblem [l..lend]; m = its first zero E, else lend.
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
                 detail::tridiag_split(ex, diag, act_e, tol);
-                const int32_t m = device::find_first(ex, act_e, block_end, is_zero);
+                const int32_t m = device::find_first(ex, act_e, is_zero, block_end);
 
                 if (m == l) {
                     l += 1;
@@ -681,7 +681,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 }
                 const auto tail_e = device::lane_vec(offdiag, bb, n - 1);
                 detail::tridiag_split(ex, diag, tail_e, tol);
-                const int32_t be = device::find_first(ex, tail_e, n - 1, is_zero);
+                const int32_t be = device::find_first(ex, tail_e, is_zero, n - 1);
                 next_block_begin = be + 1;
                 if (be <= bb) {
                     if (next_block_begin >= n) {
@@ -723,7 +723,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
             } else {
                 const auto act_e = device::lane_vec(offdiag, l, block_end);
                 detail::tridiag_split(ex, diag, act_e, tol);
-                m = device::find_first(ex, act_e, block_end, is_zero);
+                m = device::find_first(ex, act_e, is_zero, block_end);
                 if (m == l) {
                     l += 1;
                 } else if (m == l + 1) {
@@ -801,8 +801,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                     offdiag = T(0);
                 }
                 detail::tridiag_split(ex, diag, device::lane_vec(offdiag, opening ? bb : n, n - 1), tol);
-                const int32_t be = device::find_first(ex, device::lane_vec(offdiag, bb, n - 1), n - 1,
-                                                  [&](T x) { return opening && x == T(0); });
+                const int32_t be = device::find_first(ex, device::lane_vec(offdiag, bb, n - 1),
+                                                  [&](T x) { return opening && x == T(0); }, n - 1);
                 const bool opened = opening && be > bb;
 
                 const auto blk_d = device::lane_vec(diag, bb, opened ? be + 1 : bb);  // empty unless opened
@@ -842,8 +842,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             const bool active = testing && !cap;
             if (lockstep_any(partition, active)) {
                 detail::tridiag_split(ex, diag, device::lane_vec(offdiag, active ? l : n, block_end), tol);
-                const int32_t mm = device::find_first(ex, device::lane_vec(offdiag, l, block_end), block_end,
-                                                  [&](T x) { return active && x == T(0); });
+                const int32_t mm = device::find_first(ex, device::lane_vec(offdiag, l, block_end),
+                                                  [&](T x) { return active && x == T(0); }, block_end);
                 const bool adv1 = active && mm == l;
                 const bool adv2 = active && mm == l + 1;
                 const bool want = active && !adv1 && !adv2;
@@ -909,7 +909,7 @@ inline bool steqr_cta_solve(const Partition& partition,
                             SteqrShiftStrategy cta_shift_strategy) {
     if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
         if constexpr (batchlas::sgp::kMaskedByDefault) {
-            const auto chunk = make_partition<P, true>(partition.sg);
+            const auto chunk = batchlas::make_partition<P, true>(partition.sg);
             return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
         } else {
             return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
@@ -1092,6 +1092,8 @@ template <JobType J, int N, class Alg, class T> struct tier_info<routine::steqr<
     static_assert(!Arith<T>::is_complex, "steqr: d and e are real");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
+    using executor = SgpPartition<N>;
+    static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) {
         return detail::steqr_cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size();
@@ -1103,6 +1105,8 @@ template <JobType J, int NB, class Alg, class T> struct tier_info<routine::steqr
     static_assert(!Arith<T>::is_complex, "steqr: d and e are real");
     static constexpr int wg_size = 256;  // one problem per work-group, the size sytrd's Blocked tier runs at
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::wg_plan<J == JobType::EigenVectors, T>(n).plan.size(); }
 };
@@ -1144,7 +1148,7 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
         constexpr int N = Tr::n_max;
         constexpr std::size_t P = N;
         static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
-                      "steqr: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+                      "steqr: tier::Cta<N> runs on device::SgpPartition<N> (device::make_partition<N>(sg))");
         const int n = d.size();
         if (n < 1 || n > N) return -2;
         using LP = typename local_mptr<T>::pointer;  // decorated: a generic pointer costs generic LD/ST

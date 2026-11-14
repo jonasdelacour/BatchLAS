@@ -79,14 +79,14 @@ BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const
     if (k <= 0 || m <= 0 || n <= 0) return;  // uniform: before any barrier
     if constexpr (SD == Side::Left) {
         const l3::Global<T> w1{work, k, k, n}, w2{work + static_cast<std::ptrdiff_t>(k) * n, k, k, n};
-        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, v, c, w1, One{}, Zero{}, smem);
-        trmm<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, Tm, w1, w2, One{}, smem);
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, v, w2, c, NegOne{}, One{}, smem);
+        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, v, c, Zero{}, w1, smem);
+        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, Tm, w1, w2, smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, v, w2, One{}, c, smem);
     } else {
         const l3::Global<T> w1{work, m, m, k}, w2{work + static_cast<std::ptrdiff_t>(m) * k, m, m, k};
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, c, v, w1, One{}, Zero{}, smem);
-        trmm<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, Tm, w1, w2, One{}, smem);
-        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, w2, v, c, NegOne{}, One{}, smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, c, v, Zero{}, w1, smem);
+        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, Tm, w1, w2, smem);
+        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, v, One{}, c, smem);
     }
 }
 

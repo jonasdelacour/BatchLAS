@@ -482,7 +482,7 @@ TYPED_TEST(DeviceApiUtil, OrthoPastCeilingAndWorkspace) {
     EXPECT_EQ(blk.local_bytes, stages);
     EXPECT_EQ(blk.global_bytes, r16(r16(12 * 32 * sizeof(T)) + 32 * sizeof(T)));  // H (k x NB), h (NB)
     const auto chol = batchlas::device::ortho_buffer_size<TR, OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, T, L3Cfg<T>>(12);
-    EXPECT_EQ(chol.local_bytes, (stages + batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<16>, T>(12).local_bytes));
+    EXPECT_EQ(chol.local_bytes, (stages + batchlas::device::buffer_size<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Cta<16>, T>(12).local_bytes));
     EXPECT_EQ(chol.global_bytes, r16(12 * 12 * sizeof(T)));  // the Gram matrix
     const auto rz = batchlas::device::ritz_values_buffer_size<batchlas::device::tier::Blocked<3>, T, L3Cfg<T>>(45, 7);
     EXPECT_EQ(rz.local_bytes, stages);

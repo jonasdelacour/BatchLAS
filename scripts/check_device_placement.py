@@ -233,7 +233,8 @@ def is_public_device(rel):
 
 
 def routine_of(name, routines):
-    return any(name == r or name.startswith(r + "_") for r in routines)
+    # r, r_*, and the routine's public options struct (stedc -> StedcOptions, C8)
+    return any(name == r or name.startswith(r + "_") or name == r[:1].upper() + r[1:] + "Options" for r in routines)
 
 
 def overlap(a, b):

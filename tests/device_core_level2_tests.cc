@@ -116,7 +116,7 @@ TYPED_TEST(DeviceCoreLevel2Test, GerFlatAndRegisterRow) {
         }
 }
 
-TYPED_TEST(DeviceCoreLevel2Test, Her2OnATriangleAndOnTheFullSquare) {
+TYPED_TEST(DeviceCoreLevel2Test, Her2OnEachTriangle) {
     using T = TypeParam;
     auto& d = this->dev;
     constexpr int n = 19, ld = n + 3, WG = 64;
@@ -131,21 +131,22 @@ TYPED_TEST(DeviceCoreLevel2Test, Her2OnATriangleAndOnTheFullSquare) {
         const batchlas::device::WorkGroup<WG, 32> ex{it};
         const auto X = batchlas::device::assume_published(batchlas::device::vec(x, n));
         const auto Y = batchlas::device::assume_published(batchlas::device::vec(y, n));
-        batchlas::device::her2<batchlas::device::Part::Lower>(ex, alpha, X, Y, batchlas::device::mat(al, n, n, ld));
-        batchlas::device::her2<batchlas::device::Part::Full, batchlas::device::alg::TeamPerRow>(ex, alpha, X, Y, batchlas::device::mat(af, n, n, ld));
+        batchlas::device::her2<batchlas::Uplo::Lower>(ex, alpha, X, Y, batchlas::device::mat(al, n, n, ld));
+        batchlas::device::her2<batchlas::Uplo::Upper, batchlas::device::alg::TeamPerRow>(ex, alpha, X, Y, batchlas::device::mat(af, n, n, ld));
     });
     const auto gl = d.down(al, a_h.size()), gf = d.down(af, a_h.size());
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const LD<T> upd = wide(alpha) * wide(x_h[i]) * cj<T>(wide(y_h[j])) + cj<T>(wide(alpha)) * wide(y_h[i]) * cj<T>(wide(x_h[j]));
             LD<T> ref = wide(a_h[j * ld + i]) + upd;
-            EXPECT_LE(err(gf[j * ld + i], ref), tol<T>(4)) << "Full " << i << "," << j;
+            if constexpr (is_cplx<T>)
+                if (i == j) ref = LD<T>(ref.real(), 0);
+            if (i > j) EXPECT_TRUE(same_bits(gf[j * ld + i], a_h[j * ld + i])) << "lower written " << i << "," << j;
+            else EXPECT_LE(err(gf[j * ld + i], ref), tol<T>(4)) << "Upper " << i << "," << j;
             if (i < j) {
                 EXPECT_TRUE(same_bits(gl[j * ld + i], a_h[j * ld + i])) << "upper written " << i << "," << j;
                 continue;
             }
-            if constexpr (is_cplx<T>)
-                if (i == j) ref = LD<T>(ref.real(), 0);
             EXPECT_LE(err(gl[j * ld + i], ref), tol<T>(4)) << "Lower " << i << "," << j;
             if constexpr (is_cplx<T>)
                 if (i == j) EXPECT_EQ(gl[j * ld + i].imag(), real_of<T>(0)) << "Im(diag) " << i;

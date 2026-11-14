@@ -4,14 +4,18 @@
 // time so one kernel never pays the registers of two paths (a run-time `if (n <= 32)` between
 // two tiers compiles both and the kernel carries the max REG: the old design's failure).
 //   tier::Reg<N, Exact>      the matrix in registers of a Partition / SubGroup; n <= N <= 32
-//   tier::Cta<N, Alg>        the matrix in local memory of one WorkGroup; n <= N
+//   tier::Cta<N, Alg>        the matrix in local memory (of a WorkGroup, or of the work-group a
+//                            partition executor shares: tier_info::executor); n <= N
 //   tier::Blocked<NB, Alg>   any n: A in global, a diagonal block / panel in local memory, the
 //                            caller's global workspace for the rest
 //   tier::upto<NMax>         the first tier of the routine's list admitting NMax (compile time)
 // Per routine (a tag type in device::routine) and scalar T, tier_info<Routine, Tier, T> states
-// wg_size, sg_size, admits(n) and buffer_size(n); tiers_t<Routine, T> lists the routine's tiers
-// smallest first. with_tier (host) visits the first admitting tier for a run-time n.
+// the executor type, wg_size, sg_size, per_group (matrices per work-group: one per executor),
+// admits(n) and buffer_size(n); tiers_t<Routine, T> lists the routine's tiers smallest first.
+// with_tier (host) visits the first admitting tier for a run-time n; launch.hh turns a tier into
+// a launch (nd_range, executor, matrix slot, workspace).
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -20,6 +24,7 @@
 
 #include <sycl/sycl.hpp>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/device/core.hh>
 #include <batchlas/device/workspace.hh>
 #include <batchlas/error.hh>
@@ -93,15 +98,55 @@ template <class Routine, class T, int NMax> struct resolve_tier<Routine, T, tier
 };
 template <class Routine, class T, class Tier> using resolve_tier_t = typename resolve_tier<Routine, T, Tier>::type;
 
-// The device facts with_tier filters on.
+#if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_ACPP_SLM_OPTIN
+extern "C" int batchlas_acpp_slm_optin_bytes(int cuda_ordinal);
+#endif
+
+// The local memory a work-group of wg items may launch with (every SLM capacity's source): the
+// reported size, the acpp CUDA opt-in maximum, less acpp Metal's 8 B per item of launch scratch.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
+inline std::size_t local_mem_scratch_per_item([[maybe_unused]] const sycl::device& d) {
+#if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_HAS_SYCL_BACKEND
+    return d.get_backend() == sycl::backend::metal ? std::size_t{8} : std::size_t{0};
+#else
+    return 0;
+#endif
+}
+inline std::size_t local_mem_reported(const sycl::device& d) {
+    std::size_t reported = d.get_info<sycl::info::device::local_mem_size>();
+#if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_ACPP_SLM_OPTIN
+    if (d.get_backend() == sycl::backend::cuda) {
+        const int optin = batchlas_acpp_slm_optin_bytes(sycl::get_native<sycl::backend::cuda>(d));
+        if (optin > 0) reported = std::max(reported, static_cast<std::size_t>(optin));
+    }
+#endif
+    return reported;
+}
+inline std::size_t local_mem_bytes(const sycl::device& d, std::size_t wg) {
+    const std::size_t reported = local_mem_reported(d), scratch = local_mem_scratch_per_item(d) * wg;
+    return reported > scratch ? reported - scratch : 0;
+}
+// What ANY work-group may request; a caller that knows its width may ask (d, wg) for more.
+inline std::size_t local_mem_bytes(const sycl::device& d) {
+    if (local_mem_scratch_per_item(d) == 0) return local_mem_bytes(d, 0);
+    return local_mem_bytes(d, d.get_info<sycl::info::device::max_work_group_size>());
+}
+
+// The device facts with_tier filters on; a tier of wg items may use local_mem_for(wg).
 struct DeviceLimits {
     std::size_t local_mem_bytes = 0;
     std::vector<std::size_t> sub_group_sizes;
     std::size_t max_work_group_size = 0;
     bool fp64 = false;
+    std::size_t local_scratch_per_item = 0;
+    std::size_t local_mem_for(std::size_t wg) const {
+        const std::size_t scratch = local_scratch_per_item * wg;
+        return local_mem_bytes > scratch ? local_mem_bytes - scratch : 0;
+    }
     static DeviceLimits of(const sycl::device& d) {
-        return {d.get_info<sycl::info::device::local_mem_size>(), d.get_info<sycl::info::device::sub_group_sizes>(),
-                d.get_info<sycl::info::device::max_work_group_size>(), d.has(sycl::aspect::fp64)};
+        return {local_mem_reported(d), d.get_info<sycl::info::device::sub_group_sizes>(),
+                d.get_info<sycl::info::device::max_work_group_size>(), d.has(sycl::aspect::fp64),
+                local_mem_scratch_per_item(d)};
     }
 };
 
@@ -114,7 +159,8 @@ template <class Routine, class Tier, class T> bool tier_fits(const DeviceLimits&
     bool sg_ok = false;
     for (std::size_t s : lim.sub_group_sizes) sg_ok = sg_ok || s == static_cast<std::size_t>(I::sg_size);
     if (!sg_ok) return false;
-    return I::buffer_size(n).local_bytes <= lim.local_mem_bytes;
+    // A launch holds per_group matrices' local slices (launch.hh's local_workspace).
+    return I::buffer_size(n).local_bytes * static_cast<std::size_t>(I::per_group) <= lim.local_mem_for(I::wg_size);
 }
 template <class Routine, class T, class F, class... Tiers> bool visit_first(const DeviceLimits& lim, int n, F& f, tier::list<Tiers...>) {
     bool done = false;
@@ -124,7 +170,8 @@ template <class Routine, class T, class F, class... Tiers> bool visit_first(cons
 }  // namespace detail
 
 // Host side: call f(Tier{}) for the first tier of List (default: the routine's list) that admits
-// n, fits the device's local memory and work-group size, runs at a sub-group size the device
+// n, fits the device's local memory (per_group slices, less the per-item launch scratch) and
+// work-group size, runs at a sub-group size the device
 // has, and (for a double T) a device with fp64. Each listed tier is a separate instantiation of
 // whatever kernel f launches; exactly one runs. Throws batchlas::invalid_argument("<name>: no
 // device tier admits n=<n>") when none does.

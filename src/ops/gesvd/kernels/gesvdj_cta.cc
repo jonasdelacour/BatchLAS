@@ -19,6 +19,7 @@
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/launch.hh>
 #include <src/sycl/local_mem.hh>
 #include <src/util/batch_mask.hh>
 #include <algorithm>
@@ -199,10 +200,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
                 const int32_t lane = ex.lid();
-                const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, nb);
+                const int32_t prob_id = ms.b;
                 // NO EARLY RETURN (I2): partitions share a sub-group's barriers, so a dead
                 // partition (a batch tail or an inactive item) solves a zero tile and stores nothing.
-                const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
+                const bool live = ms.live && (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);

@@ -395,7 +395,7 @@ template <class T, Side SD, Transpose TR> void check_ormqr(Dev& d, const Shape s
     const auto cv = kview(c, C);
     Launch<T> L(d, batchlas::device::ormqr_buffer_size<SD, TR, Blk<T>, T>(C.rows, C.cols), kItems);
     const auto info = L.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
-        return batchlas::device::ormqr<SD, TR, Blk<T>>(ex, batchlas::device::item(av, b), batchlas::device::item(cv, b), batchlas::device::vec(tp + std::ptrdiff_t(b) * k, k), ws);
+        return batchlas::device::ormqr<SD, TR, Blk<T>>(ex, batchlas::device::item(av, b), batchlas::device::vec(tp + std::ptrdiff_t(b) * k, k), batchlas::device::item(cv, b), ws);
     });
     const auto got = d.down(c, C.h.size());
     EXPECT_EQ(pads_changed(C, got), 0) << "ormqr wrote outside C";
@@ -472,7 +472,7 @@ TYPED_TEST(DeviceApiQrTest, BatchOf1024IsBitIdenticalPerRepresentative) {
     const auto cv = kview(c, C);
     Launch<T> Lm(d, batchlas::device::ormqr_buffer_size<Side::Left, Transpose::ConjTrans, Blk<T>, T>(C.rows, C.cols), kBig);
     Lm.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
-        return batchlas::device::ormqr<Side::Left, Transpose::ConjTrans, Blk<T>>(ex, batchlas::device::item(av, b), batchlas::device::item(cv, b), tp + std::ptrdiff_t(b) * k, ws);
+        return batchlas::device::ormqr<Side::Left, Transpose::ConjTrans, Blk<T>>(ex, batchlas::device::item(av, b), tp + std::ptrdiff_t(b) * k, batchlas::device::item(cv, b), ws);
     });
     EXPECT_EQ(items_differing(C, d.down(c, C.h.size())), 0) << "ormqr";
 
@@ -518,12 +518,12 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
               -2)
         << "orgqr: tau shorter than n";
     EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
-                  return batchlas::device::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), flat, tp, ws);
+                  return batchlas::device::ormqr<Side::Left, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), tp, flat, ws);
               })),
               -1)
         << "ormqr: A.rows() is not C.rows()";
     EXPECT_EQ(first(L.run([=](const auto& ex, int, const batchlas::device::Workspace& ws) {
-                  return batchlas::device::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), batchlas::device::item(av, 0), batchlas::device::vec(tp, n - 1), ws);
+                  return batchlas::device::ormqr<Side::Right, Transpose::NoTrans, Blk<T>>(ex, batchlas::device::item(av, 0), batchlas::device::vec(tp, n - 1), batchlas::device::item(av, 0), ws);
               })),
               -1)
         << "ormqr Right: A.rows() is not C.cols()";

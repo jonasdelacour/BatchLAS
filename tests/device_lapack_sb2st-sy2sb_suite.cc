@@ -183,7 +183,7 @@ template <class T, int WG, class O> void run_band_hemv_her2(Dev& dev) {
         device::detail::hemv_band<Uplo::Lower>(rows, device::One{}, W, device::assume_published(v), device::Zero{}, w);
         device::sync(ex, device::Mem::Global);
         device::for_each_owned(ex, m, [&](int i) { p[std::ptrdiff_t(b) * m + i] = wl[i]; });
-        device::her2<device::Part::Lower, device::alg::TeamPerRow, device::arith::Native>(rows, device::NegOne{}, device::assume_published(w),
+        device::her2<Uplo::Lower, device::alg::TeamPerRow, device::arith::Native>(rows, device::NegOne{}, device::assume_published(w),
                                                                           device::assume_published(v), W);
     });
     const auto gs = dev.down(s, hs.size());

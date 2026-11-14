@@ -478,17 +478,19 @@ template <bool Conj, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVICE_
 }
 }  // namespace detail
 
-// {xs^T y...} (Conj: xs^H y) for operands of different types (e.g. a column and its
-// unit_head), one loop over y and one packed exchange: latrd's gamma/delta pair.
-template <bool Conj = false, class Ops = arith::Explicit, class Ex, class T, int Slots, class Y, class... Xs>
+// {op(xs) y...} (TR: Trans xs^T y, ConjTrans xs^H y) for operands of different types (e.g. a
+// column and its unit_head), one loop over y and one packed exchange: latrd's gamma/delta pair.
+template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class T, int Slots, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<T, Slots> scr, const Y& y, const Xs&... xs) {
-    return detail::packed_sum<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<Conj, Ops>(ex, y, xs...));
+    static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
+    return detail::packed_sum<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<TR == Transpose::ConjTrans, Ops>(ex, y, xs...));
 }
 // Without Scratch: one loop over y, then one scope-S reduction per x in argument order (on a
 // WorkGroup, portable::reduce_over_group each: the legacy kernels' trees, bit-identical).
-template <bool Conj = false, Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
+template <Transpose TR = Transpose::Trans, Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
-    auto acc = detail::dot_many_partial<Conj, Ops>(ex, y, xs...);
+    static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
+    auto acc = detail::dot_many_partial<TR == Transpose::ConjTrans, Ops>(ex, y, xs...);
     detail::reduce_each<S>(ex, acc);
     return acc;
 }
@@ -697,23 +699,21 @@ BATCHLAS_DEVICE_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
     else return acc;
 }
 
-// The first i in [0, n) with pred(i), or -1 (uniform). Each item stops at its first owned hit
-// (owned indices ascend), then one min-reduction. The x overload tests pred(x(i)).
-template <Scope S = Scope::Own, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred) {
+// The first i in [0, x.size()) with pred(x(i)), or none (uniform). Each item stops at its first
+// owned hit (owned indices ascend), then one min-reduction. An index search passes fn_vec(n, f).
+template <Scope S = Scope::Own, class Ex, class X, class P>
+    requires(requires(const X& x) { x.size(); x(0); })
+BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred, int none = -1) {
+    const int n = x.size();
     int first = INT_MAX;
     const int step = detail::size_of(ex);
     for (int i = ex.lid(); i < n; i += step)
-        if (pred(i)) {
+        if (pred(x(i))) {
             first = i;
             break;
         }
     first = detail::scope_reduce<S>(ex, first, sycl::minimum<int>());
-    return first == INT_MAX ? -1 : first;
-}
-template <Scope S = Scope::Own, class Ex, class X, class P>
-    requires(requires(const X& x) { x.size(); x(0); })
-BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred) {
-    return find_first<S>(ex, x.size(), [&](int i) { return pred(x(i)); });
+    return first == INT_MAX ? none : first;
 }
 
 // iamax (?IAMAX; ?GETF2's and ?SYTF2's pivot search): {index, key} of the maximum of key(x(i))
@@ -915,13 +915,9 @@ template <class R> BATCHLAS_DEVICE_INLINE R sqrt_scaled(ScaledProd<R> q) {
     return sycl::ldexp(mag, half);
 }
 
-// find_first with the miss value named (none instead of -1); LaneVec form: the smallest lid in
-// [x.lo, x.hi) whose element satisfies pred, else none (a min butterfly, masks ascending).
-template <Scope S = Scope::Own, class Ex, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, int n, P&& pred, int none) {
-    const int f = find_first<S>(ex, n, pred);
-    return f < 0 ? none : f;
-}
-template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, int none, P&& pred) {
+// find_first on a LaneVec: the smallest lid in [x.lo, x.hi) whose element satisfies pred, else
+// none (a min butterfly, masks ascending).
+template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, P&& pred, int none = -1) {
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
     return detail::butterfly_inline<1, Ex::size, alg::BflyAsc>(ex, cand, sycl::minimum<int>());

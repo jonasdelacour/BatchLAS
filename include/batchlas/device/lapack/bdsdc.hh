@@ -22,6 +22,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/gesvd.hh>
 #include <batchlas/device/lapack/stedc.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
@@ -178,7 +179,7 @@ template <class R> struct BdsdcLayout {
 };
 template <class R> constexpr BdsdcLayout<R> plan(int n) {
     const int N = 2 * (n > 0 ? n : 1);
-    const WorkspaceSize q = stedc_buffer_size<JobType::EigenVectors, tier::Blocked<1>, R>(N);
+    const WorkspaceSize q = buffer_size<routine::stedc<JobType::EigenVectors>, tier::Blocked<1>, R>(N);
     Plan p(q.align > 16 ? q.align : 16);
     BdsdcLayout<R> L{};
     L.gd = p.take<R>(WsSpace::Global, std::size_t(N));
@@ -201,6 +202,8 @@ template <class T> struct tiers<routine::bdsdc, T> {
 template <class T> struct tier_info<routine::bdsdc, tier::Blocked<1>, T> {
     static_assert(std::is_floating_point_v<T>, "bdsdc: a real T");
     static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<T>(n).size; }
 };
@@ -235,7 +238,7 @@ BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& 
     if (ex.leader()) detail::build_gk(d, e, gd, ge, gs);
     ex.barrier(Mem::Global);
     const int info = stedc<JobType::EigenVectors, tier::Blocked<1>>(
-        ex, gd, ge, w, detail::nested_workspace(ws, L.stedc_local, L.stedc_global), detail::stedc_params<R>{}, Z);
+        ex, gd, ge, w, Z, detail::nested_workspace(ws, L.stedc_local, L.stedc_global), StedcOptions<R>{});
     ex.barrier(Mem::Global);
     const bool wu = U.rows() >= n && U.cols() >= n;
     const bool wv = Vh.rows() >= n && Vh.cols() >= n;

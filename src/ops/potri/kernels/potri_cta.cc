@@ -119,8 +119,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
                 auto Af = [&](int r, int c) -> D& { return Ai[r + static_cast<std::ptrdiff_t>(c) * lda]; };
                 int z = -1;
                 if (md == 1) {
-                    z = device::find_first(
-                        ex, sn, [&](int i) { return dev_is_zero(Ai[static_cast<std::ptrdiff_t>(i) * (lda + 1)]); });
+                    z = device::find_first(ex, device::fn_vec(sn, [&](int i) { return Ai[static_cast<std::ptrdiff_t>(i) * (lda + 1)]; }),
+                                           [&](const D& d) { return dev_is_zero(d); });
                     if (j0 == 0 && tid == 0) flags[item] = z + 1;
                 } else if (flags[item] != 0) {
                     z = 0;
@@ -173,7 +173,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
 
             int zero = -1;
             if (md == 0) {
-                zero = device::find_first(ex, m, [&](int i) { return dev_is_zero(g_at(i, i)); });
+                zero = device::find_first(ex, device::fn_vec(m, [&](int i) { return g_at(i, i); }),
+                                          [&](const D& d) { return dev_is_zero(d); });
                 if (ex.leader() && info_ptr) info_ptr[item] = zero + 1;
             }
             if (zero >= 0) return; // work-group uniform: no barrier is left unmatched

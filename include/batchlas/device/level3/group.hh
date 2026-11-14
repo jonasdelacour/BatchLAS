@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // In-group Level 3 (v22 design B.3): ONE matrix per work-group, any m, n, k, operands in global
-// memory, the work-group's local memory as l3::Smem<Cfg>. Host op names and run-time argument
-// order (Queue replaced by the executor); the host's run-time modes are template parameters:
-//   gemm<TA, TB, Cfg>(ex, A, B, C, alpha, beta, smem)          C := alpha op(A) op(B) + beta C
-//   symm / hemm<SD, UL, Cfg>(ex, A, B, C, alpha, beta, smem)   C := alpha A B + beta C (Left), alpha B A + beta C
-//   syrk<UL, TR, Cfg>(ex, A, C, alpha, beta, smem)             C := alpha op(A) op(A)^T + beta C, UL triangle
-//   herk<UL, TR, Cfg>(ex, A, C, alpha, beta, smem)             C := alpha op(A) op(A)^H + beta C, real alpha, beta
-//   syr2k<UL, TR, Cfg>(ex, A, B, C, alpha, beta, smem)         C := alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C
-//   her2k<UL, TR, Cfg>(ex, A, B, C, alpha, beta, smem)         C := alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C
-//   trmm<SD, UL, TR, DG, Cfg>(ex, A, B, C, alpha, smem)        C := alpha op(A) B (Left), alpha B op(A); B unchanged
-//   trsm<SD, UL, TR, DG, Cfg, NB>(ex, A, B, alpha, smem)       B := alpha op(A)^-1 B (Left), alpha B op(A)^-1
+// memory, the work-group's local memory as l3::Smem<Cfg>. Host op names in BLAS argument order
+// (alpha before its product, beta before the output); the host's run-time modes are template
+// parameters:
+//   gemm<TA, TB, Cfg>(ex, alpha, A, B, beta, C, smem)          C := alpha op(A) op(B) + beta C
+//   symm / hemm<SD, UL, Cfg>(ex, alpha, A, B, beta, C, smem)   C := alpha A B + beta C (Left), alpha B A + beta C
+//   syrk<UL, TR, Cfg>(ex, alpha, A, beta, C, smem)             C := alpha op(A) op(A)^T + beta C, UL triangle
+//   herk<UL, TR, Cfg>(ex, alpha, A, beta, C, smem)             C := alpha op(A) op(A)^H + beta C, real alpha, beta
+//   syr2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, smem)         C := alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C
+//   her2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, smem)         C := alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C
+//   trmm_out<SD, UL, TR, DG, Cfg>(ex, alpha, A, B, C, smem)    C := alpha op(A) B (Left), alpha B op(A); B unchanged
+//   trsm<SD, UL, TR, DG, Cfg, NB>(ex, alpha, A, B, smem)       B := alpha op(A)^-1 B (Left), alpha B op(A)^-1
 // Every op is one tile body (l3::reg_tile_mma + store_tile_staged, the host reg route's) run
 // over the matrix's tiles by for_each_tile. A float gemm with a Cfg of a reg_configs row (Stages,
 // UnrollK and tile equal, predicated leg) gives the host route's bits. Collective: every item of
@@ -155,7 +156,7 @@ BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Smem<C>& sm, const G
 
 template <Transpose TA, Transpose TB, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     const auto a = l3::global_of(A);
@@ -174,7 +175,7 @@ BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, const MA& A, const MB& B, const M
 
 namespace l3 {
 template <Side SD, Uplo UL, bool Herm, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
-BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, Smem<Cfg> smem) {
     check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     const auto a = global_of(A);
@@ -194,13 +195,13 @@ BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, const MA& A, const MB& B, 
 
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void symm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::sym_product<SD, UL, false>(ex, A, B, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void symm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    l3::sym_product<SD, UL, false>(ex, alpha, A, B, beta, C, smem);
 }
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::sym_product<SD, UL, is_complex_v<typename Cfg::value_type>>(ex, A, B, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    l3::sym_product<SD, UL, is_complex_v<typename Cfg::value_type>>(ex, alpha, A, B, beta, C, smem);
 }
 
 // ---- syrk, herk, syr2k, her2k: only the UL triangle of C is read or written --------------------
@@ -212,7 +213,7 @@ BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, const MA& A, const MB& B, const M
 namespace l3 {
 // C := alpha op(A) op(A)^T (Herm: ^H) + beta C. Herm maps Trans to ConjTrans (a real T only).
 template <Uplo UL, Transpose TR, bool Herm, class Cfg, class Ex, class MA, class MC, class AS, class BS>
-BATCHLAS_DEVICE_INLINE void rank_k(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void rank_k(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, Smem<Cfg> smem) {
     check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     using Ar = Arith<T>;
@@ -238,7 +239,7 @@ BATCHLAS_DEVICE_INLINE void rank_k(const Ex& ex, const MA& A, const MC& C, AS al
 // (op(B), op(A)) (interleaving them is 1.53x slower, docs/perf/level3.md). Herm stages alpha
 // op(B)^H and conj(alpha) op(A)^H as they are loaded (the epilogue's alpha is 1).
 template <Uplo UL, Transpose TR, bool Herm, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
-BATCHLAS_DEVICE_INLINE void rank_2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void rank_2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, Smem<Cfg> smem) {
     check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     if constexpr (Herm) static_assert(TR != Transpose::Trans || !Arith<T>::is_complex, "her2k: op is NoTrans or ConjTrans");
@@ -268,38 +269,38 @@ BATCHLAS_DEVICE_INLINE void rank_2k(const Ex& ex, const MA& A, const MB& B, cons
 
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void syrk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::rank_k<UL, TR, false>(ex, A, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void syrk(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    l3::rank_k<UL, TR, false>(ex, alpha, A, beta, C, smem);
 }
 // TR: NoTrans (C := alpha A A^H + beta C) or ConjTrans (alpha A^H A + beta C); Trans is ConjTrans
 // for a real T. alpha, beta real; Im C(i, i) := 0.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void herk(const Ex& ex, const MA& A, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_k<UL, TR, true>(ex, A, C, alpha, beta, smem);
-    else l3::rank_k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, A, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void herk(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_k<UL, TR, true>(ex, alpha, A, beta, C, smem);
+    else l3::rank_k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, alpha, A, beta, C, smem);
 }
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void syr2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    l3::rank_2k<UL, TR, false>(ex, A, B, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void syr2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    l3::rank_2k<UL, TR, false>(ex, alpha, A, B, beta, C, smem);
 }
 // alpha scales op(B)^H as it is staged and conj(alpha) op(A)^H (the epilogue's alpha is 1); beta
 // real. Trans is ConjTrans for a real T.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, BS beta, l3::Smem<Cfg> smem) {
-    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_2k<UL, TR, true>(ex, A, B, C, alpha, beta, smem);
-    else l3::rank_2k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, A, B, C, alpha, beta, smem);
+BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, l3::Smem<Cfg> smem) {
+    if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_2k<UL, TR, true>(ex, alpha, A, B, beta, C, smem);
+    else l3::rank_2k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, false>(ex, alpha, A, B, beta, C, smem);
 }
 
-// ---- trmm (out of place, as the host op), trsm (in place) -------------------------------------
+// ---- trmm_out (C := alpha op(A) B or alpha B op(A), out of place: the host op), trsm (in place) --
 
 // The k range of each tile is the triangle's reach (a loop bound, not a mask): Left, op(A) lower:
 // rows m0 .. read columns [0, min(m, m0 + TileM)); upper: [m0, m). Right likewise over columns.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, class Ex, class MA, class MB, class MC, class AS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const MC& C, AS alpha, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void trmm_out(const Ex& ex, AS alpha, const MA& A, const MB& B, const MC& C, l3::Smem<Cfg> smem) {
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
@@ -334,7 +335,7 @@ BATCHLAS_DEVICE_INLINE void trmm(const Ex& ex, const MA& A, const MB& B, const M
 // A zero diagonal element of a NonUnit A gives Inf / NaN, as BLAS does.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, int NB = 32, class Ex, class MA, class MB, class AS>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void trsm(const Ex& ex, const MA& A, const MB& B, AS alpha, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void trsm(const Ex& ex, AS alpha, const MA& A, const MB& B, l3::Smem<Cfg> smem) {
     static_assert(NB >= 1, "trsm: NB >= 1");
     l3::check_group_cfg<Cfg, Ex>();
     using T = typename Cfg::value_type;

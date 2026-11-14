@@ -523,7 +523,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
             if (mask != nullptr && mask[b] == 0) return;  // I3
             // A(c, r) := conj(A(r, c)) for r > c: the item owns the mirrored element (c, r). Herm
             // also zeroes Im(A(r, r)), which the Hermitian syev never reads.
-            device::mirror<Uplo::Lower, true>(device::ElemAt<true>{c, r}, device::item(A, b, n, n));
+            device::mirror<Uplo::Lower, Transpose::ConjTrans>(device::ElemAt<true>{c, r}, device::item(A, b, n, n));
         });
     });
 }

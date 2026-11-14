@@ -46,6 +46,8 @@ template <Uplo UL> struct posv {
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::posv<UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<T>; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<T, NB>::make().size; }
 };

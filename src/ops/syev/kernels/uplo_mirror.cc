@@ -43,7 +43,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // Only strictly-upper source entries do work; each writes its mirror (c, r).
                 if (c <= r) return;
-                device::mirror<Uplo::Upper, true>(device::ElemAt{c, r}, device::mat(ptr + b * stride, n, n, ld));
+                device::mirror<Uplo::Upper, Transpose::ConjTrans>(device::ElemAt{c, r}, device::mat(ptr + b * stride, n, n, ld));
             });
     });
     return ctx.get_event();

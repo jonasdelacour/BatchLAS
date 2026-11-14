@@ -58,7 +58,7 @@ BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, 
         const auto A11 = A.sub(j, j, jb, jb);
         laset(ex, Zero{}, One{}, W);
         ex.barrier(Mem::Global);
-        trsm<Side::Left, UL, Transpose::NoTrans, DG, Cfg, NB>(ex, A11, W, One{}, sm);
+        trsm<Side::Left, UL, Transpose::NoTrans, DG, Cfg, NB>(ex, One{}, A11, W, sm);
         lacpy<kTri>(ex, W, A11);
         ex.barrier(Mem::Global);
     };
@@ -69,8 +69,8 @@ BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, 
             if (rest > 0) {
                 const auto A21 = A.sub(j + jb, j, rest, jb);
                 const auto W = mat(w, rest, jb, rest);
-                trsm<Side::Right, Uplo::Lower, Transpose::NoTrans, DG, Cfg, NB>(ex, A.sub(j, j, jb, jb), A21, NegOne{}, sm);
-                trmm<Side::Left, Uplo::Lower, Transpose::NoTrans, DG, Cfg>(ex, A.sub(j + jb, j + jb, rest, rest), A21, W, One{}, sm);
+                trsm<Side::Right, Uplo::Lower, Transpose::NoTrans, DG, Cfg, NB>(ex, NegOne{}, A.sub(j, j, jb, jb), A21, sm);
+                trmm_out<Side::Left, Uplo::Lower, Transpose::NoTrans, DG, Cfg>(ex, One{}, A.sub(j + jb, j + jb, rest, rest), A21, W, sm);
                 lacpy(ex, W, A21);
                 ex.barrier(Mem::Global);
             }
@@ -82,8 +82,8 @@ BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, 
             if (j > 0) {
                 const auto A12 = A.sub(0, j, j, jb);
                 const auto W = mat(w, j, jb, j);
-                trsm<Side::Right, Uplo::Upper, Transpose::NoTrans, DG, Cfg, NB>(ex, A.sub(j, j, jb, jb), A12, NegOne{}, sm);
-                trmm<Side::Left, Uplo::Upper, Transpose::NoTrans, DG, Cfg>(ex, A.sub(0, 0, j, j), A12, W, One{}, sm);
+                trsm<Side::Right, Uplo::Upper, Transpose::NoTrans, DG, Cfg, NB>(ex, NegOne{}, A.sub(j, j, jb, jb), A12, sm);
+                trmm_out<Side::Left, Uplo::Upper, Transpose::NoTrans, DG, Cfg>(ex, One{}, A.sub(0, 0, j, j), A12, W, sm);
                 lacpy(ex, W, A12);
                 ex.barrier(Mem::Global);
             }
@@ -109,28 +109,28 @@ BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, 
             if (i > 0) {
                 const auto Ai0 = A.sub(i, 0, ib, i);
                 const auto W = mat(w, ib, i, ib);
-                trmm<Side::Left, Uplo::Lower, kCT, Diag::NonUnit, Cfg>(ex, A11, Ai0, W, One{}, sm);
-                if (rest > 0) gemm<kCT, kN, Cfg>(ex, A.sub(i + ib, i, rest, ib), A.sub(i + ib, 0, rest, i), W, One{}, One{}, sm);
+                trmm_out<Side::Left, Uplo::Lower, kCT, Diag::NonUnit, Cfg>(ex, One{}, A11, Ai0, W, sm);
+                if (rest > 0) gemm<kCT, kN, Cfg>(ex, One{}, A.sub(i + ib, i, rest, ib), A.sub(i + ib, 0, rest, i), One{}, W, sm);
                 lacpy(ex, W, Ai0);
                 ex.barrier(Mem::Global);
             }
             lacpy<Part::Lower, kN, alg::Walk, alg::EdgeZeroPad>(ex, A11, W2);
             ex.barrier(Mem::Global);
-            herk<Uplo::Lower, kCT, Cfg>(ex, W2, A11, One{}, Zero{}, sm);
-            if (rest > 0) herk<Uplo::Lower, kCT, Cfg>(ex, A.sub(i + ib, i, rest, ib), A11, One{}, One{}, sm);
+            herk<Uplo::Lower, kCT, Cfg>(ex, One{}, W2, Zero{}, A11, sm);
+            if (rest > 0) herk<Uplo::Lower, kCT, Cfg>(ex, One{}, A.sub(i + ib, i, rest, ib), One{}, A11, sm);
         } else {
             if (i > 0) {
                 const auto A0i = A.sub(0, i, i, ib);
                 const auto W = mat(w, i, ib, i);
-                trmm<Side::Right, Uplo::Upper, kCT, Diag::NonUnit, Cfg>(ex, A11, A0i, W, One{}, sm);
-                if (rest > 0) gemm<kN, kCT, Cfg>(ex, A.sub(0, i + ib, i, rest), A.sub(i, i + ib, ib, rest), W, One{}, One{}, sm);
+                trmm_out<Side::Right, Uplo::Upper, kCT, Diag::NonUnit, Cfg>(ex, One{}, A11, A0i, W, sm);
+                if (rest > 0) gemm<kN, kCT, Cfg>(ex, One{}, A.sub(0, i + ib, i, rest), A.sub(i, i + ib, ib, rest), One{}, W, sm);
                 lacpy(ex, W, A0i);
                 ex.barrier(Mem::Global);
             }
             lacpy<Part::Upper, kN, alg::Walk, alg::EdgeZeroPad>(ex, A11, W2);
             ex.barrier(Mem::Global);
-            herk<Uplo::Upper, kN, Cfg>(ex, W2, A11, One{}, Zero{}, sm);
-            if (rest > 0) herk<Uplo::Upper, kN, Cfg>(ex, A.sub(i, i + ib, ib, rest), A11, One{}, One{}, sm);
+            herk<Uplo::Upper, kN, Cfg>(ex, One{}, W2, Zero{}, A11, sm);
+            if (rest > 0) herk<Uplo::Upper, kN, Cfg>(ex, One{}, A.sub(i, i + ib, ib, rest), One{}, A11, sm);
         }
     }
 }
@@ -144,7 +144,8 @@ template <class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri_blocked_prologue(
     if (n == 0) return 0;
     if (!detail::blocked_ws_ok(ws, true)) return -3;
     if (!zero_check) return 0;
-    const int z = find_first(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { return Arith<T>::is_zero(a(i, i)); });
+    const int z = find_first(ex, fn_vec(n, [&](int i) BATCHLAS_DEVICE_BODY { return a(i, i); }),
+                             [](const T& d) BATCHLAS_DEVICE_BODY { return Arith<T>::is_zero(d); });
     return z + 1;
 }
 
@@ -191,18 +192,24 @@ template <Uplo UL> struct lauum {
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potri<UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };
 template <Uplo UL, Diag DG, int NB, class Alg, class T> struct tier_info<routine::trtri<UL, DG>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::lauum<UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
 };

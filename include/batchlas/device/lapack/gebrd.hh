@@ -15,6 +15,7 @@
 
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/lapack_aux.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/interop.hh>
 #include <batchlas/device/level2.hh>
 #include <batchlas/device/level3/group.hh>
@@ -216,6 +217,8 @@ template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
     static_assert(detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr int matrices_per_sub_group = 32 / P;
+    using executor = SgpPartition<P>;
+    static constexpr int per_group = wg_size / P;
     static constexpr bool admits(int n) { return !Arith<T>::is_complex && n >= 1 && n <= P; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::gebrd_cta_plan<P, T>().size; }
 };
@@ -224,6 +227,8 @@ template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
 template <int NB, class A, class T> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, T> {
     static_assert(NB >= 1 && NB <= 64, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64 (the host panel's bound)");
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::labrd_plan<NB, T>(n, n).size; }
 };
@@ -400,10 +405,10 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const R
         const int j2 = j0 + ib;
         if (j2 < n) {
             const auto a22 = A.sub(j2, j2, m - j2, n - j2);
-            device::gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, A.sub(j2, j0, m - j2, ib), Yb.sub(j2, 0, n - j2, ib), a22,
-                                                                        NegOne{}, One{}, smem);
-            device::gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, Xb.sub(j2, 0, m - j2, ib), A.sub(j0, j2, ib, n - j2), a22,
-                                                                      NegOne{}, One{}, smem);
+            device::gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, A.sub(j2, j0, m - j2, ib), Yb.sub(j2, 0, n - j2, ib),
+                                                                        One{}, a22, smem);
+            device::gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, Xb.sub(j2, 0, m - j2, ib), A.sub(j0, j2, ib, n - j2),
+                                                                      One{}, a22, smem);
         }
     }
     for_each_owned(ex, n, [&](int i) {

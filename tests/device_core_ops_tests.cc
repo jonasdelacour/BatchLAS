@@ -594,7 +594,7 @@ TYPED_TEST(DeviceCoreOpsTest, LatrdStepComposesOnOneLayout) {
         device::hemv<Uplo::Lower>(ex, device::One{}, Am, ex.publish(vl), device::Zero{}, wl);
         for (int p = 0; p < K; ++p) {
             const auto up = device::unit_head(Um.col(p), p);
-            const auto gd = device::dot_many<true>(ex, scr, vl, Wm.col(p), up);  // one exchange: W_p^H v, U_p^H v
+            const auto gd = device::dot_many<Transpose::ConjTrans>(ex, scr, vl, Wm.col(p), up);  // one exchange: W_p^H v, U_p^H v
             const T gam = gd[0], del = gd[1];
             device::map(ex, wl, [=](T wr, T ur, T wpr) { return A::sub(wr, A::add(A::mul(ur, gam), A::mul(wpr, del))); }, wl, up, Wm.col(p));
         }
@@ -701,7 +701,7 @@ template <int WG, class T> void strict_port_case(Dev& dev) {
                 dp += hand_conj(vcp) * vc;
             }
             const T g0 = hand_group_sum(it.get_group(), gp), d0 = hand_group_sum(it.get_group(), dp);
-            const auto gd = device::dot_many<true, Scope::Group, Native>(ex, v, W.col(p).tail(k0), device::unit_head(A.col(p), p + 1).tail(k0));
+            const auto gd = device::dot_many<Transpose::ConjTrans, Scope::Group, Native>(ex, v, W.col(p).tail(k0), device::unit_head(A.col(p), p + 1).tail(k0));
             if (ex.leader()) ob[6 * n + 4 * p] = g0, ob[6 * n + 4 * p + 1] = gd[0], ob[6 * n + 4 * p + 2] = d0, ob[6 * n + 4 * p + 3] = gd[1];
         }
         // scal / dotc / axpy (Native) vs the hand std:: expressions, on w = hand hemv result.
@@ -1672,7 +1672,7 @@ TYPED_TEST(DeviceCoreOpsTest, LacpyLasetMirrorLaswpMatchAHostReplay) {
         device::lacpy(ex, av, b4);
         ex.barrier(device::Mem::Global);
         device::laset<device::Part::Upper>(ex, alpha, beta, b2);
-        device::mirror<Uplo::Lower, true>(ex, b3);
+        device::mirror<Uplo::Lower, Transpose::ConjTrans>(ex, b3);
         const auto pv = device::vec(piv, 7);
         device::laswp(ex, b4, pv, 0, 7);
         device::laswp<device::Direct::Backward>(ex, b4.sub(0, 0, m, 5), pv, 2, 6);

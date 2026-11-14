@@ -50,6 +50,8 @@ template <int NB, class Alg, class T> struct tier_info<routine::inv, tier::Block
     using cfg = detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
     static_assert(std::is_same_v<typename cfg::value_type, T>, "inv: tier::Blocked's l3 configuration is for another scalar type");
     static constexpr int wg_size = cfg::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::inv_plan<T, cfg>(n).size; }
 };

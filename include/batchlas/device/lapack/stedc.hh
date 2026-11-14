@@ -30,12 +30,12 @@
 
 namespace batchlas::device {
 
-namespace detail {
-
-// max_sec_iter: the secular iteration cap per root (StedcParams::max_sec_iter, >= 1).
-template <class R> struct stedc_params {
+// stedc's options. max_sec_iter: the secular iteration cap per root (StedcParams::max_sec_iter, >= 1).
+template <class R> struct StedcOptions {
     std::int32_t max_sec_iter = 50;
 };
+
+namespace detail {
 
 // The executor the tier is written for (the gemm's 16 x 16 items) and one root per sub-group.
 inline constexpr int wg_size = 256, sg_size = 32, part_size = 32;
@@ -167,8 +167,8 @@ BATCHLAS_DEVICE_HELPER int merge(const Ex& ex, const PEx& pex, int part_id, int 
     for_each_owned(ex, s, [&](int k) { P.d_b[k] = k < dd ? P.lam[k] : P.d_a[k]; });
     sync(ex, Mem::Global);
     if (dd > 0) {
-        gemm<Transpose::NoTrans, Transpose::NoTrans, gemm_cfg<R>>(ex, l3::Global<R>{P.tmp, n, s, dd}, l3::Global<R>{P.qp, n, dd, dd},
-                                                                  l3::Global<R>{q0, ld, s, dd}, One{}, Zero{}, P.smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, gemm_cfg<R>>(ex, One{}, l3::Global<R>{P.tmp, n, s, dd},
+                                                                  l3::Global<R>{P.qp, n, dd, dd}, Zero{}, l3::Global<R>{q0, ld, s, dd}, P.smem);
     }
     for_each_owned(ex, (s - dd) * s, [&](int t) {
         const int i = t % s, k = dd + t / s;
@@ -246,6 +246,8 @@ template <JobType J, class T> struct tiers<routine::stedc<J>, T> {
 template <JobType J, class T> struct tier_info<routine::stedc<J>, tier::Blocked<1>, T> {
     static_assert(std::is_floating_point_v<T>, "stedc: a real T");
     static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::dc_layout<T>(n, J == JobType::NoEigenVectors).size; }
 };
@@ -254,15 +256,15 @@ template <JobType J, class Tier, class T> constexpr WorkspaceSize stedc_buffer_s
     return tier_info<routine::stedc<J>, resolve_tier_t<routine::stedc<J>, T, Tier>, T>::buffer_size(n);
 }
 
-/// Eigenvalues w (ascending) and eigenvectors Z of one symmetric tridiagonal (d, e), host order
-/// (d, e, w, ws, params, Z) with jobz the template J = EigenVectors. COLLECTIVE over ex, a
+/// Eigenvalues w (ascending) and eigenvectors Z of one symmetric tridiagonal (d, e), argument order
+/// (d, e, w, Z, ws, opts) with jobz the template J = EigenVectors. COLLECTIVE over ex, a
 /// WorkGroup<256, 32> launched at sub-group size 32; d and e must be visible to every item on
 /// entry and are not written; w and Z (n x n or larger: its leading n x n block) are visible on
 /// return. Returns xSTEDC's info, uniform: 0, or 1 when a secular root ran out of
-/// params.max_sec_iter. Workspace: stedc_buffer_size<J, Tier, T>(n), ws.global this matrix's slice.
+/// opts.max_sec_iter. Workspace: stedc_buffer_size<J, Tier, T>(n), ws.global this matrix's slice.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const detail::stedc_params<R>& p,
-                              const Z& z) {
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Z& z, const Workspace& ws,
+                              const StedcOptions<R>& opts) {
     static_assert(J == JobType::EigenVectors, "stedc: J = NoEigenVectors takes no Z (its Z lives in the workspace)");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
     detail::assert_types<Ex, D, R>();
@@ -270,19 +272,19 @@ BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& 
     if (n <= 0) return 0;
     const auto g = l3::global_of(z);
     const auto L = detail::dc_layout<R>(n, false);
-    return detail::bottom_up(ex, d, e, w, l3::Global<R>{g.p, g.ld, n, n}, detail::ptrs(ws, L), p.max_sec_iter);
+    return detail::bottom_up(ex, d, e, w, l3::Global<R>{g.p, g.ld, n, n}, detail::ptrs(ws, L), opts.max_sec_iter);
 }
 
 /// Eigenvalues only (J = NoEigenVectors): the merges still form the vectors, in the workspace.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class R>
-BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const detail::stedc_params<R>& p) {
+BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const StedcOptions<R>& opts) {
     static_assert(J == JobType::NoEigenVectors, "stedc: J = EigenVectors takes Z");
     static_assert(std::is_same_v<resolve_tier_t<routine::stedc<J>, R, Tier>, tier::Blocked<1>>, "stedc: tier::Blocked<1>");
     detail::assert_types<Ex, D, R>();
     const int n = d.size();
     if (n <= 0) return 0;
     const auto L = detail::dc_layout<R>(n, true);
-    return detail::bottom_up(ex, d, e, w, l3::Global<R>{carve_global(ws, L.z), n, n, n}, detail::ptrs(ws, L), p.max_sec_iter);
+    return detail::bottom_up(ex, d, e, w, l3::Global<R>{carve_global(ws, L.z), n, n, n}, detail::ptrs(ws, L), opts.max_sec_iter);
 }
 
 }  // namespace batchlas::device

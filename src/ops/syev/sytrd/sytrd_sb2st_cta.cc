@@ -22,6 +22,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
 #include <batchlas/device/detail/sscp_target.hh>
+#include <batchlas/device/launch.hh>
 
 #include <array>
 #include <cstdint>
@@ -119,8 +120,9 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const int32_t parts_per_sg = static_cast<int32_t>(partition.get_group_linear_range());
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
                 const device::SgpPartition<P> pex{sg};  // lane = pex.lid(); the same SubGroupPartition<P>
-                const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= batch) return;
+                const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, batch);
+                const int32_t prob_id = ms.b;
+                if (!ms.live) return;
                 // I2: an inactive item chases its scratch copy like any other and stores nothing.
                 const bool live = mask == nullptr || mask[prob_id] != 0;
 

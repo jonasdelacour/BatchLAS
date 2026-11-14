@@ -112,11 +112,11 @@ struct PivIn {
 template <Transpose TR, int NB, class Cfg, class Ex, class GA, class GB>
 BATCHLAS_DEVICE_INLINE void lu_trsm_pair(const Ex& ex, const GA& a, const GB& b, l3::Smem<Cfg> sm) {
     if constexpr (TR == Transpose::NoTrans) {
-        trsm<Side::Left, Uplo::Lower, TR, Diag::Unit, Cfg, NB>(ex, a, b, One{}, sm);
-        trsm<Side::Left, Uplo::Upper, TR, Diag::NonUnit, Cfg, NB>(ex, a, b, One{}, sm);
+        trsm<Side::Left, Uplo::Lower, TR, Diag::Unit, Cfg, NB>(ex, One{}, a, b, sm);
+        trsm<Side::Left, Uplo::Upper, TR, Diag::NonUnit, Cfg, NB>(ex, One{}, a, b, sm);
     } else {
-        trsm<Side::Left, Uplo::Upper, TR, Diag::NonUnit, Cfg, NB>(ex, a, b, One{}, sm);
-        trsm<Side::Left, Uplo::Lower, TR, Diag::Unit, Cfg, NB>(ex, a, b, One{}, sm);
+        trsm<Side::Left, Uplo::Upper, TR, Diag::NonUnit, Cfg, NB>(ex, One{}, a, b, sm);
+        trsm<Side::Left, Uplo::Lower, TR, Diag::Unit, Cfg, NB>(ex, One{}, a, b, sm);
     }
 }
 

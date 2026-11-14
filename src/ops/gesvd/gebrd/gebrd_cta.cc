@@ -5,6 +5,7 @@
 #include <batchlas/device/lapack/gebrd.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
+#include <batchlas/device/launch.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -106,12 +107,12 @@ inline void gebrd_cta_impl(Queue& ctx,
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
-                const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, static_cast<int32_t>(batch_size));
+                const int32_t prob_id = ms.b;
                 // NO EARLY RETURN (I2): every barrier in gebd2_tile is work-group wide, so a dead
                 // partition (batch % probs_per_wg != 0, or an inactive item) runs a zero tile
                 // (tau = 0 throughout) and stores nothing.
-                const bool live = prob_id < static_cast<int32_t>(batch_size) &&
-                                  (mask == nullptr || mask[prob_id] != 0);
+                const bool live = ms.live && (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
                 // The operands of the hand kernel this replaced (batch_item views, the host n), in

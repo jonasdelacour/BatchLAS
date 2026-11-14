@@ -477,14 +477,15 @@ BATCHLAS_DEVICE_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
 
 // ---- level 2 (design A.2) -----------------------------------------------------------------------
 
-// A := alpha x y^H + conj(alpha) y x^H + A on part P of A (real T: alpha (x y^T + y x^T)). Each
-// element adds tag_mul(alpha, x(r) conj(y(c))) and then tag_mul(conj(alpha), y(r) conj(x(c))), in
-// that order; on a triangle (P != Full) the diagonal's imaginary part is set to zero (LAPACK
-// zher2). x and y are read across owners (Published).
+// A := alpha x y^H + conj(alpha) y x^H + A on the UL triangle of A (real T: alpha (x y^T + y x^T));
+// the other triangle is neither read nor written. Each element adds tag_mul(alpha, x(r) conj(y(c)))
+// and then tag_mul(conj(alpha), y(r) conj(x(c))), in that order; the diagonal's imaginary part is
+// set to zero (LAPACK zher2). x and y are read across owners (Published).
 //   alg::RowOwner    rows Cyclic over the items, each item serial over its row's columns
 //   alg::TeamPerRow  team t owns rows t mod nteams, its lanes stride the columns
-template <Part P, class Alg = alg::RowOwner, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
+template <Uplo UL, class Alg = alg::RowOwner, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
 BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp, const MA& a) {
+    constexpr Part P = UL == Uplo::Lower ? Part::Lower : Part::Upper;
     using T = typename MA::value_type;
     using Ar = arith_t<Ops, T>;
     detail::require_published<Ex, X>();
@@ -499,10 +500,9 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
     using S = std::remove_cv_t<decltype(alpha)>;
     constexpr bool native_tag = std::is_same_v<Ops, arith::Native> && (std::is_same_v<S, One> || std::is_same_v<S, NegOne>);
     const int m = a.rows(), n = a.cols();
-    // Columns of row r that part P can touch: the triangle bound keeps a Lower trip count at r + 1.
+    // Columns of row r that the triangle can touch: the bound keeps a Lower trip count at r + 1.
     auto col_end = [&](int r) BATCHLAS_DEVICE_BODY {
         if constexpr (P == Part::Lower) return sycl::min(n, r + 1);
-        else if constexpr (P == Part::StrictLower) return sycl::min(n, r);
         else return n;
     };
     auto upd = [&](int r, int c) BATCHLAS_DEVICE_BODY {
@@ -521,7 +521,7 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
             const T t2 = Ar::mul(static_cast<T>(y(r)), Ar::conj(static_cast<T>(x(c))));
             v = Ar::add(Ar::add(static_cast<T>(a(r, c)), tag_mul(alpha, t1)), tag_mul(alpha_c, t2));
         }
-        if constexpr (Ar::is_complex && P != Part::Full)
+        if constexpr (Ar::is_complex)
             if (r == c) v = Ar::make(Ar::re(v), real_t<T>(0));
         a(r, c) = v;
     };

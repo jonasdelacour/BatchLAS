@@ -567,16 +567,22 @@ template <Uplo UL, class T> struct tiers<routine::sytrf<UL>, T> {
 template <Uplo UL, int N, class T> struct tier_info<routine::sytrf<UL>, tier::Cta<N>, T> {
     static_assert(N <= 32, "sytrf tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_cta_plan<N, T>().size; }
 };
 template <Uplo UL, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<1>, T> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_wg_plan<real_t<T>>().size; }
 };
 template <Uplo UL, int NB, class T> struct tier_info<routine::sytrf<UL>, tier::Blocked<NB>, T> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrf_blocked_plan<NB, T>(n).size; }
 };

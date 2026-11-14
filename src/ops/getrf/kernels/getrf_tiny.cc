@@ -22,6 +22,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device/launch.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -167,12 +168,13 @@ struct GetrfTinyBody {
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = px.lid();
         const int pidx = tiny_native::tiny_partition_id(sg, px.part);
-        const int prob_id = wg_id * kMpw + pidx;
+        const device::MatrixSlot ms = device::matrix_slot(wg_id, kMpw, pidx, batch);
+        const int prob_id = ms.b;
 
         // CLAMP, DO NOT RETURN (as steqr_cta.cc does too): tiny_device.hh's
         // third invariant -- an early-exited lane still sits in the shuffle mask. A masked-off
         // item is dead the same way (I2): it factors an identity pad and stores nothing.
-        const bool live = (prob_id < batch) && (mask == nullptr || mask[prob_id] != 0);
+        const bool live = ms.live && (mask == nullptr || mask[prob_id] != 0);
         const int b = live ? prob_id : 0;
         const TinyMat<D> A{ap + static_cast<std::ptrdiff_t>(b) * strp, ldp};
         const TinyPiv piv{piv_ptr, b, n};

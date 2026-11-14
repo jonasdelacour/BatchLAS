@@ -12,6 +12,7 @@
 #include <batchlas/device/level1.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -167,10 +168,11 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
                 const int32_t lane = ex.lid();
-                const int32_t prob_id = wg_id * probs_per_wg + part_id;
+                const device::MatrixSlot ms = device::matrix_slot(wg_id, probs_per_wg, part_id, nb);
+                const int32_t prob_id = ms.b;
                 // NO EARLY RETURN: a dead partition, or an inactive item of the batch mask, sweeps a
                 // zero tile and stores nothing. The mask is read after the pair-table barrier.
-                const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
+                const bool live = ms.live && (mask == nullptr || mask[prob_id] != 0);
                 const bool pair_lane = (lane < pairs_per_round);
                 const bool row_lane = (lane < nn);
 

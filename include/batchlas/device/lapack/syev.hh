@@ -17,6 +17,7 @@
 
 #include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/lapack/ormqr.hh>
 #include <batchlas/device/lapack/steqr.hh>
 #include <batchlas/device/lapack/sytrd.hh>
@@ -348,7 +349,7 @@ template <bool V, int NB, class T> struct syev_blocked_plan {
         constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
         const WorkspaceSize s1 = sytrd_buffer_size<Uplo::Lower, tier::Blocked<NB>, T>(n);
         const WorkspaceSize s2 = steqr_buffer_size<J, tier::Blocked<1>, R>(n);
-        const WorkspaceSize s3 = V && n > 1 ? ormqr_buffer_size<Side::Left, Transpose::NoTrans, ormqr_tier<T>, T>(n - 1, n) : WorkspaceSize{};
+        const WorkspaceSize s3 = V && n > 1 ? buffer_size<routine::ormqr<Side::Left, Transpose::NoTrans>, ormqr_tier<T>, T>(n - 1, n) : WorkspaceSize{};
         sub_g = plan.take<std::byte>(WsSpace::Global, mx(s1.global_bytes, mx(s2.global_bytes, s3.global_bytes)));
         sub_l = plan.take<std::byte>(WsSpace::Local, mx(s1.local_bytes, mx(s2.local_bytes, s3.local_bytes)));
     }
@@ -412,7 +413,7 @@ BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::G
             ex.barrier(Mem::Global);
         }
         if (n > 1)
-            (void)ormqr<Side::Left, Transpose::NoTrans, ormqr_tier<T>>(ex, mat(a.p + 1, nm1, nm1, lda), mat(zp + 1, nm1, n, n), tp, sub);
+            (void)ormqr<Side::Left, Transpose::NoTrans, ormqr_tier<T>>(ex, mat(a.p + 1, nm1, nm1, lda), vec(tp, nm1), mat(zp + 1, nm1, n, n), sub);
         ex.barrier(Mem::Global);
     }
     for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
@@ -518,12 +519,16 @@ template <JobType J, Uplo UL, int N, class Alg, class T> struct tier_info<routin
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "syev: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
+    using executor = SgpPartition<N>;
+    static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::syev_cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size(); }
 };
 template <JobType J, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::syev<J, UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::blocked_cfg<T>::threads;  // 256: sytrd's, steqr's and ormqr's
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) {
         return detail::syev_blocked_plan<J == JobType::EigenVectors, NB, T>(n).plan.size();
@@ -565,7 +570,7 @@ BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Wo
         constexpr int N = Tr::n_max;
         constexpr std::size_t P = N;
         static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
-                      "syev: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+                      "syev: tier::Cta<N> runs on device::SgpPartition<N> (device::make_partition<N>(sg))");
         const int n = A.rows();
         if (n < 1 || n > N || A.cols() != n) return -2;
         using Lay = detail::cta_layout<kVecs, N, T>;
@@ -575,7 +580,7 @@ BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Wo
         const auto w = carve_local(ws, plan.w).get();
         const auto q = carve_local(ws, plan.q).get();
         // The solve runs maskless over the whole sub-group: every lane reaches it (the contract).
-        const auto solve = make_partition<P, false>(ex.part.sg);
+        const auto solve = batchlas::make_partition<P, false>(ex.part.sg);
         const detail::cta_opts o{opts.max_sweeps, opts.shift, true, true};
         bool failed = false;
         detail::syev_cta_run<T, P, kVecs, Lay::lda, Lay::ldq>(ex.part, solve, a, 0, v, 0, w, 0, q, 0, A, A, W, n, UL == Uplo::Upper,

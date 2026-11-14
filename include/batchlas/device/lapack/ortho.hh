@@ -21,6 +21,7 @@
 #include <batchlas/device/level2.hh>
 #include <batchlas/device/level3/group.hh>
 #include <batchlas/device/scalar.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/workspace.hh>
 
@@ -60,7 +61,7 @@ template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr OrthoLa
     OrthoLayout<T> l{};
     if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
     if constexpr (is_chol_v<Algo>) {
-        l.chol = p.take<std::byte>(WsSpace::Local, potrf_buffer_size<Uplo::Lower, tier::Cta<Tier::n_max>, T>(k).local_bytes);
+        l.chol = p.take<std::byte>(WsSpace::Local, buffer_size<routine::potrf<Uplo::Lower>, tier::Cta<Tier::n_max>, T>(k).local_bytes);
         l.gram = p.take<T>(WsSpace::Global, uk * uk);
     } else if constexpr (tier::is_cta_v<Tier>) {
         l.h = p.take<T>(WsSpace::Local, uk);
@@ -115,8 +116,8 @@ BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Sm
                 const l3::Global<T> q{g.p, g.ld, m, c0};
                 const l3::Global<T> aj{g.p + static_cast<std::ptrdiff_t>(c0) * g.ld, g.ld, m, nb};
                 const l3::Global<T> hj{hb, k, c0, nb};
-                gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, q, aj, hj, One{}, Zero{}, sm);
-                gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, q, hj, aj, NegOne{}, One{}, sm);
+                gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, q, aj, Zero{}, hj, sm);
+                gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, q, hj, One{}, aj, sm);
             }
             cgs2(ex, blk, vec(h, nb));
         }
@@ -130,7 +131,7 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const W
     using R = real_t<T>;
     const int m = a.rows(), k = a.cols();
     const auto gram = mat(gp, k, k, k);
-    herk<Uplo::Lower, Transpose::ConjTrans, Cfg>(ex, a, gram, One{}, Zero{}, sm);
+    herk<Uplo::Lower, Transpose::ConjTrans, Cfg>(ex, One{}, a, Zero{}, gram, sm);
     if constexpr (Shift) {
         // trace(A^H A) = ||A||_F^2 bounds ||A||_2^2, so the shift scales with the Gram matrix.
         const R fro2 = reduce(ex, k, [&](int i) { return Arith<T>::re(gram(i, i)); });
@@ -140,7 +141,7 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const W
     }
     const int info = potrf<Uplo::Lower, tier::Cta<N>>(ex, gram, pws);
     if (info != 0) return info;
-    trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg>(ex, gram, a, One{}, sm);
+    trsm<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg>(ex, One{}, gram, a, sm);
     return 0;
 }
 }  // namespace detail

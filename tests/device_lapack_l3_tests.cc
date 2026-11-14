@@ -131,8 +131,8 @@ template <class T, Transpose TA, Transpose TB> void check_gemm(Dev& d) {
     const batchlas::KernelMatrixView<T, batchlas::MatrixFormat::Dense> av(a.p, a.rows, a.cols, a.ld, int(a.stride), kItems);
     launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) {
         const batchlas::device::Mat<T> cm{c.p + std::size_t(q) * c.stride, batchlas::device::Dyn{c.rows}, batchlas::device::Dyn{c.cols}, batchlas::device::Dyn{c.ld}};
-        batchlas::device::gemm<TA, TB, Cfg<T>>(ex, batchlas::device::item(av, q, a.rows, a.cols), b.g(q), cm, alpha, beta, sm);
-        batchlas::device::gemm<TA, TB, Cfg<T>>(ex, batchlas::device::item(av, q, a.rows, a.cols), b.g(q), c0.g(q), alpha, batchlas::device::Zero{}, sm);
+        batchlas::device::gemm<TA, TB, Cfg<T>>(ex, alpha, batchlas::device::item(av, q, a.rows, a.cols), b.g(q), beta, cm, sm);
+        batchlas::device::gemm<TA, TB, Cfg<T>>(ex, alpha, batchlas::device::item(av, q, a.rows, a.cols), b.g(q), batchlas::device::Zero{}, c0.g(q), sm);
     });
     const auto got = d.down(c.p, C.h.size()), got0 = d.down(c0.p, C0.h.size());
     Worst w, w0;
@@ -184,8 +184,8 @@ TYPED_TEST(DeviceApiL3Test, GemmAndTrsmSaturatingBatchBitIdentical) {
     const T alpha = val<T>(5), beta = val<T>(6);
     const auto a = to_dev(d, A), b = to_dev(d, B), c = to_dev(d, C), l = to_dev(d, L);
     launch<T>(d, items, [=](const auto& ex, int q, auto sm) {
-        batchlas::device::gemm<kNT, kNT, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta, sm);
-        batchlas::device::trsm<Side::Left, Uplo::Lower, kNT, Diag::NonUnit, Cfg<T>>(ex, l.g(q), c.g(q), alpha, sm);
+        batchlas::device::gemm<kNT, kNT, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta, c.g(q), sm);
+        batchlas::device::trsm<Side::Left, Uplo::Lower, kNT, Diag::NonUnit, Cfg<T>>(ex, alpha, l.g(q), c.g(q), sm);
     });
     const auto got = d.down(c.p, C.h.size());
     int differ = 0;
@@ -206,7 +206,7 @@ TEST_F(DeviceApiL3Host, GemmFloatIsTheHostRegRouteBitForBit) {
     const HostMat<T> A(kM, kK, items, 41), B(kK, kN, items, 42), C(kM, kN, items, 43);
     const T alpha = val<T>(9), beta = val<T>(10);
     const auto a = to_dev(d, A), b = to_dev(d, B), c = to_dev(d, C), ch = to_dev(d, C);
-    launch<T>(d, items, [=](const auto& ex, int q, auto sm) { batchlas::device::gemm<kNT, kNT, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta, sm); });
+    launch<T>(d, items, [=](const auto& ex, int q, auto sm) { batchlas::device::gemm<kNT, kNT, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta, c.g(q), sm); });
     const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> av(a.p, a.rows, a.cols, a.ld, int(a.stride), items),
         bv(b.p, b.rows, b.cols, b.ld, int(b.stride), items), cv(ch.p, ch.rows, ch.cols, ch.ld, int(ch.stride), items);
     const std::string spelling = "reg:m=32:n=32:k=8:u=1";
@@ -242,8 +242,8 @@ template <class T, Side SD, Uplo UL, bool Herm> void check_symm(Dev& d) {
     const T alpha = val<T>(3), beta = val<T>(4);
     const auto a = to_dev(d, A), b = to_dev(d, B), c = to_dev(d, C);
     launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) {
-        if constexpr (Herm) batchlas::device::hemm<SD, UL, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta, sm);
-        else batchlas::device::symm<SD, UL, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta, sm);
+        if constexpr (Herm) batchlas::device::hemm<SD, UL, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta, c.g(q), sm);
+        else batchlas::device::symm<SD, UL, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta, c.g(q), sm);
     });
     const auto got = d.down(c.p, C.h.size());
     Worst w;
@@ -291,10 +291,10 @@ template <class T, int Op, Uplo UL, Transpose TR> void check_rank(Dev& d) {
     const T beta = herm ? T(beta_r) : val<T>(2);
     const auto a = to_dev(d, A), b = to_dev(d, B), c = to_dev(d, C);
     launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) {
-        if constexpr (Op == 0) batchlas::device::syrk<UL, TR, Cfg<T>>(ex, a.g(q), c.g(q), alpha, beta, sm);
-        else if constexpr (Op == 1) batchlas::device::herk<UL, TR, Cfg<T>>(ex, a.g(q), c.g(q), alpha_r, beta_r, sm);
-        else if constexpr (Op == 2) batchlas::device::syr2k<UL, TR, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta, sm);
-        else batchlas::device::her2k<UL, TR, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, beta_r, sm);
+        if constexpr (Op == 0) batchlas::device::syrk<UL, TR, Cfg<T>>(ex, alpha, a.g(q), beta, c.g(q), sm);
+        else if constexpr (Op == 1) batchlas::device::herk<UL, TR, Cfg<T>>(ex, alpha_r, a.g(q), beta_r, c.g(q), sm);
+        else if constexpr (Op == 2) batchlas::device::syr2k<UL, TR, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta, c.g(q), sm);
+        else batchlas::device::her2k<UL, TR, Cfg<T>>(ex, alpha, a.g(q), b.g(q), beta_r, c.g(q), sm);
     });
     const auto got = d.down(c.p, C.h.size());
     auto opa = [&](const HostMat<T>& X, int q, int i, int k) { return opw(X, q, i, k, TR); };
@@ -386,7 +386,7 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG> void check_trmm(Dev&
             for (int i = 0; i < kM; ++i) C.at(q, i, j) = batchlas::device::qnan<T>();  // output only: never read
     const T alpha = val<T>(5);
     const auto a = to_dev(d, A), b = to_dev(d, B), c = to_dev(d, C);
-    launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) { batchlas::device::trmm<SD, UL, TR, DG, Cfg<T>>(ex, a.g(q), b.g(q), c.g(q), alpha, sm); });
+    launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) { batchlas::device::trmm_out<SD, UL, TR, DG, Cfg<T>>(ex, alpha, a.g(q), b.g(q), c.g(q), sm); });
     const auto got = d.down(c.p, C.h.size()), b_after = d.down(b.p, B.h.size());
     Worst w;
     for (int q = 0; q < kItems; ++q)
@@ -430,8 +430,8 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG, bool AlphaOne> void 
     const T alpha = AlphaOne ? T(1) : val<T>(6);
     const auto a = to_dev(d, A), b = to_dev(d, B);
     launch<T>(d, kItems, [=](const auto& ex, int q, auto sm) {
-        if constexpr (AlphaOne) batchlas::device::trsm<SD, UL, TR, DG, Cfg<T>>(ex, a.g(q), b.g(q), batchlas::device::One{}, sm);
-        else batchlas::device::trsm<SD, UL, TR, DG, Cfg<T>>(ex, a.g(q), b.g(q), alpha, sm);
+        if constexpr (AlphaOne) batchlas::device::trsm<SD, UL, TR, DG, Cfg<T>>(ex, batchlas::device::One{}, a.g(q), b.g(q), sm);
+        else batchlas::device::trsm<SD, UL, TR, DG, Cfg<T>>(ex, alpha, a.g(q), b.g(q), sm);
     });
     const auto got = d.down(b.p, B.h.size());
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == kNT);

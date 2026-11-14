@@ -344,7 +344,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         for (int p = 0; p < i; ++p) {
             const auto vcol = unit_head(A.col(p), p + 1).tail(i + 1);
             const auto wcol = W.col(p).tail(i + 1);
-            const auto gd = dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
+            const auto gd = dot_many<Transpose::ConjTrans, Scope::Group, Native>(ex, v, wcol, vcol);
             const T gamma = gd[0], delta = gd[1];
             map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
         }
@@ -417,8 +417,8 @@ BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3:
                                              tau(j0 + i) = t;
                                          });
         if (n2 > 0)
-            her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, l3::Global<T>{a.p + j2 + j0 * lda, lda, n2, ib}, l3::Global<T>{wp + j2, n, n2, ib},
-                                                         l3::Global<T>{a.p + j2 + j2 * lda, lda, n2, n2}, NegOne{}, One{}, sm);
+            her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, NegOne{}, l3::Global<T>{a.p + j2 + j0 * lda, lda, n2, ib},
+                                                         l3::Global<T>{wp + j2, n, n2, ib}, One{}, l3::Global<T>{a.p + j2 + j2 * lda, lda, n2, n2}, sm);
     }
     for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
         d(i) = a(i, i);
@@ -444,14 +444,18 @@ template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::sytrd<UL
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "sytrd: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
+    using executor = SgpPartition<N>;
+    static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrd_cta_plan<N, T>{}.plan.size(); }
 };
 // tier::Blocked<NB>: Uplo::Lower only (the host sytrd_blocked's restriction; mirror an Upper input
-// with core mirror<Uplo::Upper, true> first, as syev_blocked does).
+// with core mirror<Uplo::Upper, Transpose::ConjTrans> first, as syev_blocked does).
 template <int NB, class Alg, class T> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::blocked_cfg<T>::threads;  // 256: the her2k tile's items
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrd_blocked_plan<NB, T>(n).plan.size(); }
 };
@@ -492,7 +496,7 @@ BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const E
     } else {
         constexpr int N = Tr::n_max;
         static_assert(std::is_same_v<Ex, SgpPartition<N, false>> || std::is_same_v<Ex, SgpPartition<N, true>>,
-                      "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::wrap(make_partition<N>(sg)))");
+                      "sytrd: tier::Cta<N> runs on device::SgpPartition<N> (device::make_partition<N>(sg))");
         const int n = A.rows();
         if (n < 1 || n > N || A.cols() != n) return -2;
         const detail::sytrd_cta_plan<N, T> plan{};

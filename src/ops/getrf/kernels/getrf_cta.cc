@@ -20,6 +20,7 @@
 #include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/device/lapack_aux.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <algorithm>
@@ -161,11 +162,12 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 int b, slot;
                 if constexpr (SC == device::Scope::Sub) {
                     slot = static_cast<int>(it.get_sub_group().get_group_linear_id());
-                    b = wg_id * G + slot;
+                    const device::MatrixSlot ms = device::matrix_slot(wg_id, G, slot, batch);
+                    b = ms.b;
                     // Sub-group-uniform, and this scope executes only sub-group
                     // barriers -- an early return under a work-group barrier hangs.
                     // The mask test is the same sub-group's item, so uniform too.
-                    if (b >= batch || (mask != nullptr && mask[b] == 0)) return;
+                    if (!ms.live || (mask != nullptr && mask[b] == 0)) return;
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;

@@ -196,8 +196,8 @@ TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
             hl = device::herm_view<device::alg::ThreeLoads>(A, Uplo::Lower)(i, j);
             Hu(i, j) = hu;
             Hl(i, j) = hl;
-            if (i > j) device::mirror<Uplo::Upper, true>(TrioElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
-            device::mirror<Uplo::Lower, true>(TrioElemAt{i, j}, M2);
+            if (i > j) device::mirror<Uplo::Upper, Transpose::ConjTrans>(TrioElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
+            device::mirror<Uplo::Lower, Transpose::ConjTrans>(TrioElemAt{i, j}, M2);
             device::laset(TrioElemAt{i, j}, device::Zero{}, i < nn ? R(1) : R(0), Q);
         }
     });
@@ -1097,7 +1097,7 @@ template <class T, int P, bool Masked> void lane_case(Dev& dev) {
         T el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : T(0);
         const T an = device::lanst<NormType::Max>(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 1, n - 2));
         device::detail::tridiag_split(ex, dl, device::lane_vec(el, 0, n - 1), tol);
-        const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), n - 1, [](T x) { return x == T(0); });
+        const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), [](T x) { return x == T(0); }, n - 1);
         device::scal<device::arith::Native>(ex, T(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
         device::detail::reverse(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 0, 0), true);
         device::detail::reverse(ex, device::lane_vec(dl, 2, n - 1), device::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);

@@ -185,7 +185,7 @@ void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const 
                 std::byte* gws, std::int32_t* info, std::int32_t max_sec_iter, int n) {
     const device::WorkspaceSize sz = device::stedc_buffer_size<J, Tier, T>(n);
     const auto Zk = Z.kernel_view();
-    device::detail::stedc_params<T> p;
+    device::StedcOptions<T> p;
     p.max_sec_iter = max_sec_iter;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
@@ -197,8 +197,8 @@ void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const 
                                                                       device::global_slice(gws, sz, b)};
                                                int ib = 0;
                                                if constexpr (J == JobType::EigenVectors)
-                                                   ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p,
-                                                                           device::item(Zk, b, n, n));
+                                                   ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b),
+                                                                           device::item(Zk, b, n, n), ws, p);
                                                else ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p);
                                                if (ex.leader()) info[b] = ib;
                                            });

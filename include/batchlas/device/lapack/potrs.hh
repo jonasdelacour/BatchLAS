@@ -48,11 +48,11 @@ BATCHLAS_DEVICE_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, con
     const auto A = mat(&a(0, 0), n, n, static_cast<int>(a.ld));
     const auto B = mat(&b(0, 0), n, nrhs, static_cast<int>(b.ld));
     if constexpr (UL == Uplo::Lower) {
-        trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, Cfg, NB>(ex, A, B, One{}, sm);
-        trsm<Side::Left, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, A, B, One{}, sm);
+        trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, A, B, sm);
+        trsm<Side::Left, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, A, B, sm);
     } else {
-        trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, A, B, One{}, sm);
-        trsm<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, Cfg, NB>(ex, A, B, One{}, sm);
+        trsm<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, A, B, sm);
+        trsm<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, Cfg, NB>(ex, One{}, A, B, sm);
     }
 }
 
@@ -90,6 +90,8 @@ template <Uplo UL> struct potrs {
 template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrs<UL>, tier::Blocked<NB, Alg>, T> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::BlockedSolvePlan<T>::make().size; }
 };

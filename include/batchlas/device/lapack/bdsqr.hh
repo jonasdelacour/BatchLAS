@@ -94,6 +94,8 @@ template <class T> struct tiers<routine::bdsqr, T> {
 template <class T> struct tier_info<routine::bdsqr, tier::Blocked<1>, T> {
     static_assert(std::is_floating_point_v<T>, "bdsqr: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sweep_plan<T>(n).size; }
 };

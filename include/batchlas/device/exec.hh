@@ -8,6 +8,9 @@
 //   size       work-items sharing a Cyclic operand (i owned by lid == i mod size)
 //   team       the unit a Scope::Sub reduction spans (a sub-group, a partition, one item)
 //   sub_whole  true when one team is the whole executor (Scope::Sub is then uniform)
+// Each launch executor (WorkGroup, Teams, SubGroup, Partition, RtGroup, Thread) is built from
+// the kernel's item as `Ex ex{it}` (launch<R, Tier, T>::exec). Fit and the index-only
+// executors (Slot, ElemAt, Grid1D) wrap an executor or a caller-mapped index instead.
 
 #include <cstdint>
 #include <type_traits>
@@ -203,6 +206,8 @@ template <int SG = 32> struct SubGroup {
     static constexpr Scope natural_scope = Scope::Sub;
     sycl::sub_group sg;
 
+    BATCHLAS_DEVICE_INLINE SubGroup(sycl::sub_group s) : sg(s) {}
+    BATCHLAS_DEVICE_INLINE explicit SubGroup(sycl::nd_item<1> it) : sg(it.get_sub_group()) {}
     BATCHLAS_DEVICE_INLINE sycl::sub_group sub() const { return sg; }
     BATCHLAS_DEVICE_INLINE int lid() const { return static_cast<int>(sg.get_local_linear_id()); }
     BATCHLAS_DEVICE_INLINE int lane() const { return lid(); }
@@ -233,6 +238,7 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
     Impl part;
 
     BATCHLAS_DEVICE_INLINE explicit Partition(sycl::sub_group sg) : part(sg) {}
+    BATCHLAS_DEVICE_INLINE explicit Partition(sycl::nd_item<1> it) : part(it.get_sub_group()) {}
     struct Wrap {};
     BATCHLAS_DEVICE_INLINE Partition(Wrap, Impl p) : part(p) {}  // adopt an existing partition object
     BATCHLAS_DEVICE_INLINE int lid() const {
@@ -289,6 +295,8 @@ struct Thread {
     static constexpr int size = 1, team_size = 1, nteams = 1;
     static constexpr bool sub_whole = true;
     static constexpr Scope natural_scope = Scope::Sub;
+    constexpr Thread() = default;
+    BATCHLAS_DEVICE_INLINE explicit Thread(sycl::nd_item<1>) {}
     BATCHLAS_DEVICE_INLINE int lid() const { return 0; }
     BATCHLAS_DEVICE_INLINE int lane() const { return 0; }
     BATCHLAS_DEVICE_INLINE int team() const { return 0; }

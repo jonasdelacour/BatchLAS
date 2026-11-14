@@ -433,10 +433,10 @@ BATCHLAS_DEVICE_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in,
         ex.barrier(Mem::Global);
         if (j2 >= n) continue;
         const auto u12 = l3::global_of(a.sub(j, j2, jb, n - j2));
-        trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, l3::global_of(a.sub(j, j, jb, jb)), u12, One{}, sm);
+        trsm<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::Unit, Cfg, NB>(ex, One{}, l3::global_of(a.sub(j, j, jb, jb)), u12, sm);
         if (j2 < m)
-            gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, l3::global_of(a.sub(j2, j, m - j2, jb)), u12,
-                                                              l3::global_of(a.sub(j2, j2, m - j2, n - j2)), NegOne{}, One{}, sm);
+            gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, l3::global_of(a.sub(j2, j, m - j2, jb)),
+                                                              u12, One{}, l3::global_of(a.sub(j2, j2, m - j2, n - j2)), sm);
     }
     return ex.uniform(info);
 }
@@ -449,12 +449,16 @@ template <int N, bool Exact, class T>
 struct tier_info<routine::getrf, tier::Reg<N, Exact>, T> {
     static constexpr int part_size = detail::reg_lanes(N);
     static constexpr int wg_size = 32, sg_size = 32;
+    using executor = Partition<part_size>;
+    static constexpr int per_group = wg_size / part_size;
     static constexpr bool admits(int n) { return n >= 1 && (Exact ? n == N : n <= N); }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 /// getrf's Cta<N>: one WorkGroup (or RtGroup) per matrix; the tile and 32 slots in local memory.
 template <int N, class T> struct tier_info<routine::getrf, tier::Cta<N>, T> {
     static constexpr int wg_size = detail::leaf_wg(N), sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::getrf_cta_plan<T>(n, n).size; }
 };
@@ -464,6 +468,8 @@ template <int NB, class Alg, class T> struct tier_info<routine::getrf, tier::Blo
     using cfg = detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
     static_assert(std::is_same_v<typename cfg::value_type, T>, "getrf: tier::Blocked's l3 configuration is for another scalar type");
     static constexpr int wg_size = cfg::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::lu_blocked_plan<T, cfg>().size; }
 };

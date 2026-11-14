@@ -149,11 +149,14 @@ template <class T, int R, int C, class AS, class BS> BATCHLAS_DEVICE_INLINE void
         for (int i = 0; i < R; ++i) t(i, j) = select(i - j == off, d, o);
 }
 
-// The strict triangle opposite FROM, from FROM: A(i, j) := A(j, i) (Herm: conj, and the
-// diagonal's imaginary part is zeroed). Each write reads only the FROM triangle, so items do
-// not race; a later op reading the mirrored triangle across owners needs a barrier.
-template <Uplo FROM, bool Herm = false, class Alg = alg::Walk, class Ex, class MA>
+// The strict triangle opposite FROM, from FROM: A(i, j) := op(A)(i, j) = A(j, i) (TR: Trans, or
+// ConjTrans: conj, and the diagonal's imaginary part is zeroed). Each write reads only the FROM
+// triangle, so items do not race; a later op reading the mirrored triangle across owners needs a
+// barrier.
+template <Uplo FROM, Transpose TR = Transpose::Trans, class Alg = alg::Walk, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE void mirror(const Ex& ex, const MA& a) {
+    static_assert(TR != Transpose::NoTrans, "mirror: TR is Trans or ConjTrans");
+    constexpr bool Herm = TR == Transpose::ConjTrans;
     using T = typename MA::value_type;
     using A = Arith<T>;
     const int n = a.rows();

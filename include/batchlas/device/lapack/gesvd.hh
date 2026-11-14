@@ -198,6 +198,8 @@ template <SvdVectors JU, SvdVectors JVT, class T> struct tiers<routine::gesvd<JU
 // buffer_size(n) is the square problem's; gesvd_buffer_size<JU, JVT, Tier, T>(m, n) any other.
 template <SvdVectors JU, SvdVectors JVT, int NB, class A, class T> struct tier_info<routine::gesvd<JU, JVT>, tier::Blocked<NB, A>, T> {
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::driver_plan<JU, JVT, NB, T>(n, n).size; }
 };
