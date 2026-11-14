@@ -78,7 +78,7 @@ template <class T> constexpr T minus_half() {
 // A22 -= W Y^H + Y W^H. Every Level 3 op ends on a global barrier.
 template <class Cfg, class Ex, class MA, class MW, class MT>
 BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const MA& a22, const MW& w, const MT& tf, typename Cfg::value_type* pp,
-                                         typename Cfg::value_type* yp, typename Cfg::value_type* m1p, typename Cfg::value_type* m2p, l3::Smem<Cfg> sm) {
+                                         typename Cfg::value_type* yp, typename Cfg::value_type* m1p, typename Cfg::value_type* m2p, const Workspace& sm) {
     using T = typename Cfg::value_type;
     constexpr Transpose NT = Transpose::NoTrans;
     constexpr Transpose CT = Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
@@ -168,7 +168,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& a_in, const MB& ab_in, 
     }
 
     const auto lay = detail::panel_layout<Tier, T>(n, kd);
-    const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, lay.smem);
     T* const taup = carve_global(ws, lay.taup);
     T* const vp = carve_global(ws, lay.v);
     T* const tfp = carve_global(ws, lay.tf);

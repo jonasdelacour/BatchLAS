@@ -94,14 +94,14 @@ template <class R> struct Ptrs {
     R *d_a, *z_a, *d_b, *z_b, *lam, *absx, *qp, *tmp;
     std::int32_t *map_a, *map_b, *keep, *perm, *plocal, *scan_inc, *scan_exc, *rank;
     local_mptr<std::int32_t> reduced;
-    l3::Smem<gemm_cfg<R>> smem;
+    Workspace smem;
 };
 template <class R> BATCHLAS_DEVICE_INLINE Ptrs<R> ptrs(const Workspace& ws, const StedcLayout<R>& L) {
     return {carve_global(ws, L.d_a),     carve_global(ws, L.z_a),      carve_global(ws, L.d_b),      carve_global(ws, L.z_b),
             carve_global(ws, L.lam),     carve_global(ws, L.absx),     carve_global(ws, L.qp),       carve_global(ws, L.tmp),
             carve_global(ws, L.map_a),   carve_global(ws, L.map_b),    carve_global(ws, L.keep),     carve_global(ws, L.perm),
             carve_global(ws, L.plocal),  carve_global(ws, L.scan_inc), carve_global(ws, L.scan_exc), carve_global(ws, L.rank),
-            carve_local(ws, L.reduced),  l3::Smem<gemm_cfg<R>>{carve_local(ws, L.smem).get_raw()}};
+            carve_local(ws, L.reduced),  sub_workspace(ws, L.smem)};
 }
 
 // One merge: rows / columns [o, o + s) of Z hold diag(Q1, Q2) (Q1 m x m), w(o..o + s) the two

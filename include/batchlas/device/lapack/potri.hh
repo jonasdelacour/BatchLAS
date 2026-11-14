@@ -48,7 +48,7 @@ template <class T> struct BlockedPanelPlan {
 // trmm writes W, W is copied back. The diagonal block is inverted as A11^-1 I (W := I, trsm),
 // then its triangle copied into A. Ends on a global barrier.
 template <Uplo UL, Diag DG, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, const Workspace& sm) {
     constexpr bool unit = DG == Diag::Unit;
     constexpr Part kTri = UL == Uplo::Lower ? (unit ? Part::StrictLower : Part::Lower) : (unit ? Part::StrictUpper : Part::Upper);
     const int n = A.rows();
@@ -96,7 +96,7 @@ BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, 
 // blocks below (right), through W; the diagonal block := its own herk (a zero-padded copy in W,
 // beta 0: xLAUU2) plus the herk of the blocks below (right). Ends on a global barrier.
 template <Uplo UL, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, const Workspace& sm) {
     constexpr Transpose kCT = Transpose::ConjTrans, kN = Transpose::NoTrans;
     const int n = A.rows();
     for (int i = 0; i < n; i += NB) {
@@ -162,7 +162,7 @@ BATCHLAS_DEVICE_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const M
     const int pre = potri_blocked_prologue(ex, a, ws, C != BlockedChain::Lauum && DG == Diag::NonUnit);
     if (pre != 0 || n == 0) return pre;
     const auto pl = BlockedPanelPlan<T>::make(n, NB);
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     T* const w = carve_global(ws, pl.w);
     const auto A = mat(&a(0, 0), n, n, static_cast<int>(a.ld));
     if constexpr (C != BlockedChain::Lauum) trtri_blocked_body<UL, DG, NB, Cfg>(ex, A, w, sm);

@@ -105,7 +105,7 @@ namespace detail {
 // B := U^-1 L^-1 B (NoTrans), or op(L)^-1 op(U)^-1 B (Trans, ConjTrans): the two triangles of
 // getrf's factor on the in-group trsm (NB-wide diagonal blocks); each solve ends on a global barrier.
 template <Transpose TR, int NB, class Cfg, class Ex, class GA, class GB>
-BATCHLAS_DEVICE_INLINE void lu_trsm_pair(const Ex& ex, const GA& a, const GB& b, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void lu_trsm_pair(const Ex& ex, const GA& a, const GB& b, const Workspace& sm) {
     if constexpr (TR == Transpose::NoTrans) {
         trsm<Side::Left, Uplo::Lower, TR, Diag::Unit, Cfg, NB>(ex, One{}, a, b, sm);
         trsm<Side::Left, Uplo::Upper, TR, Diag::NonUnit, Cfg, NB>(ex, One{}, a, b, sm);
@@ -124,12 +124,12 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const PV
     const auto b = l3::global_of(b_in);
     const auto bw = mat_wide(b.p, b.m, b.n, b.ld);
     constexpr auto pl = detail::lu_blocked_plan<D, Cfg>();
-    const l3::Smem<Cfg> sm{carve_local(w, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(w, pl.smem);
     if constexpr (TR == Transpose::NoTrans) {
         laswp(ex, bw, piv, 0, a.n);
         ex.barrier(Mem::Global);
     }
-    lu_trsm_pair<TR, NB>(ex, a, b, sm);
+    lu_trsm_pair<TR, NB, Cfg>(ex, a, b, sm);
     if constexpr (TR != Transpose::NoTrans) {
         laswp<Direct::Backward>(ex, bw, piv, 0, a.n);
         ex.barrier(Mem::Global);

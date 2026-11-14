@@ -5,7 +5,7 @@
 // m, n or k (a run-time choice inside a kernel pays the max REG over its paths).
 //   RegGeom<TM, TN, TK, TR, TC, UnrollK, Stages>  the register-tiled tile (GemmRegisterTiledKernel)
 //   cfg::RegTiled<T, TM, TN, TK, TR, TC, Stages, UnrollK, Ops>  RegGeom for scalar T and an Arith policy
-//   Smem<Cfg>, smem_elems<Cfg>(), smem_bytes<Cfg>()  the caller's local memory for one work-group
+//   smem_elems<Cfg>(), smem_bytes<Cfg>()  the stage an L3 op takes at the start of its ws.local
 
 #include <cstddef>
 #include <type_traits>
@@ -14,6 +14,7 @@
 
 #include <batchlas/device/arith.hh>
 #include <batchlas/device/core.hh>
+#include <batchlas/device/workspace.hh>
 
 namespace batchlas::device::l3 {
 
@@ -74,16 +75,19 @@ inline constexpr bool is_reg_tiled_v<RegTiled<T, TM, TN, TK, TR, TC, S, U, O>> =
 
 template <class C> concept Config = cfg::is_reg_tiled_v<C>;
 
-/// The caller's local memory for one work-group: Cfg::smem_elems elements of Cfg::value_type
-/// (a raw pointer into a local_accessor or a Workspace's local slice).
-template <class C> struct Smem {
-    typename C::value_type* p;
-};
 template <class C> inline constexpr int smem_elems() { return C::smem_elems; }
 template <class C> inline constexpr std::size_t smem_bytes() { return sizeof(typename C::value_type) * std::size_t(C::smem_elems); }
-/// Smem over a local_accessor of Cfg::value_type (at least smem_elems<Cfg>() long).
-template <class C, class Acc> BATCHLAS_DEVICE_INLINE Smem<C> smem_of(const Acc& acc) {
-    return {acc.template get_multi_ptr<sycl::access::decorated::no>().get()};
-}
 
 }  // namespace batchlas::device::l3
+
+namespace batchlas::device::detail {
+// An L3 op's stage: Cfg::smem_elems elements of Cfg::value_type at the start of ws.local, kept
+// decorated (a generic T* would leave the address space to inference).
+template <class C> struct Smem {
+    local_mptr<typename C::value_type> p;
+};
+template <class C> BATCHLAS_DEVICE_INLINE Smem<C> smem_of(const Workspace& ws) {
+    using T = typename C::value_type;
+    return {carve_local(ws, WsSlot<T>{WsSpace::Local, 0, static_cast<std::size_t>(C::smem_elems)})};
+}
+}  // namespace batchlas::device::detail

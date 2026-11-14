@@ -106,7 +106,7 @@ BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, c
     constexpr int NB = Tier::nb;
     const int n = a.rows(), k = v.cols();
     const auto pl = detail::RitzValuesBlockedPlan<T>::template make<Tier, Cfg>(n, k);
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     T* const p = carve_global(ws, pl.av);
     for (int c0 = 0; c0 < k; c0 += NB) {
         const int nb = k - c0 < NB ? k - c0 : NB;

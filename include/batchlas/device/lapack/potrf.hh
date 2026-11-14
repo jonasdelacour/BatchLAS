@@ -845,7 +845,7 @@ template <int NB, class S> BATCHLAS_DEVICE_INLINE int potrf_blocked_loop(S& s, i
 // column changes); info is local, so it is uniform.
 template <Uplo UL, int NB, class Ex, class Cfg, class D, class MG, class MD, class DV> struct BlockedRight {
     const Ex& ex;
-    const l3::Smem<Cfg>& sm;
+    const Workspace& sm;
     D* S;
     int* fl;
     const DV& dg;
@@ -951,7 +951,7 @@ BATCHLAS_DEVICE_INLINE int potrf_blocked_op(const WorkGroup<WG, SG>& ex, const M
     if (n == 0) return 0;
     if (!blocked_ws_ok(ws, false)) return -3;
     constexpr PotrfBlockedPlan<T, NB> pl = PotrfBlockedPlan<T, NB>::make();
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     D* const S = carve_local(ws, pl.blk).get_raw();
     int* const fl = carve_local(ws, pl.fail).get_raw();
     const Vec<R, Ext<NB>, Unit, Mem::Local> dg{carve_local(ws, pl.diag).get_raw(), {}};

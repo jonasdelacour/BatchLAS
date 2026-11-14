@@ -122,10 +122,11 @@ inline void gebrd_cta_impl(Queue& ctx,
                 const auto E_prob = E_view.batch_item(pid);
                 const auto TAUQ_prob = TAUQ_view.batch_item(pid);
                 const auto TAUP_prob = TAUP_view.batch_item(pid);
-                // The work-group's accessor; gebrd indexes this partition's slice by part_id.
+                // This partition's slice of the work-group's accessor.
                 const device::Workspace ws{device::local_mptr<std::byte>(reinterpret_cast<device::local_mptr<std::byte>::pointer>(
-                                           A_local.template get_multi_ptr<sycl::access::decorated::yes>().get_decorated())),
-                                       nullptr};
+                                               A_local.template get_multi_ptr<sycl::access::decorated::yes>().get_decorated())) +
+                                               part_id * kSlice,
+                                           nullptr};
                 device::gebrd<Tier>(ex, it, ItemOfOrder<T>{A_prob, n}, D_prob, E_prob, TAUQ_prob, TAUP_prob, ws, live);
             });
     });

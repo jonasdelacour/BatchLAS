@@ -71,6 +71,15 @@ template <class T> BATCHLAS_DEVICE_INLINE T* carve_global(const Workspace& w, co
     return reinterpret_cast<T*>(w.global + s.offset);
 }
 
+// The ws of an op called inside another op: w from a Local slot on (an L3 stage) and, given a
+// Global slot, from that slot on; the local pointer stays decorated.
+template <class L> BATCHLAS_DEVICE_INLINE Workspace sub_workspace(const Workspace& w, const WsSlot<L>& local) {
+    return {w.local + local.offset, w.global};
+}
+template <class L, class G> BATCHLAS_DEVICE_INLINE Workspace sub_workspace(const Workspace& w, const WsSlot<L>& local, const WsSlot<G>& global) {
+    return {w.local + local.offset, w.global + global.offset};
+}
+
 // Matrix b's slice of the caller's global buffer of batch * global_bytes.
 BATCHLAS_DEVICE_INLINE std::byte* global_slice(std::byte* base, const WorkspaceSize& sz, std::int64_t b) {
     return base + static_cast<std::ptrdiff_t>(b) * static_cast<std::ptrdiff_t>(sz.global_bytes);

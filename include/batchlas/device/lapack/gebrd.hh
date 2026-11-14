@@ -198,7 +198,7 @@ inline constexpr int blocked_wg = 256;
 inline constexpr int blocked_nb = 16;  // the default panel width (the host's gebrd_block_size)
 template <class T> struct GebrdBlockedPlan {
     WsSlot<T> work;  // local: wa (NB), wx (NB)
-    WsSlot<T> smem;  // local: l3::Smem<BlockedCfg<T>>
+    WsSlot<T> smem;  // local: the L3 stage of GebrdBlockedCfg<T>
     WsSlot<T> x, y;  // global: X (ld m), Y (ld n)
     WorkspaceSize size;
 };
@@ -243,15 +243,10 @@ template <class T> struct tiers<routine::gebrd, T> {
 
 // xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
 // overwritten with the reflectors (xGEBD2's layout), d / e receive the bidiagonal, tauq / taup
-// the reflector scalars. ws.local is the WORK-GROUP's local buffer, one device::buffer_size<
-// routine::gebrd, Tier, T>(n).local_bytes slice per partition: partition k of the group (k =
-// sub-group * 32 / P + partition in its sub-group) uses slice k, addressed by an int32 element
-// offset from ws.local (a local pointer moved per partition costs ~8% more SASS). So
-// launch<routine::gebrd, tier::Cta<P>, T>::workspace (this matrix's slice) does NOT fit this tier
-// until A3 makes ws this matrix's slice: pass the work-group's buffer. Collective over the
-// work-group of it: the barriers are work-group wide, so every partition calls it with the same n
-// and ws, and a partition without a matrix passes live = false (a zero tile, nothing read or
-// stored). Returns 0 (no info).
+// the reflector scalars. ws is this matrix's slice (launch<routine::gebrd, tier::Cta<P>,
+// T>::workspace). Collective over the work-group of it: the barriers are work-group wide, so
+// every partition calls it with the same n, and a partition without a matrix passes live = false
+// (a zero tile, nothing read or stored). Returns 0 (no info).
 template <class Tier, class Ex, class MA, class RV, class TV>
 BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
                               const TV& taup, const Workspace& ws, bool live = true) {
@@ -262,12 +257,8 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const
     static_assert(!Arith<T>::is_complex, "gebrd: tier::Cta is real only");
     static_assert(Ex::size == P, "gebrd: tier::Cta<P> runs on a P-lane partition");
     constexpr auto plan = detail::gebrd_cta_plan<P, T>();
-    constexpr int slice = static_cast<int>(plan.size.local_bytes / sizeof(T));
-    static_assert(plan.tile.offset == 0 && slice * sizeof(T) == plan.size.local_bytes, "gebrd: a slice is whole T");
-    const int part = static_cast<int>(it.get_sub_group().get_group_linear_id()) * static_cast<int>(ex.part.get_group_linear_range()) +
-                     static_cast<int>(ex.part.get_group_linear_id());
     const int n = A.rows();
-    const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, part * slice};
+    const Mat<T, Dyn, Dyn, Ext<P>, Mem::Local, Cyclic, local_mptr<T>> tile{carve_local(ws, plan.tile), {n}, {n}, {}, 0};
     detail::gebd2_tile<T>(ex, it, tile, A, d, e, tauq, taup, n, live);
     return 0;
 }
@@ -390,7 +381,7 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const R
     const auto Yb = device::mat(carve_global(ws, plan.y), n, NB, n);
     const local_mptr<T> work = carve_local(ws, plan.work);
     const Vec<T, Dyn, Unit, Mem::Local, Cyclic, local_mptr<T>> wa{work, Dyn{NB}}, wx{work, Dyn{NB}, Unit{}, NB};
-    const l3::Smem<Cfg> smem{carve_local(ws, plan.smem).get_raw()};
+    const Workspace smem = sub_workspace(ws, plan.smem);
     for (int j0 = 0; j0 < n; j0 += NB) {
         const int ib = sycl::min(NB, n - j0);
         laset(ex, Zero{}, Zero{}, Xb.sub(j0, 0, m - j0, ib));

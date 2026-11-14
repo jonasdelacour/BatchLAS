@@ -46,10 +46,9 @@ template <Side SD, int NB, class Cfg, class T> constexpr WorkspaceSize ormqr_siz
 template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class T>
 BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a, const l3::Global<T>& c, int k, const T* tau,
                                          const OrmqrSlots<T>& s, const Workspace& w) {
-    const l3::Smem<Cfg> sm{carve_local(w, s.smem).get_raw()};
+    const Workspace sm = sub_workspace(w, s.smem, s.work);
     T* const vb = carve_global(w, s.v);
     T* const tb = carve_global(w, s.t);
-    T* const wb = carve_global(w, s.work);
     constexpr bool forward = (SD == Side::Left) == (TR != Transpose::NoTrans);
     // i0 itself is the induction variable (a downward block count narrows to i27 on Metal).
     const int first = forward ? 0 : (k - 1) / NB * NB;
@@ -57,7 +56,7 @@ BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a
         const int ib = k - i0 < NB ? k - i0 : NB;
         const l3::Global<T> cs = SD == Side::Left ? l3::Global<T>{c.p + i0, c.ld, c.m - i0, c.n}
                                                   : l3::Global<T>{c.p + static_cast<std::ptrdiff_t>(i0) * c.ld, c.ld, c.m, c.n - i0};
-        larfb_from_panel<SD, TR, Cfg>(ex, a, i0, ib, tau, cs, vb, tb, NB, wb, sm);
+        larfb_from_panel<SD, TR, Cfg>(ex, a, i0, ib, tau, cs, vb, tb, NB, sm);
     }
 }
 }  // namespace detail

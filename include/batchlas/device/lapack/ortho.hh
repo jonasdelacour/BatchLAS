@@ -104,7 +104,7 @@ template <class Ex, class MA, class H> BATCHLAS_DEVICE_INLINE void cgs2(const Ex
 // A_j -= Q H; cgs2(A_j) } with Q the columns left of the block; the first block runs cgs2 once.
 // The two projections are in-group gemms (H: c0 x nb at ld k); every step ends on a global barrier.
 template <int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, const Workspace& sm) {
     const int m = a.rows(), k = a.cols();
     const auto g = l3::global_of(a);
     for (int c0 = 0; c0 < k; c0 += NB) {
@@ -127,7 +127,7 @@ BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, l3::Sm
 // One CholeskyQR pass: G := A^H A (its lower triangle), for ShiftChol3's first pass G += s I with
 // the host's s, then G = L L^H and A := A L^-H. Returns potrf's info (k > 0: A not changed).
 template <int N, bool Shift, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const Workspace& pws, l3::Smem<Cfg> sm) {
+BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const Workspace& pws, const Workspace& sm) {
     using R = real_t<T>;
     const int m = a.rows(), k = a.cols();
     const auto gram = mat(gp, k, k, k);
@@ -213,23 +213,23 @@ BATCHLAS_DEVICE_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws)
         constexpr int N = Tier::n_max;
         if (k > N) return -2;
         if (k == 0) return 0;
-        const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
+        const Workspace sm = sub_workspace(ws, lay.smem);
         const Workspace pws{carve_local(ws, lay.chol), nullptr};
         T* const g = carve_global(ws, lay.gram);
-        int info = detail::cholqr_pass<N, Alg == OrthoAlgorithm::ShiftChol3>(ex, a, g, pws, sm);
+        int info = detail::cholqr_pass<N, Alg == OrthoAlgorithm::ShiftChol3, Cfg>(ex, a, g, pws, sm);
         if constexpr (Alg != OrthoAlgorithm::Cholesky) {
-            if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
+            if (info == 0) info = detail::cholqr_pass<N, false, Cfg>(ex, a, g, pws, sm);
         }
         if constexpr (Alg == OrthoAlgorithm::ShiftChol3) {
-            if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
+            if (info == 0) info = detail::cholqr_pass<N, false, Cfg>(ex, a, g, pws, sm);
         }
         return info;
     } else if constexpr (tier::is_cta_v<Tier>) {
         if (k > Tier::n_max) return -2;
         detail::cgs2(ex, a, mat_local(carve_local(ws, lay.h), k, 1, k).col(0));
     } else {
-        const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
-        detail::bcgs2<Tier::nb>(ex, a, carve_global(ws, lay.hb), carve_global(ws, lay.h), sm);
+        const Workspace sm = sub_workspace(ws, lay.smem);
+        detail::bcgs2<Tier::nb, Cfg>(ex, a, carve_global(ws, lay.hb), carve_global(ws, lay.h), sm);
     }
     return 0;
 }

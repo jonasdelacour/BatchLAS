@@ -415,7 +415,7 @@ BATCHLAS_DEVICE_INLINE int factor_blocked(const Ex& ex, const MA& a_in, const PV
     const int m = g.m, n = g.n, mn = m < n ? m : n;
     const auto a = mat_wide(g.p, m, n, g.ld);
     constexpr auto pl = lu_blocked_plan<D, Cfg>();
-    const l3::Smem<Cfg> sm{carve_local(w, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(w, pl.smem);
     const auto vs = carve_local(w, pl.vs);
     const auto is = carve_local(w, pl.is);
     int info = 0;

@@ -43,7 +43,7 @@ BATCHLAS_DEVICE_INLINE void potrs_blocked_solve(const WorkGroup<WG, SG>& ex, con
     using T = typename MA::value_type;
     using Cfg = detail::PotrfBlockedCfg<T>;
     constexpr BlockedSolvePlan<T> pl = BlockedSolvePlan<T>::make();
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     const int n = a.rows(), nrhs = b.cols();
     const auto A = mat(&a(0, 0), n, n, static_cast<int>(a.ld));
     const auto B = mat(&b(0, 0), n, nrhs, static_cast<int>(b.ld));

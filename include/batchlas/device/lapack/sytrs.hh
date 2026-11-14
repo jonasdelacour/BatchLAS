@@ -465,7 +465,7 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
     const int n = A.rows(), nrhs = B.cols();
     const auto pl = sytrs_blocked_plan<D>(n, nrhs);
     int* const flag = carve_local(ws, pl.flag).get_raw();
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     D* const lw = carve_global(ws, pl.l);
     D* const y = carve_global(ws, pl.y);
     int* const ps = carve_global(ws, pl.idx);

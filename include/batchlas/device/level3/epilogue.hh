@@ -53,9 +53,9 @@ template <Uplo UL, bool HermDiag = false> struct TriMask {
 // the tuned expression (LinearEpilogue); another Ops forms alpha v + beta prior through Arith
 // (no std::complex operator*). mask drops the elements it does not keep (design B.2 Mask).
 template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ops = arith::Native, class Ex, class T,
-          int TR, int TC, class Mask = NoMask>
+          int TR, int TC, class Mask = NoMask, class LP>
 BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<T, TR, TC>& acc,
-                                           T* lo, T* hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta,
+                                           LP lo, LP hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta,
                                            [[maybe_unused]] Mask mask = {}) {
     constexpr int CS = TileM + 1;
     constexpr int LoCols = LoElems / CS;
@@ -63,7 +63,7 @@ BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_r
     constexpr int CW = LoCols + HiCols;
     constexpr int Passes = (TileN + CW - 1) / CW;
     static_assert(CW >= 1, "store_tile_staged: the stage must hold one C column");
-    auto slot = [&](int c, int r) -> T* { return c < LoCols ? lo + c * CS + r : hi + (c - LoCols) * CS + r; };
+    auto slot = [&](int c, int r) -> LP { return c < LoCols ? lo + c * CS + r : hi + (c - LoCols) * CS + r; };
     const bool beta_zero = beta == T(0);
 #pragma unroll 1
     for (int pass = 0; pass < Passes; ++pass) {

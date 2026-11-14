@@ -399,7 +399,7 @@ BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3:
     T* const wcp = carve_global(ws, plan.wc);
     const auto vip = carve_local(ws, plan.vip).get();
     const auto wip = carve_local(ws, plan.wip).get();
-    const l3::Smem<Cfg> sm{carve_local(ws, plan.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, plan.smem);
 
     if constexpr (Ar::is_complex) {
         for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<T>(0)); });

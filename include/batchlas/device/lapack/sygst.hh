@@ -256,14 +256,14 @@ template <class T> BATCHLAS_DEVICE_INLINE l3::Global<T> gsub(const l3::Global<T>
 // with the mirrored diagonal block H (LAPACK's hemm) and her2k (syr2k for a real T) on the panel and trailing
 // parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
 template <Itype IT, Uplo UL, int NB, class Ex, class D, class DB>
-BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
+BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, const Workspace& sm, D* h, D* w) {
     using Cfg = blocked_cfg_t<D>;
     using Ar = Arith<D>;
     using R = typename Ar::real_t;
     constexpr bool lower = UL == Uplo::Lower;
     constexpr Transpose TH = Ar::is_complex ? Transpose::ConjTrans : Transpose::Trans;
     constexpr Transpose NT = Transpose::NoTrans;
-    const l3::Smem<Cfg> sm{lmem};
+    D* const lmem = reinterpret_cast<D*>(sm.local.get_raw());  // sygs2's block, under the L3 stage
     auto lift = [](R x) BATCHLAS_DEVICE_BODY {
         if constexpr (Ar::is_complex) return Ar::make(x, R(0));
         else return D(x);
@@ -377,7 +377,7 @@ BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const W
         if (b.rows() < n || b.cols() < n) return -3;
         if (n == 0) return 0;
         const auto plan = detail::sygst_blocked_plan<D, Tr::nb, IT>(n);
-        detail::blocked<IT, UL, Tr::nb>(ex, l3::global_of(a), l3::global_of(b), reinterpret_cast<D*>(ws.local.get_raw()),
+        detail::blocked<IT, UL, Tr::nb>(ex, l3::global_of(a), l3::global_of(b), ws,
                                                  carve_global(ws, plan.h), carve_global(ws, plan.w));
         sync(ex, Mem::Global);
         return 0;

@@ -311,10 +311,9 @@ template <int NB, class Cfg, class T> constexpr WorkspaceSize geqrf_size(int m, 
 // spanning every column to the right (no separate ormqr pass).
 template <int NB, class Cfg, class Ex, class T>
 BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>& a, T* tau, const GeqrfSlots<T>& s, const Workspace& w) {
-    const l3::Smem<Cfg> sm{carve_local(w, s.smem).get_raw()};
+    const Workspace sm = sub_workspace(w, s.smem, s.work);
     T* const vb = carve_global(w, s.v);
     T* const tb = carve_global(w, s.t);
-    T* const wb = carve_global(w, s.work);
     const RtGroup<Scope::Group, Ex::sg_size> pex{ex.it};
     const int m = a.m, n = a.n, k = m < n ? m : n;
     for (int j0 = 0; j0 < k; j0 += NB) {
@@ -324,7 +323,7 @@ BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>&
         ex.barrier(Mem::Global);  // the panel's last column update visible before V is packed
         if (n2 <= 0) break;       // uniform
         const l3::Global<T> a22{a.p + j0 + static_cast<std::ptrdiff_t>(j2) * a.ld, a.ld, mp, n2};
-        larfb_from_panel<Side::Left, Transpose::ConjTrans, Cfg>(ex, a, j0, ib, tau, a22, vb, tb, NB, wb, sm);
+        larfb_from_panel<Side::Left, Transpose::ConjTrans, Cfg>(ex, a, j0, ib, tau, a22, vb, tb, NB, sm);
     }
 }
 

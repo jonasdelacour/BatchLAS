@@ -3,7 +3,7 @@
 // LAPACK xLARFB (DIRECT = Forward, STOREV = Columnwise): apply the block reflector H = I - V T V^H
 // of larft to C from the left or the right, on the in-group Level 3 (level3/group.hh): two gemms
 // and a trmm over the work-group's tiles, one matrix per work-group, everything in global memory
-// but the L3 stage (l3::Smem). larfb_from_panel is the WY step the blocked QR ops share (geqrf's
+// but the L3 stage (ws.local). larfb_from_panel is the WY step the blocked QR ops share (geqrf's
 // trailing update, every block of ormqr / orgqr): pack V from geqrf's storage, larft, larfb.
 
 #include <cstddef>
@@ -58,14 +58,14 @@ template <class Cfg, class Ex> BATCHLAS_DEVICE_INLINE constexpr void larfb_check
 /// (Left; Right: W1 = C V, W2 = W1 op(T), C -= W2 V^H). Collective over a WorkGroup of
 /// Cfg::threads items; inputs visible on entry, c visible on return. Operands: l3::Global, a
 /// global Mat or device::item.
-/// @param work  larfb_work_elems<SD>(m, n, k) elements of global memory (W1 then W2, packed)
-/// @param smem  the work-group's l3::Smem<Cfg>
-template <Side SD, Transpose TR, Direct DR, class Cfg, class Ex, class MV, class MT, class MC, class W>
+/// @param ws  ws.local: the L3 stage (l3::smem_bytes<Cfg>()); ws.global: W1 then W2, packed,
+///            larfb_work_elems<SD>(m, n, k) elements of Cfg::value_type
+template <Side SD, Transpose TR, Direct DR, class Cfg, class Ex, class MV, class MT, class MC>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const MC& c, W* work, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const MC& c, const Workspace& ws) {
     static_assert(DR == Direct::Forward, "larfb: Direct::Forward (larft's only direction)");
     using T = typename Cfg::value_type;
-    static_assert(std::is_same_v<std::remove_cv_t<W>, T>, "larfb: work holds the Cfg's scalar type");
+    T* const work = carve_global(ws, WsSlot<T>{WsSpace::Global, 0, 0});
     static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "larfb: complex Trans is not H^H; use ConjTrans");
     constexpr Transpose OT = TR == Transpose::NoTrans ? Transpose::NoTrans : Transpose::ConjTrans;
     const auto vg = l3::global_of(v);
@@ -74,24 +74,25 @@ BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const 
     if (k <= 0 || m <= 0 || n <= 0) return;  // uniform: before any barrier
     if constexpr (SD == Side::Left) {
         const l3::Global<T> w1{work, k, k, n}, w2{work + static_cast<std::ptrdiff_t>(k) * n, k, k, n};
-        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, vg, cg, Zero{}, w1, smem);
-        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, smem);
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, vg, w2, One{}, cg, smem);
+        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, vg, cg, Zero{}, w1, ws);
+        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, ws);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, vg, w2, One{}, cg, ws);
     } else {
         const l3::Global<T> w1{work, m, m, k}, w2{work + static_cast<std::ptrdiff_t>(m) * k, m, m, k};
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, cg, vg, Zero{}, w1, smem);
-        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, smem);
-        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, vg, One{}, cg, smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, cg, vg, Zero{}, w1, ws);
+        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, ws);
+        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, vg, One{}, cg, ws);
     }
 }
 
 /// The WY step of reflectors i0 .. i0 + ib - 1 of geqrf's storage a (Q of order a.m): V :=
 /// a(i0 :, i0 : i0 + ib) unit lower with zeros above (vbuf, ld a.m - i0), T := larft(V,
 /// tau(i0 :)) (tbuf, ld ldt >= ib), then larfb<SD, TR> on c (a.m - i0 rows for Left, columns
-/// for Right). a's diagonal and upper triangle are not read. Collective; c visible on return.
+/// for Right), with larfb's ws. a's diagonal and upper triangle are not read. Collective; c
+/// visible on return.
 template <Side SD, Transpose TR, class Cfg, class Ex, class T>
 BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& a, int i0, int ib, const T* tau, const l3::Global<T>& c,
-                                          T* vbuf, T* tbuf, int ldt, T* work, l3::Smem<Cfg> smem) {
+                                          T* vbuf, T* tbuf, int ldt, const Workspace& ws) {
     const int mv = a.m - i0;
     const auto panel = mat(a.p + i0 + static_cast<std::ptrdiff_t>(i0) * a.ld, mv, ib, a.ld);
     const auto v = mat(vbuf, mv, ib, mv);
@@ -100,7 +101,7 @@ BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& 
     ex.barrier(Mem::Global);  // V complete before larft's gemv reads its columns
     larft(ex, v, vec(tau + i0, ib), mat(tbuf, ib, ib, ldt));
     ex.barrier(Mem::Global);  // T complete before the trmm stages it
-    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, work, smem);
+    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, ws);
 }
 
 }  // namespace batchlas::device

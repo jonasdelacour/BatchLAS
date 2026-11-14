@@ -31,15 +31,15 @@ template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, c
 BATCHLAS_DEVICE_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
                                       const int& k, Tile<T, G::ThreadTileRows, G::ThreadTileCols>& accum) {
     auto load_stage = [&](int kk0, int s) BATCHLAS_DEVICE_BODY {
-        T* tile_a_stage = &tile_a[s * G::StageASize];
-        T* tile_b_stage = &tile_b[s * G::StageBSize];
-        auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * G::TileAStride + r]; };
-        auto dst_b = [&](int r, int c) -> T& { return tile_b_stage[G::b_slot(c, r)]; };
+        auto* tile_a_stage = &tile_a[s * G::StageASize];
+        auto* tile_b_stage = &tile_b[s * G::StageBSize];
+        auto dst_a = [&](int r, int c) -> auto& { return tile_a_stage[c * G::TileAStride + r]; };
+        auto dst_b = [&](int r, int c) -> auto& { return tile_b_stage[G::b_slot(c, r)]; };
         stage(kk0, dst_a, dst_b);
     };
     auto accumulate_stage = [&](int stage, int kk0) {
-        const T* tile_a_stage = &tile_a[stage * G::StageASize];
-        const T* tile_b_stage = &tile_b[stage * G::StageBSize];
+        const auto* tile_a_stage = &tile_a[stage * G::StageASize];
+        const auto* tile_b_stage = &tile_b[stage * G::StageBSize];
         mma_slab<G::TileK, G::UnrollK, Exact, Ops>(
             accum, kk0, k, [&](int t, int i) { return tile_a_stage[t * G::TileAStride + local_row * G::ThreadTileRows + i]; },
             [&](int t, int j) { return tile_b_stage[G::b_slot(local_col * G::ThreadTileCols + j, t)]; });

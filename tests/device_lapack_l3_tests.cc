@@ -106,11 +106,14 @@ template <class T> int pads_changed(const HostMat<T>& before, const std::vector<
     return bad;
 }
 
-// The kernel every case launches: items work-groups of kWG, f(ex, item, smem).
+// The kernel every case launches: items work-groups of kWG, f(ex, item, ws), the stage in ws.local.
 template <class T, class F> void launch(Dev& d, int items, F f) {
     d.template run<kWG>(items, batchlas::device::l3::smem_bytes<Cfg<T>>(), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<kWG> ex{it};
-        f(ex, static_cast<int>(it.get_group_linear_id()), batchlas::device::l3::Smem<Cfg<T>>{reinterpret_cast<T*>(lm)});
+        const batchlas::device::Workspace ws{
+            sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(reinterpret_cast<std::byte*>(lm)),
+            nullptr};
+        f(ex, static_cast<int>(it.get_group_linear_id()), ws);
     });
 }
 

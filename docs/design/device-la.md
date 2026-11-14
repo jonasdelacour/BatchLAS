@@ -79,7 +79,7 @@ library CALLs), address-space loss (0 generic LD/ST), spills (LMEM 0) and `reqd_
   are collective, read inputs visible on entry and end with a barrier, so results are visible on return.
 - **Scalars are tags:** `One`, `Zero`, `NegOne`, `Scalar<T>`, `MaybeZero`. `beta = Zero` never reads the
   output. Argument order is BLAS's at every level: alpha before its product, beta before the output
-  (`axpy(ex, alpha, x, y)`, `gemm<TA, TB, Cfg>(ex, alpha, A, B, beta, C, smem)`; out-of-place trmm is
+  (`axpy(ex, alpha, x, y)`, `gemm<TA, TB, Cfg>(ex, alpha, A, B, beta, C, ws)`; out-of-place trmm is
   `trmm_out`). LAPACK ops take the netlib name with the queue replaced by the executor, and the host's
   run-time modes (uplo, side, trans, itype, job) become template parameters.
 - **Arithmetic policies** `arith::{Explicit, ExplicitInline, Native, Fma}` via `arith_t<Ops,T>`. Strict
@@ -192,7 +192,7 @@ Include the umbrella `<batchlas/device.hh>` (core, no LAPACK) or single headers.
 | `level1.hh` | `for_each_owned[_2d]` (`alg::RowOwner`), `for_each_owned_2d_batched<U>`, `map2d`, `for_each_team_owned<alg::Lockstep | Diverge>`, `for_each_owned_tiles<TR, TC>`, `axpy`, `scal`, `copy`, `swap`, `fill`, `map_many`, `interleave`, `reverse`, `upper_bound`, `rscl`, `dot[c]`, `dot_partial<TR>`, `dot_slab<N>`, `dotN<K, TR>`, `dot_many`, `nrm2<Alg>`, `lassq`, `asum`, `iamax<NaN, Key>` (a `Range`, a tie, `ArgMaxSlots`, a skip index), `find_first` (also `none`, `LaneVec`), `prod_scaled` / `ScaledProd` / `sqrt_scaled` |
 | `level2.hh` | `gemv<TR, Alg, Ops, Shape, Side>` (`alg::TeamPerRow`, `alg::ColDot<W>`), `symv` / `hemv`, `ger[u,c]<Alg, Ops>` (`alg::Flat`), `ger_row<TR>`, `her2<UL, Alg, Ops>`, `trmv<UL, TR, DG, Ops, Alg>` (Thread; `alg::Serial`, `alg::SplitDot<W>`), one `trsv<UL, TR, DG, Div, Alg, Ops, Upd>` (Div `alg::Div | Recip | RealDiv | DiagApply`, a diagonal operand or step object (`TpDiag`, `guarded_recip`); Alg `alg::Serial`, `alg::SerialRows<R>`, `alg::SplitDot<W>`, `alg::LanePerRow` (lane register, Cyclic `Frag`, RowFrag block), `alg::LanePerRowRolled`; Upd `alg::Fused | Unfused | UnfusedRight | DotThenSub | Axpy`), `dgmm<Side>`, `gbmv<KL, KU>`, `ger<Ops>` on register `Frag`s into a `Tile` |
 | `level3.hh` | register tier: `gemm<TA, TB, Shape, Ops>`, `gemm_sub<K, Ops>`, `trsm<SD, UL, TR, DG, Ops>` into a `Tile` (`A`, `B` of `gemm_sub` and `A` of `trsm` may be any `a(i, j)` operand) |
-| `level3/` | the in-group Level 3 (`group.hh`: `gemm`, `symm` / `hemm`, `syrk` / `herk` (`l3::rank_k`), `syr2k` / `her2k` (`l3::rank_2k`), `trmm`, `trmm_out`, `trsm` on one matrix per work-group, alpha before its product and beta before the output, any m, n, k) and the tuned gemm components it is built from: `cfg.hh` (`cfg::RegTiled`, `Smem`, `smem_elems`), `stage.hh`, `mma.hh`, `pipeline.hh`, `schedule.hh`, `epilogue.hh` (`LinearEpilogue`), `packet.hh` (`Vec4`, `Packet`), `copy_async.hh` (cp.async, target-guarded) |
+| `level3/` | the in-group Level 3 (`group.hh`: `gemm`, `symm` / `hemm`, `syrk` / `herk` (`l3::rank_k`), `syr2k` / `her2k` (`l3::rank_2k`), `trmm`, `trmm_out`, `trsm` on one matrix per work-group, alpha before its product and beta before the output, any m, n, k) and the tuned gemm components it is built from: `cfg.hh` (`cfg::RegTiled`, `smem_elems`, `smem_bytes`), `stage.hh`, `mma.hh`, `pipeline.hh`, `schedule.hh`, `epilogue.hh` (`LinearEpilogue`), `packet.hh` (`Vec4`, `Packet`), `copy_async.hh` (cp.async, target-guarded) |
 | `lapack_aux.hh` | `lacpy<Part, OP, Alg, alg::Edge*, DiagFill>` (`alg::RowMirror`: the Hermitian completion, one row per item; `live`), `laset` (block offset, `Frag`, Cyclic `Frag`, `Tile`), `mirror`, `laswp<Direct>`, `laswp_index`, `laswp_gather`, `lapmr<Direct, Alg, Base>`, `IpivSink`, `rot<Conv, Ops>` (`alg::RotReflector2`), `lasr<Pivot, Direct, Conv>`, `largv` / `lartv<Rot, Ops>` / `lar2v<Rot, Ops>`, `larfg` (also one element per item), `larf<Side, Ops, alg::ScaleW | ScaleV, alg::Lockstep | Diverge>` (also on a `Frag` column), `lanst<NormType>`, `lange<NormType>`, `laqge`, `lascl<Part>`, `lacgv`, `trttp` / `tpttr` (also a column range with run-time uplo and direction), `trimask` / `tri_expand` (`Tri`, `UploC` / `DiagC`), `geam`, the SLM tile moves `tile_load[_trans]` / `tile_store[_pair, _diag]`, trsm's `tp_pack_lower` / `tp_diag_recip` / `lacpy_tile_in` / `lacpy_tile_out` / `frag_copy_out` |
 | `scalar.hh` | `Givens`, `lartg<W>` (`alg::LartgExact` / `LartgFast` / `Promote`), `lae2`, `laev2`, `las2`, `lapack_shift`, `eig2x2_nearest<alg::TieLowest | TieHighest>`, `detail::block_scale<alg::UnscaleRecip | UnscaleRatio>`, `larfg_scalars`, `lamch<C>`, `qnan`, `phase`, `sign_nonzero_real`, `SafeRecip` |
 | `reduce.hh` | `shuffle_xor`, `shuffle_down`, `butterfly<Lo, Hi, Order>`, `shift_reduce<Count>` (a lane stride), `ArgMax`, `argmax_merge<Tie, NaN>`, `ArgMaxMerge`, `ArgMaxSlots`, `argmax_allreduce`, `allreduce(ex, v, op)` / `allreduce(ex, scr, v, op, trailing_barrier)` (a `T` or a `std::array`), `AtomicMinSlot`, `alg::Tie*`, `alg::Nan*` |
@@ -264,14 +264,15 @@ dv::stedc<JobType::EigenVectors, dv::tier::Blocked<1>>(ex, d, e, lambda, Z, w, d
 // dense symmetric eigenproblem (ascending W; A holds the eigenvectors); options after the workspace
 dv::syev<JobType::EigenVectors, Uplo::Lower, Tier>(ex, dv::item(A, b), dv::vec(W + b * n, n), w, dv::SyevOptions<float>{});
 
-// bidiagonal reduction of a small real matrix in local memory (the host GebrdCTAKernel's body)
+// bidiagonal reduction of a small real matrix in local memory (the host GebrdCTAKernel's body);
+// w is this partition's slice (launch<routine::gebrd, Tier, T>::workspace)
 dv::gebrd<dv::tier::Cta<32>>(ex, it, dv::item(A, b), d, e, tauq, taup, w);
 
-// in-group gemm, any m, n, k: the host reg route's tile body, bit-identical for float
+// in-group gemm, any m, n, k: the host reg route's tile body, bit-identical for float; the
+// stage is the first l3::smem_bytes<Cfg>() of w.local (no global part)
 using Cfg = dv::l3::cfg::RegTiled<float, 32, 32, 8, 2, 2>;            // 256 items
-sycl::local_accessor<float> smem(dv::l3::smem_elems<Cfg>(), h);        // in the command group
 dv::gemm<Transpose::NoTrans, Transpose::Trans, Cfg>(ex, dv::One{}, dv::item(A, b), dv::item(B, b), dv::Zero{},
-                                                     dv::item(C, b), dv::l3::smem_of<Cfg>(smem));
+                                                     dv::item(C, b), w);
 
 // CSR times dense, BLAS argument order: C = alpha A B + beta C (no workspace)
 dv::spmm<Transpose::NoTrans, Transpose::NoTrans, Tier>(ex, alpha, dv::csr_item(A, b), dv::item(B, b), beta, dv::item(C, b));

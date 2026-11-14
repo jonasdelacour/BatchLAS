@@ -79,7 +79,7 @@ BATCHLAS_DEVICE_INLINE int getri(const Ex& ex, const MA& a, const PV& ipiv, cons
     const int n = ag.n;
     constexpr auto pl = detail::lu_blocked_plan<D, Cfg>();
     const int info = detail::permute_identity(ex, mat_wide(ag.p, n, n, ag.ld), ipiv, mat_wide(cg.p, n, n, cg.ld));
-    detail::lu_trsm_pair<Transpose::NoTrans, Tr::nb>(ex, ag, cg, l3::Smem<Cfg>{carve_local(ws, pl.smem).get_raw()});
+    detail::lu_trsm_pair<Transpose::NoTrans, Tr::nb, Cfg>(ex, ag, cg, sub_workspace(ws, pl.smem));
     return info;
 }
 

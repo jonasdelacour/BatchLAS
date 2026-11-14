@@ -187,7 +187,7 @@ protected:
     sycl::queue& q() { return sycl_queue(*this->ctx); }
 
     // The user-style kernel: SgpPartition<P> per matrix, the tier visited by with_tier, the
-    // workspace the work-group's local byte accessor (gebrd slices it per partition), dead
+    // workspace this partition's slice of the work-group's local byte accessor, dead
     // partitions with live = false.
     template <class R> void device_gebrd(GebrdData<R>& g, DevBuf<R>& a, DevBuf<R>& d, DevBuf<R>& e, DevBuf<R>& tq, DevBuf<R>& tp) {
         const MatrixView<R, MatrixFormat::Dense> av(a.p, g.n, g.n, g.ld, g.sa, kBatch);
@@ -212,9 +212,9 @@ protected:
                        const bool live = b < kBatch;
                        const int pb = live ? b : 0;
 #ifdef BATCHLAS_DEVICE_API_SVD_BREAK
-                       const std::size_t slice = (part & 1) ? lb : 0;
+                       const std::size_t slice = std::size_t(part + (part & 1)) * lb;
 #else
-                       const std::size_t slice = 0;
+                       const std::size_t slice = std::size_t(part) * lb;
 #endif
                        const device::Workspace w{slm.template get_multi_ptr<sycl::access::decorated::yes>() + slice, nullptr};
                        (void)device::gebrd<Tier>(ex, it, device::item(akv, pb, n, n), device::item(dvw, pb), device::item(evw, pb), device::item(tqv, pb),

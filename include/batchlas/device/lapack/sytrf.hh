@@ -521,7 +521,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
     const int n = A.rows();
     const auto pl = sytrf_blocked_plan<NB, D>(n);
     const auto am = argmax_slots<Mem::Global, true>(carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw());
-    const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
+    const Workspace sm = sub_workspace(ws, pl.smem);
     D* const w = carve_global(ws, pl.w);
     D* const a0 = &A(0, 0);
     const int lda = static_cast<int>(sytrf_ld(A));
