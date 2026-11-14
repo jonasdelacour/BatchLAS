@@ -128,7 +128,6 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const bool is_upper = upper;
         const int32_t max_sweeps = std::max<int32_t>(int32_t(1), static_cast<int32_t>(params.max_sweeps));
         const SteqrShiftStrategy shift_strategy = params.cta_shift_strategy;
-        const SteqrUpdateScheme update_scheme = params.cta_update_scheme;
         const bool do_sort = params.sort;
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
@@ -165,7 +164,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                const device::detail::cta_opts o{max_sweeps, shift_strategy, update_scheme, do_sort, ascending};
+                const device::detail::cta_opts o{max_sweeps, shift_strategy, do_sort, ascending};
                 // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
                 // back-transform; the stores skip a dead chunk.
                 device::detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(

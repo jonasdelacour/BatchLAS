@@ -7,7 +7,7 @@
 // Guards (agent-guide section 8):
 //   - bit-identity (memcmp) of the eigenvalues, Q (with vectors) and info for float and double,
 //     both jobz, n at every tier boundary (1, 2, 4, 5, 8, 9, 16, 17, 31, 32 = the ceiling), the
-//     three shift / update combinations and a one-sweep budget (info = 1 must occur: straddled);
+//     two shift strategies and a one-sweep budget (info = 1 must occur: straddled);
 //   - batch 1024 (32 / N problems per sub-group, the Q tiles at non-zero local offsets) with
 //     period-3 items: uniform, graded (d, e scaled by 2^-3i) and a split straddle (one e at 1/16
 //     and one at 16x the dsteqr negligibility bound, one exact zero);
@@ -51,13 +51,9 @@ template <class T> T nan_v() { return std::numeric_limits<T>::quiet_NaN(); }
 
 struct Case {
     SteqrShiftStrategy shift;
-    SteqrUpdateScheme update;
     int max_sweeps;
 };
-constexpr Case kCases[] = {{SteqrShiftStrategy::Lapack, SteqrUpdateScheme::EXP, 50},
-                           {SteqrShiftStrategy::Wilkinson, SteqrUpdateScheme::EXP, 50},
-                           {SteqrShiftStrategy::Lapack, SteqrUpdateScheme::PG, 50},
-                           {SteqrShiftStrategy::Lapack, SteqrUpdateScheme::EXP, 1}};
+constexpr Case kCases[] = {{SteqrShiftStrategy::Lapack, 50}, {SteqrShiftStrategy::Wilkinson, 50}, {SteqrShiftStrategy::Lapack, 1}};
 
 // Representative r of item b (b % kPeriod): 0 uniform, 1 graded, 2 the split straddle.
 template <class T> void fill(int n, std::vector<T>& d, std::vector<T>& e, std::vector<T>& q, int ld, int batch = kBatch) {
@@ -147,7 +143,6 @@ template <class T> class DeviceApiSteqrTest : public DeviceCoreTest<T> {
         p.back_transform = true;
         p.max_sweeps = static_cast<std::size_t>(c.max_sweeps);
         p.cta_shift_strategy = c.shift;
-        p.cta_update_scheme = c.update;
         const std::size_t bytes = steqr_cta_buffer_size<T>(*dev.ctx, dv_, ev, wv, jobz, p);
         std::byte* ws = dev.alloc<std::byte>(bytes, std::byte{0});
         (void)steqr_cta<kB, T>(*dev.ctx, dv_, ev, wv, Span<std::byte>(ws, bytes), jobz, p, Qv, Span<int32_t>(info, kBatch));
@@ -184,13 +179,13 @@ template <class T, JobType J, class TF> void bit_identity(TF& t) {
     for (const Case& c : kCases) {
         int failures = 0;
         for (int n : kNs) {
-            SCOPED_TRACE("n=" + std::to_string(n) + " shift=" + std::to_string(int(c.shift)) + " update=" +
-                         std::to_string(int(c.update)) + " sweeps=" + std::to_string(c.max_sweeps));
+            SCOPED_TRACE("n=" + std::to_string(n) + " shift=" + std::to_string(int(c.shift)) + " sweeps=" +
+                         std::to_string(c.max_sweeps));
             const int ld = n + 3;
             std::vector<T> d0, e0, q0;
             fill<T>(n, d0, e0, q0, ld);
             const auto h = t.host(n, ld, J, c, d0, e0, q0);
-            const auto g = t.template device<J>(n, ld, batchlas::device::steqr_opts{c.max_sweeps, c.shift, c.update}, d0, e0, q0);
+            const auto g = t.template device<J>(n, ld, batchlas::device::steqr_opts{c.max_sweeps, c.shift}, d0, e0, q0);
             EXPECT_EQ(bitdiff(g.w, h.w), 0);
             EXPECT_EQ(bitdiff(g.info, h.info), 0);
             if constexpr (J == JobType::EigenVectors) EXPECT_EQ(bitdiff(g.q, h.q), 0);  // pads included
@@ -215,7 +210,7 @@ TYPED_TEST(DeviceApiSteqrTest, WrongShiftIsSeen) {
     const Case c = kCases[0];
     const auto h = this->host(n, ld, JobType::EigenVectors, c, d0, e0, q0);
     const auto g = this->template device<JobType::EigenVectors>(
-        n, ld, batchlas::device::steqr_opts{c.max_sweeps, SteqrShiftStrategy::Wilkinson, c.update}, d0, e0, q0);
+        n, ld, batchlas::device::steqr_opts{c.max_sweeps, SteqrShiftStrategy::Wilkinson}, d0, e0, q0);
     EXPECT_GT(bitdiff(g.q, h.q), 0);
 }
 

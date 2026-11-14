@@ -596,17 +596,6 @@ inline SteqrShiftStrategy parse_steqr_shift_strategy(std::string value) {
     throw py::value_error("invalid steqr shift strategy");
 }
 
-inline SteqrUpdateScheme parse_steqr_update_scheme(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "pg") {
-        return SteqrUpdateScheme::PG;
-    }
-    if (value == "exp" || value == "explicit") {
-        return SteqrUpdateScheme::EXP;
-    }
-    throw py::value_error("invalid steqr update scheme");
-}
-
 inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
     value = lower_copy(std::move(value));
     if (value == "auto") {
@@ -1424,10 +1413,6 @@ SteqrParams<T> parse_steqr_params(const py::dict& options) {
     if (options.contains("cta_shift_strategy")) {
         params.cta_shift_strategy =
             parse_steqr_shift_strategy(py::cast<std::string>(options["cta_shift_strategy"]));
-    }
-    if (options.contains("cta_update_scheme")) {
-        params.cta_update_scheme =
-            parse_steqr_update_scheme(py::cast<std::string>(options["cta_update_scheme"]));
     }
     return params;
 }

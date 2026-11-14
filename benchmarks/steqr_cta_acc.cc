@@ -22,7 +22,7 @@ void EigensolverSizes(Benchmark* b) {
     for (double n : {16.0, 32.0, 64.0}) b->Args({n});
 }
 
-template <typename Real, Backend B, SteqrUpdateScheme Scheme>
+template <typename Real, Backend B>
 void run_steqr_cta(miniacc::State& state, const char* impl_name) {
     const int n = std::max(2, state.arg_int(0));
     const double target_log10 = std::isfinite(state.target_log10_cond()) ? state.target_log10_cond() : 1.0;
@@ -38,7 +38,6 @@ void run_steqr_cta(miniacc::State& state, const char* impl_name) {
     params.sort = true;
     params.transpose_working_vectors = false;
     params.sort_order = SortOrder::Ascending;
-    params.cta_update_scheme = Scheme;
 
     size_t produced = 0;
     while (produced < state.samples()) {
@@ -91,13 +90,8 @@ void run_steqr_cta(miniacc::State& state, const char* impl_name) {
 } // namespace
 
 template <typename Real, Backend B>
-static void ACC_STEQR_CTA_PG(miniacc::State& state) {
-    run_steqr_cta<Real, B, SteqrUpdateScheme::PG>(state, "steqr_cta_pg");
-}
-
-template <typename Real, Backend B>
-static void ACC_STEQR_CTA_EXP(miniacc::State& state) {
-    run_steqr_cta<Real, B, SteqrUpdateScheme::EXP>(state, "steqr_cta_exp");
+static void ACC_STEQR_CTA(miniacc::State& state) {
+    run_steqr_cta<Real, B>(state, "steqr_cta");
 }
 
 template <typename Benchmark>
@@ -105,7 +99,6 @@ void EigensolverSizesNetlib(Benchmark* b) {
     EigensolverSizes(b);
 }
 
-BATCHLAS_REGISTER_ACCURACY(ACC_STEQR_CTA_PG, EigensolverSizes)
-BATCHLAS_REGISTER_ACCURACY(ACC_STEQR_CTA_EXP, EigensolverSizes)
+BATCHLAS_REGISTER_ACCURACY(ACC_STEQR_CTA, EigensolverSizes)
 
 MINI_ACC_MAIN()

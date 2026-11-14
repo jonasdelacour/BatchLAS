@@ -260,6 +260,37 @@ template <int N, class T> struct sytrd_cta_plan {
 };
 
 // ---- xLATRD, Lower: one work-group, A in global memory ------------------------------------------
+// xLATRD's column update of panel column i: A(r, i) -= V(r, :i) W(i, :i)^H + W(r, :i) V(i, :i)^H,
+// each term subtracted from the running value (not a gemv: beta = 1 sums first), for A(i, i) on
+// the item with `diag` and rows r in [r0, r1) as lid, lid + stride, ... V is the unit-head panel
+// in Ab; vip / wip hold V(i, :i) and W(i, :i). The one body of latrd_lower_run and of the host
+// grid kernel (whose work-groups split the rows).
+template <class AB, class WB, class Loc>
+BATCHLAS_DEVICE_INLINE void latrd_col_update_run(const AB& Ab, const WB& Wb, const Loc& vip_local, const Loc& wip_local, int i, bool diag,
+                                              int r0, int r1, int lid, int stride) {
+    using T = std::remove_cvref_t<decltype(Ab(0, 0))>;
+    if (diag) {
+        T aii = Ab(i, i);
+        for (int p = 0; p < i; ++p) {
+            const T vip = vip_local[p];
+            const T wip = wip_local[p];
+            aii -= vip * ::batchlas::device::conj(wip) + wip * ::batchlas::device::conj(vip);
+        }
+        Ab(i, i) = aii;
+    }
+    for (int r = r0 + lid; r < r1; r += stride) {
+        T val = Ab(r, i);
+        for (int p = 0; p < i; ++p) {
+            const T wip = wip_local[p];
+            const T vip = vip_local[p];
+            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? T(Ab(r, p)) : T(0));
+            const T wrp = Wb(r, p);
+            val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
+        }
+        Ab(r, i) = val;
+    }
+}
+
 // The lower panel's one body (the host LatrdLowerPanelKernelLegacy's too): reduces columns 0 ..
 // ib-1 of the n x n matrix Ab (lower triangle read; ib <= n - 1) and forms W (n x ib), as xLATRD
 // UPLO = 'L'. Reflector i leaves in Ab(i+2:, i) with its unit Ab(i+1, i) := 1 (the trailing update
@@ -289,28 +320,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         }
         ex.barrier(Mem::Local);
 
-        // A(i:, i) -= V(i:, :i) W(i, :i)^H + W(i:, :i) V(i, :i)^H, each term subtracted from the
-        // running value (not a gemv: beta = 1 sums first).
-        if (lid == 0) {
-            T aii = Ab(i, i);
-            for (int p = 0; p < i; ++p) {
-                const T vip = vip_local[p];
-                const T wip = wip_local[p];
-                aii -= vip * ::batchlas::device::conj(wip) + wip * ::batchlas::device::conj(vip);
-            }
-            Ab(i, i) = aii;
-        }
-        for (int r = i + 1 + lid; r < n; r += WG) {
-            T val = Ab(r, i);
-            for (int p = 0; p < i; ++p) {
-                const T wip = wip_local[p];
-                const T vip = vip_local[p];
-                const T vrp = unit_head(A.col(p), p + 1)(r);
-                const T wrp = Wb(r, p);
-                val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
-            }
-            Ab(r, i) = val;
-        }
+        latrd_col_update_run(Ab, Wb, vip_local, wip_local, i, lid == 0, i + 1, n, lid, WG);
         ex.barrier(Mem::Global);
 
         // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.

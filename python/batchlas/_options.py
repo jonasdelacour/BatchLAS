@@ -88,7 +88,6 @@ class SteqrOptions:
     sort_order: str = "ascending"
     cta_wg_size_multiplier: int = 0  # 0: tuned per dtype and size
     cta_shift_strategy: str = "lapack"
-    cta_update_scheme: str = "exp"
 
 
 @dataclass(slots=True)

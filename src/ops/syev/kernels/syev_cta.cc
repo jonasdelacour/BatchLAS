@@ -101,7 +101,7 @@ Span<std::byte> ws_remaining(Span<std::byte> ws, std::size_t offset_bytes) {
 // SYTRD back-transform is explicit), the work-group multiplier wg_mult, and, when the caller
 // left max_sweeps and the shift strategy at their defaults, 400 / Wilkinson (the CTA STEQR
 // defaults are speed-oriented; large batches want the robust pair). A complex T copies the
-// fields over; its cta_update_scheme stays at the default.
+// fields over.
 template <typename T>
 SteqrParams<typename base_type<T>::type> cta_steqr_params(SteqrParams<T> p, size_t wg_mult) {
     using Real = typename base_type<T>::type;

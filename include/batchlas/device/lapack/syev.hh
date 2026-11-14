@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy, SteqrUpdateScheme
+#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/ormqr.hh>
 #include <batchlas/device/lapack/steqr.hh>
@@ -183,7 +183,6 @@ template <bool V, int N, class T> struct syev_cta_plan {
 struct cta_opts {  // the host SteqrParams fields of the same meaning
     std::int32_t max_sweeps;
     SteqrShiftStrategy shift;
-    SteqrUpdateScheme update;
     bool sort;
     bool ascending;
 };
@@ -263,7 +262,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
     if constexpr (!V) {
         // ---- Stage 2: eigenvalues only, no accumulator. ----
         detail::QSharedCache<Real, P, LDQ, false, QBuf> qcache(Q_local, base_q, lane, nn);
-        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift, o.update);
+        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift);
         on_solved(failed);
 
         const std::int32_t dst = slot_of(diag);
@@ -285,7 +284,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
 
         // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
         detail::QSharedCache<Real, P, LDQ, true, Buf> qcache(A_local, base_a, lane, nn);
-        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift, o.update);
+        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift);
         on_solved(failed);
 
         // The sweeps wrote the tile by row (lane == row); the readout reads it by column.
@@ -308,7 +307,7 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
         }
         group_barrier(part);
 
-        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift, o.update);
+        const bool failed = detail::steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn, o.max_sweeps, o.shift);
         on_solved(failed);
 
         const std::int32_t dst = slot_of(diag);
@@ -516,7 +515,7 @@ template <class Tv, class TQv> BATCHLAS_DEVICE_INLINE void sytrd_tau_pack_at(con
 }
 
 // The host syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}).
-inline constexpr steqr_opts default_opts{400, SteqrShiftStrategy::Wilkinson, SteqrUpdateScheme::EXP};
+inline constexpr steqr_opts default_opts{400, SteqrShiftStrategy::Wilkinson};
 
 }  // namespace detail
 
@@ -558,7 +557,7 @@ template <JobType J, Uplo UL, class Tier, class T> constexpr WorkspaceSize syev_
 //   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
 //                     (every lane calls with its partition's problem); ws.local. opts: steqr's.
 //   tier::Blocked<NB> any n, one problem per WorkGroup<256>, COLLECTIVE; ws.global is this matrix's
-//                     slice; opts.max_sweeps only (the work-group steqr's shift and update).
+//                     slice; opts.max_sweeps only (the work-group steqr's shift).
 // Returns 0, k > 0 when steqr did not converge (Cta: 1; Blocked: the e(j) != 0 left), -2 when A is
 // not square with 1 <= n (<= N for Cta); uniform.
 template <JobType J, Uplo UL, class Tier, class Ex, class MA, class WV>
@@ -589,7 +588,7 @@ BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Wo
         const auto q = carve_local(ws, plan.q).get();
         // The solve runs maskless over the whole sub-group: every lane reaches it (the contract).
         const auto solve = make_partition<P, false>(ex.part.sg);
-        const detail::cta_opts o{opts.max_sweeps, opts.shift, opts.update, true, true};
+        const detail::cta_opts o{opts.max_sweeps, opts.shift, true, true};
         bool failed = false;
         detail::syev_cta_run<T, P, kVecs, Lay::lda, Lay::ldq>(ex.part, solve, a, 0, v, 0, w, 0, q, 0, A, A, W, n, UL == Uplo::Upper,
                                                                    true, o, [&](bool f) BATCHLAS_DEVICE_BODY { failed = f; });

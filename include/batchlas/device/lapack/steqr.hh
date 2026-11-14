@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy, SteqrUpdateScheme
+#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
@@ -363,10 +363,11 @@ inline void solve_2x2_and_update(Partition partition,
     qcache.apply_if(pred, l0 + 1, l0, cs, sn);
 }
 
-// Pad: the chunks of the lockstep domain share one trip count, and a chunk
-// with `active` false or a shorter chase idles through identity rotations.
-// Idle state is never multiplied by a mask, only discarded by selects, so a
-// failed chunk's NaNs cannot reach d, e or Q. EXP only.
+// One shifted QL sweep on [l, m]. Pad: the chunks of the lockstep domain share one trip count,
+// and a chunk with `active` false or a shorter chase idles through identity rotations. Idle state
+// is never multiplied by a mask, only discarded by selects, so a failed chunk's NaNs cannot reach
+// d, e or Q.
+// evidence: docs/algorithms/steqr.md#steqr-the-cta-ql-step
 template <typename T, size_t P, bool Pad = false, typename Partition, typename QCache>
 inline void implicit_ql_step(const Partition& partition,
                              T& diag,
@@ -376,15 +377,14 @@ inline void implicit_ql_step(const Partition& partition,
                              int32_t l,
                              int32_t m,
                              SteqrShiftStrategy shift_strategy,
-                             SteqrUpdateScheme update_scheme,
                              bool active = true) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
     // An idle chunk's l and m are stale: clamp every shuffle source into the chunk.
     const int32_t ls = Pad ? sycl::clamp(l, int32_t(0), static_cast<int32_t>(P) - 2) : l;
     const int32_t ms = Pad ? sycl::clamp(m, int32_t(0), static_cast<int32_t>(P) - 1) : m;
 
-    // EXP scheme: QL as a QR-style bulge chase in *virtual reversed* indexing inside
-    // [l..m]. The only chase: QR sweeps run it on a mirrored block (reverse_block).
+    // QL as a QR-style bulge chase in *virtual reversed* indexing inside [l..m] (EXP).
+    // The only chase: QR sweeps run it on a mirrored block (reverse_block).
     const auto explicit_ql_step_exp = [&]() {
         // Preload shift inputs.
         T p0  = select_from_group(partition, diag, ls);
@@ -521,90 +521,7 @@ inline void implicit_ql_step(const Partition& partition,
         if (active) qcache.chase_end(l);
     };
 
-    if (Pad || update_scheme == SteqrUpdateScheme::EXP) {
-        explicit_ql_step_exp();
-        return;
-    }
-
-    // Broadcast values needed for the shift (all lanes participate).
-    const T p0 = select_from_group(partition, diag, l);
-    const T e0 = select_from_group(partition, offdiag, l);
-    const T dlp1 = select_from_group(partition, diag, l + 1);
-    const T dm = select_from_group(partition, diag, m);
-
-    // Partition-uniform scalar state (evaluated redundantly on every lane).
-    T g = T(0);
-    T c = T(1);
-    T s = T(1);
-    T p = T(0);
-
-    {
-        T mu = T(0);
-        if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
-            // Want the eigenvalue nearest D(l); eig2x2_nearest picks the one nearest its third arg.
-            mu = eig2x2_nearest<alg::TieHighest>(dlp1, e0, p0);
-        } else {
-            // LAPACK-style stable implicit shift.
-            mu = device::lapack_shift(p0, e0, dlp1);
-        }
-        g = dm - mu;
-    }
-
-    qcache.chase_begin(m);
-
-    for (int32_t i = m; i-- > l;) {
-        // Broadcast the tridiagonal entries needed for this step.
-        const T ei = select_from_group(partition, offdiag, i);
-        const T di = select_from_group(partition, diag, i);
-        const T dip1 = select_from_group(partition, diag, i + 1);
-
-        // Whether E(i+1) should be updated is a pure function of (i, m, n).
-        const bool do_e_upd = (i != (m - 1)) && ((i + 1) < (n - 1));
-
-        const auto [c1b, s1b, d_ip1_new_b, r1_out_b] = [&]() {
-            // {c1, s1, d_ip1_new, r1_out}
-            const T f = s * ei;
-            T rout = T(0);
-
-            const auto [c1, s1, r1] = device::lartg<device::alg::LartgFast>(g, f);
-
-            // In the original local-memory version: E(i+1) = r1 for i != m-1, when i+1 < N-1.
-            if (do_e_upd) {
-                rout = r1;
-            }
-
-            const T g2 = dip1 - p;
-            const T r2 = (di - g2) * s1 + T(2) * c1 * (c * ei);
-            p = s1 * r2;
-
-            const T d_ip1_new = g2 + p;
-            g = c1 * r2 - (c * ei);
-            c = c1;
-            s = s1;
-
-            return std::array{c1, s1, d_ip1_new, rout};
-        }();
-
-        // Apply D/E updates directly to registers (predicated, not branched).
-        const bool owns_ip1 = (lane == (i + 1));
-        diag = owns_ip1 ? d_ip1_new_b : diag;
-        offdiag = (owns_ip1 && do_e_upd) ? r1_out_b : offdiag;
-
-        // QL uses reversed-column convention; keep the same sign as before: apply(i+1,i,c,-s).
-        qcache.template chase_step<-1>(c1b, -s1b);
-    }
-
-    qcache.chase_end(l);
-
-    // Final updates: D(l) = D(l) - p, and E(l) = g.
-    const T d_l_new_b = p0 - p;
-    const T e_l_new_b = g;
-    if (lane == l) {
-        diag = d_l_new_b;
-        if (l < (n - 1)) {
-            offdiag = e_l_new_b;
-        }
-    }
+    explicit_ql_step_exp();
 }
 
 // One problem's STEQR outer loop: split at zero offdiagonals, then shifted QL sweeps
@@ -617,8 +534,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                                    QCache& qcache,
                                    int32_t n,
                                    int32_t max_sweeps,
-                                   SteqrShiftStrategy cta_shift_strategy,
-                                   SteqrUpdateScheme cta_update_scheme) {
+                                   SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -700,7 +616,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                 }
                 sweep_budget -= 1;
 
-                implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, cta_update_scheme);
+                implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
             }
 
             if (!advanced) {
@@ -734,8 +650,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                                  QCache& qcache,
                                  int32_t n,
                                  int32_t max_sweeps,
-                                 SteqrShiftStrategy cta_shift_strategy,
-                                 SteqrUpdateScheme cta_update_scheme) {
+                                 SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -839,8 +754,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
         }
         if (done) break;
 
-        implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m,
-                               cta_shift_strategy, cta_update_scheme);
+        implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
         sweep_budget -= 1;
         sweeps_at_l += 1;
     }
@@ -857,8 +771,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                                      QCache& qcache,
                                      int32_t n,
                                      int32_t max_sweeps,
-                                     SteqrShiftStrategy cta_shift_strategy,
-                                     SteqrUpdateScheme cta_update_scheme) {
+                                     SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -962,8 +875,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
 
         // ---- Every chunk with a pending sweep chases in the same pass. ----
         if (lockstep_any(partition, ready)) {
-            implicit_ql_step<T, P, true>(partition, diag, offdiag, qcache, n, l, m,
-                                         cta_shift_strategy, cta_update_scheme, ready);
+            implicit_ql_step<T, P, true>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, ready);
         }
         sweep_budget -= ready ? 1 : 0;
         sweeps_at_l += ready ? 1 : 0;
@@ -984,9 +896,8 @@ inline constexpr bool kSteqrCtaFlatPays = (P == 16) || (P == 8 && std::is_same_v
 //
 // A full-sub-group (emulated) partition promises every lane of the sub-group runs
 // this. P == 32 runs the nested loops maskless; smaller chunks on NVPTX take the
-// chunk-masked partition (every maskless form measured slower there); elsewhere EXP
-// takes the lockstep solver, while PG's nested loops are legal only while the chunks
-// happen not to diverge. Judge changes here by real-kernel A/B, not microbenchmarks.
+// chunk-masked partition (every maskless form measured slower there); elsewhere the
+// lockstep solver. Judge changes here by real-kernel A/B, not microbenchmarks.
 // evidence: docs/perf/steqr.md#full-warp-partition
 template <typename T, size_t P, typename Partition, typename QCache>
 inline bool steqr_cta_solve(const Partition& partition,
@@ -995,23 +906,18 @@ inline bool steqr_cta_solve(const Partition& partition,
                             QCache& qcache,
                             int32_t n,
                             int32_t max_sweeps,
-                            SteqrShiftStrategy cta_shift_strategy,
-                            SteqrUpdateScheme cta_update_scheme) {
+                            SteqrShiftStrategy cta_shift_strategy) {
     if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
         if constexpr (batchlas::sgp::kMaskedByDefault) {
             const auto chunk = make_partition<P, true>(partition.sg);
-            return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps,
-                                         cta_shift_strategy, cta_update_scheme);
-        } else if (cta_update_scheme == SteqrUpdateScheme::EXP) {
-            return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                                  cta_shift_strategy, cta_update_scheme);
+            return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
+        } else {
+            return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
         }
     } else if constexpr (kSteqrCtaFlatPays<T, P>) {
-        return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                          cta_shift_strategy, cta_update_scheme);
+        return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
     }
-    return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                        cta_shift_strategy, cta_update_scheme);
+    return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
 }
 
 // No report between the solve and the stores (the device op returns the flag instead).
@@ -1025,7 +931,7 @@ struct NoReport {
 template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache,
           typename Report = NoReport>
 BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
-                                       int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live,
+                                       int32_t max_sweeps, SteqrShiftStrategy shift, bool live,
                                        Report report = {}) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
     if constexpr (ComputeVecs) {
@@ -1033,7 +939,7 @@ BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, 
     }
     T diag = (live && lane < n) ? d(lane) : T(0);
     T offdiag = (live && lane < (n - 1)) ? e(lane) : T(0);
-    const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, shift, update);
+    const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, shift);
     report(failed);
     if (live && lane < n) d(lane) = diag;
     if (live && lane < (n - 1)) e(lane) = offdiag;
@@ -1175,11 +1081,10 @@ template <JobType J> struct steqr {
 }  // namespace routine
 
 // The run-time knobs of the solve (the host SteqrParams fields of the same meaning). The Blocked
-// tier reads max_sweeps only (steqr_wg's shift and update, as the host route).
+// tier reads max_sweeps only (steqr_wg's shift, as the host route).
 struct steqr_opts {
     int max_sweeps = 50;
     SteqrShiftStrategy shift = SteqrShiftStrategy::Lapack;
-    SteqrUpdateScheme update = SteqrUpdateScheme::EXP;
 };
 
 template <JobType J, int N, class Alg, class T> struct tier_info<routine::steqr<J>, tier::Cta<N, Alg>, T> {
@@ -1246,7 +1151,7 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
         const detail::steqr_cta_plan<kVecs, N, T> plan{};
         detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
         const bool failed = detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
-                                                                     opts.shift, opts.update, true);
+                                                                     opts.shift, true);
         return failed ? 1 : 0;
     }
 }

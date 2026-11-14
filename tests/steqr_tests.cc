@@ -78,21 +78,6 @@ std::optional<verify::Slack> float_slack(verify::Slack s) {
 }
 const verify::Slack kClosedFormN16{0.16, "old bound 1e-5 absolute, ||T||_2 = 2"};
 
-static inline const char* update_scheme_name(SteqrUpdateScheme scheme) {
-    switch (scheme) {
-        case SteqrUpdateScheme::PG:
-            return "PG";
-        case SteqrUpdateScheme::EXP:
-            return "EXP";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-static constexpr std::array<SteqrUpdateScheme, 2> kSteqrUpdateSchemes = {
-    SteqrUpdateScheme::PG,
-    SteqrUpdateScheme::EXP,
-};
 }
 
 template <typename T, Backend B>
@@ -246,7 +231,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues), dense_A.all_items());
 }
 
-TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
+TYPED_TEST(SteqrTest, SteqrRandomN8WilkinsonCompare) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -275,9 +260,8 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
                          ws_ref.to_span(), JobType::EigenVectors, params_ref, eigvects_ref);
     this->ctx->wait();
 
-    // --- STEQR with explicit update schemes ---
-    for (auto scheme : kSteqrUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    // --- CTA STEQR, Wilkinson shift ---
+    {
         Vector<float_type> evals_cta = Vector<float_type>::zeros(n, batch);
         auto eigvects_cta = Matrix<float_type>::Zeros(n, n, batch);
         SteqrParams<float_type> params_cta = {};
@@ -286,7 +270,6 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
         params_cta.transpose_working_vectors = false;
         params_cta.sort_order = SortOrder::Ascending;
         params_cta.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
-        params_cta.cta_update_scheme = scheme;
 
         UnifiedVector<std::byte> ws_cta(
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
@@ -295,7 +278,7 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
                              ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
         this->ctx->wait();
 
-        // Two results of the code under test (default vs explicit scheme), not a reference.
+        // Two results of the code under test (default vs Wilkinson shift), not a reference.
         UnifiedVector<float_type> w_cta(n * batch), w_ref(n * batch);
         for (int i = 0; i < n * batch; ++i) w_cta[i] = evals_cta(i % n, i / n), w_ref[i] = evals_ref(i % n, i / n);
         test_utils::expect_eigenvalues_agree<float_type>(w_cta, w_ref, n, batch);
@@ -304,7 +287,7 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
+TYPED_TEST(SteqrTest, SteqrSingleMatrixWilkinson) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -322,8 +305,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
         expected_eigenvalues[i-1] = float_type(a - 2.0f * std::sqrt(b * c) * std::cos(M_PI * i / (n + 1)));
     }
 
-    for (auto scheme : kSteqrUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         // fresh output buffers each iteration
         Vector<float_type> eigenvalues(n, batch);
         auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
@@ -333,7 +315,6 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
         params.transpose_working_vectors = false;
         params.sort_order = SortOrder::Ascending;
         params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
-        params.cta_update_scheme = scheme;
 
         auto ws = UnifiedVector<std::byte>(
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
@@ -352,7 +333,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
     }
 }
 
-TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
+TYPED_TEST(SteqrTest, SteqrBatchedMatricesWilkinson) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
@@ -373,15 +354,13 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
         }
     }
 
-    for (auto scheme : kSteqrUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         SteqrParams<float_type> params = {};
         params.max_sweeps = 10;
         params.sort = true;
         params.transpose_working_vectors = false;
         params.sort_order = SortOrder::Ascending;
         params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
-        params.cta_update_scheme = scheme;
 
         Vector<float_type> eigenvalues(n, batch);
         auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
@@ -409,7 +388,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
     constexpr Backend B = TestFixture::BackendType;
     // Each size runs a host LAPACK reference over the whole batch, so cost is
     // linear in `batch` x 29 sizes. Large-batch dispatch stays covered by
-    // SteqrBatchedMatricesWithSchemes (batch=1280); keep the full size sweep,
+    // SteqrBatchedMatricesWilkinson (batch=1280); keep the full size sweep,
     // which is what actually exercises the block/tail boundaries.
     const int batch = 64;
     for (int n = 4; n <= 32; ++n) {
@@ -609,16 +588,15 @@ void stress_run_case(Queue& ctx,
         ctx.wait();
     }
 
-    // steqr (alternate scheme): eigenvalues only, but still requires a square eigvects argument.
+    // steqr (Wilkinson shift): eigenvalues only, but still requires a square eigvects argument.
     {
-        stress_debug_log("stress_run_case: steqr(alt-scheme)");
+        stress_debug_log("stress_run_case: steqr(wilkinson)");
         SteqrParams<Real> params = {};
         params.max_sweeps = 200;
         params.sort = true;
         params.transpose_working_vectors = false;
         params.sort_order = SortOrder::Ascending;
         params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
-        params.cta_update_scheme = SteqrUpdateScheme::EXP;
 
         auto ws = UnifiedVector<std::byte>(
             steqr_buffer_size<Real>(ctx, diag, sub, cta_eigs, JobType::EigenVectors, params),
@@ -1236,7 +1214,7 @@ bool run_steqr_vectors(Queue& ctx, const std::vector<std::vector<long double>>& 
 // with be < n-1 (a map that drops bb passes every unsplit input). Every warp
 // at n <= 16 holds both directions, n = 32 is the stedc leaf width (one item
 // per warp, so a smaller batch), and batch 4099 leaves a ragged final
-// work-group. Every item is checked, under every shift and update scheme.
+// work-group. Every item is checked, under both shift strategies.
 // ---------------------------------------------------------------------------
 TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
     using T = typename TestFixture::ScalarType;
@@ -1284,17 +1262,16 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
             ref[b] = sturm_eigenvalues(hd[b], he[b]);
         }
 
-        for (const auto scheme : kSteqrUpdateSchemes) {
+        {
             for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
                 // NETLIB's host queue never takes steqr_cta (should_use_cta, src/ops/syev/steqr/steqr.cc:15-24,40-43)
-                // and steqr_wg reads no cta_* field: every (scheme, shift) pair there is the same run.
-                if (B == Backend::NETLIB && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack))
+                // and steqr_wg reads no cta_* field: every shift there is the same run.
+                if (B == Backend::NETLIB && shift != SteqrShiftStrategy::Lapack)
                     continue;
                 Vector<Real> evals(n, Real(0), batch);
                 auto eigvects = Matrix<Real>::Zeros(n, n, batch);
                 UnifiedVector<int32_t> info(batch, int32_t(0));
                 SteqrParams<Real> params = {};
-                params.cta_update_scheme = scheme;
                 params.cta_shift_strategy = shift;
                 std::string skip;
                 if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
@@ -1302,7 +1279,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
                 }
 
                 if (tridiag_batch_ok(*this->ctx, hd, he, ref, evals, eigvects, info)) continue;
-                const std::string tag = std::string("n=") + std::to_string(n) + " " + update_scheme_name(scheme) +
+                const std::string tag = std::string("n=") + std::to_string(n) +
                                         (shift == SteqrShiftStrategy::Lapack ? " Lapack" : " Wilkinson");
                 int bad_items = 0;
                 for (int b = 0; b < batch && bad_items < 8; ++b) {
@@ -1358,12 +1335,11 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
             }
         }
 
-        for (const auto scheme : kSteqrUpdateSchemes) {
+        {
             Vector<Real> evals(n, Real(0), batch);
             auto eigvects = Matrix<Real>::Zeros(n, n, batch);
             UnifiedVector<int32_t> info(batch, int32_t(-1));
             SteqrParams<Real> params = {};
-            params.cta_update_scheme = scheme;
             std::string skip;
             if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
                 GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
@@ -1380,7 +1356,7 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
                     ok = info[b] > 0;
                 }
                 if (!ok) ++bad_items;
-                EXPECT_TRUE(ok) << "n=" << n << " " << update_scheme_name(scheme) << " item " << b << " (chunk "
+                EXPECT_TRUE(ok) << "n=" << n << " item " << b << " (chunk "
                                 << b % per_warp << "): info " << info[b] << ", " << why;
             }
         }

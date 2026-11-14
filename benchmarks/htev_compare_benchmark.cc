@@ -40,7 +40,6 @@ static void BM_HTEV_STEQR(minibench::State& state) {
     JobType jobz = JobType::EigenVectors;
 
     SteqrParams<T> params;
-    params.cta_update_scheme = SteqrUpdateScheme::EXP;
     params.back_transform    = false;
 
     auto q         = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);

@@ -39,7 +39,6 @@ static void BM_STEQR(minibench::State& state) {
     params.max_sweeps = n_sweeps;
     params.cta_wg_size_multiplier = wg_multiplier;
     params.cta_shift_strategy = (shift_kind == 1) ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
-    params.cta_update_scheme = SteqrUpdateScheme::EXP;
     params.back_transform = false;
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;

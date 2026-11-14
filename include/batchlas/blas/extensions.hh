@@ -1128,17 +1128,6 @@ namespace batchlas {
         Wilkinson = 1,  ///< Wilkinson shift computed from the trailing \f$2 \times 2\f$ block.
     };
 
-    /**
-     * @brief Update scheme of the CTA STEQR's implicit QR/QL steps.
-     *
-     * The default (SteqrParams::cta_update_scheme) is `EXP`.
-     * @see @ref algo_steqr, section "steqr: the CTA update schemes EXP and PG"
-     */
-    enum class SteqrUpdateScheme {
-        PG = 0,   ///< Parlett-Gray style scalar recurrence.
-        EXP = 1,  ///< Explicit similarity update mirroring steqr.cc's bulge-chasing math.
-    };
-
     /** @brief Parameters for steqr() and steqr_cta(), and for stedc()'s leaf solves. */
     template <typename T>
     struct SteqrParams {
@@ -1160,7 +1149,6 @@ namespace batchlas {
         size_t cta_wg_size_multiplier = 0;
 
         SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;  ///< CTA STEQR only: shift strategy.
-        SteqrUpdateScheme cta_update_scheme = SteqrUpdateScheme::EXP;        ///< CTA STEQR only: update scheme.
     };
 
 
