@@ -2662,12 +2662,6 @@ namespace batchlas {
     /// @addtogroup api_tridiag
     /// @{
 
-    /** @brief Secular-equation root finder used by stedc()'s merge step. */
-    enum class StedcSecularSolver {
-        Rocm,    ///< rocSOLVER-style solver (default).
-        Legacy,  ///< Original BatchLAS solver.
-    };
-
     /** @brief How the merge step (secular solve + eigenvector formation) is dispatched. */
     enum class StedcMergeVariant {
         Auto = -1,          ///< Use BatchLAS tuning tables for the current problem size
@@ -2692,7 +2686,6 @@ namespace batchlas {
     struct StedcParams {
         int64_t recursion_threshold = 0; ///< Leaf size; \f$\le 0\f$ uses BatchLAS tuning, otherwise this exact threshold
         StedcAlgorithm algorithm = StedcAlgorithm::Auto;               ///< Merge-tree driver.
-        StedcSecularSolver secular_solver = StedcSecularSolver::Rocm;  ///< Secular root finder.
         SteqrParams<T> leaf_steqr_params = SteqrParams<T>();           ///< Parameters of the leaf steqr() solves.
 
         StedcMergeVariant merge_variant = StedcMergeVariant::Auto;     ///< Merge-step dispatch.

@@ -205,7 +205,6 @@ set(EXTENSIONS_SYTRD_SOURCES
 
 set(EXTENSIONS_STEDC_SOURCES
     syev/stedc/stedc.cc
-    syev/stedc/stedc_secular.cc
     syev/stedc/stedc_merge_kernels.cc
 )
 

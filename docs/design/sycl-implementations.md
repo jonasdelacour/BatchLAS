@@ -79,8 +79,7 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
   `CUDAToolkit_ROOT` from acpp's `default-cuda-path`, and fails when FindCUDAToolkit's toolkit is not
   the one acpp compiles against (stale cache in an old tree).
 - **No GPU at configure:** an explicit `cuda:sm_XX` builds the CUDA backend from `librt-backend-cuda`.
-- **No `SYCL_EXTERNAL`:** the secular-equation root solvers (`stedc_secular_roots.hh`) are `inline`
-  where it is undefined. Device code may not name a `__host__`-only function.
+- **No `SYCL_EXTERNAL`:** device code may not name a `__host__`-only function.
 - **Target dispatch:** `on_ptx()` is true and `target_arch()` is `__CUDA_ARCH__ / 10` in the device
   pass; `redux` keys on `BATCHLAS_NVPTX_ARCH`.
 - **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the CUDA

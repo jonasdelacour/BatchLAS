@@ -403,9 +403,14 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
         }
 
         // The tuned default (STEDC_THREADS_PER_ROOT_*, 8 in every bucket) is one
-        // of these; parts_per_wg = wg_size / P varies across the sweep.
-        for (int P : {4, 8, 16, 32}) {
-            SCOPED_TRACE("log10cond=" + std::to_string(log10_cond) + " P=" + std::to_string(P));
+        // of these; parts_per_wg = wg_size / P varies across the sweep. P = 0:
+        // the Fused and Baseline merges, laed4 on one work-item per root.
+        using MV = StedcMergeVariant;
+        const std::pair<MV, int> arms[] = {{MV::FusedCta, 4}, {MV::FusedCta, 8}, {MV::FusedCta, 16},
+                                           {MV::FusedCta, 32}, {MV::Fused, 0}, {MV::Baseline, 0}};
+        for (const auto& [variant, P] : arms) {
+            SCOPED_TRACE("log10cond=" + std::to_string(log10_cond) + " variant=" + std::to_string(int(variant)) +
+                         " P=" + std::to_string(P));
             auto a_cta = diag;
             auto b_cta = sub;
             UnifiedVector<float_type> W(static_cast<size_t>(n) * batch);
@@ -414,7 +419,7 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
 
             StedcParams<float_type> params{
                 .recursion_threshold = 16,
-                .merge_variant = StedcMergeVariant::FusedCta,
+                .merge_variant = variant,
                 .enable_rescale = true,
                 .secular_threads_per_root = P,
             };
@@ -528,24 +533,17 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 // tree of leaf steqr calls and secular-equation merges, and either level can
 // fail to converge on one batch item while every other item is fine.
 //
-// WHICH KNOB FORCES A FAILURE, AND WHICH ONLY LOOKS LIKE IT DOES.
+// WHICH KNOB FORCES A FAILURE. stedc has two caps:
 //
-// stedc has two caps and they are NOT equally reachable, which is the trap in
-// writing the forced case:
-//
-//   * `leaf_steqr_params.max_sweeps` is real. It caps the leaf steqr, and the
+//   * `leaf_steqr_params.max_sweeps` caps the leaf steqr, and the
 //     level-synchronous driver -- the default -- folds each leaf's status back
 //     into the caller's span (src/ops/syev/stedc/stedc.cc:922-937; the fold is
 //     needed because that one steqr call solves leaves*batch problems, so its
 //     batch axis is LONGER than `info`). This is what the forced case below
 //     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
-//   * `max_sec_iter` is NOT reachable on the arms that run by default:
-//     src/ops/syev/stedc/stedc_secular.cc:298 and :521 hardcode `i < 50` and :700
-//     hardcodes `iter >= 100`, so the parameter never reaches the loop. Only
-//     Fused/FusedCta honour it (stedc_merge_cta.cc:1006). A test that set
-//     max_sec_iter, ran the default arm and watched nothing fail would look
-//     exactly like a working guard while testing a value that never left the
-//     parameter struct -- so it is not written here.
+//   * `max_sec_iter` caps device::laed4 on every merge arm (Baseline, Fused,
+//     FusedCta); the forced case below still uses the leaf cap, the failure
+//     LAPACK reports.
 // ---------------------------------------------------------------------------
 
 TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {

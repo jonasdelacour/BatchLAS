@@ -96,16 +96,13 @@ The GPU solver is rocSOLVER's `seq_solve`/`seq_solve_ext` [6]: `dlaed4` [5] with
    bracket, step halfway to its end ([`src/ops/syev/stedc/stedc_merge_cta.cc:275-277`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L275-L277), [`158-160`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L158-L160)).
 5. **Stop** at \f$|g| \le \varepsilon\,\mathrm{err}\f$ ([`src/ops/syev/stedc/stedc_merge_cta.cc:365`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L365),
    [`393`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L393)), \f$\mathrm{err}\f$ the running bound `ERRETM` of `dlaed4` ([`354-356`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L354-L356)), or at the step
-   cap, raising `info`: `max_sec_iter` (`FusedCta`), 50 (`Baseline`, `Fused`), 100 (`Legacy`).
+   cap `max_sec_iter` (every merge), raising `info`.
 
 The last root takes \f$o = d_k\f$, \f$\tau \in (0, \sigma/2]\f$ or \f$[\sigma/2, \sigma]\f$ by the
 sign of \f$g(d_k + \sigma/2)\f$, and the single scheme \f$C = g - \delta_{k-1}\psi' - \delta_k\phi'\f$
 ([`src/ops/syev/stedc/stedc_merge_cta.cc:448-480`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L448-L480), [`530-539`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L530-L539)). For \f$k = 1\f$,
-\f$\lambda = d_1 + \sigma z_1^2\f$ ([`439-442`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L439-L442)). `Baseline` and `Fused` use a copy of this solver,
-[`src/ops/syev/stedc/stedc_secular_roots.hh:127-611`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_secular_roots.hh#L127-L611).
-
-> **Warning:** the `Legacy` solver never reads `rho`; it solves the \f$\sigma = 1\f$ equation
-> ([`src/ops/syev/stedc/stedc_secular.cc:72-88`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_secular.cc#L72-L88)).
+\f$\lambda = d_1 + \sigma z_1^2\f$ ([`439-442`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L439-L442)). Every merge runs this one solver, `device::laed4`
+(`include/batchlas/device/lapack/laed4.hh`); `Baseline` and `Fused` on one work-item per root.
 
 ## stedc: recomputing z for orthogonal eigenvectors
 
@@ -173,7 +170,7 @@ even/odd views with two GEMMs and never narrow ([`src/ops/syev/stedc/stedc.cc:47
 | otherwise | `stedc_impl` |
 
 On GPU, \f$n_0\f$, `merge_variant` (default `FusedCta`) and lanes per root \f$p\f$ come from
-[`tuning_params.hh:107-128`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/include/batchlas/tuning_params.hh#L107-L128). Elsewhere the solver is `Legacy`, the merge `Baseline`, and \f$n_0 = 1\f$ unless
+[`tuning_params.hh:107-128`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/include/batchlas/tuning_params.hh#L107-L128). Elsewhere the merge is `Baseline` and \f$n_0 = 1\f$ unless
 `recursion_threshold` is set, so \f$L = 0\f$ and recursion runs to \f$1 \times 1\f$ leaves
 ([`src/ops/syev/stedc/stedc.cc:49-58`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L49-L58)).
 
@@ -183,8 +180,6 @@ On GPU, \f$n_0\f$, `merge_variant` (default `FusedCta`) and lanes per root \f$p\
 | `Fused`; `FusedCta` without sub-group 32 | [`src/ops/syev/stedc/stedc_merge_kernels.cc:21-108`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_kernels.cc#L21-L108) | thread per root |
 | `FusedCta`, \f$p \le 32\f$ | [`src/ops/syev/stedc/stedc_merge_cta.cc:782-861`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L782-L861) | \f$p\f$ lanes per root, \f$d, z\f$ in local memory |
 | `FusedCta`, \f$p > 32\f$ | [`src/ops/syev/stedc/stedc_merge_cta.cc:865-952`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L865-L952) | work-group, roots serial |
-| `Legacy` solver, any variant | [`src/ops/syev/stedc/stedc_secular.cc:37-186`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_secular.cc#L37-L186) | work-group, roots serial, log-domain product |
-
 ## stedc: references
 
 1. J. J. M. Cuppen, "A divide and conquer method for the symmetric tridiagonal eigenproblem",

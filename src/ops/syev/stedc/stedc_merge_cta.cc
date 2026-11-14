@@ -17,7 +17,6 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include <src/math-helpers.hh>
-#include <src/ops/syev/stedc/stedc_secular.hh>
 #include <src/ops/syev/stedc/stedc_merge_kernels.hh>
 #include <src/kernels/common/info_span.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>

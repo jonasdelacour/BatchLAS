@@ -607,17 +607,6 @@ inline SteqrUpdateScheme parse_steqr_update_scheme(std::string value) {
     throw py::value_error("invalid steqr update scheme");
 }
 
-inline StedcSecularSolver parse_stedc_secular_solver(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "rocm") {
-        return StedcSecularSolver::Rocm;
-    }
-    if (value == "legacy") {
-        return StedcSecularSolver::Legacy;
-    }
-    throw py::value_error("invalid stedc secular_solver");
-}
-
 inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
     value = lower_copy(std::move(value));
     if (value == "auto") {
@@ -1457,9 +1446,6 @@ StedcParams<T> parse_stedc_params(const py::dict& options) {
         py_scalar_or_default<int>(options, "secular_cta_wg_size_multiplier", params.secular_cta_wg_size_multiplier);
     if (options.contains("algorithm")) {
         params.algorithm = parse_stedc_algorithm(py::cast<std::string>(options["algorithm"]));
-    }
-    if (options.contains("secular_solver")) {
-        params.secular_solver = parse_stedc_secular_solver(py::cast<std::string>(options["secular_solver"]));
     }
     if (options.contains("merge_variant")) {
         params.merge_variant = parse_stedc_merge_variant(py::cast<std::string>(options["merge_variant"]));

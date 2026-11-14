@@ -161,8 +161,6 @@ public:
             "src/ops/syev/stedc/stedc_merge_cta.cc",
             "src/ops/syev/stedc/stedc_merge_kernels.cc",
             "src/ops/syev/stedc/stedc_merge_kernels.hh",
-            "src/ops/syev/stedc/stedc_secular.cc",
-            "src/ops/syev/stedc/stedc_secular.hh",
             "src/ops/ormqr/kernels/ormqr_blocked.cc",
             "src/kernels/common/larft_wy.hh",
             "src/ops/syev/kernels/uplo_mirror.cc",

@@ -93,8 +93,9 @@ layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::rot_ro
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::rot_round_right
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::round_robin_pair
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::sym_schur2
+layout-detail-use src/ops/syev/stedc/stedc.cc device::detail::denominators
+layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::denominators
 layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::rescale
-layout-detail-use src/ops/syev/stedc/stedc_secular.cc device::detail::fold
 layout-detail-use src/ops/syev/steqr/steqr_cta.cc device::detail::QSharedCache
 layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::wg_forward
 layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::wg_solve_2x2

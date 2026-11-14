@@ -31,8 +31,8 @@ enabled, 15-20% end to end (batch 256, float, \f$n = 64\f$ 0.930 -> 0.782 ms, \f
 ## stedc: the dd == 1 secular-solve fault
 
 When a subproblem deflates to `dd == 1`, `solve_root_ext_generic` dereferenced `d_prob(dd - 2)`, out
-of the shared window (`CUDA_ERROR_ILLEGAL_ADDRESS`). Both the CTA solver and `sec_solve_ext_roc`
-(`stedc_secular.cc`) now return the closed form \f$x = d_0 + \rho z_0^2\f$ first.
+of the shared window (`CUDA_ERROR_ILLEGAL_ADDRESS`). `device::laed4` (`detail::solve_last`), the one
+solver of every merge, now returns the closed form \f$x = d_0 + \rho z_0^2\f$ first.
 `StedcTest.FusedCtaConditionedHeavyDeflation` (log10 condition 1, 3, 5, all four widths) reproduces
 the fault when the fix is reverted.
 
@@ -115,26 +115,46 @@ clustered small eigenvalues: good residuals, bimodal orthogonality.
 
 ## stedc: the rejected private-pole fast path
 
-The fused merge (`stedc_merge_kernels.cc`) runs the secular solver in place in `Q_bid`. Keeping the
-poles in a private `T d_priv[128]` array gave bimodal orthogonality for float \f$n \le 64\f$; in place
-matches the baseline exactly.
+The fused merge once ran its own secular solver in place in `Q_bid`; keeping the poles in a private
+`T d_priv[128]` array gave bimodal orthogonality for float \f$n \le 64\f$. It now runs `device::laed4`
+on the poles in global memory ([below](#stedc-one-secular-solver)).
+
+## stedc: one secular solver
+
+Every merge (`FusedCta`, `Fused`, `Baseline`, and the CPU device) solves its roots with
+`device::laed4`; the per-thread rocSOLVER copy (`sec_solve_roc`, `sec_solve_ext_roc`) and the
+original `Legacy` solver (`StedcSecularSolver`) are gone. `Legacy` was 3.4-4.5x slower than
+`FusedCta` (float, \f$n = 64, 128\f$) and 3.7x in double at \f$n = 64\f$. Two changes made `laed4` the
+faster body on one work-item per root:
+
+- `s += w * ratio` as one expression (an FMA; two statements were a DMUL and a DADD).
+- FP64 keeps \f$d - o\f$ in the root's `Q(:, k)` scratch, one subtraction per term less; float ignores
+  the scratch, whose strided reads cost it 4-6% (`Baseline` float \f$n = 64\f$: 0.876 with, 0.825
+  without).
+
+`stedc` jobz = V, batch 1024 / 512 / 256 / 128 at \f$n\f$ = 64 / 128 / 256 / 512, RTX 4090, 16
+alternating reps, new / old:
+
+| merge | float | double |
+| --- | --- | --- |
+| `Baseline` | 0.823-0.932 | 0.987-1.013 (\f$n = 64\f$: 1.013) |
+| `Fused` | 0.875-0.941 | 0.936-0.980 |
+| `FusedCta` (default) | 0.997-1.000 | 0.991-0.995 |
+
+`Baseline` double at \f$n = 64\f$ was 1.030 with neither change and 1.021 with the FMA alone; before the
+FMA its solve kernel ran 16% more FP64 instructions than the old solver (ncu).
 
 ## stedc: convergence reporting through info
 
-Every secular root solver reports whether it met tolerance; a root that hit the iteration cap is a
-failure, not a silently wrong eigenvalue.
+`device::laed4` reports whether each root met tolerance (`laed4_root::converged`); a root that hit
+`max_sec_iter` is a failure, not a silently wrong eigenvalue.
 
-- The flag is an out-parameter with no default, so a new call site cannot drop it.
 - Reports from several threads of one item merge through an atomic `fetch_max`.
 - The public `stedc` clears `info` once; callers running `stedc` twice on the same items (`gesvd`)
   must use the no-clear entry point.
 
-The device/host choice of secular routine tests `is_gpu`, not `B != Backend::NETLIB`: the host
-runtime cannot run the ROCm-style root routines inside SYCL kernels.
-
 ## stedc: open debts
 
-- **`max_sec_iter` does not reach one exit arm:** `stedc_secular.cc` uses a literal 100 there.
 - **Direct eigenvalues-only calls** still build eigenvectors
   ([above](#stedc-eigenvalues-only-still-builds-eigenvectors)).
 
@@ -168,7 +188,7 @@ tolerance both passed residual checks with bimodal float orthogonality at \f$n \
 
 ## stedc: literature on the merge
 
-The secular solver (`solve_root_roc_generic`) is the rocSOLVER middle-way / fixed-weight hybrid with
+The secular solver (`device::laed4`) is the rocSOLVER middle-way / fixed-weight hybrid with
 bound-clamped steps; it follows the recommended scheme, leave it alone. Untried leads: relative-accuracy
 Löwner vectors (Jakovčević Stor, Slapničar & Barlow, arXiv:1405.7537; could remove `enable_rescale`),
 HSS-compressed eigenvectors for large n (arXiv:1510.04591), and boundary-row D&C for values-only
