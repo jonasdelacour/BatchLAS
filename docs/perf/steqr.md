@@ -68,8 +68,10 @@ dead tail chunks onto a zero problem instead of returning:
 - **`P = 32`** runs the nested loops unchanged; MATCH.ANY and VOTEU drop from 10-11 to 0 per kernel.
   Float n = 24 and n = 32 gain 1.07-1.09x (kernel), public `steqr` 1.05-1.10x; double is FP64-pipe
   bound and unchanged.
-- **`P < 32` on NVPTX** rebuilds the native partition and runs the flat or nested form.
-- **Other targets** have no native partition and run the lockstep solver.
+- **`P < 32`** rebuilds the chunk-masked partition (`make_partition<P, true>`) on every backend that
+  masks by default (NVPTX, AMDGCN, SPIR-V, acpp SSCP) and runs the flat or nested form.
+- **The generic backend** (DPC++ Native CPU; acpp with `BATCHLAS_SGP_FORCE_GENERIC`) has no device
+  partition and runs the lockstep solver.
 
 ### Rejected: full-warp variants
 

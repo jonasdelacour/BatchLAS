@@ -421,7 +421,7 @@ BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_pro
 /// uniform. max_iter >= 1 caps the iteration (StedcParams::max_sec_iter). scratch (Thread
 /// only): dd writable entries of this item, contents undefined on return; the same root. FP64
 /// holds d - origin there (one subtraction per term less); float ignores it (its strided reads
-/// cost more than the subtraction). evidence: docs/perf/stedc.md#stedc-one-secular-solver
+/// cost more than the subtraction). `evidence: docs/perf/stedc.md#stedc-one-secular-solver`
 template <class Ex, class DV, class T, class SV = detail::NoScratch>
 BATCHLAS_DEVICE_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho, std::int32_t max_iter,
                                          const SV& scratch = {}) {

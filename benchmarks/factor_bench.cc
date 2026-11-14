@@ -19,6 +19,7 @@
 //
 //   usage: factor_bench <op> <type> <m> <n> <nrhs> <batch> <reps>
 //                       [--route=<pin>] [--csv=<path>] [--arms=a,b,...]
+//                       [--uplo=upper|lower] [--trans=n|t|c] [--mask[=all|alt]]
 //   env:   WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)
 //
 #include <batchlas/blas/functions/geqrf.hh>
@@ -295,6 +296,10 @@ struct Cfg {
     // potrf/posv only. The grids on docs/perf were Lower-only because this harness could
     // not express anything else, which is why the Upper windows read "untested".
     bool upper = false;
+    Transpose trans = Transpose::NoTrans;  // getrs only
+    // A batch mask on every operand view of the timed call: 0 none, 1 every item active (the
+    // Masked kernel instances at full work), 2 even items only. The checked items are active ones.
+    int mask = 0;
 };
 
 static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
@@ -379,6 +384,13 @@ static int run(const Cfg& c) {
     }
     q->wait();
 
+    // The timed call's views carry the mask; copies, the untimed factorisation and checks do not.
+    UnifiedVector<std::uint8_t> bmask(c.mask ? nbatch : size_t(1), std::uint8_t(1));
+    if (c.mask == 2)
+        for (int b = 0; b < batch; ++b) bmask[size_t(b)] = std::uint8_t(b % 2 == 0);
+    const MV Acall = c.mask ? Av.with_batch_mask(bmask.to_span()) : Av;
+    const MV Xcall = (c.mask && has_rhs) ? Xv.with_batch_mask(bmask.to_span()) : Xv;
+
     auto reset_A = [&] { (void)MV::copy(*q, Av, A0v); q->wait(); };
 
     // getrs and orgqr both consume a factorisation. Produce it ONCE, untimed,
@@ -451,13 +463,13 @@ static int run(const Cfg& c) {
         size_t need = 0;
         try {
             switch (c.op) {
-                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
-                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
-                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
-                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
-                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Acall, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Acall); break;
+                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Acall, Xcall, c.trans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Acall, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Acall, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Acall, Xcall); break;
+                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Acall, Xcall, up_of(c)); break;
             }
         } catch (const std::invalid_argument& e) {
             refuse(arms[i], e);
@@ -469,16 +481,16 @@ static int run(const Cfg& c) {
 
     auto call = [&] {
         switch (c.op) {
-            case OpKind::potrf: (void)potrf<BE, T>(*q, Av, up_of(c), ws.to_span(), info.to_span()); break;
-            case OpKind::getrf: (void)getrf<BE, T>(*q, Av, piv.to_span(), ws.to_span(), info.to_span()); break;
-            case OpKind::getrs: (void)getrs<BE, T>(*q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws.to_span()); break;
-            case OpKind::geqrf: (void)geqrf<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
-            case OpKind::orgqr: (void)orgqr<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
+            case OpKind::potrf: (void)potrf<BE, T>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
+            case OpKind::getrf: (void)getrf<BE, T>(*q, Acall, piv.to_span(), ws.to_span(), info.to_span()); break;
+            case OpKind::getrs: (void)getrs<BE, T>(*q, Acall, Xcall, c.trans, piv.to_span(), ws.to_span()); break;
+            case OpKind::geqrf: (void)geqrf<BE, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::orgqr: (void)orgqr<BE, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
             case OpKind::gesv:
-                (void)gesv<BE, T>(*q, Av, Xv, piv.to_span(), ws.to_span(), info.to_span());
+                (void)gesv<BE, T>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
                 break;
             case OpKind::posv:
-                (void)posv<BE, T>(*q, Av, Xv, up_of(c), ws.to_span(), info.to_span());
+                (void)posv<BE, T>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
                 break;
         }
         q->wait();
@@ -551,7 +563,8 @@ static int run(const Cfg& c) {
             if (!run_arm(a)) continue;
         }
         // Items 0 and batch-1 (item 0 is blind to a wrong stride); within, not pass: arms may be wrong by design.
-        const std::vector<int> items{0, batch - 1};
+        const int last = (c.mask == 2 && (batch - 1) % 2 != 0) ? batch - 2 : batch - 1;
+        const std::vector<int> items{0, last};
         using Check = verify::Check;
         bool within = false;
         switch (c.op) {
@@ -583,7 +596,7 @@ static int run(const Cfg& c) {
             case OpKind::gesv:
             case OpKind::posv:
             case OpKind::getrs:
-                a.residual = MV::solve_residual(*q, A0v, Xv, B0v, items);
+                a.residual = MV::solve_residual(*q, A0v, c.trans, Xv, B0v, items);
                 within = verify::within<T>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
@@ -638,6 +651,8 @@ int main(int argc, char** argv) {
             "  op   : potrf getrf getrs geqrf orgqr gesv posv\n"
             "  type : float double cfloat cdouble\n"
             "  --uplo=upper|lower : potrf and posv only, default lower\n"
+            "  --trans=n|t|c      : getrs only, default n\n"
+            "  --mask[=all|alt]   : a batch mask on the timed call (all: every item, alt: even items)\n"
             "  env  : WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)\n"
             "prints: op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,"
             "rel_sd,reps,residual,extra_check,info_nonzero,bad,reason\n");
@@ -666,6 +681,11 @@ int main(int argc, char** argv) {
         else if (a.rfind("--csv=", 0) == 0) c.csv = a.substr(6);
         else if (a == "--uplo=upper") c.upper = true;
         else if (a == "--uplo=lower") c.upper = false;
+        else if (a == "--trans=n") c.trans = Transpose::NoTrans;
+        else if (a == "--trans=t") c.trans = Transpose::Trans;
+        else if (a == "--trans=c") c.trans = Transpose::ConjTrans;
+        else if (a == "--mask" || a == "--mask=all") c.mask = 1;
+        else if (a == "--mask=alt") c.mask = 2;
         else if (a.rfind("--arms=", 0) == 0) {
             // SPLIT ON COMMAS EXACTLY, never a substring test: `--arms=native` under a
             // `find("vendor")` test dropped the vendor arm silently, and `--arms=vendor`
@@ -690,6 +710,10 @@ int main(int argc, char** argv) {
     }
     if (c.m <= 0 || c.n <= 0 || c.batch <= 0 || c.reps <= 0) {
         std::fprintf(stderr, "factor_bench: need m>0 n>0 batch>0 reps>0\n");
+        return 2;
+    }
+    if (c.trans != Transpose::NoTrans && c.op != OpKind::getrs) {
+        std::fprintf(stderr, "factor_bench: --trans is getrs only\n");
         return 2;
     }
     if ((c.op == OpKind::getrs || is_solve_op(c.op)) && c.nrhs <= 0) {

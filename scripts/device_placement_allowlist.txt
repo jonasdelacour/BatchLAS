@@ -44,7 +44,7 @@ layout-detail-use src/ops/iluk/iluk.cc device::detail::shifted_pivot
 layout-detail-use src/ops/iluk/iluk.cc device::detail::stabilize_pivot
 layout-detail-use src/ops/ortho/ortho.cc device::detail::normalize
 layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::OrderGuard
-layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::potf2_reg
+layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::potf2_reg  # decision-24 exception: posv_tiny keeps its own composition; on the shared potrf_reg_run + potrs_reg body cfloat n=20 nrhs=4 ran 1.35x (15 reps, v23 M3a-finish)
 layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::reg_load_lower
 layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::reg_load_upper
 layout-detail-use src/ops/posv/kernels/posv_tiny.cc device::detail::reg_store_lower
