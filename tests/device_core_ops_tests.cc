@@ -1596,7 +1596,7 @@ TYPED_TEST(DeviceCoreOpsTest, ReductionsV21OnEveryExecutor) {
 // The packed exchange in a kernel WITHOUT reqd_sub_group_size: on a device whose sub-groups
 // are not 32 lanes (the CPU device, AdaptiveCpp) the contract check must take the portable
 // path; on NVPTX the 32-lane form is a compile-time fact. dotN<3> and allreduce with Scratch
-// (a std::array sum; a T with a non-sum op and trailing_barrier = false, the scratch's last use).
+// (a std::array sum; a real T with sycl::maximum and trailing_barrier = false, the last use).
 TYPED_TEST(DeviceCoreOpsTest, PackedExchangeHonoursTheSubGroupContract) {
     using T = TypeParam;
     constexpr int WG = 128, n = 333;
@@ -1617,11 +1617,12 @@ TYPED_TEST(DeviceCoreOpsTest, PackedExchangeHonoursTheSubGroupContract) {
                 const device::Scratch<T, slots> scr{batchlas::util::get_raw_ptr(lm)};
                 const auto d3 = device::dotN<3>(ex, scr, std::array<decltype(xv), 3>{xv, yv, xv}, yv);
                 const auto a2 = device::allreduce(ex, scr, std::array<T, 2>{T(real_of<T>(1)), xv(ex.lid())});
-                const auto re_max = [](T u, T v) { return std::real(v) > std::real(u) ? v : u; };
-                const T a1 = device::allreduce(ex, scr, xv(ex.lid()), re_max, false);
+                using R = real_of<T>;  // a complex reduction is a sum (exec.hh): the max runs on Re
+                const device::Scratch<R, slots> rscr{reinterpret_cast<R*>(scr.p)};
+                const R a1 = device::allreduce(ex, rscr, std::real(xv(ex.lid())), sycl::maximum<R>(), false);
                 if (ex.leader()) {
                     T* ob = o + std::ptrdiff_t(b) * no;
-                    ob[0] = d3[0], ob[1] = d3[1], ob[2] = d3[2], ob[3] = a2[0], ob[4] = a2[1], ob[5] = a1;
+                    ob[0] = d3[0], ob[1] = d3[1], ob[2] = d3[2], ob[3] = a2[0], ob[4] = a2[1], ob[5] = T(a1);
                 }
             });
         })
@@ -1632,8 +1633,8 @@ TYPED_TEST(DeviceCoreOpsTest, PackedExchangeHonoursTheSubGroupContract) {
     for (int b = 0; b < kBatch; ++b) {
         const T* xb = hx.data() + std::size_t(b) * n;
         const T* yb = hy.data() + std::size_t(b) * n;
-        T xmax = xb[0];
-        for (int i = 1; i < WG; ++i) xmax = std::real(xb[i]) > std::real(xmax) ? xb[i] : xmax;
+        real_of<T> xmax = std::real(xb[0]);
+        for (int i = 1; i < WG; ++i) xmax = std::max(xmax, std::real(xb[i]));
         LD<T> xy = 0, yy = 0, x128 = 0;
         long double s = 0, syy = 0, s128 = 0;
         for (int i = 0; i < n; ++i) {
@@ -1644,7 +1645,7 @@ TYPED_TEST(DeviceCoreOpsTest, PackedExchangeHonoursTheSubGroupContract) {
         const T* r = got.data() + std::size_t(b) * no;
         worst = std::max({worst, rel(r[0], xy, s), rel(r[1], yy, syy), rel(r[2], xy, s), rel(r[4], x128, s128)});
         bad += std::real(r[3]) != real_of<T>(WG);
-        bad += r[5] != xmax;
+        bad += r[5] != T(xmax);
     }
     EXPECT_VERIFY(T, Check::blas, n, worst);
     EXPECT_EQ(bad, 0);
