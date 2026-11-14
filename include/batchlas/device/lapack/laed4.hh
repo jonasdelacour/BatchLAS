@@ -5,8 +5,8 @@
 // collective over an executor (the ROCm stedc root iteration with LAPACK's error bound). Root k
 // < dd - 1 lies in (d_k, d_{k+1}), root dd - 1 in (d_{dd-1}, d_{dd-1} + rho). Every evaluation
 // sums over the executor (shuffles on a partition, work-group reductions on a group).
-//   laed4                    the public op: root k as origin + tau (origin a pole, so the
-//                            caller forms d_i - x as (d_i - origin) - tau without cancellation)
+//   laed4                    the public op: info, and root k as origin + tau (origin a pole, so
+//                            the caller forms d_i - x as (d_i - origin) - tau without cancellation)
 //   detail::solve_inner / solve_last   the two root forms (the host merges' bodies)
 //   detail::uniform    the leader's value in every item (a loop exit on a reduced value)
 // Moved from src/ops/syev/stedc/stedc_merge_cta.cc unchanged: the host's fused merges and
@@ -24,15 +24,15 @@
 
 namespace batchlas::device {
 
-/// Root of xLAED4: x = origin + tau; converged = the iteration met its error bound (false: it
-/// ran out of max_iter, the merge reports info > 0).
-template <class T> struct laed4_root {
+namespace detail {
+
+// A secular root x = origin + tau; converged = the iteration met its error bound (false: it ran
+// out of max_iter, the merge reports info > 0). laed4 returns it as (info, origin, tau).
+template <class T> struct SecularRoot {
     T origin;
     T tau;
     bool converged;
 };
-
-namespace detail {
 
 template <class Ex> inline constexpr bool is_group_v = is_work_group_v<Ex>;
 template <int SG> inline constexpr bool is_group_v<RtGroup<Scope::Group, SG>> = true;
@@ -45,7 +45,7 @@ template <class Ex, class T> BATCHLAS_DEVICE_INLINE T uniform(const Ex& ex, T v)
     else return ex.uniform(v);
 }
 
-template <typename T, typename Ex> struct Eval {
+template <class T, class Ex> struct Eval {
     T secular_value;
     T secular_derivative;
     T lower_sum;
@@ -55,12 +55,12 @@ template <typename T, typename Ex> struct Eval {
     T error_estimate;
 };
 
-template <typename T> BATCHLAS_DEVICE_HELPER void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
+template <class T> BATCHLAS_DEVICE_HELPER void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
     if (secular_value <= T(0)) lower_bound = sycl::fmax(lower_bound, tau);
     if (secular_value > T(0)) upper_bound = sycl::fmin(upper_bound, tau);
 }
 
-template <typename T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T lower_bound, T upper_bound, T secular_value) {
+template <class T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T lower_bound, T upper_bound, T secular_value) {
     if (tau + step > upper_bound || tau + step < lower_bound) {
         step = (secular_value < T(0)) ? (upper_bound - tau) / T(2) : (lower_bound - tau) / T(2);
     }
@@ -70,7 +70,7 @@ template <typename T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T low
 // The secular function at x = origin + tau without the terms i in [lower_end, upper_start):
 // per item the sums of z_i^2 / (d_i - x), of (z_i / (d_i - x))^2 and of the running sums (the
 // laed4 error term) below and above that window, then six reductions over the executor.
-template <typename T, typename Ex, typename DV, typename ZV>
+template <class T, class Ex, class DV, class ZV>
 BATCHLAS_DEVICE_HELPER Eval<T, Ex> evaluate(const Ex& ex, const DV& d_prob, const ZV& z_prob, std::int32_t dd, std::int32_t pole_index,
                                          std::int32_t skip, T origin, T tau, T rho_inv) {
     const std::int32_t lower_end = pole_index + (skip < 0 ? 1 : 0);
@@ -100,7 +100,7 @@ struct NoScratch {};
 
 // d - origin into one item's scratch (a Thread's), once per root: the evaluations then run on
 // (scratch, 0), the same values with one subtraction per term less. Returns the poles to use.
-template <typename T, typename Ex, typename DV, typename SV>
+template <class T, class Ex, class DV, class SV>
 BATCHLAS_DEVICE_INLINE const auto& shift_poles(const DV& d_prob, const SV& scratch, std::int32_t dd, T origin) {
     if constexpr (std::is_same_v<SV, NoScratch>) {
         return d_prob;
@@ -111,13 +111,13 @@ BATCHLAS_DEVICE_INLINE const auto& shift_poles(const DV& d_prob, const SV& scrat
     }
 }
 
-template <typename T, typename Ex> struct EvalState {
+template <class T, class Ex> struct EvalState {
     Eval<T, Ex> eval;
     T err;
     T ratio_sq;
 };
 
-template <typename T, typename Ex>
+template <class T, class Ex>
 BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12, T pole_k, T pole_k1, bool origin_lower, bool use_fixed,
                                T wi_ratio_sq) {
     T qc;
@@ -167,8 +167,8 @@ BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12,
 
 // Root k < dd - 1, in (d_k, d_{k+1}): the origin is the nearer pole (the sign of f at the
 // midpoint), then ROC steps with the fixed-weight / middle-way switch.
-template <typename T, typename Ex, typename DV, typename SV = NoScratch>
-BATCHLAS_DEVICE_HELPER laed4_root<T> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, T rho,
+template <class T, class Ex, class DV, class SV = NoScratch>
+BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, T rho,
                                               std::int32_t max_iter, const SV& scratch = {}) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
@@ -287,8 +287,8 @@ BATCHLAS_DEVICE_HELPER laed4_root<T> solve_inner(const Ex& ex_in, const DV& d_pr
 }
 
 // Root dd - 1, in (d_{dd-1}, d_{dd-1} + rho), origin the last pole; dd == 1 is exact.
-template <typename T, typename Ex, typename DV, typename SV = NoScratch>
-BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, T rho,
+template <class T, class Ex, class DV, class SV = NoScratch>
+BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, T rho,
                                              std::int32_t max_iter, const SV& scratch = {}) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
     const T rho_inv = T(1) / rho;
@@ -413,25 +413,37 @@ BATCHLAS_DEVICE_HELPER laed4_root<T> solve_last(const Ex& ex_in, const DV& d_pro
     return {origin, tau, converged};
 }
 
+// laed4's body: root k as a SecularRoot. Not force-inlined: the callers' code stays the one it
+// was when laed4 itself returned the root.
+template <class Ex, class DV, class T, class SV>
+BATCHLAS_DEVICE_HELPER SecularRoot<T> secular_root(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho,
+                                                   std::int32_t max_iter, const SV& scratch) {
+    if constexpr (sizeof(T) < 8 || std::is_same_v<SV, NoScratch>) {
+        if (k == dd - 1) return solve_last<T>(ex, d, z, dd, rho, max_iter);
+        return solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
+    } else {
+        if (k == dd - 1) return solve_last<T>(ex, d, z, dd, rho, max_iter, scratch);
+        return solve_inner<T>(ex, d, z, dd, k, rho, max_iter, scratch);
+    }
+}
+
 }  // namespace detail
 
 /// Root k (0-based) of the dd-pole secular equation 1/rho + sum_i z_i^2 / (d_i - x) = 0, d
-/// ascending and distinct, z without zeros, rho > 0 (a deflated merge: laed2). COLLECTIVE over
-/// ex: every item calls with the same k; d and z must be visible to every item. The result is
-/// uniform. max_iter >= 1 caps the iteration (StedcParams::max_sec_iter). scratch (Thread
-/// only): dd writable entries of this item, contents undefined on return; the same root. FP64
-/// holds d - origin there (one subtraction per term less); float ignores it (its strided reads
-/// cost more than the subtraction). `evidence: docs/perf/stedc.md#stedc-one-secular-solver`
+/// ascending and distinct, z without zeros, rho > 0 (a deflated merge: laed2), as x = origin +
+/// tau (origin, tau: out). COLLECTIVE over ex: every item calls with the same k; d and z must be
+/// visible to every item. Returns xLAED4's info, uniform: 0, or 1 when the iteration ran out of
+/// max_iter >= 1 (StedcParams::max_sec_iter). scratch (Thread only): dd writable entries of this
+/// item, contents undefined on return; the same root. FP64 holds d - origin there (one
+/// subtraction per term less); float ignores it (its strided reads cost more than the
+/// subtraction). `evidence: docs/perf/stedc.md#stedc-one-secular-solver`
 template <class Ex, class DV, class T, class SV = detail::NoScratch>
-BATCHLAS_DEVICE_HELPER laed4_root<T> laed4(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho, std::int32_t max_iter,
-                                         const SV& scratch = {}) {
-    if constexpr (sizeof(T) < 8 || std::is_same_v<SV, detail::NoScratch>) {
-        if (k == dd - 1) return detail::solve_last<T>(ex, d, z, dd, rho, max_iter);
-        return detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
-    } else {
-        if (k == dd - 1) return detail::solve_last<T>(ex, d, z, dd, rho, max_iter, scratch);
-        return detail::solve_inner<T>(ex, d, z, dd, k, rho, max_iter, scratch);
-    }
+BATCHLAS_DEVICE_INLINE int laed4(const Ex& ex, const DV& d, const DV& z, int dd, int k, T rho, T& origin, T& tau, int max_iter,
+                                 const SV& scratch = {}) {
+    const auto root = detail::secular_root(ex, d, z, dd, k, rho, max_iter, scratch);
+    origin = root.origin;
+    tau = root.tau;
+    return static_cast<int>(!root.converged);
 }
 
 }  // namespace batchlas::device

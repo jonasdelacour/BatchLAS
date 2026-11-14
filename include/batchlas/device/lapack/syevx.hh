@@ -11,16 +11,17 @@
 
 namespace batchlas::device {
 
+namespace detail {
+
 // lam: n ascending eigenvalues, q: their vectors. Block [first, first + count), or for a value
 // range (vl, vu] the leader's Sturm counts (stebz's `<=`) published in block[0..1] (int64 SLM).
 // The lowest `capacity` are kept (reversed when reverse) into w and v; v's columns past them
-// are exactly zero. q, v are touched only when want_v. Returns the true count.
+// are exactly zero. q, v are touched only when want_v. Returns the true count (int: m's type).
 // evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
 template <class Ex, class L, class R, class Blk, class W, class Q, class V>
-BATCHLAS_DEVICE_INLINE std::int64_t syevx_select(const Ex& ex, const L& lam, bool value_range, R vl, R vu,
-                                              std::int64_t first, std::int64_t count, std::int64_t capacity,
-                                              bool reverse, const Blk& block, const W& w, bool want_v, const Q& q,
-                                              const V& v) {
+BATCHLAS_DEVICE_INLINE int syevx_select(const Ex& ex, const L& lam, bool value_range, R vl, R vu, std::int64_t first,
+                                         std::int64_t count, std::int64_t capacity, bool reverse, const Blk& block, const W& w,
+                                         bool want_v, const Q& q, const V& v) {
     if (value_range) {
         if (ex.leader()) {
             const std::int64_t c_lo = upper_bound(Thread{}, lam, vl);
@@ -42,7 +43,9 @@ BATCHLAS_DEVICE_INLINE std::int64_t syevx_select(const Ex& ex, const L& lam, boo
         // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
         laset<Part::Full, alg::Flat>(ex, Zero{}, Zero{}, v.sub(0, write, n, v.cols() - write));
     }
-    return count;
+    return static_cast<int>(count);
 }
+
+}  // namespace detail
 
 }  // namespace batchlas::device

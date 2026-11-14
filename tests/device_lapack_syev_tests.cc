@@ -134,11 +134,12 @@ template <class T> struct Out {
 template <JobType J, Uplo UL, class Tier, class T> class ApiSyevCtaKernel;
 
 // The user's kernel: one problem per partition of N lanes, the tiles in the work-group's local
-// memory at this partition's slice, the tier fixed at compile time.
-template <JobType J, Uplo UL, class Tier, class T> void launch_cta(Dev& dev, T* A, int n, int ld, real_of<T>* w, int* info) {
+// memory at this partition's slice, the tier fixed at compile time. Slots b >= live run dead.
+template <JobType J, Uplo UL, class Tier, class T>
+void launch_cta(Dev& dev, T* A, int n, int ld, real_of<T>* w, int* info, int live = kBatch) {
     constexpr int N = Tier::n_max;
     constexpr int ppw = 32 / N;
-    constexpr std::size_t lbytes = batchlas::device::syev_buffer_size<J, UL, Tier, T>(N).local_bytes;
+    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, Tier, T>(N).local_bytes;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<sycl::uint4, 1> slm(sycl::range<1>((lbytes * ppw + 15) / 16), h);
            h.parallel_for<ApiSyevCtaKernel<J, UL, Tier, T>>(
@@ -151,8 +152,10 @@ template <JobType J, Uplo UL, class Tier, class T> void launch_cta(Dev& dev, T* 
                    const batchlas::device::Workspace ws{sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(
                                               raw + std::size_t(slot) * lbytes),
                                           nullptr};
-                   const int r = batchlas::device::syev<J, UL, Tier>(ex, batchlas::device::mat(A + std::size_t(b) * ld * n, n, n, ld), batchlas::device::vec(w + std::size_t(b) * n, n), ws);
-                   if (ex.leader()) info[b] = r;
+                   const bool on = b < live;
+                   const int r = batchlas::device::syev<J, UL, Tier>(ex, batchlas::device::mat(A + std::size_t(b) * ld * n, n, n, ld), batchlas::device::vec(w + std::size_t(b) * n, n), ws,
+                                                                    batchlas::device::SyevOptions<real_of<T>>{}, on);
+                   if (on && ex.leader()) info[b] = r;
                });
        }).wait_and_throw();
 }
@@ -252,6 +255,38 @@ TYPED_TEST(DeviceApiSyevCtaTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
     EXPECT_EQ(written, 0);
 }
 
+// C9: the last three slots of the last sub-group (Cta<8>: four per sub-group) run with live =
+// false. Their A and w stay as given; every live slot keeps the all-live run's bits.
+TYPED_TEST(DeviceApiSyevCtaTest, DeadSlotsWriteNothing) {
+    using T = TypeParam;
+    using R = real_of<T>;
+    const int n = 7, ld = n + 3, live = kBatch - 3;
+    const auto a0 = input<T>(n, ld, Uplo::Lower, kBatch);
+    const std::vector<R> w0(std::size_t(n) * kBatch, std::numeric_limits<R>::quiet_NaN());
+    Dev& dev = this->dev;
+    const auto run = [&](int nlive) {
+        T* A = dev.up(a0);
+        R* w = dev.up(w0);
+        int* info = dev.alloc<int>(kBatch, 7);
+        launch_cta<kV, Uplo::Lower, batchlas::device::tier::Cta<8>, T>(dev, A, n, ld, w, info, nlive);
+        return std::pair{dev.down(A, a0.size()), dev.down(w, w0.size())};
+    };
+    const auto all = run(kBatch), part = run(live);
+    const auto split = [&](const auto& g, const auto& ref, const auto& in, std::size_t per) {
+        int live_diff = 0, dead_diff = 0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            if (i < std::size_t(live) * per) live_diff += !same_bits(g[i], ref[i]);
+            else dead_diff += !same_bits(g[i], in[i]);
+        }
+        return std::pair{live_diff, dead_diff};
+    };
+    EXPECT_EQ(split(part.first, all.first, a0, std::size_t(ld) * n), std::pair(0, 0));
+    EXPECT_EQ(split(part.second, all.second, w0, n), std::pair(0, 0));
+    int solved = 0;  // the all-live run does write those slots: a write there is visible
+    for (std::size_t i = std::size_t(live) * n; i < w0.size(); ++i) solved += !std::isnan(all.second[i]);
+    EXPECT_GT(solved, 0);
+}
+
 TEST(DeviceApiSyevTier, WithTierPicksTheSmallestCtaThenBlocked) {
     const batchlas::device::DeviceLimits lim{48 * 1024, {32}, 1024, true};
     for (int n : {1, 4, 5, 8, 9, 16, 17, 32, 33, 64, 1000}) {
@@ -275,7 +310,7 @@ template <JobType J, int N, class T> void expect_cta_size() {
     const std::size_t lda = fused ? N + 1 : N;
     std::size_t bytes = (lda * N + 2 * N) * sizeof(T);
     if (J == kV && is_cplx<T>) bytes = (bytes + 15) / 16 * 16 + std::size_t(N + 1) * N * sizeof(real_of<T>);
-    const auto s = batchlas::device::syev_buffer_size<J, Uplo::Lower, batchlas::device::tier::Cta<N>, T>(N);
+    const auto s = batchlas::device::buffer_size<batchlas::device::routine::syev<J, Uplo::Lower>, batchlas::device::tier::Cta<N>, T>(N);
     EXPECT_EQ(s.local_bytes, (bytes + 15) / 16 * 16) << "N=" << N;
     EXPECT_EQ(s.global_bytes, 0u);
 }
@@ -298,7 +333,7 @@ template <JobType J, Uplo UL, class T> Out<T> blocked_device(Dev& dev, int n, in
     T* A = dev.up(a0);
     real_of<T>* w = dev.alloc<real_of<T>>(std::size_t(n) * batch, std::numeric_limits<real_of<T>>::quiet_NaN());
     int* info = dev.alloc<int>(batch, 7);
-    const batchlas::device::WorkspaceSize sz = batchlas::device::syev_buffer_size<J, UL, BlockedTier, T>(n);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, BlockedTier, T>(n);
     std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
     dev.run<WG>(batch, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
@@ -447,9 +482,9 @@ TYPED_TEST(DeviceApiSyevBlockedTest, ResidualSeesAWrongMatrix) {
 TEST(DeviceApiSyevTier, BlockedBufferSizeHoldsTheStages) {
     using T = std::complex<float>;
     for (int n : {1, 33, 1000}) {
-        const auto s = batchlas::device::syev_buffer_size<kV, Uplo::Lower, BlockedTier, T>(n);
-        const auto s1 = batchlas::device::sytrd_buffer_size<Uplo::Lower, BlockedTier, T>(n);
-        const auto s2 = batchlas::device::steqr_buffer_size<kV, batchlas::device::tier::Blocked<1>, float>(n);
+        const auto s = batchlas::device::buffer_size<batchlas::device::routine::syev<kV, Uplo::Lower>, BlockedTier, T>(n);
+        const auto s1 = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
+        const auto s2 = batchlas::device::buffer_size<batchlas::device::routine::steqr<kV>, batchlas::device::tier::Blocked<1>, float>(n);
         // d, e, tau, Re(d), |e|, S, Z, rank, then at least the largest stage.
         const std::size_t own = (3 * sizeof(T) + 2 * sizeof(float) + sizeof(T) + sizeof(int)) * std::size_t(n) + std::size_t(n) * n * sizeof(T);
         EXPECT_GE(s.global_bytes, own + std::max(s1.global_bytes, s2.global_bytes)) << "n=" << n;

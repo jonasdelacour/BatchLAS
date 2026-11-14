@@ -4,8 +4,8 @@
 //   laed2                    Givens rotations merge poles closer than the tolerance (z(j) -> 0,
 //                            the two eigenvector columns rotated), then every |rho z_k| below
 //                            it deflates; returns the gather order, kept first
-//   laed2_merge_vector       z = [last row of Q1, sign(rho) first row of Q2] / sqrt(2) (xLAED1's
-//                            z of the rank-one tear)
+//   detail::laed2_merge_vector  z = [last row of Q1, sign(rho) first row of Q2] / sqrt(2)
+//                            (xLAED1's z of the rank-one tear)
 //   detail::fold       a work-group reduction over a contiguous operand (joint_reduce)
 // The host merge's StedcComputeV / StedcDeflation kernels and device::stedc run these bodies.
 // Every operand an op writes is a callable (i) -> T&: the host passes its batched views'
@@ -33,7 +33,6 @@ template <class Ex, class X, class Op> BATCHLAS_DEVICE_INLINE auto fold(const Ex
     const auto first = x.p + x.off;
     return batchlas::portable::joint_reduce(ex.it.get_group(), first, first + x.size(), op);
 }
-}  // namespace detail
 
 /// z(0..m) = row1 / sqrt(2), z(m..) = sign * row2 / sqrt(2): the rank-one term of the tear is
 /// |rho| u u^T with u = e_{m-1} + sign(rho) e_m (the diagonal corrections are -|rho|), so the
@@ -44,6 +43,7 @@ BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, 
     map(ex, z.head(m), [](T q) { return q / std::sqrt(T(2)); }, row1);
     map(ex, z.tail(m), [=](T q) { return sign * q / std::sqrt(T(2)); }, row2);
 }
+}  // namespace detail
 
 /// Deflation of the n-pole merge on the work-group ex. d (operand) and d_at (callable) the sorted
 /// poles, z the weights (rotated in place), Qb the merge's eigenvector columns, addressed through

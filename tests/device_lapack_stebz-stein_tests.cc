@@ -168,7 +168,7 @@ template <class T> StebzParams<T> params_for(const Sel& s, int n) {
     }
     return p;
 }
-template <class T> device::detail::stebz_params<T> device_params(const StebzParams<T>& p, int n) {
+template <class T> device::StebzOptions<T> device_params(const StebzParams<T>& p, int n) {
     const bool index = p.range == EigenRangeType::Index;
     return {p.range == EigenRangeType::Value,
             index ? p.il : 0,
@@ -189,9 +189,9 @@ template <class T> struct WOut {
 // The device op from a user kernel: WorkGroup<256, 32>, one matrix per work-group.
 template <class T>
 void user_stebz(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, std::int32_t* m, std::int32_t* info,
-                const device::detail::stebz_params<T>& p, int n) {
+                const device::StebzOptions<T>& p, int n) {
     constexpr int WG = 256;
-    const device::WorkspaceSize sz = device::stebz_buffer_size<Tier, T>(n);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stebz, Tier, T>(n);
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
            h.parallel_for<UserStebz<T>>(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG),
@@ -284,7 +284,7 @@ TYPED_TEST(DeviceApiStebzStein, StebzTierQueries) {
         std::string got = "none";
         device::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
-        const auto sz = device::stebz_buffer_size<Tier, T>(n);
+        const auto sz = device::buffer_size<device::routine::stebz, Tier, T>(n);
         const auto L = device::detail::stebz_layout<T>();
         EXPECT_EQ(sz, L.size);
         EXPECT_EQ(sz.global_bytes, 0u);
@@ -307,7 +307,7 @@ template <class T>
 void user_stein(Dev& dev, int wg, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const std::int32_t* counts,
                 const MatrixView<T, MatrixFormat::Dense>& Z, std::byte* gws, std::int32_t* info, std::uint32_t seed) {
     const int n = d.size(), k = Z.cols();
-    const device::WorkspaceSize sz = device::stein_buffer_size<Tier, T>(n, k);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stein, Tier, T>(n, k);
     const auto Zk = Z.kernel_view();
     const SteinParams<T> hp;
     const std::int32_t max_iter = std::max<std::int32_t>(1, hp.max_iterations);
@@ -318,7 +318,7 @@ void user_stein(Dev& dev, int wg, const VectorView<T>& d, const VectorView<T>& e
                const device::RtGroup<> ex{it};
                const int b = static_cast<int>(it.get_group_linear_id());
                const int kb = counts ? std::clamp<int>(counts[b], 0, k) : k;
-               const device::detail::stein_params<T> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
+               const device::SteinOptions<T> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
                const auto dvec = device::vec(d.data_ptr() + std::int64_t(b) * d.stride(), n, d.inc());
                const auto evec = device::vec(e.data_ptr() + std::int64_t(b) * e.stride(), n - 1, e.inc());
                const auto Zb = device::mat(Zk.data() + std::int64_t(b) * Zk.stride(), n, k, Zk.ld());
@@ -363,7 +363,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinMatchesHostRoute) {
             stein(*dev.ctx, dview, eview, wview, std::size_t(k), counts, Zh, Span<std::byte>(hws, bytes), sp);
             dev.ctx->wait();
 
-            const auto gsz = device::stein_buffer_size<Tier, T>(n, k);
+            const auto gsz = device::buffer_size<device::routine::stein, Tier, T>(n, k);
             std::byte* gws = dev.up(std::vector<std::byte>(gsz.global_bytes * kBatch));
             std::int32_t* info = dev.up(std::vector<std::int32_t>(kBatch, -7));
             const int wg = std::min({256, dev.max_wg(), std::max(n, 1)});
@@ -399,7 +399,7 @@ TYPED_TEST(DeviceApiStebzStein, SteinTierQueries) {
         device::with_tier<R, T>(this->dev.q().get_device(), n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
         for (int k : {1, n}) {
-            const auto sz = device::stein_buffer_size<Tier, T>(n, k);
+            const auto sz = device::buffer_size<device::routine::stein, Tier, T>(n, k);
             const auto L = device::detail::stein_layout<T>(n, k);
             EXPECT_EQ(sz, L.size);
             const std::size_t nk = std::size_t(n) * k;

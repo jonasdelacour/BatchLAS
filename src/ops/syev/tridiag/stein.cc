@@ -107,7 +107,7 @@ Event stein(Queue& ctx,
                 // value range the count is data-dependent and per item.
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
                 const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
-                const device::detail::stein_params<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
+                const device::SteinOptions<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
                 const int b = static_cast<int>(bid);
                 const device::detail::SteinScratch<T> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      dl_ptr, dd_ptr, du_ptr, du2_ptr, xb_ptr, piv_ptr, bid * k};
@@ -142,7 +142,7 @@ Event stein(Queue& ctx,
                 // Stopping at kb, not k, is a COST bound (a stale tail forms one bogus cluster);
                 // phase 1's kb bound is the one that protects correctness.
                 // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
-                const device::detail::stein_params<T> p{max_iter, ortho_threshold, seed};
+                const device::SteinOptions<T> p{max_iter, ortho_threshold, seed};
                 const device::detail::SteinScratch<T> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0};
                 device::detail::reorthogonalize(ex, dv, ev, device::item(w, static_cast<int>(bid)), kb, Zb, s, p);

@@ -146,7 +146,7 @@ FMA its solve kernel ran 16% more FP64 instructions than the old solver (ncu).
 
 ## stedc: convergence reporting through info
 
-`device::laed4` reports whether each root met tolerance (`laed4_root::converged`); a root that hit
+`device::laed4` reports whether each root met tolerance (its returned info, 1 when not); a root that hit
 `max_sec_iter` is a failure, not a silently wrong eigenvalue.
 
 - Reports from several threads of one item merge through an atomic `fetch_max`.

@@ -25,6 +25,14 @@
 
 namespace batchlas::device {
 
+/// syev's options: steqr's knobs (the host SteqrParams fields of the same meaning) at the host
+/// syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}). The Blocked tier reads
+/// max_sweeps only (the work-group steqr's shift).
+template <class R> struct SyevOptions {
+    int max_sweeps = 400;
+    SteqrShiftStrategy shift = SteqrShiftStrategy::Wilkinson;
+};
+
 namespace detail {
 
 // SubGroupPartition's own chunk barrier (core Partition::barrier is a whole-sub-group barrier).
@@ -347,8 +355,8 @@ template <bool V, int NB, class T> struct syev_blocked_plan {
         z = plan.take<T>(WsSpace::Global, V ? un * un : 0);
         rank = plan.take<int>(WsSpace::Global, un);
         constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
-        const WorkspaceSize s1 = sytrd_buffer_size<Uplo::Lower, tier::Blocked<NB>, T>(n);
-        const WorkspaceSize s2 = steqr_buffer_size<J, tier::Blocked<1>, R>(n);
+        const WorkspaceSize s1 = buffer_size<routine::sytrd<Uplo::Lower>, tier::Blocked<NB>, T>(n);
+        const WorkspaceSize s2 = buffer_size<routine::steqr<J>, tier::Blocked<1>, R>(n);
         const WorkspaceSize s3 = V && n > 1 ? buffer_size<routine::ormqr<Side::Left, Transpose::NoTrans>, ormqr_tier<T>, T>(n - 1, n) : WorkspaceSize{};
         sub_g = plan.take<std::byte>(WsSpace::Global, mx(s1.global_bytes, mx(s2.global_bytes, s3.global_bytes)));
         sub_l = plan.take<std::byte>(WsSpace::Local, mx(s1.local_bytes, mx(s2.local_bytes, s3.local_bytes)));
@@ -362,7 +370,7 @@ template <bool V, int NB, class T> struct syev_blocked_plan {
 // column j of Z in column rank(j) of A. Returns steqr's info (uniform).
 template <bool V, Uplo UL, int NB, int WG, class T, class WV>
 BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const WV& W, const Workspace& ws,
-                                         const steqr_opts& opts) {
+                                         const SteqrOptions& opts) {
     using R = real_t<T>;
     using Ar = Arith<T>;
     constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
@@ -503,9 +511,6 @@ template <class Tv, class TQv> BATCHLAS_DEVICE_INLINE void sytrd_tau_pack_at(con
     }
 }
 
-// The host syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}).
-inline constexpr steqr_opts default_opts{400, SteqrShiftStrategy::Wilkinson};
-
 }  // namespace detail
 
 namespace routine {
@@ -538,34 +543,37 @@ template <JobType J, Uplo UL, class T> struct tiers<routine::syev<J, UL>, T> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>;
 };
 
-// Bytes of ONE problem's workspace (Cta: local tile, v, w and the Hermitian accumulator; Blocked:
-// global d, e, tau, Z and the stages' slice, local the stages' maximum).
-template <JobType J, Uplo UL, class Tier, class T> constexpr WorkspaceSize syev_buffer_size(int n) {
-    return tier_info<routine::syev<J, UL>, resolve_tier_t<routine::syev<J, UL>, T, Tier>, T>::buffer_size(n);
-}
-
-// xSYEV / xHEEV on one n x n matrix A, reading only its UL triangle (Im(diag) ignored): W(0..n-1)
-// the eigenvalues ascending (real), A := the eigenvectors (column j for W(j)) with EigenVectors,
-// A overwritten with NoEigenVectors (Blocked) or untouched (Cta).
-//   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
-//                     (every lane calls with its partition's problem); ws.local. opts: steqr's.
-//   tier::Blocked<NB> any n, one problem per WorkGroup<256>, COLLECTIVE; ws.global is this matrix's
-//                     slice; opts.max_sweeps only (the work-group steqr's shift).
-// Returns 0, k > 0 when steqr did not converge (Cta: 1; Blocked: the e(j) != 0 left), -2 when A is
-// not square with 1 <= n (<= N for Cta); uniform.
-template <JobType J, Uplo UL, class Tier, class Ex, class MA, class WV>
-BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Workspace& ws, const steqr_opts& opts = detail::default_opts) {
+/// xSYEV / xHEEV on one n x n matrix A, reading only its UL triangle (Im(diag) ignored): W(0..n-1)
+/// the eigenvalues ascending (real), A := the eigenvectors (column j for W(j)) with EigenVectors,
+/// A overwritten with NoEigenVectors (Blocked) or untouched (Cta).
+///   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
+///                     (every lane calls with its partition's problem); ws.local. opts: steqr's.
+///   tier::Blocked<NB> any n, one problem per WorkGroup<256>, COLLECTIVE; ws.global is this matrix's
+///                     slice; opts.max_sweeps only (the work-group steqr's shift).
+/// Returns 0, k > 0 when steqr did not converge (Cta: 1; Blocked: the e(j) != 0 left), -2 when A is
+/// not square with 1 <= n (<= N for Cta); uniform.
+/// ws: buffer_size<routine::syev<J, UL>, Tier, T>(n) for ONE problem (Cta: local tile, v, w and
+/// the Hermitian accumulator; Blocked: global d, e, tau, Z and the stages' slice, local the
+/// stages' maximum). live == false (a dead slot of a packed
+/// launch, same n): A and W are neither read nor written (ws is its scratch), every collective is
+/// reached; returns 0.
+template <JobType J, Uplo UL, class Tier, class Ex, class MA, class WV,
+          class Re = real_t<std::remove_cv_t<typename MA::value_type>>>
+BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Workspace& ws,
+                                const SyevOptions<Re>& opts = SyevOptions<Re>{}, bool live = true) {
     using T = std::remove_cv_t<typename MA::value_type>;
     using R = routine::syev<J, UL>;
     using Tr = resolve_tier_t<R, T, Tier>;
     static_assert(HasTier<R, Tr, T>, "syev: the routine has no such tier (tier::Cta<N>, tier::Blocked<NB>)");
+    static_assert(std::is_same_v<Re, real_t<T>>, "syev: options of the matrix's real type");
     constexpr bool kVecs = J == JobType::EigenVectors;
     if constexpr (tier::is_blocked_v<Tr>) {
         constexpr int WG = tier_info<R, Tr, T>::wg_size;
         static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "syev: tier::Blocked<NB> runs on device::WorkGroup<256> (one matrix per work-group)");
+        if (!live) return 0;  // one matrix per work-group: the whole group is dead
         const auto a = l3::global_of(A);
         if (a.m < 1 || a.n != a.m) return -2;
-        return detail::syev_blocked_run<kVecs, UL, Tr::nb>(ex, a, W, ws, opts);
+        return detail::syev_blocked_run<kVecs, UL, Tr::nb>(ex, a, W, ws, SteqrOptions{opts.max_sweeps, opts.shift});
     } else {
         constexpr int N = Tr::n_max;
         constexpr std::size_t P = N;
@@ -584,8 +592,8 @@ BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Wo
         const detail::cta_opts o{opts.max_sweeps, opts.shift, true, true};
         bool failed = false;
         detail::syev_cta_run<T, P, kVecs, Lay::lda, Lay::ldq>(ex.part, solve, a, 0, v, 0, w, 0, q, 0, A, A, W, n, UL == Uplo::Upper,
-                                                                   true, o, [&](bool f) BATCHLAS_DEVICE_BODY { failed = f; });
-        return failed ? 1 : 0;
+                                                                   live, o, [&](bool f) BATCHLAS_DEVICE_BODY { failed = f; });
+        return live && failed ? 1 : 0;
     }
 }
 

@@ -26,6 +26,8 @@
 
 namespace batchlas::device {
 
+namespace detail {
+
 /// F's leading dimension at order kb: whole 16-byte packs per line, plus one pack against bank
 /// conflicts; and the local elements of one block (F, then the transpose buffer of ld kb + 1).
 template <class T> constexpr int sygs2_ldf(int kb) {
@@ -35,8 +37,6 @@ template <class T> constexpr int sygs2_ldf(int kb) {
 template <class T> constexpr std::size_t sygs2_block_elems(int kb) {
     return static_cast<std::size_t>(kb) * static_cast<std::size_t>(sygs2_ldf<T>(kb) + kb + 1);
 }
-
-namespace detail {
 
 BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
 
@@ -99,7 +99,7 @@ template <class D> constexpr SygstCtaPlan<D> sygst_cta_plan(int n) {
 /// each item reduces its column; C (real diagonal) goes back to A's uplo triangle and, through
 /// full(itm, row, col, value), to wherever the caller keeps the whole Hermitian block.
 ///   fbase   ipw * (fper + sper) local elements, 16-byte aligned: the F stores, then the S buffers
-///   fper    kb * ldf, ldf = sygs2_ldf<D>(kb);  sper = kb * lds, lds = kb + 1
+///   fper    kb * ldf, ldf = detail::sygs2_ldf<D>(kb);  sper = kb * lds, lds = kb + 1
 ///   a_of(itm), b_of(itm)  matrix itm's A (read, written) and B (read) operands
 ///   dead(itm)             true for a matrix no item may load, compute or store (out of range or
 ///                         masked; uniform per block)
@@ -203,23 +203,17 @@ template <class D, int NB, Itype IT> constexpr SygstBlockedPlan<D> sygst_blocked
 }
 }  // namespace detail
 
-/// Local and global bytes of one matrix of order n (Cta: n <= N, global none; Blocked: any n);
-/// Tier may be tier::upto.
-template <Itype IT, Uplo UL, class Tier, class T> constexpr WorkspaceSize sygst_buffer_size(int n) {
-    using D = std::remove_cv_t<T>;
-    using Tr = resolve_tier_t<routine::sygst<IT, UL>, D, Tier>;
-    static_assert(detail::is_tier_v<Tr>, "sygst: tier::Cta<N> or tier::Blocked<NB>, N, NB <= 32");
-    if constexpr (detail::sygst_is_cta_v<Tr>) return detail::sygst_cta_plan<D>(n).plan.size();
-    else return detail::sygst_blocked_plan<D, Tr::nb, IT>(n).size;
-}
-
+// buffer_size(n): the local and global bytes of one matrix of order n (Cta: n <= N, global none;
+// Blocked: any n).
 template <Itype IT, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, T> {
     static_assert(N >= 1 && N <= 32, "sygst: tier::Cta<N>, N <= 32");
     static constexpr int wg_size = (N + 31) / 32 * 32, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Cta<N, Alg>, T>(n); }
+    static constexpr WorkspaceSize buffer_size(int n) {
+        return detail::sygst_cta_plan<std::remove_cv_t<T>>(n).plan.size();
+    }
 };
 template <Itype IT, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, T> {
     static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
@@ -227,7 +221,9 @@ template <Itype IT, Uplo UL, int NB, class Alg, class T> struct tier_info<routin
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sygst_buffer_size<IT, UL, tier::Blocked<NB, Alg>, T>(n); }
+    static constexpr WorkspaceSize buffer_size(int n) {
+        return detail::sygst_blocked_plan<std::remove_cv_t<T>, NB, IT>(n).size;
+    }
 };
 
 namespace detail {
@@ -353,9 +349,9 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
 /// j < n owns column j); Blocked, tier_info's wg_size (256) items, A and B in global memory (a
 /// Mat over T*, device::item or l3::Global) and B's diagonal real (potrf's factor: the trsm / trmm
 /// steps read it as stored, as LAPACK's do). A and B visible to every item on entry, A's result on
-/// return. ws: sygst_buffer_size<Itype, UL, Tier, T>(n), 16-byte aligned (Blocked, n > NB: a
-/// global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller than n x n);
-/// uniform over the executor.
+/// return. ws: buffer_size<routine::sygst<Itype, UL>, Tier, T>(n), 16-byte aligned (Blocked,
+/// n > NB: a global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller
+/// than n x n); uniform over the executor.
 template <Itype IT, Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;

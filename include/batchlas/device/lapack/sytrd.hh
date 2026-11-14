@@ -464,24 +464,22 @@ template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
     using type = std::conditional_t<UL == Uplo::Lower, tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>, cta>;
 };
 
-// Bytes of ONE problem's workspace (Cta: local tile + v + w; Blocked: global W, v, wcol and local
-// vip, wip and the L3 stage).
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrd_buffer_size(int n) {
-    return tier_info<routine::sytrd<UL>, resolve_tier_t<routine::sytrd<UL>, T, Tier>, T>::buffer_size(n);
-}
-
-// xSYTRD / xHETRD on one n x n matrix A, reading only A's UL triangle (Im(diag) ignored); d(i) =
-// A(i,i), e(i) the off-diagonal, tau(i) (i < n-1) the reflector scalars, all of A's scalar type.
-//   tier::Cta<N>      (unblocked: xSYTD2) n = A.rows() <= N, one matrix per SgpPartition<N>; A
-//                     leaves in LAPACK's packing with BOTH triangles written (the reflectors in UL,
-//                     the conjugate mirror in the other). ws.local only.
-//   tier::Blocked<NB> Uplo::Lower, any n, one matrix in global memory per WorkGroup<256>; A leaves
-//                     in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of the upper
-//                     triangle is not referenced. ws.global is this matrix's slice.
-// ws: sytrd_buffer_size bytes for this problem. COLLECTIVE over the executor. Returns 0, or -2
-// when A is not square with 1 <= n (<= N for Cta).
+/// xSYTRD / xHETRD on one n x n matrix A, reading only A's UL triangle (Im(diag) ignored); d(i) =
+/// A(i,i), e(i) the off-diagonal, tau(i) (i < n-1) the reflector scalars, all of A's scalar type.
+///   tier::Cta<N>      (unblocked: xSYTD2) n = A.rows() <= N, one matrix per SgpPartition<N>; A
+///                     leaves in LAPACK's packing with BOTH triangles written (the reflectors in UL,
+///                     the conjugate mirror in the other). ws.local only.
+///   tier::Blocked<NB> Uplo::Lower, any n, one matrix in global memory per WorkGroup<256>; A leaves
+///                     in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of the upper
+///                     triangle is not referenced. ws.global is this matrix's slice.
+/// ws: buffer_size<routine::sytrd<UL>, Tier, T>(n) for ONE problem (Cta: local tile + v + w;
+/// Blocked: global W, v, wcol and local vip, wip and the L3 stage). COLLECTIVE over the executor.
+/// Returns 0, or -2 when A is not square with 1 <= n (<= N for Cta). live == false (a dead slot of
+/// a packed launch, same n): A, d, e and tau are neither read nor written (ws is its scratch),
+/// every collective is reached; returns 0.
 template <Uplo UL, class Tier, class Ex, class MA, class DV, class EV, class TV>
-BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws,
+                                 bool live = true) {
     using T = std::remove_cv_t<typename MA::value_type>;
     using R = routine::sytrd<UL>;
     using Tr = resolve_tier_t<R, T, Tier>;
@@ -489,6 +487,7 @@ BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const E
     if constexpr (tier::is_blocked_v<Tr>) {
         constexpr int WG = tier_info<R, Tr, T>::wg_size;
         static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "sytrd: tier::Blocked<NB> runs on device::WorkGroup<256> (one matrix per work-group)");
+        if (!live) return 0;  // one matrix per work-group: the whole group is dead
         const auto a = l3::global_of(A);
         if (a.m < 1 || a.n != a.m) return -2;
         detail::sytrd_blocked_run<Tr::nb>(ex, a, d, e, tau, ws);
@@ -503,7 +502,7 @@ BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const E
         const auto a = carve_local(ws, plan.a).get();
         const auto v = carve_local(ws, plan.v).get();
         const auto w = carve_local(ws, plan.w).get();
-        detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, true);
+        detail::sytrd_cta_run<UL, T, static_cast<size_t>(N)>(ex.part, a, 0, v, 0, w, 0, A, d, e, tau, n, live);
         return 0;
     }
 }

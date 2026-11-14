@@ -148,7 +148,7 @@ template <device::Itype IT, Uplo UL, class Tier, int Wg = 0, class T>
 void device_call(Dev& dev, T* A, const T* B, const Problem<T>& p, int* info) {
     using Tr = device::resolve_tier_t<device::routine::sygst<IT, UL>, T, Tier>;  // Tier may be tier::upto
     constexpr int WG = Wg > 0 ? Wg : device::tier_info<device::routine::sygst<IT, UL>, Tr, T>::wg_size;
-    const device::WorkspaceSize ws = device::sygst_buffer_size<IT, UL, Tier, T>(p.n);
+    const device::WorkspaceSize ws = device::buffer_size<device::routine::sygst<IT, UL>, Tier, T>(p.n);
     std::byte* gws = nullptr;
     if (ws.global_bytes) {
         gws = sycl::malloc_device<std::byte>(ws.global_bytes * kBatch, dev.q());
@@ -463,7 +463,7 @@ TYPED_TEST(DeviceApiSygstTest, BadArgumentsReturnMinusIAndTouchNothing) {
     EXPECT_EQ(std::memcmp(this->dev.down(A, p.a.size()).data(), p.a.data(), p.a.size() * sizeof(T)), 0);
     const int n = p.n, lda = p.lda, ldb = p.ldb;
     const std::ptrdiff_t sa = p.sa, sb = p.sb;
-    const device::WorkspaceSize ws = device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<16>, T>(n);
+    const device::WorkspaceSize ws = device::buffer_size<device::routine::sygst<device::Itype::AinvB, Uplo::Lower>, device::tier::Cta<16>, T>(n);
     this->dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(ws.local_bytes), h);
            h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * 32, 32), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -519,9 +519,9 @@ TEST(DeviceApiSygstTiers, WithTierBoundariesFiltersAndBufferSize) {
         return std::pair<std::size_t, std::size_t>{r16(std::max(blk, stage)), r16(g)};
     };
     for (int n : {1, 16, 32, 33, 65, 100}) {
-        const auto f1 = device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Blocked<32>, float>(n);
-        const auto c2 = device::sygst_buffer_size<device::Itype::AB, Uplo::Upper, device::tier::Blocked<16>, std::complex<float>>(n);
-        const auto z3 = device::sygst_buffer_size<device::Itype::BA, Uplo::Lower, device::tier::Blocked<32>, std::complex<double>>(n);
+        const auto f1 = device::buffer_size<device::routine::sygst<device::Itype::AinvB, Uplo::Lower>, device::tier::Blocked<32>, float>(n);
+        const auto c2 = device::buffer_size<device::routine::sygst<device::Itype::AB, Uplo::Upper>, device::tier::Blocked<16>, std::complex<float>>(n);
+        const auto z3 = device::buffer_size<device::routine::sygst<device::Itype::BA, Uplo::Lower>, device::tier::Blocked<32>, std::complex<double>>(n);
         EXPECT_EQ(std::pair(f1.local_bytes, f1.global_bytes), blocked_hand(n, 32, 1, 4)) << n;
         EXPECT_EQ(std::pair(c2.local_bytes, c2.global_bytes), blocked_hand(n, 16, 2, 8)) << n;
         EXPECT_EQ(std::pair(z3.local_bytes, z3.global_bytes), blocked_hand(n, 32, 3, 16)) << n;
@@ -532,10 +532,10 @@ TEST(DeviceApiSygstTiers, WithTierBoundariesFiltersAndBufferSize) {
         return (bytes + 15) / 16 * 16;
     };
     for (int n : {1, 3, 8, 13, 31, 32}) {
-        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<32>, float>(n).local_bytes), hand(n, 4)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AB, Uplo::Upper, device::tier::Cta<32>, std::complex<float>>(n).local_bytes), hand(n, 8)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Upper, device::tier::Cta<32>, std::complex<double>>(n).local_bytes), hand(n, 16)) << n;
-        EXPECT_EQ((device::sygst_buffer_size<device::Itype::AinvB, Uplo::Lower, device::tier::Cta<32>, double>(n).global_bytes), 0u) << n;
+        EXPECT_EQ((device::buffer_size<device::routine::sygst<device::Itype::AinvB, Uplo::Lower>, device::tier::Cta<32>, float>(n).local_bytes), hand(n, 4)) << n;
+        EXPECT_EQ((device::buffer_size<device::routine::sygst<device::Itype::AB, Uplo::Upper>, device::tier::Cta<32>, std::complex<float>>(n).local_bytes), hand(n, 8)) << n;
+        EXPECT_EQ((device::buffer_size<device::routine::sygst<device::Itype::AinvB, Uplo::Upper>, device::tier::Cta<32>, std::complex<double>>(n).local_bytes), hand(n, 16)) << n;
+        EXPECT_EQ((device::buffer_size<device::routine::sygst<device::Itype::AinvB, Uplo::Lower>, device::tier::Cta<32>, double>(n).global_bytes), 0u) << n;
     }
 }
 

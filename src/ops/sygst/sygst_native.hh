@@ -21,12 +21,12 @@ inline constexpr std::size_t kDiagSlmCap = 32768;  ///< a group's shared memory 
 
 template <typename T>  /// F's leading dimension: whole 16-byte packs per line, plus one pack against bank conflicts
 constexpr int diag_ldf(int kb) {
-    return ::batchlas::device::sygs2_ldf<T>(kb);
+    return ::batchlas::device::detail::sygs2_ldf<T>(kb);
 }
 
 template <typename T>  /// shared-memory elements of one item: F and the transpose buffer (ld kb + 1)
 constexpr std::size_t diag_item_elems(int kb) {
-    return ::batchlas::device::sygs2_block_elems<T>(kb);
+    return ::batchlas::device::detail::sygs2_block_elems<T>(kb);
 }
 
 template <typename T>  /// items per work-group at order kb: as many as kDiagWg columns and kDiagSlmCap hold
