@@ -84,7 +84,7 @@ Span<int32_t> info_layout(Queue& ctx, BumpAllocator& pool, Span<int32_t> info_ou
 // One launch for sytrf's `cta` and sysv's `cta`: B is null for the factor alone. Sub-group 0
 // factors (sub-group collectives only, so the factor is the same with or without B); sysv's
 // work-group has one sub-group per right-hand side (at most kSytrsCtaMaxSg), which then solve in
-// parallel with sytrs `cta`'s converted solve (device::sytrs_cols).
+// parallel with sytrs `cta`'s converted solve (device::detail::sytrs_cols).
 template <typename T>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int* piv, int32_t* info,
                  const MatrixView<T, MatrixFormat::Dense>* B, const std::uint8_t* mask) {
@@ -212,8 +212,8 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                 const device::RtGroup<> g(it);
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 int* const gp = piv + b * n;
-                const int st = device::sytf2(G, n, upper, g, device::argmax_slots<device::Mem::Global, true>(&red[0], &redi[0]),
-                                                        [&](int k, int v) { gp[k] = v; });
+                const int st = device::sytf2(g, G, n, upper, device::argmax_slots<device::Mem::Global, true>(&red[0], &redi[0]),
+                                             [&](int k, int v) { gp[k] = v; });
                 if (lid == 0) info[b] = st;
             });
     });
@@ -255,8 +255,8 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 const Vec<D> x{bp + b * strb + c * ldb, n, upper};
                 const int* const gp = piv + b * n;
-                device::sytrs_col(G, n, upper, x, g, device::detail::SumScratch<R>{&red[0], &red[wg / 32]},
-                                        [&](int k) { return gp[k]; });
+                device::sytrs_col(g, G, [&](int k) { return gp[k]; }, x, n, upper,
+                                  device::detail::SumScratch<R>{&red[0], &red[wg / 32]});
             });
     });
     return ctx.get_event();
@@ -325,7 +325,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 const int first = state[2 * b], end = state[2 * b + 1];
                 int st = info[b];
                 device::sync<device::Scope::Group>(g, device::Mem::Global);
-                device::lasyf_undo(S, first, end, g, [&](int j, bool& two) {
+                device::lasyf_undo(g, S, first, end, [&](int j, bool& two) {
                     const int raw = gp[upper ? n - 1 - j : j];
                     two = raw < 0;
                     const int p = (raw < 0 ? -raw : raw) - 1;
@@ -335,14 +335,14 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                     const int sub = n - end;
                     const int off = upper ? 0 : end;
                     const Tile<D> T2 = rev_mat(item + off + static_cast<std::ptrdiff_t>(off) * lda, lda, sub, upper);
-                    const int t = sub > 0 ? device::sytf2(T2, sub, upper, g, am, [&](int k, int v) {
+                    const int t = sub > 0 ? device::sytf2(g, T2, sub, upper, am, [&](int k, int v) {
                         gp[k + off] = v > 0 ? v + off : v - off;
                     }) : 0;
                     if (st == 0 && t > 0) st = t + off;
                 } else {
                     const Tile<D> W = device::detail::w_tile(wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper);
-                    const int e = device::lasyf(S, W, n, k0, nb, end, upper, g, am, st,
-                                                          [&](int k, int v) { gp[k] = v; });
+                    const int e = device::lasyf(g, S, W, n, k0, nb, end, upper, am, st,
+                                                [&](int k, int v) { gp[k] = v; });
                     if (lid == 0) {
                         state[2 * b] = end;
                         state[2 * b + 1] = e;

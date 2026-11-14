@@ -148,11 +148,13 @@ template <class D> BATCHLAS_DEVICE_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t 
 
 }  // namespace detail
 
-// ?sytf2, lower form, on the logical tile. `piv_out(phys_k, value)` stores LAPACK's ipiv entry
-// (1-based; a 2x2 pivot writes -(p+1) at both of its positions); item 0 calls it. Returns info.
-// am: the pivot search's standalone, Global-fenced ArgMaxSlots (unread on a SubGroup).
-template <typename D, typename Ex, typename AM, typename PivOut>
-inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, AM am, PivOut&& piv_out) {
+// ?sytf2, lower form, on the logical n x n tile S (any matrix operand; Upper passes the reversed
+// view and rev). `piv_out(phys_k, value)` stores LAPACK's ipiv entry (1-based; a 2x2 pivot writes
+// -(p+1) at both of its positions); item 0 calls it. Returns info. am: the pivot search's
+// standalone, Global-fenced ArgMaxSlots (unread on a SubGroup).
+template <class Ex, class MS, class AM, class PivOut>
+inline int sytf2(const Ex& ex, const MS& S, int n, bool rev, AM am, PivOut&& piv_out) {
+    using D = typename MS::value_type;
     using A = arith_t<arith::Fma, D>;
     using R = real_t<D>;
     const R alpha = detail::bk_alpha<R>();
@@ -165,54 +167,54 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, AM am
         const R absakk = abs1(S(k, k));
         // ?sytf2's I?AMAX takes the first maximum in storage order: the smallest physical row,
         // which for the reversed (upper) form is the largest logical one. 32: the sub-group width.
-        const auto col = iamax(g, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
+        const auto col = iamax(ex, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
         const R colmax = col.value < R(0) ? R(0) : col.value;
         const int imax = col.index;
-        const int stage = detail::bk_stage(g, absakk, colmax, alpha);
+        const int stage = detail::bk_stage(ex, absakk, colmax, alpha);
         if (stage == detail::kBkNeedRow) {
-            const auto row = iamax(g, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, alg::TieLowest{}, am,
+            const auto row = iamax(ex, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, alg::TieLowest{}, am,
                                    imax, -1, 32);
-            detail::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
+            detail::bk_choice(ex, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
         }
         if (stage == detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
         } else {
             const int kk = k + kstep - 1;
             if (kp != kk) {  // the symmetric interchange of kk and kp
-                for_each_owned(g, Range{kp + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { std::swap(S(i, kk), S(i, kp)); });
-                for_each_owned(g, Range{kk + 1, kp}, [&](int j) BATCHLAS_DEVICE_BODY { std::swap(S(j, kk), S(kp, j)); });
-                if (g.leader()) {
+                for_each_owned(ex, Range{kp + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { std::swap(S(i, kk), S(i, kp)); });
+                for_each_owned(ex, Range{kk + 1, kp}, [&](int j) BATCHLAS_DEVICE_BODY { std::swap(S(j, kk), S(kp, j)); });
+                if (ex.leader()) {
                     std::swap(S(kk, kk), S(kp, kp));
                     if (kstep == 2) std::swap(S(k + 1, k), S(kp, k));
                 }
             }
-            sync<Scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(ex, Mem::Global);
             if (kstep == 1) {  // A22 -= A21 d^-1 A21^T (?syr), then L21 = A21 d^-1
                 const D mr1 = A::neg(A::recip(S(k, k)));
                 for (int j = k + 1; j < n; ++j) {
                     const D t = A::mul(mr1, S(j, k));
-                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, j) = A::add(S(i, j), A::mul(S(i, k), t)); });
+                    for_each_owned(ex, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, j) = A::add(S(i, j), A::mul(S(i, k), t)); });
                 }
-                sync<Scope::Group>(g, Mem::Global);
+                sync<Scope::Group>(ex, Mem::Global);
                 const D r1 = A::neg(mr1);
-                for_each_owned(g, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, k) = A::mul(r1, S(i, k)); });
+                for_each_owned(ex, Range{k + 1, n}, [&](int i) BATCHLAS_DEVICE_BODY { S(i, k) = A::mul(r1, S(i, k)); });
             } else if (k < n - 2) {  // A22 -= A21 D^-1 A21^T, then L21 = A21 D^-1
                 const auto blk = detail::bk_block2(S(k, k), S(k + 1, k), S(k + 1, k + 1));
                 for (int j = k + 2; j < n; ++j) {
                     const D a = blk.first(S(j, k), S(j, k + 1)), b = blk.second(S(j, k), S(j, k + 1));
-                    for_each_owned(g, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY {
+                    for_each_owned(ex, Range{j, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                         S(i, j) = A::sub(A::sub(S(i, j), A::mul(S(i, k), a)), A::mul(S(i, k + 1), b));
                     });
                 }
-                sync<Scope::Group>(g, Mem::Global);
-                for_each_owned(g, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
+                sync<Scope::Group>(ex, Mem::Global);
+                for_each_owned(ex, Range{k + 2, n}, [&](int i) BATCHLAS_DEVICE_BODY {
                     const D a = blk.first(S(i, k), S(i, k + 1)), b = blk.second(S(i, k), S(i, k + 1));
                     S(i, k) = a;
                     S(i, k + 1) = b;
                 });
             }
         }
-        if (g.leader()) {
+        if (ex.leader()) {
             if (kstep == 1) {
                 piv_out(phys(k), phys(kp) + 1);
             } else {
@@ -220,7 +222,7 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, AM am
                 piv_out(phys(k + 1), -(phys(kp) + 1));
             }
         }
-        sync<Scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
         k += kstep;
     }
     return info;
@@ -234,17 +236,18 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, AM am
 // evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
 // The loops stay hand-written: as device ops the W zero-fill unrolled fully at device link and the
 // column update moved loads and FMAs (complex<float> registers 68 -> 128).
-template <typename D, typename Ex, typename AM, typename PivOut>
-inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, int k0, int nb, int start, bool rev,
-                 const Ex& g, AM am, int& info, PivOut&& piv_out) {
+template <class Ex, class MS, class MW, class AM, class PivOut>
+inline int lasyf(const Ex& ex, const MS& S, const MW& W, int n, int k0, int nb, int start, bool rev, AM am, int& info,
+                 PivOut&& piv_out) {
+    using D = typename MS::value_type;
     using A = arith_t<arith::Fma, D>;
     using R = real_t<D>;
     const R alpha = detail::bk_alpha<R>();
-    const int lid = g.lid(), nl = detail::size_of(g);
+    const int lid = ex.lid(), nl = detail::size_of(ex);
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     for (int i = k0 + lid; i < n; i += nl)
         for (int c = 0; c <= nb; ++c) W(i, c) = A::zero();
-    sync<Scope::Group>(g, Mem::Global);
+    sync<Scope::Group>(ex, Mem::Global);
     // W(k:n, dst) := source - A(k:n, start:k) W(r, start-k0:k-k0): the panel's finished columns only.
     auto update_col = [&](int k, int dst, int r, auto&& source) {
         for (int i = k + lid; i < n; i += nl) {
@@ -252,7 +255,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
             for (int l = start - k0; l < k - k0; ++l) acc = A::sub(acc, A::mul(S(i, k0 + l), W(r, l)));
             W(i, dst) = acc;
         }
-        sync<Scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
     };
     int k = start;
     while (k < k0 + nb) {
@@ -261,17 +264,17 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
         int kstep = 1;
         int kp = k;
         const R absakk = abs1(W(k, c));
-        const auto col = iamax(g, [&](int i) -> D& { return W(i, c); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
+        const auto col = iamax(ex, [&](int i) -> D& { return W(i, c); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
         const R colmax = col.value < R(0) ? R(0) : col.value;
         const int imax = col.index;
-        const int stage = detail::bk_stage(g, absakk, colmax, alpha);
+        const int stage = detail::bk_stage(ex, absakk, colmax, alpha);
         if (stage == detail::kBkNeedRow) {
             update_col(k, c + 1, imax, [&](int i) { return i < imax ? S(imax, i) : S(i, imax); });
-            const auto row = iamax(g, [&](int j) -> D& { return W(j, c + 1); }, Range{k, n}, alg::TieLowest{}, am, imax, -1, 32);
-            detail::bk_choice(g, absakk, colmax, row.value, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
+            const auto row = iamax(ex, [&](int j) -> D& { return W(j, c + 1); }, Range{k, n}, alg::TieLowest{}, am, imax, -1, 32);
+            detail::bk_choice(ex, absakk, colmax, row.value, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k)
                 for (int i = k + lid; i < n; i += nl) W(i, c) = W(i, c + 1);
-            sync<Scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(ex, Mem::Global);
         }
         if (stage == detail::kBkZero) {
             if (info == 0) info = phys(k) + 1;
@@ -287,7 +290,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
                 for (int l = start + lid; l < kk; l += nl) std::swap(S(kk, l), S(kp, l));
                 for (int l = start - k0 + lid; l <= kk - k0; l += nl) std::swap(W(kk, l), W(kp, l));
             }
-            sync<Scope::Group>(g, Mem::Global);
+            sync<Scope::Group>(ex, Mem::Global);
             if (kstep == 1) {
                 const D r1 = A::recip(W(k, c));
                 for (int i = k + lid; i < n; i += nl) S(i, k) = i == k ? W(k, c) : A::mul(r1, W(i, c));
@@ -313,7 +316,7 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
                 piv_out(phys(k + 1), -(phys(kp) + 1));
             }
         }
-        sync<Scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
         k += kstep;
     }
     // The last step's row search may have left column imax in W(:, nb) though the block was \f$1 \times 1\f$:
@@ -326,9 +329,9 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
 // ?lasyf's last loop: undo the panel's interchanges on its own finished columns [start, end), in
 // reverse, so they hold ?sytf2's form. `logical_partner(j)` is ipiv's partner of logical column j
 // (rows j / j-1 for a 2 x 2 block ending at j) and its sign. Runs after the trailing update.
-template <typename D, typename Ex, typename PivIn>
-inline void lasyf_undo(const detail::RevMat<D>& S, int start, int end, const Ex& g, PivIn&& logical_partner) {
-    const int lid = g.lid(), nl = detail::size_of(g);
+template <class Ex, class MS, class PivIn>
+inline void lasyf_undo(const Ex& ex, const MS& S, int start, int end, PivIn&& logical_partner) {
+    const int lid = ex.lid(), nl = detail::size_of(ex);
     int j = end - 1;
     while (j >= start) {
         const int jj = j;
@@ -338,7 +341,7 @@ inline void lasyf_undo(const detail::RevMat<D>& S, int start, int end, const Ex&
         --j;
         if (jp != jj && j >= start)
             for (int l = start + lid; l <= j; l += nl) std::swap(S(jp, l), S(jj, l));
-        sync<Scope::Group>(g, Mem::Global);
+        sync<Scope::Group>(ex, Mem::Global);
     }
 }
 
@@ -457,22 +460,22 @@ template <class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int sytrf_check
 // the logical lower triangle of G into the local tile S; then the factoring sub-group g (the
 // items with `factors`) runs ?sytf2 on S, copies the factor back to G, and its leader calls
 // info_out(info). Returns ?sytf2's info on g, 0 elsewhere. No trailing barrier.
-template <class All, class Sub, typename D, typename AM, typename PivOut, typename InfoOut>
+template <class All, class Sub, class D, class AM, class PivOut, class InfoOut>
 BATCHLAS_DEVICE_INLINE int sytrf_cta_run(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
                                          bool rev, AM am, PivOut&& piv_out, InfoOut&& info_out) {
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
     sync<Scope::Group>(all, Mem::Global);
     int st = 0;
     if (factors) {
-        st = sytf2(S, n, rev, g, am, piv_out);
+        st = sytf2(g, S, n, rev, am, piv_out);
         lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(g, S, G);
         if (g.leader()) info_out(st);
     }
     return st;
 }
 
-template <Uplo UL, int N, class Ex, class MA>
-BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+template <Uplo UL, int N, class Ex, class MA, class PV>
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, const PV& ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -483,21 +486,21 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, in
     // One sub-group factors: its arg-max never reaches the cross-sub-group scratch.
     const int st = sytrf_cta_run(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev,
                                     argmax_slots<Mem::Global, true>(static_cast<R*>(nullptr), static_cast<int*>(nullptr)),
-                                    [&](int k, int v) { ipiv[k] = v; }, NoOp{});
+                                    [&](int k, int v) { ipiv(k) = v; }, NoOp{});
     sync<Scope::Group>(ex, Mem::Global);
     if constexpr (Ex::sub_whole) return st;
     else return ex.uniform(st);
 }
 
-template <Uplo UL, class Ex, class MA>
-BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+template <Uplo UL, class Ex, class MA, class PV>
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A, const PV& ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
     constexpr auto pl = sytrf_wg_plan<R>();
     const auto am = argmax_slots<Mem::Global, true>(carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw());
     // sytf2's verdicts are uniform and each step ends on a barrier: info is uniform, A visible.
-    return sytf2(sytrf_view(A, rev), A.rows(), rev, ex, am, [&](int k, int v) { ipiv[k] = v; });
+    return sytf2(ex, sytrf_view(A, rev), A.rows(), rev, am, [&](int k, int v) { ipiv(k) = v; });
 }
 
 // The host `blocked` route's step order in one work-group: each panel's ?lasyf, its trailing
@@ -506,9 +509,9 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A
 // 2 x 2 block took column k0 + NB), on the logical trailing matrix [end, n): physically the lower
 // triangle at (end, end), or for Upper the upper triangle at (0, 0) with the panel's columns and
 // W's both reversed. evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
-template <Uplo UL, int NB, class Ex, class MA>
+template <Uplo UL, int NB, class Ex, class MA, class PV>
     requires(NB > 1)
-BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const PV& ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Cfg = sytrf_l3_cfg<D>;
     using Ar = arith_t<typename Cfg::ops, D>;
@@ -524,9 +527,9 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
     const int lda = static_cast<int>(sytrf_ld(A));
     const RevMat<D> S = rev_mat(a0, lda, n, rev);
     const RevMat<D> W = w_tile(w, n, n, NB + 1, rev);
-    auto piv_out = [&](int k, int v) { ipiv[k] = v; };
+    auto piv_out = [&](int k, int v) { ipiv(k) = v; };
     auto partner = [&](int j, bool& two) {
-        const int raw = ipiv[rev ? n - 1 - j : j];
+        const int raw = ipiv(rev ? n - 1 - j : j);
         two = raw < 0;
         const int p = (raw < 0 ? -raw : raw) - 1;
         return rev ? n - 1 - p : p;
@@ -534,8 +537,8 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
     const D neg_one = Ar::neg(Ar::one()), one = Ar::one();
     int info = 0, first = 0, end = 0;
     for (int k0 = 0; n - k0 > NB; k0 += NB) {
-        lasyf_undo(S, first, end, ex, partner);
-        const int e = lasyf(S, W, n, k0, NB, end, rev, ex, am, info, piv_out);
+        lasyf_undo(ex, S, first, end, partner);
+        const int e = lasyf(ex, S, W, n, k0, NB, end, rev, am, info, piv_out);
         first = end;
         end = e;
         const int m = n - e, rank = e - k0;
@@ -548,12 +551,12 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
         l3::rank_update<Cfg, tri, false>(ex, sm, c, neg_one, one, pass);
         sync<Scope::Group>(ex, Mem::Global);
     }
-    lasyf_undo(S, first, end, ex, partner);
+    lasyf_undo(ex, S, first, end, partner);
     const int sub = n - end;
     if (sub > 0) {  // ?sytf2 on the trailing sub-matrix; its ipiv and info shifted to A's indices
         const int off = rev ? 0 : end;
-        const int t = sytf2(rev_mat(a0 + off + off * lda, lda, sub, rev), sub, rev, ex, am,
-                            [&](int k, int v) { ipiv[k + off] = v > 0 ? v + off : v - off; });
+        const int t = sytf2(ex, rev_mat(a0 + off + off * lda, lda, sub, rev), sub, rev, am,
+                            [&](int k, int v) { ipiv(k + off) = v > 0 ? v + off : v - off; });
         if (info == 0 && t > 0) info = t + off;
     }
     return info;
@@ -587,22 +590,17 @@ template <Uplo UL, int NB, class T> struct tier_info<routine::sytrf<UL>, tier::B
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrf_blocked_plan<NB, T>(n).size; }
 };
 
-// The workspace of one matrix: local bytes for the tier's tile / scratch; a global part only for
-// Blocked<NB> (W), which the caller offsets per matrix (global_slice).
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sytrf_buffer_size(int n) {
-    using Rt = routine::sytrf<UL>;
-    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n);
-}
-
 // ?sytrf of one matrix inside a kernel: A := its Bunch-Kaufman factor in LAPACK's storage for UL,
-// ipiv[0, n) := LAPACK's ipiv (1-based int32; a 2 x 2 block negative at both of its rows).
+// ipiv (a Vec<int> of n) := LAPACK's ipiv (1-based; a 2 x 2 block negative at both of its rows).
 // Collective: every item of ex calls it with the same arguments, A and ipiv's memory visible to
 // all on entry; both are visible to every item on return. Returns LAPACK's info, the same on
 // every item: 0; k > 0 (D(k, k) is exactly zero; the factor is complete); -2 (A not square, or n
 // outside the tier); -4 (ld < max(1, n)); -1 (ex: a run-time width that is not whole 32-wide
 // sub-groups, or wider than Blocked<1>'s 256). The executor needs sub-group size 32. ws holds
-// sytrf_buffer_size<UL, Tier, T>(n): its local bytes, and its global bytes for this matrix alone.
-template <Uplo UL, class Tier, class Ex, class MA> inline int sytrf(const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
+// buffer_size<routine::sytrf<UL>, Tier, T>(n): its local bytes, and its global bytes for this
+// matrix alone (Blocked<NB>'s W; the caller offsets it per matrix, global_slice).
+template <Uplo UL, class Tier, class Ex, class MA, class PV>
+BATCHLAS_DEVICE_INLINE int sytrf(const Ex& ex, const MA& A, const PV& ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using Tr = resolve_tier_t<routine::sytrf<UL>, D, Tier>;
     static_assert(detail::sytrf_exec_ok<Ex>(), "sytrf: an executor of whole 32-wide sub-groups");

@@ -3,10 +3,9 @@
 // ?GETF2, GETRF's own routine: by row interchanges (getf2) or lazy relabel (getf2_relabel), with a
 // fused pivot search (one butterfly, one slot barrier); arith::Fma. detail: the policies and
 // the steps core has no SASS-identical form of yet. evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
-// The public op getrf<Tier>(ex, A, ipiv, ws): Reg and Cta are the bodies the host tiny and cta
-// routes launch; Blocked (any n) runs ?GETRF's panel loop on the in-group Level 3. detail
-// holds the plans, sinks and tier bodies, and the LU family's Blocked configuration and plan,
-// which getrs, gesv, getri and inv share (one executor and local layout for a fused kernel).
+// The public op getrf<Tier>(ex, A, ipiv, ws): Reg and Cta are the host tiny and cta routes'
+// bodies; Blocked (any n) is ?GETRF's panel loop on the in-group Level 3. detail: the plans,
+// sinks, tier bodies, and the Blocked configuration and plan getrs, gesv, getri and inv share.
 
 #include <cstddef>
 #include <cstdint>
@@ -89,7 +88,7 @@ template <class Ex, class VS, class IS> struct PivotRowsGroup {
     int m;
     int lanes;
     IpivSink ipiv;
-    std::int32_t& info;
+    int& info;
     template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j);
         const ArgMax<R> a = argmax_allreduce(ex, ArgMax<R>{cand ? rowid : m, (cand && (mag == mag)) ? mag : R(-1)}, alg::TieLowest{},
@@ -100,12 +99,12 @@ template <class Ex, class VS, class IS> struct PivotRowsGroup {
         if (ex.leader()) ipiv.set(j, w.row);
     }
     BATCHLAS_DEVICE_INLINE void on_zero(bool zero, int j) const {
-        if (zero && ex.leader() && info == 0) info = static_cast<std::int32_t>(ipiv.base + j + 1);
+        if (zero && ex.leader() && info == 0) info = static_cast<int>(ipiv.base + j + 1);
     }
 };
 template <class Ex, class VS, class IS>
 BATCHLAS_DEVICE_INLINE PivotRowsGroup<Ex, VS, IS> pivot_rows_group(const Ex& ex, VS vs, IS is, int m, IpivSink ipiv,
-                                                                std::int32_t& info) {
+                                                                int& info) {
     return {ex, vs, is, m, detail::team_size_of(ex), ipiv, info};
 }
 
@@ -119,7 +118,7 @@ template <int N, class Px> struct PivotPartition {
     int n;
     int lane;
     int& my_piv;
-    std::int32_t& linfo;
+    int& linfo;
     template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j) && (rowid < n);
         const ArgMax<R> a = argmax_allreduce(px, ArgMax<R>{pivot_key(cand ? rowid : (rowid + N), lane), (cand && (mag == mag)) ? mag : R(-1)},
@@ -130,7 +129,7 @@ template <int N, class Px> struct PivotPartition {
         if (lane == j) my_piv = w.row;
     }
     BATCHLAS_DEVICE_INLINE void on_zero(bool zero, int j) const {
-        if (zero && linfo == 0) linfo = static_cast<std::int32_t>(j + 1);
+        if (zero && linfo == 0) linfo = static_cast<int>(j + 1);
     }
 };
 
@@ -186,12 +185,13 @@ template <class Px> BATCHLAS_DEVICE_INLINE BcastShuffle<Px> bcast_shuffle(const 
 // ---- ?GETF2, explicit row interchanges ----------------------------------------------------------
 // In place on A (mat_wide: legacy 64-bit addressing) for kmax steps (NOT min(m, n)): iamax, ipiv,
 // swap of the WHOLE rows (only columns >= k is the classic silently wrong LU), rscl, rank-1
-// update; barriers B1 (Scope::Group) to B4. Ex: RtGroup<Scope::Sub | Scope::Group>. info: the
-// leader's running first failure (global, 1-based); the first EXACT zero pivot, no epsilon,
-// leaves its column unscaled. vs / is: nteams slots of local memory for the pivot exchange.
-template <class Ex, class MA, class VS, class IS>
-BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, IpivSink ipiv, std::int32_t info, const VS& vs,
-                                       const IS& is) {
+// update; barriers B1 (Scope::Group) to B4. Ex: RtGroup<Scope::Sub | Scope::Group>. ipiv (a Vec):
+// step k's row 1-based plus `base`, the panel's global row (no fix-up pass). info: the leader's
+// running first failure (global, 1-based); the first EXACT zero pivot, no epsilon, leaves its
+// column unscaled. vs / is: nteams slots of local memory for the pivot exchange.
+template <class Ex, class MA, class PV, class VS, class IS>
+BATCHLAS_DEVICE_INLINE int getf2(const Ex& ex, const MA& a, int kmax, const PV& ipiv, int info, const VS& vs, const IS& is,
+                                 int base = 0) {
     using D = typename MA::value_type;
     constexpr Mem fence = MA::mem == Mem::Local ? Mem::Local : Mem::Global;
     const int m = a.rows();
@@ -201,12 +201,12 @@ BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, I
                                     lanes)
                     .index;
         if (p >= m) p = k;  // unreachable: k < m, so column k always has a row
-        if (ex.leader()) ipiv.set(k, p);
+        if (ex.leader()) ipiv(k) = base + p + 1;
         if (p != k) swap(ex, a.row(k), a.row(p));
         ex.barrier(fence);  // B2
         const D d = a(k, k);
         if (Arith<D>::is_zero(d)) {
-            if (ex.leader() && info == 0) info = static_cast<std::int32_t>(ipiv.base + k + 1);
+            if (ex.leader() && info == 0) info = base + k + 1;
         } else {
             detail::rscl_col(ex, d, a, k + 1, k);
         }
@@ -219,10 +219,10 @@ BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, I
 
 // Both residencies' entry; `info_item` is READ too (first failure wins): launchers zero it.
 template <class Ex, class MA, class ValAcc, class IdxAcc>
-inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_item, int piv_base, std::int32_t* info_item,
-                               ValAcc rval, IdxAcc ridx) {
-    std::int32_t info = ex.leader() ? *info_item : 0;
-    info = getf2(ex, A, kmax, IpivSink{piv_item, piv_base}, info, rval, ridx);
+inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_item, int piv_base, int* info_item, ValAcc rval,
+                               IdxAcc ridx) {
+    int info = ex.leader() ? *info_item : 0;
+    info = getf2(ex, A, kmax, vec(piv_item, kmax), info, rval, ridx, piv_base);
     if (ex.leader()) *info_item = info;
 }
 
@@ -348,11 +348,7 @@ template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_plan() {
 // Where the Reg tier's info goes besides the return value: nowhere (the public op), or the
 // launcher's slot (host routes, inside the same `live` branch as the factor store).
 struct NoInfo {
-    template <class Px> BATCHLAS_DEVICE_INLINE void operator()(const Px&, std::int32_t) const {}
-};
-struct PivPtr {
-    std::int32_t* p;
-    BATCHLAS_DEVICE_INLINE std::int32_t& operator()(int i) const { return p[i]; }
+    template <class Px> BATCHLAS_DEVICE_INLINE void operator()(const Px&, int) const {}
 };
 
 // ONE ELEMENT of the padded tile, per element DELIBERATELY: the one spelling that cannot take
@@ -371,15 +367,15 @@ template <class D, class MA> inline D load_pad_identity(const MA& a, int r, int 
 // `lane` is px.lid(), read by the caller before it builds the operands (the host route's order).
 // evidence: docs/perf/lu.md#lu-the-tiny-tier
 template <int NC, class Px, class MA, class PV, class Bc, class Sink>
-BATCHLAS_DEVICE_INLINE std::int32_t getrf_reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live,
-                                         const Bc& bc, const Sink& sink) {
+BATCHLAS_DEVICE_INLINE int getrf_reg_run(const Px& px, int lane, const MA& a, const PV& ipiv, int n, bool live, const Bc& bc,
+                                         const Sink& sink) {
     using D = typename MA::value_type;
     Frag<D, NC> rA;
 BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NC; ++c) rA[c] = load_pad_identity<D>(a, lane, c, n, live);
     int rowid = lane;   // WHICH matrix row this lane currently owns
     int my_piv = lane;  // lane j accumulates ipiv[j]
-    std::int32_t linfo = 0;
+    int linfo = 0;
     const detail::PivotPartition<Px::size, Px> piv{px, n, lane, my_piv, linfo};
     getf2_relabel(rA, rowid, n, n, piv, bc);
     if (live) {
@@ -398,7 +394,7 @@ BATCHLAS_UNROLL_FULL
 // (getf2_panel_device's contract: *info_item is read, first failure wins).
 template <class Ex, class MG, class MT, class VS, class IS>
 BATCHLAS_DEVICE_INLINE void getrf_cta_run(const Ex& ex, const MG& ag, const MT& at, int kmax, int* piv_item, int piv_base,
-                                 std::int32_t* info_item, const VS& vs, const IS& is) {
+                                          int* info_item, const VS& vs, const IS& is) {
     lacpy<Part::Full, Transpose::NoTrans, alg::DivMod>(ex, ag, at);  // stage into the padded ld
     ex.barrier();                                                    // B0
     getf2_panel_device(ex, at, kmax, piv_item, piv_base, info_item, vs, is);
@@ -412,8 +408,8 @@ BATCHLAS_DEVICE_INLINE void getrf_cta_run(const Ex& ex, const MG& ag, const MT& 
 // A22 -= L21 U12 (in-group gemm). getf2 ends on a global barrier (ipiv and the panel are
 // visible), one global barrier follows the interchanges, trsm and gemm end on their own. info:
 // the leader's first exact zero pivot (global, 1-based, sticky), made uniform at the end.
-template <int NB, class Cfg, class Ex, class MA>
-BATCHLAS_DEVICE_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in, std::int32_t* ipiv, const Workspace& w) {
+template <int NB, class Cfg, class Ex, class MA, class PV>
+BATCHLAS_DEVICE_INLINE int factor_blocked(const Ex& ex, const MA& a_in, const PV& ipiv, const Workspace& w) {
     using D = typename Cfg::value_type;
     const auto g = l3::global_of(a_in);
     const int m = g.m, n = g.n, mn = m < n ? m : n;
@@ -422,14 +418,13 @@ BATCHLAS_DEVICE_INLINE std::int32_t factor_blocked(const Ex& ex, const MA& a_in,
     const l3::Smem<Cfg> sm{carve_local(w, pl.smem).get_raw()};
     const auto vs = carve_local(w, pl.vs);
     const auto is = carve_local(w, pl.is);
-    const PivPtr piv{ipiv};
-    std::int32_t info = 0;
+    int info = 0;
     for (int j = 0; j < mn; j += NB) {
         const int jb = mn - j < NB ? mn - j : NB;
         const int j2 = j + jb;
-        info = getf2(ex, a.sub(j, j, m - j, jb), jb, IpivSink{ipiv + j, j}, info, vs, is);
-        laswp(ex, a.sub(0, 0, m, j), piv, j, j2);
-        laswp(ex, a.sub(0, j2, m, n - j2), piv, j, j2);
+        info = getf2(ex, a.sub(j, j, m - j, jb), jb, vec(&ipiv(j), jb), info, vs, is, j);
+        laswp(ex, a.sub(0, 0, m, j), ipiv, j, j2);
+        laswp(ex, a.sub(0, j2, m, n - j2), ipiv, j, j2);
         ex.barrier(Mem::Global);
         if (j2 >= n) continue;
         const auto u12 = l3::global_of(a.sub(j, j2, jb, n - j2));
@@ -480,11 +475,6 @@ template <class T> struct tiers<routine::getrf, T> {
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>>;
 };
 
-/// The workspace of one n x n matrix for getrf<Tier> (host and device; constexpr).
-template <class Tier, class T> constexpr WorkspaceSize getrf_buffer_size(int n) {
-    return tier_info<routine::getrf, resolve_tier_t<routine::getrf, T, Tier>, T>::buffer_size(n);
-}
-
 /// @brief ?GETRF in a kernel: \f$A = PLU\f$ in place for one matrix, by the executor `ex`.
 ///
 /// Collective: every item of `ex` calls it with the same arguments; A must be visible to all
@@ -494,35 +484,34 @@ template <class Tier, class T> constexpr WorkspaceSize getrf_buffer_size(int n) 
 ///   n uniform across the sub-group; a dead partition passes `live = false` (it factors an
 ///   identity and stores nothing; every lane still calls). `ws` unused.
 /// - `tier::Cta<N>`: `ex` a WorkGroup<WG, SG> or RtGroup; A m x n with
-///   `ws.local` >= getrf_buffer_size<Tier, T>(max(m, n)) bytes; `live` executor-uniform.
+///   `ws.local` >= buffer_size<routine::getrf, Tier, T>(max(m, n)) bytes; `live` executor-uniform.
 /// - `tier::Blocked<NB>`: `ex` a WorkGroup<tier_info::wg_size, 32>; A m x n of any size in
 ///   global memory (Mat over T*, ItemMat or l3::Global), factored in place by NB-wide panels;
-///   ipiv in memory every item reads; `ws.local` >= getrf_buffer_size<Tier, T>(n) bytes, no
+///   ipiv in memory every item reads; `ws.local` >= buffer_size<routine::getrf, Tier, T>(n) bytes, no
 ///   global workspace; `live` executor-uniform. Alg: an l3::cfg preset for the trailing updates.
 /// - `tier::upto<N>`: the first tier of tiers_t<routine::getrf, T> that admits N.
 /// @param[in]     ex    the executor
 /// @param[in,out] a     this matrix (any operand: Mat, ItemMat, ...); overwritten with L and U
-/// @param[out]    ipiv  this matrix's min(m, n) pivots, 1-based int32
+/// @param[out]    ipiv  this matrix's min(m, n) pivots, 1-based (a Vec<int>: vec(ipiv + b * n, n))
 /// @param[in]     ws    this matrix's workspace slice
 /// @param[in]     live  false: a dead matrix of the launch (see the tiers)
 /// @return LAPACK's info, uniform across `ex`: 0, or the first k with \f$U_{kk} = 0\f$ exactly
-template <class Tier, class Ex, class MA>
-BATCHLAS_DEVICE_INLINE std::int32_t getrf(const Ex& ex, const MA& a, std::int32_t* ipiv, const Workspace& ws = {},
-                                       bool live = true) {
+template <class Tier, class Ex, class MA, class PV>
+BATCHLAS_DEVICE_INLINE int getrf(const Ex& ex, const MA& a, const PV& ipiv, const Workspace& ws = {}, bool live = true) {
     using D = detail::lu_value_t<MA>;
     using Tr = resolve_tier_t<routine::getrf, D, Tier>;
     static_assert(HasTier<routine::getrf, Tr, D>, "getrf: this tier is not offered for this scalar type");
     if constexpr (tier::is_reg_v<Tr>) {
         static_assert(Tr::n_max <= Ex::size, "getrf: tier::Reg<N> needs a Partition of at least N lanes");
-        return detail::getrf_reg_run<Tr::n_max>(ex, ex.lid(), a, detail::PivPtr{ipiv}, a.cols(), live,
+        return detail::getrf_reg_run<Tr::n_max>(ex, ex.lid(), a, ipiv, a.cols(), live,
                                                 detail::bcast_shuffle(ex), detail::NoInfo{});
     } else if constexpr (tier::is_cta_v<Tr>) {
         if (!live) return 0;
         const int m = a.rows(), n = a.cols();
         const auto pl = detail::getrf_cta_plan<D>(m, n);
         const auto at = mat_wide<Mem::Local>(carve_local(ws, pl.tile).get_raw(), m, n, pl.ld);
-        std::int32_t info = 0;
-        detail::getrf_cta_run(ex, a, at, m < n ? m : n, ipiv, 0, &info, carve_local(ws, pl.vs), carve_local(ws, pl.is));
+        int info = 0;
+        detail::getrf_cta_run(ex, a, at, m < n ? m : n, &ipiv(0), 0, &info, carve_local(ws, pl.vs), carve_local(ws, pl.is));
         return ex.uniform(info);
     } else {
         using Cfg = detail::lu_blocked_cfg_t<D, Tr>;

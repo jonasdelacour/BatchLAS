@@ -300,7 +300,7 @@ template <class R, class Tr, class T, class F> void launch(Dev& d, int items, in
 template <class Tr, class T> void device_getrf(Dev& d, const DevBatch<T>& a, std::int32_t* piv, std::int32_t* info, int dead = -1) {
     const int n = a.cols;
     launch<batchlas::device::routine::getrf, Tr, T>(d, a.items, n, nullptr, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
-        const std::int32_t r = batchlas::device::getrf<Tr>(ex, a.mat(b), piv + std::ptrdiff_t(b) * n, w, b != dead);
+        const int r = batchlas::device::getrf<Tr>(ex, a.mat(b), batchlas::device::vec(piv + std::ptrdiff_t(b) * n, n), w, b != dead);
         if (b != dead && ex.leader()) info[b] = r;
     });
 }
@@ -308,8 +308,9 @@ template <class Tr, class T> void device_getrf(Dev& d, const DevBatch<T>& a, std
 template <Transpose TR, class T> void device_getrs(Dev& d, const DevBatch<T>& a, const DevBatch<T>& b, const std::int32_t* piv) {
     const auto av = a.kview(), bv = b.kview();
     const int n = a.cols;
-    launch<batchlas::device::routine::getrs, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
-        (void)batchlas::device::getrs<TR, Tier>(ex, batchlas::device::item(av, q), batchlas::device::item(bv, q), piv + std::ptrdiff_t(q) * n, w);
+    launch<batchlas::device::routine::getrs<TR>, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
+        (void)batchlas::device::getrs<TR, Tier>(ex, batchlas::device::item(av, q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n),
+                                                batchlas::device::item(bv, q), w);
     });
 }
 template <class T> void device_getrs(Dev& d, Transpose tr, const DevBatch<T>& a, const DevBatch<T>& b, const std::int32_t* piv) {
@@ -321,7 +322,7 @@ template <class T> void device_getrs(Dev& d, Transpose tr, const DevBatch<T>& a,
 template <class T> void device_gesv(Dev& d, const DevBatch<T>& a, const DevBatch<T>& b, std::int32_t* piv, std::int32_t* info) {
     const int n = a.cols;
     launch<batchlas::device::routine::gesv, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
-        const std::int32_t r = batchlas::device::gesv<Tier>(ex, a.mat(q), b.mat(q), piv + std::ptrdiff_t(q) * n, w);
+        const int r = batchlas::device::gesv<Tier>(ex, a.mat(q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n), b.mat(q), w);
         if (ex.leader()) info[q] = r;
     });
 }
@@ -329,13 +330,13 @@ template <class T> void device_gesv(Dev& d, const DevBatch<T>& a, const DevBatch
 template <class T> void device_getri(Dev& d, const DevBatch<T>& a, const DevBatch<T>& c, const std::int32_t* piv, std::int32_t* info) {
     const int n = a.cols;
     launch<batchlas::device::routine::getri, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
-        const std::int32_t r = batchlas::device::getri<Tier>(ex, a.global(q), c.global(q), piv + std::ptrdiff_t(q) * n, w);
+        const int r = batchlas::device::getri<Tier>(ex, a.global(q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n), c.global(q), w);
         if (ex.leader()) info[q] = r;
     });
 }
 template <class T> void device_inv(Dev& d, const DevBatch<T>& a, const DevBatch<T>& c, std::byte* gws, std::int32_t* info) {
     launch<batchlas::device::routine::inv, Tier, T>(d, a.items, a.cols, gws, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
-        const std::int32_t r = batchlas::device::inv<Tier>(ex, a.mat(q), c.mat(q), w);
+        const int r = batchlas::device::inv<Tier>(ex, a.mat(q), c.mat(q), w);
         if (ex.leader()) info[q] = r;
     });
 }
@@ -438,7 +439,7 @@ TYPED_TEST(DeviceApiLuTest, WithTierSwitchesToBlockedAndAnyConfigurationFactors)
             picked = batchlas::device::tier::is_blocked_v<Tr> ? "Blocked" : "Cta";
             device_getrf<Tr>(d, a, i32(piv), info);
         });
-        const bool cta = n <= 128 && batchlas::device::getrf_buffer_size<batchlas::device::tier::Cta<128>, T>(n).local_bytes <= lim.local_mem_bytes;
+        const bool cta = n <= 128 && batchlas::device::buffer_size<batchlas::device::routine::getrf, batchlas::device::tier::Cta<128>, T>(n).local_bytes <= lim.local_mem_bytes;
         EXPECT_EQ(picked, cta ? "Cta" : "Blocked") << "n=" << n;
         check_factor(A0, downloaded(d, A0, a.p), d.down(i32(piv), std::size_t(n) * 6), d.down(info, 6), "with_tier " + picked);
     }
@@ -576,7 +577,7 @@ TYPED_TEST(DeviceApiLuTest, InvBlockedIsGetrfThenGetriOnACopy) {
         Batch<T> A0(n, n, items), C0(n, n, items);
         fill_lu(A0, 0x7000u + n, true);
         const auto a = to_dev(d, A0), w = to_dev(d, A0), c = to_dev(d, C0), cw = to_dev(d, C0);
-        const batchlas::device::WorkspaceSize ws = batchlas::device::inv_buffer_size<Tier, T>(n);
+        const batchlas::device::WorkspaceSize ws = batchlas::device::buffer_size<batchlas::device::routine::inv, Tier, T>(n);
         std::byte* gws = d.template alloc<std::byte>(ws.global_bytes * items, std::byte{0x5a});
         std::int64_t* piv = d.template alloc<std::int64_t>(std::size_t(n) * items, -1);
         std::int32_t* info = d.template alloc<std::int32_t>(items, -12345);
@@ -650,7 +651,7 @@ template <class R> void expect_any_n(const std::string& name) {
 }
 
 TEST(DeviceApiLuTier, EveryRoutineOffersBlockedForAnyN) {
-    expect_any_n<batchlas::device::routine::getrs>("getrs");
+    expect_any_n<batchlas::device::routine::getrs<kNT>>("getrs");
     expect_any_n<batchlas::device::routine::gesv>("gesv");
     expect_any_n<batchlas::device::routine::getri>("getri");
     expect_any_n<batchlas::device::routine::inv>("inv");
@@ -660,20 +661,22 @@ TEST(DeviceApiLuTier, EveryRoutineOffersBlockedForAnyN) {
 TEST(DeviceApiLuTier, BufferSizeIsThePlanByHand) {
     using batchlas::device::WorkspaceSize;
     // L3 stages 1 * (33 * 8 + 9 * 32) = 552 elements, then 32 real and 32 int pivot slots.
-    EXPECT_EQ((batchlas::device::getrf_buffer_size<Tier, float>(500)), (WorkspaceSize{2464, 0, 16}));
-    EXPECT_EQ((batchlas::device::getrf_buffer_size<Tier, double>(1)), (WorkspaceSize{4800, 0, 16}));
-    EXPECT_EQ((batchlas::device::getrf_buffer_size<Tier, std::complex<float>>(7)), (WorkspaceSize{4672, 0, 16}));
-    EXPECT_EQ((batchlas::device::getrf_buffer_size<Tier, std::complex<double>>(4000)), (WorkspaceSize{9216, 0, 16}));
-    EXPECT_EQ((batchlas::device::getrs_buffer_size<kCT, Tier, float>(500, 7)), (WorkspaceSize{2464, 0, 16}));
-    EXPECT_EQ((batchlas::device::gesv_buffer_size<Tier, double>(9, 2)), (WorkspaceSize{4800, 0, 16}));
-    EXPECT_EQ((batchlas::device::getri_buffer_size<Tier, std::complex<float>>(3)), (WorkspaceSize{4672, 0, 16}));
+    using Getrf = batchlas::device::routine::getrf;
+    EXPECT_EQ((batchlas::device::buffer_size<Getrf, Tier, float>(500)), (WorkspaceSize{2464, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<Getrf, Tier, double>(1)), (WorkspaceSize{4800, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<Getrf, Tier, std::complex<float>>(7)), (WorkspaceSize{4672, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<Getrf, Tier, std::complex<double>>(4000)), (WorkspaceSize{9216, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::getrs<kCT>, Tier, float>(500, 7)), (WorkspaceSize{2464, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::getrs<kNT>, Tier, float>(500)), (WorkspaceSize{2464, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::gesv, Tier, double>(9, 2)), (WorkspaceSize{4800, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::getri, Tier, std::complex<float>>(3)), (WorkspaceSize{4672, 0, 16}));
     // inv: the copy (n * n) then n int32 pivots at a 16-byte offset: float n = 10: 400 + 40 -> 448.
-    EXPECT_EQ((batchlas::device::inv_buffer_size<Tier, float>(10)), (WorkspaceSize{2464, 448, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::inv, Tier, float>(10)), (WorkspaceSize{2464, 448, 16}));
     // complex<double> n = 3: 144 + 12 -> 160.
-    EXPECT_EQ((batchlas::device::inv_buffer_size<Tier, std::complex<double>>(3)), (WorkspaceSize{9216, 160, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::inv, Tier, std::complex<double>>(3)), (WorkspaceSize{9216, 160, 16}));
     // 64 x 64 tiles of 4 x 4: 65 * 8 + 9 * 64 = 1096 elements.
     using Tier16 = batchlas::device::tier::Blocked<16, batchlas::device::l3::cfg::RegTiled<float, 64, 64, 8, 4, 4>>;
-    EXPECT_EQ((batchlas::device::getrf_buffer_size<Tier16, float>(1)), (WorkspaceSize{4640, 0, 16}));
+    EXPECT_EQ((batchlas::device::buffer_size<Getrf, Tier16, float>(1)), (WorkspaceSize{4640, 0, 16}));
     static_assert(batchlas::device::tier_info<batchlas::device::routine::inv, Tier, float>::wg_size == 256);
     static_assert(!batchlas::device::tier_info<batchlas::device::routine::getri, Tier, float>::admits(0));
 }

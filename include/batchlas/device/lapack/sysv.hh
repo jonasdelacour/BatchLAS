@@ -10,7 +10,7 @@
 //                           sytrf `wg` and sytrs `wg`); ex at most 256 items
 //   tier::Blocked<NB>, NB>1 any n: sytrf Blocked<NB>, then sytrs Blocked<NB> (sysv `compose`
 //                           over sytrf `blocked` and sytrs `blocked`); ex = WorkGroup<256, 32>;
-//                           not in tiers_t; sysv_buffer_size<UL, Tier, T>(n, nrhs)
+//                           not in tiers_t; buffer_size<routine::sysv<UL>, Tier, T>(n, nrhs)
 // Tests: tests/device_lapack_sytrf_tests.cc.
 
 #include <cstddef>
@@ -45,8 +45,8 @@ template <int N, class T> constexpr SysvCtaPlan<N, T> sysv_cta_plan() {
     return {tile, idx, p.size()};
 }
 
-template <Uplo UL, int N, class Ex, class MA, class MB>
-BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+template <Uplo UL, int N, class Ex, class MA, class PV, class MB>
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
@@ -60,7 +60,7 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
         ex, g, detail::sytrf_team(ex) == 0, detail::sytrf_view(A, rev), detail::rev_mat(tp, ldt, n, false), n, rev,
         argmax_slots<Mem::Global, true>(static_cast<R*>(nullptr), static_cast<int*>(nullptr)),
         [&](int k, int v) {
-            ipiv[k] = v;
+            ipiv(k) = v;
             pp[k] = v;
         },
         [&](int st) { pp[4 * N + 1] = st; });
@@ -75,22 +75,22 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
     return info;
 }
 
-template <Uplo UL, class Ex, class MA, class MB>
-BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+template <Uplo UL, class Ex, class MA, class PV, class MB>
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<1>, const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     // Both halves carve the same workspace from offset 0: sytrf's ends on a barrier.
     const int info = detail::sytrf_run<UL>(tier::Blocked<1>{}, ex, A, ipiv, ws);
     if (info != 0) return info;
-    detail::sytrs_run<UL>(tier::Blocked<1>{}, ex, A, B, ipiv, ws);
+    detail::sytrs_run<UL>(tier::Blocked<1>{}, ex, A, ipiv, B, ws);
     return 0;
 }
 
-template <Uplo UL, int NB, class Ex, class MA, class MB>
+template <Uplo UL, int NB, class Ex, class MA, class PV, class MB>
     requires(NB > 1)
-BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sysv_run(tier::Blocked<NB>, const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     // As Blocked<1>: both halves carve from offset 0 of both spaces; sytrf's ends on a barrier.
     const int info = detail::sytrf_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, ws);
     if (info != 0) return info;
-    detail::sytrs_run<UL>(tier::Blocked<NB>{}, ex, A, B, ipiv, ws);
+    detail::sytrs_run<UL>(tier::Blocked<NB>{}, ex, A, ipiv, B, ws);
     return 0;
 }
 
@@ -131,24 +131,20 @@ template <Uplo UL, int NB, class T> struct tier_info<routine::sysv<UL>, tier::Bl
     }
 };
 
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sysv_buffer_size(int n, int nrhs = 1) {
-    using Rt = routine::sysv<UL>;
-    return tier_info<Rt, resolve_tier_t<Rt, T, Tier>, T>::buffer_size(n, nrhs);
-}
-
-// ?sysv of one matrix inside a kernel: A := sytrf's factor, ipiv[0, n) := its pivots, and B :=
-// A^-1 B when info == 0. Collective as sytrf; A, ipiv and B visible to every item on return.
-// Returns sytrf's info (k > 0: B untouched) or a negative LAPACK argument number (sytrs_check's,
-// ?sysv numbers them as ?sytrs), the same on every item.
-template <Uplo UL, class Tier, class Ex, class MA, class MB>
-inline int sysv(const Ex& ex, const MA& A, const MB& B, int* ipiv, const Workspace& ws) {
+// ?sysv of one matrix inside a kernel: A := sytrf's factor, ipiv (a Vec<int> of n) := its pivots,
+// and B := A^-1 B when info == 0. Collective as sytrf; A, ipiv and B visible to every item on
+// return. Returns sytrf's info (k > 0: B untouched) or a negative LAPACK argument number
+// (sytrs_check's, ?sysv numbers them as ?sytrs), the same on every item. ws:
+// buffer_size<routine::sysv<UL>, Tier, T>(n, nrhs).
+template <Uplo UL, class Tier, class Ex, class MA, class PV, class MB>
+BATCHLAS_DEVICE_INLINE int sysv(const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
     static_assert(std::is_same_v<D, std::remove_cv_t<typename MB::value_type>>, "sysv: A and B of one scalar type");
     using Tr = resolve_tier_t<routine::sysv<UL>, D, Tier>;
     static_assert(detail::sytrf_exec_ok<Ex>(), "sysv: an executor of whole 32-wide sub-groups");
     const int chk = detail::sytrs_check<Tr>(ex, A, B);
     if (chk != 0 || A.rows() == 0) return chk;
-    return detail::sysv_run<UL>(Tr{}, ex, A, B, ipiv, ws);
+    return detail::sysv_run<UL>(Tr{}, ex, A, ipiv, B, ws);
 }
 
 }  // namespace batchlas::device

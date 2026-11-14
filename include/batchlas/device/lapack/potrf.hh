@@ -3,10 +3,10 @@
 // LAPACK xPOTRF / xPOTF2 inside a kernel (v22 design A.3, C.4-C.7). Public entry:
 //   int potrf<UL, Tier>(ex, A, ws)               A = L L^H (Lower) or U^H U (Upper) in place;
 //                                               returns LAPACK info, uniform over ex
-//   WorkspaceSize potrf_buffer_size<UL, Tier, T>(n)
+//   WorkspaceSize buffer_size<routine::potrf<UL>, Tier, T>(n)
 //   tier::Reg<N>  ex = Partition<N> (one matrix per N lanes of a 32-wide sub-group, lane r row r)
 //   tier::Cta<N>  ex = WorkGroup<WG, 32>, WG = tier_info<...>::wg_size or any multiple of 32;
-//                 the matrix in local memory (ws.local, potrf_buffer_size bytes)
+//                 the matrix in local memory (ws.local, buffer_size bytes)
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: A stays in global memory; per NB-wide
 //                 panel potf2 (SgSlm) on the local diagonal block, then the in-group L3 trsm and
 //                 herk (level3/group.hh); ws.local = L3 stages + the block, no global bytes
@@ -18,9 +18,9 @@
 // output is visible to every item). info = k > 0: the leading minor of order k is not positive
 // definite; -2: n > the tier's bound or A not square; -3: ws.local missing or misaligned.
 //
-// potf2 is ONE column loop owning LAPACK's control: the pivot test `!(akk > 0)` (NaN fails),
-// sticky, so the first failing column k records info = k + 1 and every later column stops
-// changing. Per column k it asks the distribution: skip(k) (Dist::skips: past a uniform
+// int potf2<UL>(ex, dist, live) is ONE column loop owning LAPACK's control: the pivot test
+// `!(akk > 0)` (NaN fails), sticky, so the first failing column k records info = k + 1 and every
+// later column stops changing. Per column k it asks the distribution: skip(k) (Dist::skips: past a uniform
 // run-time order, no collective), col_live(k), pivot(k) -> Re A(k, k) on every item,
 // scale(k, akk, act), update(k, act), optional fail(k). Dist::static_cols > 0 is a compile-time
 // column count (unrolled register forms), 0 a run-time d.cols(). The control stays here, not in
@@ -53,13 +53,6 @@
 
 namespace batchlas::device {
 
-namespace detail {
-struct Potf2Result {
-    std::int32_t info;  // 1-based first failing column, 0: success
-    bool alive;         // live and no failure
-};
-}  // namespace detail
-
 // Column k. A macro, not a function: the sticky state must stay SSA in the function that holds
 // the loop (a by-value step function changes PotrfTiny's SASS), and the two loop headers differ
 // only in the unroll pragma (unroll_count(1) on the run-time loop would add PTX "nounroll").
@@ -79,11 +72,16 @@ struct Potf2Result {
     d.scale(k, akk, act);                                                                 \
     d.update(k, act);
 
-template <Uplo UL, class Dist> BATCHLAS_DEVICE_INLINE detail::Potf2Result potf2(const Dist& d, bool live = true) {
-    static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
+namespace detail {
+struct Potf2Result {
+    int info;    // 1-based first failing column, 0: success
+    bool alive;  // live and no failure (the panel form's sticky flag)
+};
+// The loop itself.
+template <class Dist> BATCHLAS_DEVICE_INLINE Potf2Result potf2_run(const Dist& d, bool live) {
     using R = typename Dist::R;
     bool alive = live;
-    std::int32_t info = 0;
+    int info = 0;
     if constexpr (Dist::static_cols > 0) {
 BATCHLAS_UNROLL_FULL
         for (int k = 0; k < Dist::static_cols; ++k) {
@@ -96,7 +94,16 @@ BATCHLAS_UNROLL_FULL
     }
     return {info, alive};
 }
+}  // namespace detail
 #undef BATCHLAS_POTF2_COLUMN
+
+// ?POTF2 of the matrix the distribution `d` holds on the executor `ex` (every item calls with the
+// same arguments); returns info: the 1-based first failing column, 0 on success or live = false.
+template <Uplo UL, class Ex, class Dist> BATCHLAS_DEVICE_INLINE int potf2(const Ex& ex, const Dist& d, bool live = true) {
+    static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
+    (void)ex;
+    return detail::potf2_run(d, live).info;
+}
 
 namespace detail {
 
@@ -218,7 +225,7 @@ BATCHLAS_UNROLL_FULL
 template <class D, int N, int NC, OrderGuard G = OrderGuard::Predicate, class Part, class Bcast>
 BATCHLAS_DEVICE_INLINE std::int32_t potf2_reg(const Part& part, Frag<D, NC, RowFrag>& rA, int n, bool live, Bcast bc) {
     const RegRows<D, N, NC, G, Part, Bcast> d{part, rA, n, bc, part.lid()};
-    return potf2<Uplo::Lower>(d, live).info;
+    return potf2<Uplo::Lower>(part, d, live);
 }
 
 // Row `lane` of the stored triangle into rA (pointer, never a reference to the Frag). A row that
@@ -343,7 +350,7 @@ BATCHLAS_DEVICE_HELPER void potf2_sg_slm_body(SubGroup<SG> ex, MA a, int ib, DV 
     BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) d[c] = (lane < ib && c < ib && c <= lane) ? a(lane, c) : D{};
     const SgSlm<NB, Rsqrt, SG, MA, DV> dist{ex, a, ib, diag, info, info_base, lane, d};
-    potf2<Uplo::Lower>(dist);
+    potf2<Uplo::Lower>(ex, dist);
 }
 
 // The n x kb panel P whose diagonal block starts at row c0, one item per row (row = ex.lid();
@@ -413,7 +420,7 @@ BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, 
                                           Bar&& bar) {
     using B = std::remove_reference_t<Bar>;
     const detail::PanelRows<Rsqrt, PM, B> dist{p, c0, kb, n, bar, ex.lid(), ex.leader(), info};
-    return potf2<Uplo::Lower>(dist, ok).alive;
+    return detail::potf2_run(dist, ok).alive;
 }
 
 // ---- the CTA (right-looking, SLM-resident) and LPANEL (left-looking) recurrences' pieces -------
@@ -1017,12 +1024,6 @@ template <Uplo UL, class T> struct tiers<routine::potrf<UL>, T> {
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<32>>,
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<16>>>;
 };
-
-// The workspace of one matrix (host and device; Reg: none). Tier may be tier::upto<NMax>.
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrf_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::potrf<UL>, T, Tier>;
-    return tier_info<routine::potrf<UL>, Tr, T>::buffer_size(n);
-}
 
 // A := L L^H (Lower) / U^H U (Upper) of the n x n Hermitian positive definite A (its UL triangle
 // read and overwritten, the other neither read nor written); returns info (see the file head).

@@ -6,7 +6,7 @@
 //   trsm_lane          op(A)^{-1} Y, one sub-group, lane i owns row i: core trsv<LanePerRow> per column
 //   gemm_nr            C -= op(A) X with X.cols() <= NR accumulators
 // Arithmetic is arith::Fma: sycl_device::dev_mul / fma_acc / dev_div bit for bit.
-// The public op getrs<TR, Tier>(ex, A, B, ipiv, ws): tier::Blocked (any n, nrhs) is LAPACK's
+// The public op getrs<TR, Tier>(ex, A, ipiv, B, ws): tier::Blocked (any n, nrhs) is LAPACK's
 // ?GETRS on the in-group trsm, with the LU family's executor and local plan (lapack/getrf.hh).
 
 #include <sycl/sycl.hpp>
@@ -90,22 +90,17 @@ BATCHLAS_UNROLL_FULL
 
 }  // namespace batchlas::device::detail
 
-// ==== the public op: getrs<TR, Tier>(ex, A, B, ipiv, ws [, live]) (v22 design C.2-C.7) ===========
+// ==== the public op: getrs<TR, Tier>(ex, A, ipiv, B, ws [, live]) (v22 design C.2-C.7) ===========
 namespace batchlas::device {
 
 namespace routine {
-struct getrs {
+template <Transpose TR> struct getrs {
     static constexpr const char* name = "getrs";
+    static constexpr Transpose trans = TR;
 };
 }  // namespace routine
 
 namespace detail {
-
-// getrf's pivots, read only (1-based int32).
-struct PivIn {
-    const std::int32_t* p;
-    BATCHLAS_DEVICE_INLINE std::int32_t operator()(int i) const { return p[i]; }
-};
 
 // B := U^-1 L^-1 B (NoTrans), or op(L)^-1 op(U)^-1 B (Trans, ConjTrans): the two triangles of
 // getrf's factor on the in-group trsm (NB-wide diagonal blocks); each solve ends on a global barrier.
@@ -122,15 +117,14 @@ BATCHLAS_DEVICE_INLINE void lu_trsm_pair(const Ex& ex, const GA& a, const GB& b,
 
 // The Blocked tier: ?GETRS as LAPACK spells it. NoTrans: laswp forward on B, then L and U;
 // Trans / ConjTrans: op(U), op(L), then laswp backward.
-template <Transpose TR, int NB, class Cfg, class Ex, class MA, class MB>
-BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const MB& b_in, const std::int32_t* ipiv, const Workspace& w) {
+template <Transpose TR, int NB, class Cfg, class Ex, class MA, class PV, class MB>
+BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const PV& piv, const MB& b_in, const Workspace& w) {
     using D = typename Cfg::value_type;
     const auto a = l3::global_of(a_in);
     const auto b = l3::global_of(b_in);
     const auto bw = mat_wide(b.p, b.m, b.n, b.ld);
     constexpr auto pl = detail::lu_blocked_plan<D, Cfg>();
     const l3::Smem<Cfg> sm{carve_local(w, pl.smem).get_raw()};
-    const PivIn piv{ipiv};
     if constexpr (TR == Transpose::NoTrans) {
         laswp(ex, bw, piv, 0, a.n);
         ex.barrier(Mem::Global);
@@ -144,18 +138,16 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const MB
 
 }  // namespace detail
 
-/// getrs's Blocked<NB>: any n and nrhs; getrf's Blocked executor and local plan (no global workspace).
-template <int NB, class Alg, class T>
-struct tier_info<routine::getrs, tier::Blocked<NB, Alg>, T> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {};
-template <class T> struct tiers<routine::getrs, T> {
+/// getrs's Blocked<NB>: any n and nrhs; getrf's Blocked executor and local plan (no global
+/// workspace). buffer_size(n[, nrhs]): nrhs does not enter it.
+template <Transpose TR, int NB, class Alg, class T>
+struct tier_info<routine::getrs<TR>, tier::Blocked<NB, Alg>, T> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {
+    using tier_info<routine::getrf, tier::Blocked<NB, Alg>, T>::buffer_size;
+    static constexpr WorkspaceSize buffer_size(int n, int) { return buffer_size(n); }
+};
+template <Transpose TR, class T> struct tiers<routine::getrs<TR>, T> {
     using type = tier::list<tier::Blocked<32>>;
 };
-
-/// The workspace of one n x nrhs solve for getrs<TR, Tier> (host and device; constexpr).
-template <Transpose TR, class Tier, class T> constexpr WorkspaceSize getrs_buffer_size(int n, int nrhs = 1) {
-    (void)nrhs;
-    return tier_info<routine::getrs, resolve_tier_t<routine::getrs, T, Tier>, T>::buffer_size(n);
-}
 
 /// @brief ?GETRS in a kernel: \f$\mathrm{op}(A) X = B\f$ from getrf's factor, B overwritten by X.
 ///
@@ -163,25 +155,24 @@ template <Transpose TR, class Tier, class T> constexpr WorkspaceSize getrs_buffe
 /// items on entry; B visible to all on return. A zero U(k, k) gives Inf / NaN, as LAPACK does
 /// (getrf's info reports it).
 /// - `tier::Blocked<NB>`: `ex` a WorkGroup<tier_info::wg_size, 32>; A n x n and B n x nrhs of
-///   any size in global memory; `ws.local` >= getrs_buffer_size<TR, Tier, T>(n) bytes.
+///   any size in global memory; `ws.local` >= buffer_size<routine::getrs<TR>, Tier, T>(n) bytes.
 /// @tparam TR  op(A): NoTrans, Trans or ConjTrans (the host's run-time transA)
 /// @param[in]     ex    the executor
 /// @param[in]     a     getrf's L and U of this matrix
+/// @param[in]     ipiv  getrf's n pivots, 1-based (a Vec<int>)
 /// @param[in,out] b     this matrix's right-hand sides; overwritten with X
-/// @param[in]     ipiv  getrf's n pivots, 1-based int32
 /// @param[in]     ws    this matrix's workspace slice
 /// @param[in]     live  false: a dead matrix of the launch (executor-uniform)
 /// @return 0 (the host getrs has no info)
-template <Transpose TR, class Tier, class Ex, class MA, class MB>
-BATCHLAS_DEVICE_INLINE std::int32_t getrs(const Ex& ex, const MA& a, const MB& b, const std::int32_t* ipiv, const Workspace& ws = {},
-                                       bool live = true) {
+template <Transpose TR, class Tier, class Ex, class MA, class PV, class MB>
+BATCHLAS_DEVICE_INLINE int getrs(const Ex& ex, const MA& a, const PV& ipiv, const MB& b, const Workspace& ws = {}, bool live = true) {
     using D = detail::lu_value_t<MA>;
-    using Tr = resolve_tier_t<routine::getrs, D, Tier>;
-    static_assert(HasTier<routine::getrs, Tr, D>, "getrs: this tier is not offered for this scalar type");
+    using Tr = resolve_tier_t<routine::getrs<TR>, D, Tier>;
+    static_assert(HasTier<routine::getrs<TR>, Tr, D>, "getrs: this tier is not offered for this scalar type");
     static_assert(std::is_same_v<D, detail::lu_value_t<MB>>, "getrs: A and B hold one scalar type");
     using Cfg = detail::lu_blocked_cfg_t<D, Tr>;
     static_assert(Ex::size == Cfg::threads, "getrs: tier::Blocked runs on a WorkGroup of tier_info::wg_size items");
-    if (live) detail::solve_blocked<TR, Tr::nb, Cfg>(ex, a, b, ipiv, ws);
+    if (live) detail::solve_blocked<TR, Tr::nb, Cfg>(ex, a, ipiv, b, ws);
     return 0;
 }
 

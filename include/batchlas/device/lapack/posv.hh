@@ -3,7 +3,7 @@
 // LAPACK xPOSV inside a kernel (v22 design C.2, C.4-C.7): A = L L^H (Lower) or U^H U (Upper) in
 // place, then B := A^-1 B when the factorization succeeded. Public entry:
 //   int posv<UL, Tier>(ex, A, B, ws)           potrf's info (uniform over ex), or -i
-//   WorkspaceSize posv_buffer_size<UL, Tier, T>(n)
+//   WorkspaceSize buffer_size<routine::posv<UL>, Tier, T>(n)
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n and nrhs: potrf's then potrs's Blocked tier
 //                      on one workspace (potrf's plan, whose first slot potrs carves)
 // The small tiers land with WP7. info = k > 0: the leading minor of order k is not positive
@@ -54,12 +54,6 @@ template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::posv<UL
 template <Uplo UL, class T> struct tiers<routine::posv<UL>, T> {
     using type = tier::list<tier::Blocked<(detail::reg_max_n<T> >= 32 ? 32 : 16)>>;
 };
-
-// The workspace of one matrix (host and device); nrhs does not enter it. Tier may be tier::upto<NMax>.
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize posv_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::posv<UL>, T, Tier>;
-    return tier_info<routine::posv<UL>, Tr, T>::buffer_size(n);
-}
 
 // A := its Cholesky factor (UL triangle read and overwritten, the other neither read nor written),
 // then B := A^-1 B for the n x nrhs B; returns info (see the file head).

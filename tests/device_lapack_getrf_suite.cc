@@ -299,8 +299,9 @@ TYPED_TEST(DeviceLapackGetf2Test, Getf2ExplicitSwapEveryExecutor) {
                 const device::WorkGroup<64> ex{it};
                 R* vs = reinterpret_cast<R*>(lm);
                 int* is = reinterpret_cast<int*>(lm + 32 * sizeof(R));
-                std::int32_t info = ex.leader() ? inf[b] : 0;
-                info = device::getf2(ex, device::mat(ad + per * b, m, n, ld), kmax, device::IpivSink{piv + std::size_t(b) * kmax, base}, info, vs, is);
+                int info = ex.leader() ? inf[b] : 0;
+                info = device::getf2(ex, device::mat(ad + per * b, m, n, ld), kmax, device::vec(piv + std::size_t(b) * kmax, kmax), info, vs, is,
+                                     base);
                 if (ex.leader()) inf[b] = info;
             });
         }
@@ -411,9 +412,9 @@ TYPED_TEST(DeviceLapackGetf2Test, Getf2RelabelMatchesExplicitSwapBitForBit) {
         this->dev.template run<64>(kBatch, 32 * (sizeof(R) + sizeof(int)), [=](sycl::nd_item<1> it, unsigned char* lm) {
             const int b = static_cast<int>(it.get_group_linear_id());
             const device::RtGroup<device::Scope::Group> ex{it};
-            std::int32_t info = ex.leader() ? inf2[b] : 0;
-            info = device::getf2(ex, device::mat_wide(ad2 + per * b, m, n, ld), kmax, device::IpivSink{piv2 + std::size_t(b) * kmax, base}, info,
-                             reinterpret_cast<R*>(lm), reinterpret_cast<int*>(lm + 32 * sizeof(R)));
+            int info = ex.leader() ? inf2[b] : 0;
+            info = device::getf2(ex, device::mat_wide(ad2 + per * b, m, n, ld), kmax, device::vec(piv2 + std::size_t(b) * kmax, kmax), info,
+                                 reinterpret_cast<R*>(lm), reinterpret_cast<int*>(lm + 32 * sizeof(R)), base);
             if (ex.leader()) inf2[b] = info;
         });
         const char* what = v == 0 ? "relabel RtGroup<Group> + local row" : "relabel Partition<16> + shuffles";

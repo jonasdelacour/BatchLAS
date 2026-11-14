@@ -168,12 +168,12 @@ template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead 
              const bool live = b < batch && b != dead;
              const int bb = live ? b : 0;
              const auto A = device::mat_wide(a + std::ptrdiff_t(bb) * stride, n, n, ld);
-             const std::int32_t r = device::getrf<Tier>(px, A, piv + std::ptrdiff_t(bb) * n, device::Workspace{}, live);
+             const int r = device::getrf<Tier>(px, A, device::vec(piv + std::ptrdiff_t(bb) * n, n), device::Workspace{}, live);
              if (live && px.leader()) info[bb] = r;
          }).wait_and_throw();
     } else {
         constexpr int WG = I::wg_size;
-        const device::WorkspaceSize ws = device::getrf_buffer_size<Tier, T>(n);
+        const device::WorkspaceSize ws = device::buffer_size<device::routine::getrf, Tier, T>(n);
         q.submit([&](sycl::handler& h) {
              sycl::local_accessor<std::byte, 1> lm(sycl::range<1>(ws.local_bytes), h);
              h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -181,7 +181,7 @@ template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead 
                  const int b = static_cast<int>(it.get_group_linear_id());
                  const device::Workspace w{lm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr};
                  const auto A = device::mat_wide(a + std::ptrdiff_t(b) * stride, n, n, ld);
-                 const std::int32_t r = device::getrf<Tier>(ex, A, piv + std::ptrdiff_t(b) * n, w, b != dead);
+                 const int r = device::getrf<Tier>(ex, A, device::vec(piv + std::ptrdiff_t(b) * n, n), w, b != dead);
                  if (b != dead && ex.leader()) info[b] = r;
              });
          }).wait_and_throw();
@@ -235,7 +235,7 @@ template <class T> bool host_runs(Queue& ctx, int n, Route r) { return r == Rout
 // less its wg * 8 B runtime scratch stops complex<float> Cta<64> below n = 64.
 template <class Tier, class T> bool device_holds(Queue& ctx, int n) {
     using I = device::tier_info<device::routine::getrf, Tier, T>;
-    return device::getrf_buffer_size<Tier, T>(n).local_bytes <= batchlas::impl::local_mem_bytes(sycl_queue(ctx).get_device(), I::wg_size);
+    return device::buffer_size<device::routine::getrf, Tier, T>(n).local_bytes <= batchlas::impl::local_mem_bytes(sycl_queue(ctx).get_device(), I::wg_size);
 }
 
 template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Route route, const char* what) {
@@ -303,7 +303,7 @@ TYPED_TEST(DeviceApiGetrfTest, CtaTierIsTheCtaRouteBitForBit) {
 // The advertised ceiling, launched: Cta<128> at n = 128 wherever the device's local memory holds it.
 TYPED_TEST(DeviceApiGetrfTest, CtaTierLaunchesAtItsCeiling) {
     using T = TypeParam;
-    const auto need = device::getrf_buffer_size<device::tier::Cta<128>, T>(128).local_bytes;
+    const auto need = device::buffer_size<device::routine::getrf, device::tier::Cta<128>, T>(128).local_bytes;
     if (!device_holds<device::tier::Cta<128>, T>(this->ctx, 128)) GTEST_SKIP() << "Cta<128> needs " << need << " bytes of local memory";
     Prob<T> p(128, 0xce11u);
     run_device<device::tier::Cta<128>>(this->ctx, p);
@@ -370,13 +370,13 @@ TEST(DeviceApiGetrfTier, WithTierPicksTheFirstFittingTier) {
 TEST(DeviceApiGetrfTier, BufferSizeIsThePlanByHand) {
     using device::WorkspaceSize;
     // float n = 64: tile 65 * 64 * 4 = 16640, slots 32 * 4 + 32 * 4.
-    EXPECT_EQ((device::getrf_buffer_size<device::tier::Cta<64>, float>(64)), (WorkspaceSize{16896, 0, 16}));
+    EXPECT_EQ((device::buffer_size<device::routine::getrf, device::tier::Cta<64>, float>(64)), (WorkspaceSize{16896, 0, 16}));
     // complex<double> n = 33: tile 33 * 33 * 16 = 17424, slots 32 * 8 + 32 * 4.
-    EXPECT_EQ((device::getrf_buffer_size<device::tier::Cta<64>, std::complex<double>>(33)), (WorkspaceSize{17808, 0, 16}));
+    EXPECT_EQ((device::buffer_size<device::routine::getrf, device::tier::Cta<64>, std::complex<double>>(33)), (WorkspaceSize{17808, 0, 16}));
     // float n = 7: tile 7 * 7 * 4 = 196 -> 208 aligned, slots 128 + 128, total 464.
-    EXPECT_EQ((device::getrf_buffer_size<device::tier::Cta<64>, float>(7)), (WorkspaceSize{464, 0, 16}));
-    EXPECT_EQ((device::getrf_buffer_size<device::tier::Reg<32>, float>(32)), (WorkspaceSize{}));
-    EXPECT_EQ((device::getrf_buffer_size<device::tier::upto<20>, float>(20)), (WorkspaceSize{}));
+    EXPECT_EQ((device::buffer_size<device::routine::getrf, device::tier::Cta<64>, float>(7)), (WorkspaceSize{464, 0, 16}));
+    EXPECT_EQ((device::buffer_size<device::routine::getrf, device::tier::Reg<32>, float>(32)), (WorkspaceSize{}));
+    EXPECT_EQ((device::buffer_size<device::routine::getrf, device::tier::upto<20>, float>(20)), (WorkspaceSize{}));
     static_assert(std::is_same_v<device::resolve_tier_t<device::routine::getrf, float, device::tier::upto<20>>, device::tier::Reg<32>>);
     static_assert(std::is_same_v<device::resolve_tier_t<device::routine::getrf, float, device::tier::upto<33>>, device::tier::Cta<64>>);
     static_assert(std::is_same_v<device::resolve_tier_t<device::routine::getrf, std::complex<double>, device::tier::upto<20>>, device::tier::Cta<64>>);
