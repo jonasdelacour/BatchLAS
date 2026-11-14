@@ -22,7 +22,6 @@
 #include <batchlas/device/lapack/lagts.hh>
 #include <batchlas/device/lapack/larfb.hh>
 #include <batchlas/device/lapack/larft.hh>
-#include <batchlas/device/lapack/norm.hh>
 #include <batchlas/device/lapack/orgqr.hh>
 #include <batchlas/device/lapack/ormbr.hh>
 #include <batchlas/device/lapack/ormqr.hh>

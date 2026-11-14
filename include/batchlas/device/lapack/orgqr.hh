@@ -52,37 +52,31 @@ template <class T> struct tiers<routine::orgqr, T> {
     using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
 };
 
-/// The workspace of one m x n matrix for orgqr<Tier> (host and device; constexpr).
-template <class Tier, class T> constexpr WorkspaceSize orgqr_buffer_size(int m, int n) {
-    return tier_info<routine::orgqr, resolve_tier_t<routine::orgqr, T, Tier>, T>::buffer_size(m, n);
-}
-
-/// @brief ?ORGQR / ?UNGQR in a kernel: A (m x n, m >= n) := the first n columns of Q.
+/// @brief ?ORGQR / ?UNGQR in a kernel: a (m x n, m >= n) := the first n columns of Q.
 ///
-/// A holds geqrf's n reflectors below its diagonal on entry (its diagonal and upper triangle are
+/// a holds geqrf's n reflectors below its diagonal on entry (its diagonal and upper triangle are
 /// not read) and Q, with orthonormal columns, on return. Collective over a
-/// WorkGroup<tier_info<...>::wg_size, 32>; A and tau visible on entry, A visible on return.
+/// WorkGroup<tier_info<...>::wg_size, 32>; a and tau visible on entry, a visible on return.
 /// @param ex   the executor
-/// @param A    this matrix (l3::Global, a global Mat or device::item), overwritten with Q
-/// @param tau  n scalars: a T* or a unit-stride vector operand
+/// @param a    this matrix (l3::Global, a global Mat or device::item), overwritten with Q
+/// @param tau  n scalars, a unit-stride vector operand (device::vec)
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
-///             orgqr_buffer_size<Tier, T>(m, n)
+///             buffer_size<routine::orgqr, Tier, T>(m, n)
 /// @return 0, or -i for a bad i-th argument after the executor (1: m < n, 2: tau shorter than n,
 ///         3: no global workspace), uniform
 template <class Tier, class Ex, class MA, class Tau>
-BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
-    using T = std::remove_cvref_t<decltype(A(0, 0))>;
+BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& a, const Tau& tau, const Workspace& ws) {
+    using T = std::remove_cvref_t<decltype(a(0, 0))>;
     using Tr = resolve_tier_t<routine::orgqr, T, Tier>;
     static_assert(HasTier<routine::orgqr, Tr, T>, "orgqr: this tier is not offered for this scalar type");
     static_assert(tier::is_blocked_v<Tr>, "orgqr: only tier::Blocked<NB> is offered");
+    static_assert(!std::is_pointer_v<Tau>, "orgqr: tau is a vector operand (device::vec)");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
-    larfb_check_ex<Cfg, Ex>();
-    const auto a = l3::global_of(A);
-    const int m = a.m, n = a.n;
+    detail::larfb_check_ex<Cfg, Ex>();
+    const auto ag = l3::global_of(a);
+    const int m = ag.m, n = ag.n;
     if (m < n) return -1;
-    if constexpr (requires { tau.size(); }) {
-        if (static_cast<int>(tau.size()) < n) return -2;
-    }
+    if (static_cast<int>(tau.size()) < n) return -2;
     if (ws.global == nullptr) return -3;
     if (n <= 0) return 0;
     Plan p;
@@ -91,9 +85,8 @@ BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& A, const Tau& tau, cons
     const l3::Global<T> q{qb, m, m, n};
     laset(ex, Zero{}, One{}, mat(qb, m, n, m));
     ex.barrier(Mem::Global);  // the identity complete before the first block stages it
-    detail::ormqr_wy_blocks<Side::Left, Transpose::NoTrans, Tr::nb, Cfg>(ex, a, q, n, static_cast<const T*>(larfb_tau_base(tau)),
-                                                                              s.apply, ws);
-    lacpy(ex, mat(qb, m, n, m), mat(a.p, m, n, a.ld));
+    detail::ormqr_wy_blocks<Side::Left, Transpose::NoTrans, Tr::nb, Cfg>(ex, ag, q, n, static_cast<const T*>(&tau(0)), s.apply, ws);
+    lacpy(ex, mat(qb, m, n, m), mat(ag.p, m, n, ag.ld));
     ex.barrier(Mem::Global);  // Q visible on return
     return 0;
 }

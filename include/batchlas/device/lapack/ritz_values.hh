@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include <batchlas/device/level1.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/level3/group.hh>
 #include <batchlas/device/tier.hh>
 #include <batchlas/device/view.hh>
@@ -70,15 +71,24 @@ template <class Ex, class MA, class MV, class W> BATCHLAS_DEVICE_INLINE int ritz
     return 0;
 }
 
-/// @brief Workspace of ONE matrix for the tier::Blocked ritz_values() (constexpr, host and device).
-/// @tparam Tier  tier::Blocked<NB>: NB columns of V per gemm
-/// @tparam Cfg   the l3::cfg preset of the gemm (Cfg::value_type == T)
-/// @param[in] n  the order of A
-/// @param[in] k  the number of columns of V
-/// @return local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of T)
-template <class Tier, class T, class Cfg> constexpr WorkspaceSize ritz_values_buffer_size(int n, int k) {
-    return detail::RitzValuesBlockedPlan<T>::template make<Tier, Cfg>(n, k).size;
-}
+namespace routine {
+// The workspace form's tag: Cfg (the gemm's l3::cfg preset) sizes the stages, so the tag carries it.
+template <class Cfg> struct ritz_values {
+    static constexpr const char* name = "ritz_values";
+};
+}  // namespace routine
+
+/// The tier::Blocked ritz_values(): a WorkGroup<Cfg::threads, 32>; buffer_size(n, k) is ONE
+/// matrix's local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of T).
+template <class Cfg, int NB, class A, class T> struct tier_info<routine::ritz_values<Cfg>, tier::Blocked<NB, A>, T> {
+    static constexpr int wg_size = Cfg::threads, sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
+    static constexpr bool admits(int n) { return n >= 0; }
+    static constexpr WorkspaceSize buffer_size(int n, int k) {
+        return detail::RitzValuesBlockedPlan<T>::template make<tier::Blocked<NB, A>, Cfg>(n, k).size;
+    }
+};
 
 /// @brief The host ritz_values() inside a kernel on the in-group gemm, the host route's
 /// algorithm: per block of NB columns, P := A V(:, blk) (gemm), then w_j = ritz_values_quotient(v_j, p_j).
@@ -88,7 +98,7 @@ template <class Tier, class T, class Cfg> constexpr WorkspaceSize ritz_values_bu
 /// @param[in]  a   A, n x n, a Mat over global memory
 /// @param[in]  v   V, n x k, a Mat over global memory (col(), sub())
 /// @param[out] w   k reals, written by the leader; visible to every item on return
-/// @param[in]  ws  this matrix's slice of ritz_values_buffer_size<Tier, T, Cfg>(n, k)
+/// @param[in]  ws  this matrix's slice of buffer_size<routine::ritz_values<Cfg>, Tier, T>(n, k)
 /// @return 0 (the host op has no info)
 template <class Tier, class Cfg, class Ex, class MA, class MV, class W>
 BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w, const Workspace& ws) {

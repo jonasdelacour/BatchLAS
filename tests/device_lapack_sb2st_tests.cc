@@ -139,7 +139,7 @@ struct alignas(16) Chunk16 {
 template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vector<T>& band, int n, int kd, int ld) {
     using R = real_of<T>;
     const int nm1 = std::max(0, n - 1);
-    const device::WorkspaceSize sz = device::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, T>(n, kd);
     T* ab = dev.up(band);
     R* d = dev.up(std::vector<R>(std::size_t(kBatch) * n + kTail, poison<R>()));
     R* e = dev.up(std::vector<R>(std::size_t(kBatch) * nm1 + kTail, poison<R>()));
@@ -214,7 +214,7 @@ TYPED_TEST_SUITE(DeviceApiSb2stTest, Types);
 template <class T, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx, int n, int kd, const Out<T>& host, const std::vector<T>& band) {
     const int ld = kd + 4, nm1 = std::max(0, n - 1);
     if constexpr (device::tier::is_cta_v<Tier>) {
-        if (!fx.fits(device::sb2st_buffer_size<Uplo::Lower, Tier, T>(n, kd).local_bytes * (32 / P))) {
+        if (!fx.fits(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, T>(n, kd).local_bytes * (32 / P))) {
             std::printf("[   NOTE   ] Cta tier at n=%d kd=%d does not fit this device's local memory; not run\n", n, kd);
             return;
         }
@@ -282,7 +282,7 @@ TYPED_TEST(DeviceApiSb2stTest, CtaBoundReturnsMinusOneAndBlockedRunsIt) {
     ScopedEnvVar pin("BATCHLAS_SB2ST_SUBGROUP", "1");
     const int n = 65, kd = 3, ld = kd + 4;
     const auto band = make_band<T>(n, kd, ld, 901);
-    if (this->fits(device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<64>, T>(n, kd).local_bytes * 8)) {
+    if (this->fits(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, device::tier::Cta<64>, T>(n, kd).local_bytes * 8)) {
         const Out<T> got = run_device<T, 4, device::tier::Cta<64>>(this->dev, band, n, kd, ld);
         EXPECT_EQ(std::count(got.info.begin(), got.info.end(), -1), kBatch);
         EXPECT_EQ(poison_lost(got.d, 0), 0);
@@ -324,8 +324,8 @@ static_assert(kCta.ab.offset % 16 == 0 && kCta.ab.offset >= kCta.work.offset + k
 static_assert(kCta.size.local_bytes >= kCta.ab.offset + kCta.ab.count * sizeof(std::complex<double>) && kCta.size.global_bytes == 0);
 constexpr auto kBlk = device::detail::band_layout<device::tier::Blocked<32>, float>(37, 5);
 static_assert(kBlk.size.local_bytes == 0 && kBlk.size.global_bytes >= (37 + 5 + 2) * 2 * sizeof(float));
-static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<64>, float>(10, 1) == device::WorkspaceSize{});
-static_assert(device::sb2st_buffer_size<Uplo::Lower, device::tier::Blocked<32>, float>(0, 5) == device::WorkspaceSize{});
+static_assert(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, device::tier::Cta<64>, float>(10, 1) == device::WorkspaceSize{});
+static_assert(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, device::tier::Blocked<32>, float>(0, 5) == device::WorkspaceSize{});
 static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4096>>, device::tier::Cta<4096>>);
 static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4097>>, device::tier::Blocked<32>>);
 
@@ -341,7 +341,7 @@ template <class T> std::string pick(const device::DeviceLimits& lim, int n) {
 
 TEST(DeviceApiSb2stHost, WithTierStraddlesLocalMemoryAndTheCtaBound) {
     const int n = 200;
-    const std::size_t need = device::sb2st_buffer_size<Uplo::Lower, device::tier::Cta<4096>, float>(n, 8).local_bytes;
+    const std::size_t need = device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, device::tier::Cta<4096>, float>(n, 8).local_bytes;
     EXPECT_EQ(need, (device::tier_info<Lower8, device::tier::Cta<4096>, float>::buffer_size(n).local_bytes));
     device::DeviceLimits lim{need, {32}, 1024, true};
     EXPECT_EQ(pick<float>(lim, n), "cta");

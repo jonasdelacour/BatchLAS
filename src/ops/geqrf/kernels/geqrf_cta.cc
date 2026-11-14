@@ -169,8 +169,10 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                 // Raw-pointer tile: G panels share one local_accessor, so each needs its own
                 // base; ld unpadded.
                 using Ex = device::RtGroup<SC>;
-                device::geqr2(Ex{it}, device::mat_wide(mine, m, n, m), kmax,
-                          tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
+                // n, kmax, then tp: [=] captures in first-use order, the kernel's argument order.
+                const auto panel = device::mat_wide(mine, m, n, m);
+                const int k = kmax;
+                device::geqr2(Ex{it}, panel, device::vec(tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset, k));
 
                 if constexpr (SC == device::Scope::Sub) {
                     sycl::group_barrier(sg);                  // B4
@@ -219,8 +221,8 @@ Event geqrf_panel_global_launch(Queue& ctx,
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
                 device::geqr2(device::RtGroup<device::Scope::Group>{it},
-                          device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld), kmax,
-                          tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
+                          device::mat_wide(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld),
+                          device::vec(tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset, kmax));
             });
     });
     return ctx.get_event();
@@ -272,12 +274,15 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                 sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                                  static_cast<std::size_t>(wg)),
                                   sycl::range<1>(static_cast<std::size_t>(wg))),
-                [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                // Listed captures: their order is the kernel's argument order (ld before m, n;
+                // kmax before tp), as the raw-pointer call's first uses gave it.
+                [mask, ap, stride, ld, m, n, kmax, tp, tau_batch_stride, tau_offset, sred, sw](sycl::nd_item<1> it)
+                    BATCHLAS_REQD_SG_SIZE(32) {
                     const int b = static_cast<int>(it.get_group_linear_id());
                     if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
-                    device::geqr2_reg<N, D, R>(
-                        device::RtGroup<device::Scope::Group>{it}, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
-                        tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset,
+                    device::geqr2_reg<geqrf_native::GeqrfPanelRegPlan<D>::cols>(
+                        device::RtGroup<device::Scope::Group>{it}, device::mat(ap + static_cast<std::ptrdiff_t>(b) * stride, m, n, ld),
+                        device::vec(tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset, kmax),
                         &sred[0], &sw[0]);
                 });
         });
