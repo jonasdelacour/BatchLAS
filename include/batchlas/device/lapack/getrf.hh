@@ -229,8 +229,7 @@ inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_ite
 // ---- ?GETF2 on a RowFrag, pivoting by lazy relabel -------------------------------------------------
 // Each item holds one matrix row in rA and its logical row index in `rowid`; an interchange swaps
 // two labels and moves no data. After the relabel the winner of column j is the item with
-// rowid == j, so `act = rowid > j` keeps it from writing rA while others read its row. Policies
-// (detail has the stock ones):
+// rowid == j, so `act = rowid > j` keeps it from writing rA while others read its row. Policies:
 //   Piv: argmax(j, mag, rowid) -> PivotWinner (NaN mapped by the policy), record(j, w) (ipiv),
 //        on_zero(zero, j) (info)
 //   Bc:  publish(j, rA, rowid, w) (make the pivot row readable), pivot(j, rA, w) -> T,
