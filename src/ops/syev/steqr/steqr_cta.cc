@@ -44,7 +44,6 @@ namespace batchlas {
                               int32_t n,
                               size_t max_sweeps,
                               SteqrShiftStrategy cta_shift_strategy,
-                              SteqrUpdateScheme cta_update_scheme,
                               size_t cta_wg_size_multiplier,
                               int32_t* status,
                               BumpAllocator& pool) {
@@ -115,7 +114,7 @@ namespace batchlas {
                     // Thin launcher: device::steqr<J, tier::Cta<P>>'s body; info is written before the stores.
                     device::detail::steqr_cta_run<T, P, ComputeVecs>(
                         partition, d_prob, e_prob, Q_view.batch_item(b), qcache, n, static_cast<int32_t>(max_sweeps),
-                        cta_shift_strategy, cta_update_scheme, live, [&](bool failed) BATCHLAS_DEVICE_BODY {
+                        cta_shift_strategy, live, [&](bool failed) BATCHLAS_DEVICE_BODY {
                             if (live && failed && lane == 0) {
                                 // We cannot throw from device code; the host decides how to
                                 // handle it. info_report is an atomic fetch_max, not a store:
@@ -198,13 +197,13 @@ namespace batchlas {
             if (jobz == JobType::EigenVectors) {
                 steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
                                            params.max_sweeps,
-                                           params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                           params.cta_shift_strategy, params.cta_wg_size_multiplier,
                                            status,
                                            pool);
             } else {
                 steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
                                             params.max_sweeps,
-                                            params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
+                                            params.cta_shift_strategy, params.cta_wg_size_multiplier,
                                             status,
                                             pool);
             }

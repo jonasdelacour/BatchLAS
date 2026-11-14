@@ -271,11 +271,11 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
         const device::Mat<T, NE, NE, device::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
         for (int j = 0; j < n; ++j) {
             device::Frag<T, N> x{};
-            device::load(x, device::detail::herm(s, ul).col(j), n);
+            device::load(x, device::herm_view(s, ul).col(j), n);
             device::store(x, o1.col(j), n);
             device::load(x, device::conj_view(s.row(j)), n);
             device::store(x, o2.col(j), n);
-            for (int i = 0; i < n; ++i) device::lacpy(device::ElemAt<true>{i, j}, device::detail::herm(s, ul), o3);
+            for (int i = 0; i < n; ++i) device::lacpy(device::ElemAt<true>{i, j}, device::herm_view(s, ul), o3);
         }
     });
     const auto g1 = dev.down(O1, ho.size()), g2 = dev.down(O2, ho.size()), g3 = dev.down(O3, ho.size());

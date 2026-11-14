@@ -1023,7 +1023,7 @@ inline void bandr1_extract_tridiagonal_output(
                              const int b = static_cast<int>(idx[0]);
                              const int j = static_cast<int>(idx[1]);
                              if (mask != nullptr && mask[b] == 0) return;  // I3
-                             dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
+                             dptr[b * d_stride + j * d_inc] = device::re(AB(0, j, b));
                          });
     });
 
@@ -1296,7 +1296,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = device::re(AB(0, j, b));
             });
         });
 
@@ -1333,7 +1333,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = device::re(AB(0, j, b));
             });
         });
 

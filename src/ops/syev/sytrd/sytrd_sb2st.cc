@@ -160,7 +160,7 @@ Event btrd_lower_inplace(Queue& q,
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
                                            [=](sycl::nd_item<1> it) {
             using Real = typename base_type<T>::type;
-            using Ops = detail::btrd_givens_ops<T>;
+            using Native = device::arith::Native;
 
             const int b = static_cast<int>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group, before any barrier
@@ -204,7 +204,7 @@ Event btrd_lower_inplace(Queue& q,
             // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the
             // band entries AB(r, j + dc), addressed as the scalar loops address them.
             auto rseq = [&](int cnt, auto at) BATCHLAS_DEVICE_BODY {
-                return device::detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+                return device::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
                     return at(j1 + t * kd1);
                 });
             };
@@ -253,7 +253,7 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLARGV: the rotations annihilating the fill WORK(j) against AB(kd, j - kd1).
-                        device::largv<Ops>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
+                        device::largv<device::alg::Promote>(ex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                         device::sync(ex, device::Mem::Global);
 
                         if (nr > 2 * kd - 1) {
@@ -262,7 +262,7 @@ Event btrd_lower_inplace(Queue& q,
                             // columns and rotations are kd1 columns apart: one barrier for the nest
                             // (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
-                                device::lartv<Ops>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
+                                device::lartv<device::alg::RotLapack, Native>(ex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)),
                                                rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj), rseq(nr, Wj));
                             }
                             device::sync(ex, device::Mem::Global);
@@ -271,8 +271,9 @@ Event btrd_lower_inplace(Queue& q,
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
-                                                     device::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
+                                        device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[jinc], WORK[jinc]},
+                                                     device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
+                                                     device::vec(AB + idx(kd, jinc - kd), kdm1, incx));
                                     }
                                 }
                             }
@@ -288,7 +289,7 @@ Event btrd_lower_inplace(Queue& q,
                                 Real ct = Real(0);
                                 T st = T(0);
                                 T rt = T(0);
-                                Ops::lartg(f, g, ct, st, rt);
+                                device::detail::lartg_out<device::alg::Promote>(f, g, ct, st, rt);
                                 C[i + k] = ct;
                                 WORK[i + k] = st;
                                 ABv(k - 1, i) = rt;
@@ -296,8 +297,9 @@ Event btrd_lower_inplace(Queue& q,
                                 if (k > 2) {
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
-                                    device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
-                                                 device::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
+                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{ct, st},
+                                                 device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                                 device::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1));
                                 }
                             }
                             nr += 1;
@@ -315,7 +317,7 @@ Event btrd_lower_inplace(Queue& q,
 
                     if (nr > 0) {
                         // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                        device::lar2v<Ops>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
+                        device::lar2v<device::alg::RotLapack, Native>(ex, rseq(nr, band_p(0, -1)), rseq(nr, band_p(0, 0)), rseq(nr, band_p(1, -1)),
                                        rseq(nr, Cpj), rseq(nr, Wpj));
                         device::sync(ex, device::Mem::Global);
 
@@ -333,7 +335,7 @@ Event btrd_lower_inplace(Queue& q,
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
-                                    device::lartv<Ops>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
+                                    device::lartv<device::alg::RotLapack, Native>(ex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)),
                                                    rseq(nrt, Cj), rseq(nrt, Wj));
                                 }
                             }
@@ -344,16 +346,18 @@ Event btrd_lower_inplace(Queue& q,
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, j1inc - 1), kdm1),
-                                                         device::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
+                                            device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[j1inc], WORK[j1inc]},
+                                                         device::vec(AB + idx(2, j1inc - 1), kdm1),
+                                                         device::vec(AB + idx(1, j1inc), kdm1));
                                         }
                                     }
                                 }
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    device::detail::rot_by<Ops>(device::Thread{}, device::vec(AB + idx(2, last - 1), lend),
-                                                 device::vec(AB + idx(1, last), lend), C[last], WORK[last]);
+                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[last], WORK[last]},
+                                                 device::vec(AB + idx(2, last - 1), lend),
+                                                 device::vec(AB + idx(1, last), lend));
                                 }
                             }
                             device::sync(ex, device::Mem::Global);

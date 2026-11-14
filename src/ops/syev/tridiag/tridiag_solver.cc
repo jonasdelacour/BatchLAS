@@ -192,7 +192,7 @@ Event tridiagonal_solver(Queue& ctx,
                     int it = 0;
                     while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
                         if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                        const auto [l0, l1] = device::lae2(D[k-1], L[k-1], D[k]);
+                        const auto [l0, l1] = device::lae2(T(D[k-1]), T(L[k-1]), T(D[k]));  // values: no generic re-reads
                         const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(ex, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {

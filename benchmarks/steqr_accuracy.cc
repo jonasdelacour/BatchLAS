@@ -45,7 +45,6 @@ struct Options {
     double log10_cond_max = 10.0;
     unsigned int seed = 1234u;
     size_t max_sweeps = 100;
-    SteqrUpdateScheme scheme = SteqrUpdateScheme::PG;
     std::string cta_shift = "wilkinson"; // lapack | wilkinson
     std::string output = "output/accuracy/steqr_accuracy.csv";
     std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
@@ -66,15 +65,6 @@ Options parse_args(int argc, char** argv) {
             opt.inputs = get_value(arg);
         } else if (arg.starts_with("--impl")) {
             opt.impl = get_value(arg);
-        } else if (arg.starts_with("--scheme")) {
-            const auto val = to_lower(get_value(arg));
-            if (val == "pg") {
-                opt.scheme = SteqrUpdateScheme::PG;
-            } else if (val == "exp") {
-                opt.scheme = SteqrUpdateScheme::EXP;
-            } else {
-                throw batchlas::invalid_argument("Invalid --scheme value (use pg, exp, or pg_guarded)");
-            }
         } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);
         } else if (arg.starts_with("--type")) {
@@ -101,7 +91,6 @@ Options parse_args(int argc, char** argv) {
             std::cout << "STEQR accuracy sampler\n\n"
                       << "Options:\n"
                       << "  --impl steqr|steqr_cta|cuda_syev|netlib_syev32|netlib_steqr|netlib_sterf|netlib_stedc|stedc|both|all\n"
-                      << "  --scheme pg|exp|pg_guarded\n"
                       << "  --backend CUDA|ROCM|NETLIB\n"
                       << "  --type float|double\n"
                       << "  --n N\n"
@@ -224,17 +213,8 @@ int run_accuracy(const Options& opt) {
     const double bin_width = (bins > 0) ? (log10_span / static_cast<double>(bins)) : 0.0;
     const int base_per_bin = static_cast<int>(std::ceil(static_cast<double>(total_samples) / static_cast<double>(bins)));
     const int per_bin = static_cast<int>(std::ceil(static_cast<double>(base_per_bin) / static_cast<double>(batch))) * batch;
-    const auto scheme = opt.scheme;
 
     const char* cta_impl_name = "steqr_cta";
-    switch (scheme) {
-        case SteqrUpdateScheme::PG:
-            cta_impl_name = "steqr_cta_pg";
-            break;
-        case SteqrUpdateScheme::EXP:
-            cta_impl_name = "steqr_cta_exp";
-            break;
-    }
 
     std::filesystem::path out_path(opt.output);
     if (out_path.has_parent_path()) {
@@ -321,7 +301,6 @@ int run_accuracy(const Options& opt) {
         }
         if (run_cta) {
             params.max_sweeps = opt.max_sweeps;
-            params.cta_update_scheme = scheme;
             UnifiedVector<std::byte> ws(
                 steqr_cta_buffer_size<Real>(*q, d, e, eigs_cta, JobType::EigenVectors, params));
             (void)steqr_cta<B, Real>(*q, d, e, eigs_cta, ws.to_span(), JobType::EigenVectors, params, eigvects);

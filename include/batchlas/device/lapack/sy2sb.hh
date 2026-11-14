@@ -2,8 +2,7 @@
 #pragma once
 // sy2sb: a Hermitian (real: symmetric) matrix -> lower band of semibandwidth kd (LAPACK
 // xSYTRD_SY2SB / xHETRD_HE2HB) inside the caller's kernel, one matrix per work-group, any n and kd.
-// The host sytrd_sy2sb's algorithm on in-group ops: per panel geqr2, larft, then Q^H A Q on the
-// lower triangle with gemm / symm / hemm / syr2k / her2k (device/level3/group.hh).
+// The host sytrd_sy2sb's algorithm on in-group ops: per panel geqr2, larft, then Q^H A Q (gemm, hemm, her2k).
 // Public op (v22 design C.2/C.4/C.5): sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws); tier::Blocked<NB>
 // (NB = 32 or 64, the Level 3 tile): A and the panel scratch in global memory, only the tile
 // staging in local memory. Sizes: sy2sb_buffer_size<UL, Tier, T>(n, kd); with_tier:
@@ -93,13 +92,11 @@ BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const
     const auto pm = mat(pp, pn, pk, pn), ym = mat(yp, pn, pk, pn);
     const auto m1 = mat(m1p, pk, pk, pk), m2 = mat(m2p, pk, pk, pk);
     gemm<NT, NT, Cfg>(ex, w, tf, pm, One{}, Zero{}, sm);
-    if constexpr (Arith<T>::is_complex) hemm<Side::Left, Uplo::Lower, Cfg>(ex, a22, pm, ym, One{}, Zero{}, sm);
-    else symm<Side::Left, Uplo::Lower, Cfg>(ex, a22, pm, ym, One{}, Zero{}, sm);
+    hemm<Side::Left, Uplo::Lower, Cfg>(ex, a22, pm, ym, One{}, Zero{}, sm);
     gemm<CT, NT, Cfg>(ex, w, ym, m1, One{}, Zero{}, sm);
     gemm<CT, NT, Cfg>(ex, tf, m1, m2, One{}, Zero{}, sm);
     gemm<NT, NT, Cfg>(ex, w, m2, ym, minus_half<T>(), One{}, sm);
-    if constexpr (Arith<T>::is_complex) her2k<Uplo::Lower, NT, Cfg>(ex, w, ym, a22, NegOne{}, One{}, sm);
-    else syr2k<Uplo::Lower, NT, Cfg>(ex, w, ym, a22, NegOne{}, One{}, sm);
+    her2k<Uplo::Lower, NT, Cfg>(ex, w, ym, a22, NegOne{}, One{}, sm);
 }
 
 }  // namespace detail

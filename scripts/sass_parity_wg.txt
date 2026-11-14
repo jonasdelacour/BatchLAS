@@ -77,8 +77,6 @@
 128 ^batchlas::Stedc(?:ComputeV|Deflation|SecularSolve|RescaleV|MatrixUpdate|LevelPad)<
 # src/ops/syev/stedc/stedc.cc StedcAssignEigenvalues: sycl::nd_range<1>(batch_size*32, 32)
 32  ^batchlas::StedcAssignEigenvalues<
-# src/ops/syev/stedc/stedc_secular.cc secular_solver: sycl::nd_range<1>(d.batch_size()*128, 128)
-128 ^batchlas::Event batchlas::secular_solver<(?:float|double)>\(
 
 # src/ops/syevx/kernels/syevx_filtered.cc: sycl::range{kBoundsWG}, kBoundsWG = 64
 64  ^batchlas::SyevxFilterBoundsPartialKernel<

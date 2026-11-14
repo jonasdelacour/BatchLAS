@@ -17,11 +17,6 @@ namespace batchlas {
 
 namespace detail {
 
-// The band-to-tridiagonal (xSBTRD/xHBTRD) rotation kernels of sytrd_sb2st.cc and sytrd_sb2st_cta.cc:
-// device::sb2st_rot (lapack/sb2st.hh), the Rot of device::sb2st_givens_chase.
-template <typename T>
-using btrd_givens_ops = ::batchlas::device::sb2st_rot<T>;
-
 template <typename T>
 Event btrd_lower_inplace_subgroup_dispatch(Queue& q,
                                           KernelMatrixView<T, MatrixFormat::Dense> ab,

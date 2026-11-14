@@ -237,6 +237,19 @@ template <class Ops = arith::Explicit, class Ex, class A, class X> BATCHLAS_DEVI
         else x(i) = tag_mul(a, static_cast<T>(x(i)));
     });
 }
+// LaneVec form (operand.hh): only the window [x.lo, x.hi) is scaled.
+template <class Ops = arith::Explicit, class Ex, class A, class T> BATCHLAS_DEVICE_INLINE void scal(const Ex& ex, A a_, const LaneVec<T>& x) {
+    using V = std::remove_cv_t<T>;
+    using S = tag_t<A>;
+    const S a = as_tag(a_);
+    constexpr bool native_value = std::is_same_v<Ops, arith::Native> && !std::is_same_v<S, One> &&
+                                  !std::is_same_v<S, Zero> && !std::is_same_v<S, NegOne>;
+    if constexpr (native_value) {
+        if (x.owns(ex)) x.v *= a.v;
+    } else {
+        if (x.owns(ex)) x.v = tag_mul(a, static_cast<V>(x.v));
+    }
+}
 
 template <class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE void copy(const Ex& ex, const X& x, const Y& y) {
     for_each_owned(ex, y.size(), [&](int i) { y(i) = x(i); });
@@ -349,16 +362,27 @@ BATCHLAS_DEVICE_INLINE T reduce(const Ex& ex, Scratch<T, Slots> scr, int n, F&& 
 }
 
 namespace detail {
+// The item's partial sum. On Fit<Ex> the item's one product (0 past x.size()): no accumulator,
+// so no +0 seed to add (the sytd2 form).
 template <bool Conj, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
     using T = elem_t<X>;
     using Ar = arith_t<Ops, T>;
-    T acc = Ar::zero();
-    for_each_owned(ex, x.size(), [&](int i) {
-        if constexpr (Conj) Ar::mac_conj(acc, x(i), y(i));
-        else Ar::mac(acc, x(i), y(i));
-    });
-    return acc;
+    if constexpr (is_fit_v<Ex>) {
+        const int i = ex.lid();
+        const bool in = i >= 0 && i < x.size();
+        T p;
+        if constexpr (Conj) p = in ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
+        else p = in ? Ar::mul(x(i), y(i)) : Ar::zero();
+        return p;
+    } else {
+        T acc = Ar::zero();
+        for_each_owned(ex, x.size(), [&](int i) {
+            if constexpr (Conj) Ar::mac_conj(acc, x(i), y(i));
+            else Ar::mac(acc, x(i), y(i));
+        });
+        return acc;
+    }
 }
 }  // namespace detail
 

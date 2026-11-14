@@ -2,17 +2,16 @@
 #pragma once
 // sb2st: a Hermitian (real: symmetric) matrix in lower band storage -> real tridiagonal by bulge
 // chasing, inside the caller's kernel, on storage the caller prepared:
-//   sb2st_givens_chase<Rot>(ex, n, kd, AB, ldab, C, WORK)   xSBTRD / xHBTRD's Givens chase on one
-//                                                          sub-group partition
+//   sb2st_givens_chase(ex, n, kd, AB, ldab, C, WORK)   xSBTRD / xHBTRD's Givens chase on one
+//                                                     sub-group partition
 //   sb2st_hh_chase(ex, rows, A, n, kd, vl, wl, V, tau)      the two-stage Householder chase
 //                                                          (xSYTRD_SB2ST), reflectors kept in V, tau
-// Rot supplies the scalar rotation kernels (Rot::lartg, Rot::rot_pair, Rot::lar2v_pair); the
-// vector forms are core's largv / lartv / lar2v. detail holds what core has no form for:
+// The rotations are core's lartg / largv / lartv / lar2v / rot in T's own operators
+// (alg::Promote, arith::Native). detail holds what core has no form for:
 //   StridedTeams<C>  C strided teams per sub-group (xor masks C, 2C, ...)
-//   win_of, fn_vec   an index-form window, and a vector of write-through references
+//   win_of           an index-form window
 //   HermBandLower    a writable Hermitian matrix in LAPACK lower band storage
-//   hemv_band, larf_right   team-per-row loops in lockstep, in T's own operators
-//   rot_by<Rot>      one rotation through Rot::rot_pair
+//   hemv_band        a team-per-row loop in lockstep, in T's own operators
 // Each element is the C++ expression of the kernel it was lifted from (std::complex operators,
 // one expression per FMA chain), so a strict port stays bit-identical.
 //
@@ -21,8 +20,8 @@
 // overwritten. Tiers: Cta<N> (band and rotation scratch in local memory, n <= N) and Blocked<NB>
 // (band chased in place, scratch in the caller's global slice; NB unused: a band chase has no
 // panel). Sizes: sb2st_buffer_size<UL, Tier, T>(n, kd); with_tier: routine::sb2st<UL, KDMax>.
-// The rotation kernels are sb2st_rot<T>; the host sub-group route runs the same body
-// (detail::givens_on + finalize_tridiag) with its run-time storage choice.
+// The host sub-group route runs the same body (detail::givens_on + finalize_tridiag) with its
+// run-time storage choice.
 
 #include <array>
 #include <cstddef>
@@ -82,18 +81,6 @@ template <class M> struct WinOf {
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
 template <class M> BATCHLAS_DEVICE_INLINE WinOf<M> win_of(const M& a, int i0, int j0, int m, int n) { return {a, i0, j0, m, n}; }
-
-// x(t) = f(t), t < n, f returning a reference to write through (core fn_vec returns values). Each
-// element keeps the caller's address expression, e.g. a band chase's rotation sequence
-// AB(r, j1 + t kd1 + dc).
-template <class F> struct FnVec {
-    using value_type = std::remove_cvref_t<decltype(std::declval<const F&>()(0))>;
-    F f;
-    int n;
-    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return f(i); }
-    BATCHLAS_DEVICE_INLINE int size() const { return n; }
-};
-template <class F> BATCHLAS_DEVICE_INLINE FnVec<F> fn_vec(int n, F f) { return {f, n}; }
 
 // A Hermitian (real: symmetric) matrix in LAPACK lower band storage, half-bandwidth kd:
 // A(i, j), i >= j, lives at p[(i - j) + j * ld]. A(i, j) above the diagonal reads conj(A(j, i));
@@ -179,35 +166,8 @@ BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, cons
             for (int j = ex.lid(); j < n; j += Ex::size) acc += static_cast<T>(a(r, j)) * static_cast<T>(x(j));
         }
         acc = ex.team_reduce(acc);
-        if (live && ex.leader()) store(alpha, acc, beta, y(r));
+        if (live && ex.leader()) store_epi(alpha, acc, beta, y(r));
     });
-}
-
-// C := C (I - tau v v^H) in T's own operators: each team owns whole rows of C, reduces C v with
-// team_reduce in a lockstep loop and updates its own row; no barrier inside (core larf<Right> is
-// one row per item, serial over the columns).
-template <class Ex, class Tau, class VP, class MC> BATCHLAS_DEVICE_INLINE void larf_right(const Ex& ex, Tau tau, const VP& vp, const MC& c) {
-    using T = typename MC::value_type;
-    using N = arith_t<arith::Native, T>;
-    detail::require_published<Ex, VP>();
-    const auto& v = detail::unpub(vp);
-    const int len = c.cols();
-    for_each_team_owned<alg::Lockstep>(ex, c.rows(), [&](int o, bool live) BATCHLAS_DEVICE_BODY {
-        T w = T(0);
-        if (live) {
-            for (int k = ex.lid(); k < len; k += Ex::size) w += static_cast<T>(c(o, k)) * static_cast<T>(v(k));
-        }
-        w = tau * ex.team_reduce(w);
-        if (live) {
-            for (int k = ex.lid(); k < len; k += Ex::size) c(o, k) = static_cast<T>(c(o, k)) - w * N::conj(static_cast<T>(v(k)));
-        }
-    });
-}
-
-// One rotation (c, s) applied to the vector pair (x, y) (xROT through Rot::rot_pair).
-template <class Rot, class Ex, class X, class Y, class Rc, class Sc>
-BATCHLAS_DEVICE_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, const Sc& s) {
-    for_each_owned(ex, x.size(), [&](int i) BATCHLAS_DEVICE_BODY { Rot::rot_pair(x(i), y(i), c, s); });
 }
 
 }  // namespace detail
@@ -216,7 +176,7 @@ BATCHLAS_DEVICE_INLINE void rot_by(const Ex& ex, const X& x, const Y& y, Rc c, c
 // executor pex (SgpPartition<P>): AB the band with leading dimension ldab (global or local), C (real)
 // and WORK the rotation scratch of n + kd + 2 elements, zeroed by the caller. On return the band
 // holds the tridiagonal in rows 0 and 1 (complex: the off-diagonal not yet made real).
-template <class Rot, class Ex, class T, class R>
+template <class Ex, class T, class R>
 BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* AB, const int ldab, R* C, T* WORK) {
     const auto& partition = pex.part;
     const int kd1 = kd + 1;
@@ -234,7 +194,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
     // The rotation sequence j = j1 + t kd1, t < cnt, read through at(j): C(j), WORK(j) and the band
     // entries AB(r, j + dc), addressed as the scalar loops address them.
     auto rseq = [&](int cnt, auto at) {
-        return detail::fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
+        return fn_vec(cnt, [at, j1 = j1, kd1](int t) BATCHLAS_DEVICE_BODY -> decltype(auto) {
             return at(j1 + t * kd1);
         });
     };
@@ -257,14 +217,14 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
 
             if (nr > 0) {
                 // xLARGV over the rotations.
-                largv<Rot>(pex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
+                largv<alg::Promote>(pex, rseq(nr, band(kd, -kd1)), rseq(nr, Wj), rseq(nr, Cj));
                 group_barrier(partition);
 
                 if (nr > 2 * kd - 1) {
                     // xLARTV per band diagonal l (l sequential, rotations parallel); the rotations
                     // are independent, so one barrier after all l.
                     for (int l = 0; l < kd - 1; ++l) {
-                        lartv<Rot>(pex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)), rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj),
+                        lartv<alg::RotLapack, arith::Native>(pex, rseq(nr, band(kd - 1 - l, -kd1 + l + 1)), rseq(nr, band(kd - l, -kd1 + l + 1)), rseq(nr, Cj),
                                    rseq(nr, Wj));
                     }
                     group_barrier(partition);
@@ -273,8 +233,8 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                     if (kdm1 > 0) {
                         for_each_owned(pex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
-                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(kd - 1, j - kd), kdm1, incx), vec(AB + idx(kd, j - kd), kdm1, incx),
-                                                      C[j], WORK[j]);
+                            rot<alg::RotLapack, arith::Native>(Thread{}, Givens<R, T>{C[j], WORK[j]}, vec(AB + idx(kd - 1, j - kd), kdm1, incx),
+                                                               vec(AB + idx(kd, j - kd), kdm1, incx));
                         });
                     }
                     group_barrier(partition);
@@ -292,7 +252,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                         R ct = R(0);
                         T st = T(0);
                         T rt = T(0);
-                        Rot::lartg(f, g, ct, st, rt);
+                        detail::lartg_out<alg::Promote>(f, g, ct, st, rt);
                         C[i + k] = ct;
                         WORK[i + k] = st;
                         AB_at(k - 1, i) = rt;
@@ -300,8 +260,8 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                         if (k > 2) {
                             const R ct2 = C[i + k];
                             const T st2 = WORK[i + k];
-                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
-                                                      vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct2, st2);
+                            rot<alg::RotLapack, arith::Native>(Thread{}, Givens<R, T>{ct2, st2}, vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                                               vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1));
                         }
                     }
                     nr_out += 1;
@@ -314,7 +274,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
 
             if (nr > 0) {
                 // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
-                lar2v<Rot>(pex, rseq(nr, band(0, -1)), rseq(nr, band(0, 0)), rseq(nr, band(1, -1)), rseq(nr, Cj), rseq(nr, Wj));
+                lar2v<alg::RotLapack, arith::Native>(pex, rseq(nr, band(0, -1)), rseq(nr, band(0, 0)), rseq(nr, band(1, -1)), rseq(nr, Cj), rseq(nr, Wj));
                 group_barrier(partition);
 
                 // xHBTRD: conjugate WORK(J1) before the right application.
@@ -328,7 +288,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                     for (int l = 0; l < kd - 1; ++l) {
                         const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                         if (nrt > 0) {
-                            lartv<Rot>(pex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)), rseq(nrt, Cj), rseq(nrt, Wj));
+                            lartv<alg::RotLapack, arith::Native>(pex, rseq(nrt, band(l + 2, -1)), rseq(nrt, band(l + 1, 0)), rseq(nrt, Cj), rseq(nrt, Wj));
                         }
                     }
                     group_barrier(partition);
@@ -338,7 +298,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                     if (kdm1 > 0 && main_nrot > 0) {
                         for_each_owned(pex, main_nrot, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
-                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, j - 1), kdm1), vec(AB + idx(1, j), kdm1), C[j], WORK[j]);
+                            rot<alg::RotLapack, arith::Native>(Thread{}, Givens<R, T>{C[j], WORK[j]}, vec(AB + idx(2, j - 1), kdm1), vec(AB + idx(1, j), kdm1));
                         });
                     }
 
@@ -348,8 +308,8 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& pex, int n, int kd, T* 
                         const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                         const int last = j1end + kd1;
                         if (lend > 0) {
-                            detail::rot_by<Rot>(Thread{}, vec(AB + idx(2, last - 1), lend), vec(AB + idx(1, last), lend), C[last],
-                                                      WORK[last]);
+                            rot<alg::RotLapack, arith::Native>(Thread{}, Givens<R, T>{C[last], WORK[last]}, vec(AB + idx(2, last - 1), lend),
+                                                               vec(AB + idx(1, last), lend));
                         }
                     }
                     group_barrier(partition);
@@ -420,7 +380,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
     auto right_apply = [&](int32_t r0, int32_t r1, int32_t c0, int32_t c1, T tau) {
         if (r0 > r1 || c0 > c1) return;
         const auto v = assume_published(vec(vloc, c1 - c0 + 1));
-        detail::larf_right(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
+        larf<Side::Right, arith::Native, alg::ScaleW, alg::Lockstep>(rows, tau, v, A.sub(r0, c0, r1 - r0 + 1, c1 - c0 + 1));
         sync(ex, Mem::Global);
     };
 
@@ -492,114 +452,7 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
     }
 }
 
-// ---- the band-to-tridiagonal rotation kernels -------------------------------------------------
-// xSBTRD / xHBTRD's scalar steps in T's own operators: the Rot of sb2st_givens_chase and of core
-// largv / lartv / lar2v. complex<float> forms its rotations in double except on Metal (no fp64),
-// as src/math-helpers.hh lartg does.
-template <class T, bool = Arith<T>::is_complex> struct sb2st_rot;
-
-template <class T> struct sb2st_rot<T, false> {
-    using Real = real_t<T>;
-
-    static inline void lartg(const T& f_in, const T& g_in, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = ::batchlas::device::lartg(f_in, g_in);
-        c = ct;
-        s = T(st);
-        r = T(rt);
-    }
-
-    static inline void rot_pair(T& x, T& y, Real c, const T& s_in) {
-        const Real s = static_cast<Real>(s_in);
-        const Real xt = static_cast<Real>(x);
-        const Real yt = static_cast<Real>(y);
-        x = T(c * xt + s * yt);
-        y = T(c * yt - s * xt);
-    }
-
-    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si_in) {
-        const Real xi = static_cast<Real>(x);
-        const Real yi = static_cast<Real>(y);
-        const Real zi = static_cast<Real>(z);
-        const Real si = static_cast<Real>(si_in);
-
-        const Real t1 = si * zi;
-        const Real t2 = ci * zi;
-        const Real t3 = t2 - si * xi;
-        const Real t4 = t2 + si * yi;
-        const Real t5 = ci * xi + t1;
-        const Real t6 = ci * yi - t1;
-
-        x = T(ci * t5 + si * t4);
-        y = T(ci * t6 - si * t3);
-        z = T(ci * t4 - si * t5);
-    }
-};
-
-template <class T> struct sb2st_rot<T, true> {
-    using Real = real_t<T>;
-
-    static __attribute__((always_inline)) inline LartgResult<T> rotation(const T& f, const T& g) {
-        if constexpr (std::is_same_v<Real, float>) {
-            if (::batchlas::sycl_impl::on_metal()) return ::batchlas::device::lartg<float>(f, g);
-            return ::batchlas::device::lartg<double>(f, g);
-        } else {
-            return ::batchlas::device::lartg(f, g);
-        }
-    }
-
-    static inline void lartg(const T& f, const T& g, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = rotation(f, g);
-        c = ct;
-        s = st;
-        r = rt;
-    }
-
-    static inline void rot_pair(T& x, T& y, Real c, const T& s) {
-        const T xt = x;
-        const T yt = y;
-        x = T(c) * xt + s * yt;
-        y = T(c) * yt - ::batchlas::device::conj(s) * xt;
-    }
-
-    // Netlib CLAR2V / ZLAR2V, expression for expression.
-    static inline void lar2v_pair(T& x, T& y, T& z, Real ci, const T& si) {
-        const Real xi = static_cast<Real>(x.real());
-        const Real yi = static_cast<Real>(y.real());
-        const T zi = z;
-
-        const Real zir = static_cast<Real>(zi.real());
-        const Real zii = static_cast<Real>(zi.imag());
-
-        const Real sir = static_cast<Real>(si.real());
-        const Real sii = static_cast<Real>(si.imag());
-
-        const Real t1r = sir * zir - sii * zii;
-        const Real t1i = sir * zii + sii * zir;
-
-        const T t2 = T(ci * zir, ci * zii);
-        const T t3 = t2 - ::batchlas::device::conj(si) * T(xi, Real(0));
-        const T t4 = ::batchlas::device::conj(t2) + si * T(yi, Real(0));
-
-        const Real t5 = ci * xi + t1r;
-        const Real t6 = ci * yi - t1r;
-
-        const Real xnew = ci * t5 + (sir * static_cast<Real>(t4.real()) + sii * static_cast<Real>(t4.imag()));
-        const Real ynew = ci * t6 - (sir * static_cast<Real>(t3.real()) - sii * static_cast<Real>(t3.imag()));
-        const T znew = T(ci) * t3 + ::batchlas::device::conj(si) * T(t6, t1i);
-
-        x = T(xnew, Real(0));
-        y = T(ynew, Real(0));
-        z = znew;
-    }
-};
-
 namespace detail {
-
-// Re x read through the reference (no copy of the imaginary part).
-template <class T> inline real_t<T> re_of(const T& x) {
-    if constexpr (Arith<T>::is_complex) return static_cast<real_t<T>>(x.real());
-    else return static_cast<real_t<T>>(x);
-}
 
 // kd <= 1 needs no chase (xSBTRD's KD = 0 / KD = 1 exits): d = Re diag; e = 0 (KD = 0) or
 // |AB(1, i)| (KD = 1: the chained phase only matters for Q, which no caller forms); tau = 0.
@@ -610,14 +463,14 @@ inline void extract_narrow(int n, const AB& ab, const D& d, const E& e, const Ta
     using Real = real_t<T>;
     if constexpr (KD == 0) {
         for (int i = 0; i < n; ++i) {
-            d(i) = re_of(ab(0, i));
+            d(i) = re(ab(0, i));
             if (i < n - 1) {
                 e(i) = Real(0);
                 tau(i) = T(0);
             }
         }
     } else {
-        for (int i = 0; i < n; ++i) d(i) = re_of(ab(0, i));
+        for (int i = 0; i < n; ++i) d(i) = re(ab(0, i));
         for (int i = 0; i < n - 1; ++i) {
             const T t = ab(1, i);
             const Real a = modulus(t);
@@ -654,7 +507,7 @@ inline void finalize_tridiag(int n, const Diag& diag, const Sub& sub, const D& d
             if (j < n - 2) sub(j + 1) *= phase;
             tau(j) = T(0);
         }
-        for (int j = 0; j < n; ++j) d(j) = re_of(diag(j));
+        for (int j = 0; j < n; ++j) d(j) = re(diag(j));
     }
 }
 
@@ -666,7 +519,7 @@ inline void finalize_tridiag(int n, const Diag& diag, const Sub& sub, const D& d
 // memory at run time is rejected ("Conflicting address space information in PHI node"); there each
 // storage gets its own chase, elsewhere the pointer is selected once and the chase emitted once.
 // The caller picks c / work the same way.
-template <class Rot, class Ex, class T, class AbL, class R>
+template <class Ex, class T, class AbL, class R>
 BATCHLAS_DEVICE_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int ldg, const AbL& abl, bool stage, R* c, T* work) {
     const auto& partition = pex.part;
     const int ldab_l = kd + 1;
@@ -692,10 +545,10 @@ BATCHLAS_DEVICE_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int 
         if (stage) {
             T* const ab_l = abl();
             stage_ab(ab_l, true);
-            sb2st_givens_chase<Rot>(pex, n, kd, ab_l, ldab_l, c, work);
+            sb2st_givens_chase(pex, n, kd, ab_l, ldab_l, c, work);
             stage_ab(ab_l, false);
         } else {
-            sb2st_givens_chase<Rot>(pex, n, kd, abg, ldg, c, work);
+            sb2st_givens_chase(pex, n, kd, abg, ldg, c, work);
         }
     } else {
         T* ab = abg;
@@ -705,7 +558,7 @@ BATCHLAS_DEVICE_INLINE void givens_on(const Ex& pex, int n, int kd, T* abg, int 
             ldab = ldab_l;
             stage_ab(ab, true);
         }
-        sb2st_givens_chase<Rot>(pex, n, kd, ab, ldab, c, work);
+        sb2st_givens_chase(pex, n, kd, ab, ldab, c, work);
         if (stage) stage_ab(ab, false);
     }
 }
@@ -816,11 +669,11 @@ BATCHLAS_DEVICE_INLINE int sb2st(const Ex& pex, const AB& ab, const D& d, const 
     const auto lay = detail::band_layout<Tier, T>(n, kd);
     if constexpr (tier::is_cta_v<Tier>) {
         auto abl = [&]() BATCHLAS_DEVICE_BODY { return carve_local(ws, lay.ab).get_raw(); };
-        detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
+        detail::givens_on(pex, n, kd, abg, ldg, abl, true, carve_local(ws, lay.c).get_raw(),
                                               carve_local(ws, lay.work).get_raw());
     } else {
         auto no_abl = []() BATCHLAS_DEVICE_BODY { return static_cast<T*>(nullptr); };
-        detail::givens_on<sb2st_rot<T>>(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
+        detail::givens_on(pex, n, kd, abg, ldg, no_abl, false, carve_global(ws, lay.c),
                                               carve_global(ws, lay.work));
     }
     group_barrier(partition);

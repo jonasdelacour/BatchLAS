@@ -253,7 +253,7 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, RegisterTiledGemmFromComponents) {
     }
 }
 
-// ---- stage_storage + gemv_t_frag + store<epi::MulMac> on the POD scalar: the small batched gemm -
+// ---- stage_storage + gemv_t_frag + store_epi<epi::MulMac> on the POD scalar: the small batched gemm -
 
 template <int NB, int Chunk, class T>
 void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, T beta, const char* where) {
@@ -312,7 +312,7 @@ void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, 
         if (r < m) {
             for (int j = 0; j < kCpt; ++j) {
                 const int c = c0 + j;
-                if (c < n) device::store<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
+                if (c < n) device::store_epi<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
             }
         }
     });
@@ -451,7 +451,7 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, PipelinesRunEverySlabOnce) {
     }
 }
 
-// ---- store<epi::MulMac> (bit-exact fma chain on the POD scalar) and outer_mac (both forms) ------
+// ---- store_epi<epi::MulMac> (bit-exact fma chain on the POD scalar) and outer_mac (both forms) ------
 
 enum Slot { kFusedZero, kFused, kOuterFull0, kOuterPlain0 = kOuterFull0 + 15, kSlots = kOuterPlain0 + 15 };
 
@@ -474,8 +474,8 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, EpilogueAndOuterMacMatchTheHost) {
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         if (it.get_local_linear_id() != 0) return;
         D* const o = reinterpret_cast<D*>(out);
-        device::store<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, true}, o[kFusedZero]);  // NaN destination, never read
-        device::store<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, false}, o[kFused]);
+        device::store_epi<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, true}, o[kFusedZero]);  // NaN destination, never read
+        device::store_epi<device::epi::MulMac, device::arith::Fma>(ad, xd, device::MaybeZero<D>{bd, false}, o[kFused]);
         T a3[3], b5[5];
         for (int i = 0; i < 3; ++i) a3[i] = av[i];
         for (int j = 0; j < 5; ++j) b5[j] = bv[j];

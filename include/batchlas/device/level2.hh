@@ -25,16 +25,16 @@ template <class Ex, Transpose TR> constexpr auto default_gemv_alg() {
     else return alg::SgPerCol{};
 }
 template <class Alg, class Default> using pick_t = std::conditional_t<std::is_void_v<Alg>, Default, Alg>;
-// gemv's output: store<Shape, Ops>(alpha, acc, beta, y); Side::Right with a Scalar alpha
+// gemv's output: store_epi<Shape, Ops>(alpha, acc, beta, y); Side::Right with a Scalar alpha
 // forms acc * alpha first (then beta's term as a One-alpha store).
 template <class S> inline constexpr bool is_scalar_value_v = false;
 template <class T> inline constexpr bool is_scalar_value_v<Scalar<T>> = true;
 template <class Shape, class Ops, Side AlphaSide, class AS, class T, class BS, class Ref>
 BATCHLAS_DEVICE_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
     if constexpr (AlphaSide == Side::Right && is_scalar_value_v<AS>) {
-        store<Shape, Ops>(One{}, arith_t<Ops, T>::mul(acc, static_cast<T>(alpha.v)), beta, y);
+        store_epi<Shape, Ops>(One{}, arith_t<Ops, T>::mul(acc, static_cast<T>(alpha.v)), beta, y);
     } else {
-        store<Shape, Ops>(alpha, acc, beta, y);
+        store_epi<Shape, Ops>(alpha, acc, beta, y);
     }
 }
 template <class Ex> BATCHLAS_DEVICE_INLINE auto lane_group(const Ex& ex) {
@@ -44,7 +44,7 @@ template <class Ex> BATCHLAS_DEVICE_INLINE auto lane_group(const Ex& ex) {
 }  // namespace detail
 
 // y := alpha op(A) x + beta y; beta == Zero never reads y. Ops: the arithmetic of the dot;
-// Shape: the epilogue (store<Shape, Ops>, arith.hh); AlphaSide: Side::Right forms acc * alpha.
+// Shape: the epilogue (store_epi<Shape, Ops>, arith.hh); AlphaSide: Side::Right forms acc * alpha.
 //   alg::TeamPerRow  NoTrans: team t owns rows t mod nteams, lanes stride the columns, lane 0 stores
 //   alg::ColDot<W>   (Conj)Trans: W consecutive lanes per column (W | the sub-group), a W-lane
 //                    butterfly; the W-block's first lane stores
@@ -175,7 +175,7 @@ BATCHLAS_DEVICE_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, cons
                 if constexpr (Herm) Ar::mac_conj(acc, a(c, r), x(c));
                 else Ar::mac(acc, a(c, r), x(c));
             }
-            store(alpha, acc, beta, y(r));
+            store_epi(alpha, acc, beta, y(r));
         }
     } else {
     const int n = a.rows();
@@ -200,7 +200,7 @@ BATCHLAS_DEVICE_INLINE void symv_impl(const Ex& ex, AS alpha_, const MA& a, cons
 #pragma unroll 4
             for (int c = r + 1; c < n; ++c) Ar::mac(acc, a(c, r), x(c));
         }
-        store(alpha, acc, beta, y(r));
+        store_epi(alpha, acc, beta, y(r));
     }
     }
 }
@@ -614,7 +614,7 @@ BATCHLAS_DEVICE_INLINE void gbmv(const Ex& ex, AS alpha_, const MB& ab, const X&
         T acc = Ar::zero();
         const int j0 = i - KL > 0 ? i - KL : 0, j1 = i + KU < n - 1 ? i + KU : n - 1;
         for (int j = j0; j <= j1; ++j) Ar::mac(acc, static_cast<T>(ab(KU + i - j, j)), static_cast<T>(x(j)));
-        store<epi::Sum, Ops>(alpha, acc, beta, y(i));
+        store_epi<epi::Sum, Ops>(alpha, acc, beta, y(i));
     });
 }
 

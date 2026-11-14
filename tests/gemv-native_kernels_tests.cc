@@ -216,7 +216,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             } else {
                 if (!al.zero) acc = device::dot<device::Scope::Own, Fma>(device::Thread{}, device::conj_if(A(b).col(i), conj), X(b));
             }
-            device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
+            device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::RowSegment) {
         dev.template run<true>(kItems, [=](sycl::nd_item<1> it, std::int64_t b) {
@@ -227,7 +227,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             D acc{};
             if (!al.zero && jsub < P) acc = device::dot_partial<false, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
             acc = ops::gemv::dla::fold_down<P>(sg, acc, device::Dyn{m});
-            if (lane < m) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
+            if (lane < m) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
     } else if constexpr (S == Shape::ColSubGroup) {
         dev.template run<true>(total, [=](sycl::nd_item<1> it, std::int64_t g) {
@@ -238,7 +238,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             D acc{};
             if (!al.zero) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
             acc = device::shift_reduce<32>(team.sg, acc, AddOf{});
-            if (team.leader()) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
+            if (team.leader()) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     } else {
         constexpr int W = kSg / P;
@@ -255,7 +255,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             D acc{};
             if (!al.zero && active) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
             acc = device::shift_reduce<P>(team.part, acc, AddOf{});
-            if (team.leader() && active) device::store<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
+            if (team.leader() && active) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
     }
 
@@ -382,9 +382,9 @@ TYPED_TEST(GemvNativeKernelsTest, StoreMacChainTags) {
     const D ad = to_dev(alpha);
     this->dev.template run<false>(n, [=](sycl::nd_item<1>, std::int64_t i) {
         if (i >= n) return;
-        device::store<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::Zero{}, z[i]);
-        device::store<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::One{}, y1[i]);
-        device::store<device::epi::MacChain, Fma>(device::One{}, a[i], device::NegOne{}, y2[i]);
+        device::store_epi<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::Zero{}, z[i]);
+        device::store_epi<device::epi::MacChain, Fma>(device::Scalar<D>{ad}, a[i], device::One{}, y1[i]);
+        device::store_epi<device::epi::MacChain, Fma>(device::One{}, a[i], device::NegOne{}, y2[i]);
     });
     const auto gz = this->dev.down(reinterpret_cast<const T*>(z), n);
     const auto g1 = this->dev.down(reinterpret_cast<const T*>(y1), n);

@@ -40,7 +40,6 @@ struct Spec {
     bool identical = false;     ///< every item the same input (the saturating case)
     bool deflation_mix = false; ///< odd items deflate most of every merge, even items almost none
     StedcMergeVariant merge = StedcMergeVariant::Auto;
-    StedcSecularSolver secular = StedcSecularSolver::Rocm;
     bool cpu_queue = true;      ///< false: n >= 256, where the CPU queue's float stedc is NaN on base too
 };
 
@@ -60,7 +59,7 @@ struct Problem {
           info(std::size_t(s.batch)) {}
 
     StedcParams<T> params() const {
-        StedcParams<T> p{.recursion_threshold = s.threshold, .algorithm = s.algorithm, .secular_solver = s.secular};
+        StedcParams<T> p{.recursion_threshold = s.threshold, .algorithm = s.algorithm};
         p.merge_variant = s.merge;
         return p;
     }
@@ -138,8 +137,8 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    // The fixture's queue, and on the SYCL backend also a CPU queue: there stedc takes the CPU
-    // merge path (the legacy secular solver), which the GPU queue never runs.
+    // The fixture's queue, and on the SYCL backend also a CPU queue: there stedc takes the
+    // Baseline merge, which the GPU tuning never picks.
     std::vector<std::pair<std::string, Queue*>> queues() {
         std::vector<std::pair<std::string, Queue*>> out{{"default", this->ctx.get()}};
         if constexpr (B == Backend::SYCL) {
@@ -189,9 +188,7 @@ TYPED_TEST(StedcMask, GpuMergeVariants) {
     using V = StedcMergeVariant;
     for (const auto alg : {kRec, kLvl}) {
         const std::string a = alg == kRec ? "recursive " : "levels ";
-        this->check({a + "baseline rocm", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline});
-        this->check({a + "baseline legacy", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline,
-                     StedcSecularSolver::Legacy});
+        this->check({a + "baseline", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline});
         this->check({a + "fused", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Fused});
         this->check({a + "fused cta", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::FusedCta});
     }
@@ -204,9 +201,8 @@ TYPED_TEST(StedcMask, GpuMergeVariants) {
 // CPU queue is left out: its float stedc returns NaN at n >= 256 on base 02801019 as well.
 TYPED_TEST(StedcMask, DeflationMaximumAt512) {
     using V = StedcMergeVariant;
-    constexpr auto kRocm = StedcSecularSolver::Rocm;
-    this->check({"recursive n=512 deflation mix", 512, 4, 32, kRec, JobType::EigenVectors, false, false, true, V::Auto, kRocm, false});
-    this->check({"levels n=512 deflation mix", 512, 4, 32, kLvl, JobType::EigenVectors, true, false, true, V::Auto, kRocm, false});
+    this->check({"recursive n=512 deflation mix", 512, 4, 32, kRec, JobType::EigenVectors, false, false, true, V::Auto, false});
+    this->check({"levels n=512 deflation mix", 512, 4, 32, kLvl, JobType::EigenVectors, true, false, true, V::Auto, false});
 }
 
 TYPED_TEST(StedcMask, SaturatingIdenticalItems) {

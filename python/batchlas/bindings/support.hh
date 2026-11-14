@@ -596,28 +596,6 @@ inline SteqrShiftStrategy parse_steqr_shift_strategy(std::string value) {
     throw py::value_error("invalid steqr shift strategy");
 }
 
-inline SteqrUpdateScheme parse_steqr_update_scheme(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "pg") {
-        return SteqrUpdateScheme::PG;
-    }
-    if (value == "exp" || value == "explicit") {
-        return SteqrUpdateScheme::EXP;
-    }
-    throw py::value_error("invalid steqr update scheme");
-}
-
-inline StedcSecularSolver parse_stedc_secular_solver(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "rocm") {
-        return StedcSecularSolver::Rocm;
-    }
-    if (value == "legacy") {
-        return StedcSecularSolver::Legacy;
-    }
-    throw py::value_error("invalid stedc secular_solver");
-}
-
 inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
     value = lower_copy(std::move(value));
     if (value == "auto") {
@@ -1436,10 +1414,6 @@ SteqrParams<T> parse_steqr_params(const py::dict& options) {
         params.cta_shift_strategy =
             parse_steqr_shift_strategy(py::cast<std::string>(options["cta_shift_strategy"]));
     }
-    if (options.contains("cta_update_scheme")) {
-        params.cta_update_scheme =
-            parse_steqr_update_scheme(py::cast<std::string>(options["cta_update_scheme"]));
-    }
     return params;
 }
 
@@ -1457,9 +1431,6 @@ StedcParams<T> parse_stedc_params(const py::dict& options) {
         py_scalar_or_default<int>(options, "secular_cta_wg_size_multiplier", params.secular_cta_wg_size_multiplier);
     if (options.contains("algorithm")) {
         params.algorithm = parse_stedc_algorithm(py::cast<std::string>(options["algorithm"]));
-    }
-    if (options.contains("secular_solver")) {
-        params.secular_solver = parse_stedc_secular_solver(py::cast<std::string>(options["secular_solver"]));
     }
     if (options.contains("merge_variant")) {
         params.merge_variant = parse_stedc_merge_variant(py::cast<std::string>(options["merge_variant"]));

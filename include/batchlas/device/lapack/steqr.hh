@@ -4,8 +4,7 @@
 // problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
 // detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
 // lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
-// the forms core does not reproduce bit for bit yet (serial dlanst 'M', LaneVec scal, the
-// two-window reversal, the strict-tie 2x2 shift).
+// the form core does not reproduce bit for bit yet (the two-window reversal).
 // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 
 #include <algorithm>
@@ -15,7 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy, SteqrUpdateScheme
+#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
@@ -29,21 +28,6 @@ template <class R> struct SplitTol {
     R eps2;
     R safmin;
 };
-
-// max(|d(i)|, |e(i)|), dlanst 'M', serial on one item. fmax ignores a NaN entry (steqr's rule).
-template <class D, class E> BATCHLAS_DEVICE_INLINE auto lanst_max(const Thread&, const D& d, const E& e) {
-    using R = elem_t<D>;
-    static_assert(!Arith<R>::is_complex, "steqr_detail::lanst_max: d and e are real");
-    const int n = d.size();
-    R acc = sycl::fabs(d(n - 1));
-    for (int i = 0; i < n - 1; ++i) acc = sycl::fmax(acc, sycl::fmax(sycl::fabs(d(i)), sycl::fabs(e(i))));
-    return acc;
-}
-
-// x := a x on the window [x.lo, x.hi) only.
-template <class Ex, class T> BATCHLAS_DEVICE_INLINE void scal_lane(const Ex& ex, const T& a, const LaneVec<T>& x) {
-    if (x.owns(ex)) x.v *= a;
-}
 
 // e(j) := 0 for each negligible j < e.size(), serial; true when one was (or already was) zero.
 template <class D, class E, class R> BATCHLAS_DEVICE_INLINE bool tridiag_split(const Thread& th, const D& d, const E& e, SplitTol<R> tol) {
@@ -128,39 +112,26 @@ BATCHLAS_DEVICE_INLINE T tridiag_rot(const Thread&, const D& d, const E& e, cons
     return -ej * s;
 }
 
-// ssfmin / ssfmax / eps2 and block_scale: scalar.hh.
+// ssfmin / ssfmax / eps2, block_scale and eig2x2_nearest: scalar.hh.
 
-// The eigenvalue of [[a, b], [b, c]] closest to c, a tie going to the second root (the CTA
-// Wilkinson strategy; core eig2x2_nearest ties to the first). Plain inline, as the form it replaced.
-template <class R> inline R eig2x2_closest(const R& a, const R& b, const R& c) {
-    const auto [l1, l2] = lae2(a, b, c);
-    return std::abs(l1 - c) < std::abs(l2 - c) ? l1 : l2;
-}
-
-// ---- the work-group solver's sweep (host steqr_wg and steqr<J, tier::Blocked<1>>) ---------------
-// Core lae2 / laev2 with the operands bound by reference: by value costs the wg Francis kernel 3
-// LDG and 4 REG on sm_89 (src/math-helpers.hh keeps the same binding).
-template <class R> BATCHLAS_DEVICE_INLINE auto lae2_cref(const R& a, const R& b, const R& c) { return lae2(a, b, c); }
-template <class R> BATCHLAS_DEVICE_INLINE auto laev2_cref(const R& a, const R& b, const R& c) { return laev2(a, b, c); }
-
+// ---- the work-group solver's sweep (host steqr_wg / steqr_legacy, steqr<J, tier::Blocked<1>>) ----
 // {c, -s} of lartg(a, b): the work-group chase's rotation convention.
-template <class R> inline std::array<R, 2> wg_givens(const R& a, const R& b) {
-    const auto [c_l, s_l, r] = lartg(a, b);
-    (void)r;
-    return std::array<R, 2>{c_l, -s_l};
+template <class R> inline Givens<R> wg_givens(const R& a, const R& b) {
+    const auto g = lartg(a, b);
+    return {g.c, -g.s};
 }
 
 // An unreduced 2 x 2 block (n_local == 2) in closed form, e(0) := 0. With vectors, rot(g) takes
 // the rotation {c, -s} of laev2's eigenvector (applied as rotation 0, forward order).
 template <class R, class D, class E, class Rot> BATCHLAS_DEVICE_INLINE void wg_solve_2x2(const D& d_, const E& e_, bool vecs, Rot&& rot) {
     if (vecs) {
-        auto [rt1, rt2, c, s] = laev2_cref(d_(0), e_(0), d_(1));
+        auto [rt1, rt2, c, s] = laev2(d_(0), e_(0), d_(1));
         d_(0) = rt1;
         d_(1) = rt2;
         e_(0) = R(0);
         rot(Givens<R>{c, -s});
     } else {
-        auto [rt1, rt2] = lae2_cref(d_(0), e_(0), d_(1));
+        auto [rt1, rt2] = lae2(d_(0), e_(0), d_(1));
         d_(0) = rt1;
         d_(1) = rt2;
         e_(0) = R(0);
@@ -178,7 +149,7 @@ template <class R, class D, class E, class N, class Rot>
 BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool QR, Rot&& rot) {
     const Thread th{};
     const SplitTol<R> tol{eps2<R>(), safmin<R>()};
-    const R anorm = lanst_max(th, d_, e_);
+    const R anorm = lanst<NormType::Max>(th, d_, e_);
     if (anorm > ssfmax<R>()) {
         const R s = ssfmax<R>() / anorm;
         scal(th, s, d_);
@@ -189,16 +160,17 @@ BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool Q
         scal(th, s, e_);
     }
 
-    const auto shift = eig2x2_closest(virt_get<R, 1>(d_, QR, n_local, n_local - 2), virt_get<R, 2>(e_, QR, n_local, n_local - 2),
-                                      virt_get<R, 1>(d_, QR, n_local, n_local - 1));
+    const auto shift = eig2x2_nearest<alg::TieHighest>(virt_get<R, 1>(d_, QR, n_local, n_local - 2),
+                                                       virt_get<R, 2>(e_, QR, n_local, n_local - 2),
+                                                       virt_get<R, 1>(d_, QR, n_local, n_local - 1));
 
-    auto [c0, s0] = wg_givens(virt_get<R, 1>(d_, QR, n_local, 0) - shift, virt_get<R, 2>(e_, QR, n_local, 0));
-    rot(std::size_t{0}, Givens<R>{c0, s0});
-    auto bulge = tridiag_rot(th, d_, e_, R(0), std::size_t{0}, std::size_t{1}, Givens<R>{c0, s0}, QR);
+    const Givens<R> g0 = wg_givens(virt_get<R, 1>(d_, QR, n_local, 0) - shift, virt_get<R, 2>(e_, QR, n_local, 0));
+    rot(std::size_t{0}, g0);
+    auto bulge = tridiag_rot(th, d_, e_, R(0), std::size_t{0}, std::size_t{1}, g0, QR);
     for (std::size_t j = 1; j < n_local - 1; ++j) {
-        auto [cj, sj] = wg_givens(virt_get<R, 2>(e_, QR, n_local, j - 1), bulge);
-        rot(j, Givens<R>{cj, sj});
-        bulge = tridiag_rot(th, d_, e_, bulge, j, j + 1, Givens<R>{cj, sj}, QR);
+        const Givens<R> gj = wg_givens(virt_get<R, 2>(e_, QR, n_local, j - 1), bulge);
+        rot(j, gj);
+        bulge = tridiag_rot(th, d_, e_, bulge, j, j + 1, gj, QR);
     }
 
     const bool deflatable = tridiag_split(th, d_, e_, tol);
@@ -391,10 +363,11 @@ inline void solve_2x2_and_update(Partition partition,
     qcache.apply_if(pred, l0 + 1, l0, cs, sn);
 }
 
-// Pad: the chunks of the lockstep domain share one trip count, and a chunk
-// with `active` false or a shorter chase idles through identity rotations.
-// Idle state is never multiplied by a mask, only discarded by selects, so a
-// failed chunk's NaNs cannot reach d, e or Q. EXP only.
+// One shifted QL sweep on [l, m]. Pad: the chunks of the lockstep domain share one trip count,
+// and a chunk with `active` false or a shorter chase idles through identity rotations. Idle state
+// is never multiplied by a mask, only discarded by selects, so a failed chunk's NaNs cannot reach
+// d, e or Q.
+// evidence: docs/algorithms/steqr.md#steqr-the-cta-ql-step
 template <typename T, size_t P, bool Pad = false, typename Partition, typename QCache>
 inline void implicit_ql_step(const Partition& partition,
                              T& diag,
@@ -404,15 +377,14 @@ inline void implicit_ql_step(const Partition& partition,
                              int32_t l,
                              int32_t m,
                              SteqrShiftStrategy shift_strategy,
-                             SteqrUpdateScheme update_scheme,
                              bool active = true) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
     // An idle chunk's l and m are stale: clamp every shuffle source into the chunk.
     const int32_t ls = Pad ? sycl::clamp(l, int32_t(0), static_cast<int32_t>(P) - 2) : l;
     const int32_t ms = Pad ? sycl::clamp(m, int32_t(0), static_cast<int32_t>(P) - 1) : m;
 
-    // EXP scheme: QL as a QR-style bulge chase in *virtual reversed* indexing inside
-    // [l..m]. The only chase: QR sweeps run it on a mirrored block (reverse_block).
+    // QL as a QR-style bulge chase in *virtual reversed* indexing inside [l..m] (EXP).
+    // The only chase: QR sweeps run it on a mirrored block (reverse_block).
     const auto explicit_ql_step_exp = [&]() {
         // Preload shift inputs.
         T p0  = select_from_group(partition, diag, ls);
@@ -432,10 +404,10 @@ inline void implicit_ql_step(const Partition& partition,
 
         if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
             // For QL, the shift is formed from the leading 2x2 of the physical block (l,l+1).
-            // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
-            mu = eig2x2_closest(dlp1, e0, p0);
+            // eig2x2_nearest picks the eigenvalue nearest its 3rd argument; we want nearest D(l).
+            mu = eig2x2_nearest<alg::TieHighest>(dlp1, e0, p0);
         } else {
-            mu = device::wilkinson_shift(p0, e0, dlp1);
+            mu = device::lapack_shift(p0, e0, dlp1);
         }
 
         const int32_t nrot = Pad ? lockstep_max(partition, active ? m - l : 0) : m - l;
@@ -549,90 +521,7 @@ inline void implicit_ql_step(const Partition& partition,
         if (active) qcache.chase_end(l);
     };
 
-    if (Pad || update_scheme == SteqrUpdateScheme::EXP) {
-        explicit_ql_step_exp();
-        return;
-    }
-
-    // Broadcast values needed for the shift (all lanes participate).
-    const T p0 = select_from_group(partition, diag, l);
-    const T e0 = select_from_group(partition, offdiag, l);
-    const T dlp1 = select_from_group(partition, diag, l + 1);
-    const T dm = select_from_group(partition, diag, m);
-
-    // Partition-uniform scalar state (evaluated redundantly on every lane).
-    T g = T(0);
-    T c = T(1);
-    T s = T(1);
-    T p = T(0);
-
-    {
-        T mu = T(0);
-        if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
-            // Want eigenvalue closest to D(l); wilkinson_shift picks closest to its third arg.
-            mu = eig2x2_closest(dlp1, e0, p0);
-        } else {
-            // LAPACK-style stable implicit shift.
-            mu = device::wilkinson_shift(p0, e0, dlp1);
-        }
-        g = dm - mu;
-    }
-
-    qcache.chase_begin(m);
-
-    for (int32_t i = m; i-- > l;) {
-        // Broadcast the tridiagonal entries needed for this step.
-        const T ei = select_from_group(partition, offdiag, i);
-        const T di = select_from_group(partition, diag, i);
-        const T dip1 = select_from_group(partition, diag, i + 1);
-
-        // Whether E(i+1) should be updated is a pure function of (i, m, n).
-        const bool do_e_upd = (i != (m - 1)) && ((i + 1) < (n - 1));
-
-        const auto [c1b, s1b, d_ip1_new_b, r1_out_b] = [&]() {
-            // {c1, s1, d_ip1_new, r1_out}
-            const T f = s * ei;
-            T rout = T(0);
-
-            const auto [c1, s1, r1] = device::lartg<device::alg::LartgFast>(g, f);
-
-            // In the original local-memory version: E(i+1) = r1 for i != m-1, when i+1 < N-1.
-            if (do_e_upd) {
-                rout = r1;
-            }
-
-            const T g2 = dip1 - p;
-            const T r2 = (di - g2) * s1 + T(2) * c1 * (c * ei);
-            p = s1 * r2;
-
-            const T d_ip1_new = g2 + p;
-            g = c1 * r2 - (c * ei);
-            c = c1;
-            s = s1;
-
-            return std::array{c1, s1, d_ip1_new, rout};
-        }();
-
-        // Apply D/E updates directly to registers (predicated, not branched).
-        const bool owns_ip1 = (lane == (i + 1));
-        diag = owns_ip1 ? d_ip1_new_b : diag;
-        offdiag = (owns_ip1 && do_e_upd) ? r1_out_b : offdiag;
-
-        // QL uses reversed-column convention; keep the same sign as before: apply(i+1,i,c,-s).
-        qcache.template chase_step<-1>(c1b, -s1b);
-    }
-
-    qcache.chase_end(l);
-
-    // Final updates: D(l) = D(l) - p, and E(l) = g.
-    const T d_l_new_b = p0 - p;
-    const T e_l_new_b = g;
-    if (lane == l) {
-        diag = d_l_new_b;
-        if (l < (n - 1)) {
-            offdiag = e_l_new_b;
-        }
-    }
+    explicit_ql_step_exp();
 }
 
 // One problem's STEQR outer loop: split at zero offdiagonals, then shifted QL sweeps
@@ -645,8 +534,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                                    QCache& qcache,
                                    int32_t n,
                                    int32_t max_sweeps,
-                                   SteqrShiftStrategy cta_shift_strategy,
-                                   SteqrUpdateScheme cta_update_scheme) {
+                                   SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -678,17 +566,12 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
         const auto blk_e = device::lane_vec(offdiag, block_begin, block_end);
         const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
 
-        T scale = T(1);
-        if (anorm > ssfmax<T>()) {
-            scale = ssfmax<T>() / anorm;
-        } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-            scale = ssfmin<T>() / anorm;
-        }
-        const T inv_scale = T(1) / scale;
+        const auto bs = detail::block_scale(anorm);
+        const T scale = bs.s, inv_scale = bs.inv;
 
         if (scale != T(1)) {
-            detail::scal_lane(ex, scale, blk_d);
-            detail::scal_lane(ex, scale, blk_e);
+            scal<arith::Native>(ex, scale, blk_d);
+            scal<arith::Native>(ex, scale, blk_e);
         }
 
         // QL if |D(l)| <= |D(lend)|, QR otherwise (as dsteqr: the graded small end
@@ -733,7 +616,7 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
                 }
                 sweep_budget -= 1;
 
-                implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, cta_update_scheme);
+                implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
             }
 
             if (!advanced) {
@@ -745,8 +628,8 @@ inline bool steqr_cta_solve_nested(const Partition& partition,
 
         // Rescale converged block back to the original magnitude.
         if (scale != T(1)) {
-            detail::scal_lane(ex, inv_scale, blk_d);
-            detail::scal_lane(ex, inv_scale, blk_e);
+            scal<arith::Native>(ex, inv_scale, blk_d);
+            scal<arith::Native>(ex, inv_scale, blk_e);
         }
 
         if (failed) break;
@@ -767,8 +650,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                                  QCache& qcache,
                                  int32_t n,
                                  int32_t max_sweeps,
-                                 SteqrShiftStrategy cta_shift_strategy,
-                                 SteqrUpdateScheme cta_update_scheme) {
+                                 SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const auto is_zero = [](T x) { return x == T(0); };
@@ -812,16 +694,12 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
                 const auto blk_d = device::lane_vec(diag, bb, be + 1);
                 const auto blk_e = device::lane_vec(offdiag, bb, be);
                 const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
-                scale = T(1);
-                if (anorm > ssfmax<T>()) {
-                    scale = ssfmax<T>() / anorm;
-                } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-                    scale = ssfmin<T>() / anorm;
-                }
-                inv_scale = T(1) / scale;
+                const auto bs = detail::block_scale(anorm);
+                scale = bs.s;
+                inv_scale = bs.inv;
                 if (scale != T(1)) {
-                    detail::scal_lane(ex, scale, blk_d);
-                    detail::scal_lane(ex, scale, blk_e);
+                    scal<arith::Native>(ex, scale, blk_d);
+                    scal<arith::Native>(ex, scale, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -864,8 +742,8 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
             if (closing) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
                 if (scale != T(1)) {
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = true;
                 if (failed || next_block_begin >= n) {
@@ -876,8 +754,7 @@ inline bool steqr_cta_solve_flat(const Partition& partition,
         }
         if (done) break;
 
-        implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m,
-                               cta_shift_strategy, cta_update_scheme);
+        implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy);
         sweep_budget -= 1;
         sweeps_at_l += 1;
     }
@@ -894,8 +771,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                                      QCache& qcache,
                                      int32_t n,
                                      int32_t max_sweeps,
-                                     SteqrShiftStrategy cta_shift_strategy,
-                                     SteqrUpdateScheme cta_update_scheme) {
+                                     SteqrShiftStrategy cta_shift_strategy) {
     const auto ex = device::wrap(partition);
     const auto tol = steqr_split_tol<T>();
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -932,15 +808,10 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
                 const auto blk_d = device::lane_vec(diag, bb, opened ? be + 1 : bb);  // empty unless opened
                 const auto blk_e = device::lane_vec(offdiag, bb, opened ? be : bb);
                 const T anorm = device::lanst<NormType::Max>(ex, blk_d, blk_e);
-                T sc = T(1);
-                if (anorm > ssfmax<T>()) {
-                    sc = ssfmax<T>() / anorm;
-                } else if (anorm < ssfmin<T>() && anorm != T(0)) {
-                    sc = ssfmin<T>() / anorm;
-                }
+                const T sc = detail::block_scale(anorm).s;
                 if (opened && sc != T(1)) {
-                    detail::scal_lane(ex, sc, blk_d);
-                    detail::scal_lane(ex, sc, blk_e);
+                    scal<arith::Native>(ex, sc, blk_d);
+                    scal<arith::Native>(ex, sc, blk_e);
                 }
 
                 const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
@@ -994,8 +865,8 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
             if (lockstep_any(partition, closing)) {
                 reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
                 if (closing && scale != T(1)) {
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
-                    detail::scal_lane(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(diag, block_begin, block_end + 1));
+                    scal<arith::Native>(ex, inv_scale, device::lane_vec(offdiag, block_begin, block_end));
                 }
                 need_block = need_block || closing;
                 done = done || (closing && (failed || next_block_begin >= n));
@@ -1004,8 +875,7 @@ inline bool steqr_cta_solve_lockstep(const Partition& partition,
 
         // ---- Every chunk with a pending sweep chases in the same pass. ----
         if (lockstep_any(partition, ready)) {
-            implicit_ql_step<T, P, true>(partition, diag, offdiag, qcache, n, l, m,
-                                         cta_shift_strategy, cta_update_scheme, ready);
+            implicit_ql_step<T, P, true>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, ready);
         }
         sweep_budget -= ready ? 1 : 0;
         sweeps_at_l += ready ? 1 : 0;
@@ -1026,9 +896,8 @@ inline constexpr bool kSteqrCtaFlatPays = (P == 16) || (P == 8 && std::is_same_v
 //
 // A full-sub-group (emulated) partition promises every lane of the sub-group runs
 // this. P == 32 runs the nested loops maskless; smaller chunks on NVPTX take the
-// chunk-masked partition (every maskless form measured slower there); elsewhere EXP
-// takes the lockstep solver, while PG's nested loops are legal only while the chunks
-// happen not to diverge. Judge changes here by real-kernel A/B, not microbenchmarks.
+// chunk-masked partition (every maskless form measured slower there); elsewhere the
+// lockstep solver. Judge changes here by real-kernel A/B, not microbenchmarks.
 // evidence: docs/perf/steqr.md#full-warp-partition
 template <typename T, size_t P, typename Partition, typename QCache>
 inline bool steqr_cta_solve(const Partition& partition,
@@ -1037,23 +906,18 @@ inline bool steqr_cta_solve(const Partition& partition,
                             QCache& qcache,
                             int32_t n,
                             int32_t max_sweeps,
-                            SteqrShiftStrategy cta_shift_strategy,
-                            SteqrUpdateScheme cta_update_scheme) {
+                            SteqrShiftStrategy cta_shift_strategy) {
     if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
         if constexpr (batchlas::sgp::kMaskedByDefault) {
             const auto chunk = make_partition<P, true>(partition.sg);
-            return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps,
-                                         cta_shift_strategy, cta_update_scheme);
-        } else if (cta_update_scheme == SteqrUpdateScheme::EXP) {
-            return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                                  cta_shift_strategy, cta_update_scheme);
+            return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
+        } else {
+            return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
         }
     } else if constexpr (kSteqrCtaFlatPays<T, P>) {
-        return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                          cta_shift_strategy, cta_update_scheme);
+        return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
     }
-    return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                        cta_shift_strategy, cta_update_scheme);
+    return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, cta_shift_strategy);
 }
 
 // No report between the solve and the stores (the device op returns the flag instead).
@@ -1067,7 +931,7 @@ struct NoReport {
 template <typename T, size_t P, bool ComputeVecs, typename Partition, typename D, typename E, typename Z, typename QCache,
           typename Report = NoReport>
 BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, Z z, QCache& qcache, int32_t n,
-                                       int32_t max_sweeps, SteqrShiftStrategy shift, SteqrUpdateScheme update, bool live,
+                                       int32_t max_sweeps, SteqrShiftStrategy shift, bool live,
                                        Report report = {}) {
     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
     if constexpr (ComputeVecs) {
@@ -1075,7 +939,7 @@ BATCHLAS_DEVICE_INLINE bool steqr_cta_run(const Partition& partition, D d, E e, 
     }
     T diag = (live && lane < n) ? d(lane) : T(0);
     T offdiag = (live && lane < (n - 1)) ? e(lane) : T(0);
-    const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, shift, update);
+    const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n, max_sweeps, shift);
     report(failed);
     if (live && lane < n) d(lane) = diag;
     if (live && lane < (n - 1)) e(lane) = offdiag;
@@ -1217,11 +1081,10 @@ template <JobType J> struct steqr {
 }  // namespace routine
 
 // The run-time knobs of the solve (the host SteqrParams fields of the same meaning). The Blocked
-// tier reads max_sweeps only (steqr_wg's shift and update, as the host route).
+// tier reads max_sweeps only (steqr_wg's shift, as the host route).
 struct steqr_opts {
     int max_sweeps = 50;
     SteqrShiftStrategy shift = SteqrShiftStrategy::Lapack;
-    SteqrUpdateScheme update = SteqrUpdateScheme::EXP;
 };
 
 template <JobType J, int N, class Alg, class T> struct tier_info<routine::steqr<J>, tier::Cta<N, Alg>, T> {
@@ -1288,7 +1151,7 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
         const detail::steqr_cta_plan<kVecs, N, T> plan{};
         detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
         const bool failed = detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
-                                                                     opts.shift, opts.update, true);
+                                                                     opts.shift, true);
         return failed ? 1 : 0;
     }
 }

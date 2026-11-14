@@ -6,7 +6,7 @@
 // global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
 // replaced kernels' expression shapes. detail holds the CTA body (sytrd_cta_run, the host
 // sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
-// and the forms core does not reproduce bit for bit yet: Fit dotc / gemv / her2, lacpy_herm.
+// and the forms core does not reproduce bit for bit yet: Fit gemv / her2, lacpy_herm.
 
 #include <algorithm>
 #include <cstddef>
@@ -28,15 +28,6 @@ template <class Ops, class T> BATCHLAS_DEVICE_INLINE T her2_term(const T& x1, co
     using Ar = arith_t<Ops, T>;
     if constexpr (Ar::is_complex) return Ar::add(Ar::mul(x1, Ar::conj(y1)), Ar::mul(x2, Ar::conj(y2)));
     else return x1 * y1 + x2 * y2;
-}
-
-// x^H y, one product per item (no accumulator), then the chunk reduction.
-template <class Ops, class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE auto dotc(const Fit<Ex>& ex, const X& x, const Y& y) {
-    using T = elem_t<X>;
-    using Ar = arith_t<Ops, T>;
-    const int i = ex.lid();
-    const T p = (i >= 0 && i < x.size()) ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
-    return detail::scope_reduce<Scope::Own>(ex, p);
 }
 
 // y(r) := (A x)(r) * alpha with item r computing output row r (core gemv's RowOwner without
@@ -85,7 +76,7 @@ BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT&
             if (UL == Uplo::Upper ? r > c : r < c) continue;
             T v = a(r, c);
             if (r == c) {
-                if constexpr (Ar::is_complex) v = T(Ar::re(v), real_t<T>(0));
+                if constexpr (Ar::is_complex) v = Ar::make(Ar::re(v), real_t<T>(0));
             } else {
                 tile(c, r) = Ar::conj(v);
             }
@@ -95,15 +86,6 @@ BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT&
     } else {
         for (int c = 0; c < tile.cols(); ++c) tile(r, c) = Ar::zero();
     }
-}
-
-// B := A (m x n), item r copying row r (core lacpy owns elements 2-D; this is the row-owner
-// form the hand kernels wrote, one guarded row per item).
-template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void lacpy_rows(const Fit<Ex>& ex, const MA& a, const MB& b) {
-    const int n = a.cols();
-    for_each_owned(ex, a.rows(), [&](int r) {
-        for (int c = 0; c < n; ++c) b(r, c) = a(r, c);
-    });
 }
 
 // One sytd2 step on the active block blk: [alpha; x] = col one element per item (alpha on item
@@ -145,7 +127,7 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
         sync<Scope::Own>(ex);
         detail::gemv_rows<Ops>(fx, taui, blk, assume_published(vm), wm);
         sync<Scope::Own>(ex);
-        const T alpha2 = T(-0.5) * taui * detail::dotc<Ops>(fx, vm, wm);
+        const T alpha2 = T(-0.5) * taui * dotc<Scope::Own, Ops>(fx, vm, wm);
         axpy<Ops>(fx, Scalar<T>{alpha2}, vm, wm);
         sync<Scope::Own>(ex);
         detail::her2_full_sub<Ops>(fx, assume_published(vm), assume_published(wm), blk);
@@ -264,8 +246,8 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
 
     group_barrier(part);
 
-    // Write back A, one row per lane (core lacpy owns elements 2-D Cyclic, not rows).
-    if (live) lacpy_rows(Fit{ex}, tile.sub(0, 0, n, n), A);
+    // Write back A, one row per lane.
+    if (live) lacpy<Part::Full, Transpose::NoTrans, alg::RowOwner>(Fit{ex}, tile.sub(0, 0, n, n), A);
 }
 
 // The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.
@@ -278,6 +260,37 @@ template <int N, class T> struct sytrd_cta_plan {
 };
 
 // ---- xLATRD, Lower: one work-group, A in global memory ------------------------------------------
+// xLATRD's column update of panel column i: A(r, i) -= V(r, :i) W(i, :i)^H + W(r, :i) V(i, :i)^H,
+// each term subtracted from the running value (not a gemv: beta = 1 sums first), for A(i, i) on
+// the item with `diag` and rows r in [r0, r1) as lid, lid + stride, ... V is the unit-head panel
+// in Ab; vip / wip hold V(i, :i) and W(i, :i). The one body of latrd_lower_run and of the host
+// grid kernel (whose work-groups split the rows).
+template <class AB, class WB, class Loc>
+BATCHLAS_DEVICE_INLINE void latrd_col_update_run(const AB& Ab, const WB& Wb, const Loc& vip_local, const Loc& wip_local, int i, bool diag,
+                                              int r0, int r1, int lid, int stride) {
+    using T = std::remove_cvref_t<decltype(Ab(0, 0))>;
+    if (diag) {
+        T aii = Ab(i, i);
+        for (int p = 0; p < i; ++p) {
+            const T vip = vip_local[p];
+            const T wip = wip_local[p];
+            aii -= vip * ::batchlas::device::conj(wip) + wip * ::batchlas::device::conj(vip);
+        }
+        Ab(i, i) = aii;
+    }
+    for (int r = r0 + lid; r < r1; r += stride) {
+        T val = Ab(r, i);
+        for (int p = 0; p < i; ++p) {
+            const T wip = wip_local[p];
+            const T vip = vip_local[p];
+            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? T(Ab(r, p)) : T(0));
+            const T wrp = Wb(r, p);
+            val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
+        }
+        Ab(r, i) = val;
+    }
+}
+
 // The lower panel's one body (the host LatrdLowerPanelKernelLegacy's too): reduces columns 0 ..
 // ib-1 of the n x n matrix Ab (lower triangle read; ib <= n - 1) and forms W (n x ib), as xLATRD
 // UPLO = 'L'. Reflector i leaves in Ab(i+2:, i) with its unit Ab(i+1, i) := 1 (the trailing update
@@ -307,28 +320,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         }
         ex.barrier(Mem::Local);
 
-        // A(i:, i) -= V(i:, :i) W(i, :i)^H + W(i:, :i) V(i, :i)^H, each term subtracted from the
-        // running value (not a gemv: beta = 1 sums first).
-        if (lid == 0) {
-            T aii = Ab(i, i);
-            for (int p = 0; p < i; ++p) {
-                const T vip = vip_local[p];
-                const T wip = wip_local[p];
-                aii -= vip * ::batchlas::device::conj(wip) + wip * ::batchlas::device::conj(vip);
-            }
-            Ab(i, i) = aii;
-        }
-        for (int r = i + 1 + lid; r < n; r += WG) {
-            T val = Ab(r, i);
-            for (int p = 0; p < i; ++p) {
-                const T wip = wip_local[p];
-                const T vip = vip_local[p];
-                const T vrp = unit_head(A.col(p), p + 1)(r);
-                const T wrp = Wb(r, p);
-                val -= vrp * ::batchlas::device::conj(wip) + wrp * ::batchlas::device::conj(vip);
-            }
-            Ab(r, i) = val;
-        }
+        latrd_col_update_run(Ab, Wb, vip_local, wip_local, i, lid == 0, i + 1, n, lid, WG);
         ex.barrier(Mem::Global);
 
         // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.
@@ -350,38 +342,14 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         alpha = ::batchlas::portable::group_broadcast(g, alpha);
 
         T tau_i = T(0);
-        T beta = alpha;
         T scale = T(0);
 
         if (lid == 0) {
-            const Real xnorm = sycl::sqrt(sumsq);
-            if constexpr (Arith<T>::is_complex) {
-                if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                    tau_i = T(0);
-                    beta = alpha;
-                    scale = T(0);
-                } else {
-                    const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                    const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                    const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                    beta = -alpha_sign * T(beta_abs);
-                    tau_i = (beta - alpha) / beta;
-                    scale = T(1) / (alpha - beta);
-                }
-            } else {
-                if (xnorm == Real(0)) {
-                    tau_i = T(0);
-                    beta = alpha;
-                    scale = T(0);
-                } else {
-                    // -sign(alpha) by its sign bit (never 0), as the hand kernel's sign_nonzero.
-                    beta = -T(sycl::signbit(static_cast<Real>(alpha)) ? Real(-1) : Real(1)) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                    tau_i = (beta - alpha) / beta;
-                    scale = T(1) / (alpha - beta);
-                }
-            }
-
-            on_reflector(i, beta, tau_i);
+            // xLARFG scalars, alg::PhaseN1: a complex alpha reflects at the last column too.
+            const auto h = larfg_scalars<alg::PhaseN1>(alpha, sycl::sqrt(sumsq), x.size() + 1);
+            tau_i = h.tau;
+            scale = h.scale;
+            on_reflector(i, h.beta, tau_i);
             Ab(i + 1, i) = T(1);
         }
 

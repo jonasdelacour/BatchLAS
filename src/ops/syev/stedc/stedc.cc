@@ -12,7 +12,6 @@
 #include <src/math-helpers.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>
-#include <src/ops/syev/stedc/stedc_secular.hh>
 #include <src/ops/syev/stedc/stedc_merge_kernels.hh>
 #include <src/ops/syev/stedc/stedc_levels_plan.hh>
 #include <src/kernels/common/info_span.hh>
@@ -27,9 +26,8 @@ namespace batchlas {
 
 namespace {
 
-// `is_gpu`, not `B != Backend::NETLIB`: why the host path exists (no ROCm-style root
-// routines inside host SYCL kernels) is a property of the DEVICE, not the backend.
-// evidence: docs/perf/stedc.md#stedc-convergence-reporting-through-info
+// `is_gpu`, not `B != Backend::NETLIB`: the CPU device takes the Baseline merge whatever the
+// backend (the GPU tuning tables do not describe it).
 template <Backend B, typename T>
 inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params, bool is_gpu) {
     const int32_t nn = static_cast<int32_t>(n);
@@ -48,10 +46,6 @@ inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params, boo
             params.secular_cta_wg_size_multiplier = tuning::stedc_wg_multiplier_for_n(nn);
         }
     } else {
-        // The host/native CPU backend cannot safely invoke the ROCm-style
-        // secular root routines from inside SYCL kernels. Keep NETLIB on the
-        // legacy merge path even if callers request the newer GPU-oriented variants.
-        params.secular_solver = StedcSecularSolver::Legacy;
         params.merge_variant = StedcMergeVariant::Baseline;
     }
 
@@ -214,9 +208,7 @@ void stedc_merge_step(Queue& ctx,
 
     auto temp_lambdas = stedc_masked(VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size), mask);
     (void)Qp.fill_identity(ctx);
-    if (effective_params.secular_solver == StedcSecularSolver::Legacy) {
-        (void)secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0), info, info_nodes_per_item);
-    } else if (effective_params.merge_variant == StedcMergeVariant::Fused
+    if (effective_params.merge_variant == StedcMergeVariant::Fused
             || effective_params.merge_variant == StedcMergeVariant::FusedCta) {
         // Fused merge paths: single-kernel implementations selected by merge_variant.
         stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, effective_params, info, info_nodes_per_item);
@@ -227,34 +219,27 @@ void stedc_merge_step(Queue& ctx,
         // info_report a no-op.
         int32_t* const info_dev = info;
         const int64_t nodes_per_item = info_nodes_per_item;
+        const int32_t max_iter = static_cast<int32_t>(effective_params.max_sec_iter);
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
                 const device::RtGroup<> ex{item};
-                auto Q_bid = Qview.batch_item(bid);
-                auto n = n_reduced[bid];
-                const auto poles = device::vec(eigenvalues.batch_item(bid));
-                const auto Qn = device::mat(Q_bid);
-                device::for_each_owned_2d<device::alg::DivMod>(ex, n, n, [&](int i, int j) { Qn(i, j) = poles(i); });
-                device::sync<device::Scope::Group>(ex, device::Mem::Global);
+                const int32_t n = n_reduced[bid];
+                const auto poles = device::vec(eigenvalues.batch_item(bid)).head(n);
+                const auto zb = device::vec(v.batch_item(bid)).head(n);
+                const auto Qn = device::mat(Qview.batch_item(bid));
+                const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
+                // One root per item (laed4 on Thread, Q(:, k) its scratch, then the denominators);
+                // info_report is an atomic fetch_max over the items reporting one batch item.
                 device::for_each_owned(ex, n, [&](int k) {
-                    auto dview = Q_bid(Slice{}, k);
-                    // info_report is an atomic fetch_max: exactly the "did ANY root
-                    // fail" reduction, however many threads report the same item.
-                    bool root_converged = true;
-                    if (k == n - 1){
-                        temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), root_converged);
-                    } else {
-                        temp_lambdas(k, bid) = sec_solve_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), k, root_converged);
+                    const auto root = device::laed4(device::Thread{}, poles, zb, n, k, abs_2rho, max_iter, Qn.col(k).head(n));
+                    temp_lambdas(k, bid) = root.origin + root.tau;
+                    if (!root.converged) {
+                        detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
                     }
-                    if (!root_converged) {
-                        detail::info_report(info_dev,
-                                            detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
-                                            1);
-                    }
+                    device::detail::denominators(device::Thread{}, Qn.col(k).head(n), poles, root.origin, root.tau);
                 });
-                device::sync<device::Scope::Group>(ex, device::Mem::Global);
             });
         });
 

@@ -8,7 +8,6 @@
 #include <src/util/template-instantiations.hh>
 
 #include <src/math-helpers.hh>
-#include <src/ops/syev/stedc/stedc_secular.hh>
 #include <src/ops/syev/stedc/stedc_merge_kernels.hh>
 #include <src/kernels/common/info_span.hh>
 
@@ -33,6 +32,7 @@ void stedc_merge_fused(Queue& ctx,
     const auto batch_size = eigenvalues.batch_size();
     const int wg_size = params.merge_threads;
     const bool do_rescale = params.enable_rescale;
+    const int32_t max_iter = static_cast<int32_t>(params.max_sec_iter);
     // Locals of the enclosing scope so the kernel's `[=]` copies a pointer and a
     // scalar; nullptr makes info_report a no-op.
     int32_t* const info_dev = info;
@@ -55,30 +55,18 @@ void stedc_merge_fused(Queue& ctx,
                 const auto Q = device::mat(Q_bid).sub(0, 0, dd, dd);
                 const auto vb = device::vec(v.batch_item(bid));
 
-                // Root solve IN PLACE on column k of Q_bid (poles in every column), so
-                // apply_shift_to_poles updates Q_bid(:, k) directly. Keep it in place: a
-                // private-array copy of the poles broke orthogonality.
-                // evidence: docs/perf/stedc.md#stedc-the-rejected-private-pole-fast-path
-                const auto poles = device::vec(eigenvalues.batch_item(bid));
-                device::for_each_owned_2d<device::alg::DivMod>(ex, dd, dd, [&](int i, int j) { Q(i, j) = poles(i); });
-                device::sync<device::Scope::Group>(ex, device::Mem::Global);
-
+                // One root per item (laed4 on Thread, Q(:, k) its scratch, then the denominators).
+                // Several items may report one batch item: info_report is an atomic fetch_max.
+                const auto poles = device::vec(eigenvalues.batch_item(bid)).head(dd);
+                const auto zb = vb.head(dd);
+                const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
                 device::for_each_owned(ex, dd, [&](int k) {
-                    auto dview = Q_bid(Slice{}, k);
-                    // The flag sec_solve_* has always computed. Several threads of the same
-                    // work-group may report the same item; the report is an atomic
-                    // fetch_max, so that is exactly the "did ANY root fail" reduction wanted.
-                    bool root_converged = true;
-                    if (k == dd - 1) {
-                        temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), root_converged);
-                    } else {
-                        temp_lambdas(k, bid) = sec_solve_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), k, root_converged);
+                    const auto root = device::laed4(device::Thread{}, poles, zb, dd, k, abs_2rho, max_iter, Q.col(k));
+                    temp_lambdas(k, bid) = root.origin + root.tau;
+                    if (!root.converged) {
+                        detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
                     }
-                    if (!root_converged) {
-                        detail::info_report(info_dev,
-                                            detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
-                                            1);
-                    }
+                    device::detail::denominators(device::Thread{}, Q.col(k), poles, root.origin, root.tau);
                 });
                 device::sync<device::Scope::Group>(ex, device::Mem::Global);
 

@@ -357,33 +357,8 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if (gg == 0 && lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::conj(wip) + wip * batchlas::device::conj(vip);
-                        }
-                        Ab(i, i) = aii;
-                    }
-
-                    // ---- column update over this group's rows -----------------
-                    for (int r = rlo + lid; r < rhi; r += wg) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-                            const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::conj(wip) + wrp * batchlas::device::conj(vip);
-                        }
-                        Ab(r, i) = val;
-                    }
+                    // ---- column update: A(i, i) on group 0, this group's rows ----
+                    device::detail::latrd_col_update_run(Ab, Wb, vip_local, wip_local, i, gg == 0 && lid == 0, rlo, rhi, lid, wg);
 
                     // Write mapping [rlo+lid, rhi), read mapping [slo+lid, rhi): for gg == 0
                     // slo == rlo + 1, so item lid reads the row item lid+1 just wrote. Masked
@@ -411,36 +386,11 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     // it with 1 (which happens after barrier 2).
                     const T alpha = (i + 1 < n) ? Ab(i + 1, i) : T(0);
 
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-                    {
-                        const Real xnorm = sycl::sqrt(sumsq_total);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-                    }
+                    // xLARFG scalars, alg::PhaseN1 (a complex alpha reflects at the last column too).
+                    const auto h = device::larfg_scalars<device::alg::PhaseN1>(alpha, sycl::sqrt(sumsq_total), n - i - 1);
+                    const T tau_i = h.tau;
+                    const T beta = h.beta;
+                    const T scale = h.scale;
 
                     if (tau_i != T(0)) {
                         for (int r = slo + lid; r < rhi; r += wg) {

@@ -6,10 +6,10 @@
 //   lartg                    plane rotation [c s; -conj(s) c] [f; g] = [r; 0] (LAPACK 3.10)
 //   lae2 / laev2             eigenvalues (and eigenvector) of [[a, b], [b, c]]
 //   las2                     singular values of [[f, g], [0, h]]
-//   wilkinson_shift          dsteqr's shift from the leading 2x2 of a tridiagonal window
+//   lapack_shift             dsteqr's shift (SteqrShiftStrategy::Lapack) from the leading 2x2 of a tridiagonal window
 //   eig2x2_nearest<Tie>      the eigenvalue of [[a, b], [b, c]] nearer to c
 //   block_scale<Unscale>     dsteqr's dlascl decision for a block of norm anorm
-//   larfg_scalars<Conv>      the reflector scalars of xLARFG under three conventions
+//   larfg_scalars<Conv>      the reflector scalars of xLARFG under four conventions
 //   Givens<R, S>             a rotation (c real, s real or complex)
 //   inv_sqrt<Edge>           1 / sqrt(a): rsqrt.approx + one Newton step on NVPTX float
 
@@ -174,7 +174,7 @@ template <class R> BATCHLAS_DEVICE_INLINE R lae2_rt(R adf, R ab) {
 }  // namespace detail
 
 // SLAE2/DLAE2: {rt1, rt2} of [[a, b], [b, c]], |rt1| >= |rt2|.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> lae2(R a, R b, R c) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> lae2(const R& a, const R& b, const R& c) {
     const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
     const R acmx = amax ? a : c, acmn = amax ? c : a;
@@ -191,7 +191,7 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> lae2(R a, R b, R c) {
 }
 
 // SLAEV2/DLAEV2: {rt1, rt2, cs1, sn1}; (cs1, sn1) is the unit eigenvector of rt1.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(R a, R b, R c) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(const R& a, const R& b, const R& c) {
     const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
     const R acmx = amax ? a : c, acmn = amax ? c : a;
@@ -235,7 +235,7 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(R a, R b, R c) 
 }
 
 // SLAS2/DLAS2: {ssmin, ssmax} of the upper triangular [[f, g], [0, h]], nothing squared.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> las2(R f, R g, R h) {
+template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> las2(const R& f, const R& g, const R& h) {
     const R fa = sycl::fabs(f), ga = sycl::fabs(g), ha = sycl::fabs(h);
     const R fhmn = fa < ha ? fa : ha, fhmx = fa < ha ? ha : fa;
     if (fhmn == R(0)) {
@@ -258,7 +258,7 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> las2(R f, R g, R h) {
 // dsteqr's Wilkinson shift for the window starting at l: the eigenvalue of
 // [[d(l), e(l)], [e(l), d(l+1)]] nearest d(l): g = (d(l+1) - d(l)) / (2 e(l)),
 // d(l) - e(l) / (g + sign(hypot(g, 1), g)). e(l) != 0.
-template <class R> BATCHLAS_DEVICE_INLINE R wilkinson_shift(R dl, R el, R dl1) {
+template <class R> BATCHLAS_DEVICE_INLINE R lapack_shift(R dl, R el, R dl1) {
     const R g = (dl1 - dl) / (R(2) * el);
     const R r = sycl::hypot(g, R(1));
     return dl - el / (g + sycl::copysign(r, g));
@@ -274,11 +274,14 @@ template <class R> BATCHLAS_DEVICE_INLINE R wilkinson_shift(R dl, R el, R dl1) {
 //   alg::Phase     from (alpha, ||x||, len): beta = -sgn(alpha) ||[alpha; x]|| keeps alpha's
 //                   phase (complex beta, real tau); len <= 1, or a real alpha over x == 0 ->
 //                   identity (src detail::larfg).
+//   alg::PhaseN1   alg::Phase without the len <= 1 identity: a complex alpha reflects at len 1
+//                   too, as ZLARFG N = 1 (the xLATRD panels). Real T: identical to Phase.
 //   alg::RealBeta  from (alpha, ||x||, len): LAPACK ZLARFG's beta real / tau complex; a complex
 //                   alpha reflects even at len == 1. Real T: identical to Phase.
 namespace alg {
 struct LarfgLapack {};
 struct Phase {};
+struct PhaseN1 {};
 struct RealBeta {};
 }  // namespace alg
 
@@ -341,6 +344,11 @@ template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alp
     out.scale = T(1) / (alpha - out.beta);
     out.identity = false;
     return out;
+}
+template <class Conv, class T>
+    requires std::is_same_v<Conv, alg::PhaseN1>
+inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int) {
+    return larfg_scalars<alg::Phase>(alpha, xnorm, 2);  // len >= 2: no len <= 1 identity
 }
 
 // ---- scalar LAPACK (design A.2 scalar.hh) ---------------------------------------------------

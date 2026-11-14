@@ -156,7 +156,7 @@ template <class T, bool Pair = false> struct RtOpMat {
 };
 
 // Column-major C (int64 ld): C(r, c) at p + (c * ld + r), an element reference that reads and
-// writes through PairAccess, so core store() can take it as its y.
+// writes through PairAccess, so core store_epi() can take it as its y.
 template <class T, bool Pair = false> struct ColMat64 {
     using value_type = std::remove_cv_t<T>;
     struct Ref {
@@ -197,7 +197,7 @@ BATCHLAS_DEVICE_INLINE void usmm_row(const Thread&, const Row& a, const B& b, in
     }
 }
 
-// C(r, c0 + t) := store<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c0 + t)) for c0 + t < width;
+// C(r, c0 + t) := store_epi<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c0 + t)) for c0 + t < width;
 // a set beta flag never reads C.
 template <class Ops, class T, int NC, class L, class CM>
 BATCHLAS_DEVICE_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC, L>& acc, MaybeZero<T> beta, const CM& C, int r,
@@ -205,7 +205,7 @@ BATCHLAS_DEVICE_INLINE void store_cols(const Thread&, T alpha, const Frag<T, NC,
     BATCHLAS_UNROLL_FULL
     for (int t = 0; t < NC; ++t) {
         const int c = c0 + t;
-        if (c < width) store<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c));
+        if (c < width) store_epi<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c));
     }
 }
 

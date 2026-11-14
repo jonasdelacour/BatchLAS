@@ -46,31 +46,6 @@ template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(P
 
 BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
 
-template <class H> struct HermCol {
-    H h;
-    int j;
-    using value_type = typename H::value_type;
-    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return h(i, j); }
-    BATCHLAS_DEVICE_INLINE int size() const { return h.rows(); }
-};
-
-// The Hermitian (or symmetric) matrix whose uplo triangle M stores (uplo at run time): the
-// diagonal read as real, the other triangle as the conjugate of its mirror, one load.
-template <class M> struct HermView {
-    M a;
-    Uplo uplo;
-    using value_type = typename M::value_type;
-    BATCHLAS_DEVICE_INLINE value_type operator()(int i, int j) const {
-        const bool own = in_triangle(uplo, i, j);  // one load, its address selected
-        const value_type x = a(own ? i : j, own ? j : i);
-        return i == j ? force_real(x) : own ? x : Arith<value_type>::conj(x);
-    }
-    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
-    BATCHLAS_DEVICE_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
-};
-template <class M> BATCHLAS_DEVICE_INLINE HermView<M> herm(M a, Uplo uplo) { return {a, uplo}; }
-
 // A group of `size` items over `tiles` m x m tiles, column by column: item lid owns row lid % m
 // of tile columns lid / m, lid / m + size / m, ...; f(tile, row, col). When m does not divide
 // size, the last items revisit columns another item covers: f must be idempotent.
@@ -241,7 +216,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     sync(ex);
     // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
     Frag<D, NF> col{};
-    if (active) load(col, detail::herm(s, ul).col(j), live);
+    if (active) load(col, herm_view(s, ul).col(j), live);
     sync(ex);
     if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
@@ -256,7 +231,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
         const std::ptrdiff_t itm = first + gi;
         if (row >= kb || dead(itm)) return;
-        const D v = detail::herm(s_of(gi), ul)(row, c);
+        const D v = herm_view(s_of(gi), ul)(row, c);
         full(itm, row, c, v);
         if (detail::in_triangle(ul, row, c)) a_of(itm)(row, c) = v;
     });
@@ -354,19 +329,10 @@ template <class T> BATCHLAS_DEVICE_INLINE l3::Global<T> gsub(const l3::Global<T>
     return {g.p + r0 + c0 * g.ld, g.ld, m, n};
 }
 
-// C := alpha X Y^H + conj(alpha) Y X^H + C (Tr: X^H Y + ...) on C's UL triangle: her2k, or syr2k
-// for a real T (the host route's sym_r2k).
-template <Uplo UL, bool Tr, class Cfg, class Ex, class X, class Y, class C, class AS>
-BATCHLAS_DEVICE_INLINE void r2k(const Ex& ex, const X& x, const Y& y, const C& c, AS alpha, l3::Smem<Cfg> sm) {
-    if constexpr (Arith<typename Cfg::value_type>::is_complex)
-        her2k<UL, Tr ? Transpose::ConjTrans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
-    else syr2k<UL, Tr ? Transpose::Trans : Transpose::NoTrans, Cfg>(ex, x, y, c, alpha, One{}, sm);
-}
-
 // LAPACK's dsygst / zhegst on the UL triangles of one matrix in global memory, the step order of
 // the host blocked route (kernels/sygst_blocked.cc) at nb = NB: per block the ?sygs2 diagonal
 // reduction (sygs2_group, one block, in `lmem`), then trsm (itype 1) or trmm (2, 3), the gemm
-// with the mirrored diagonal block H (LAPACK's hemm) and her2k / syr2k on the panel and trailing
+// with the mirrored diagonal block H (LAPACK's hemm) and her2k (syr2k for a real T) on the panel and trailing
 // parts. Every L3 op ends on a global barrier; each diagonal step is followed by one.
 template <Itype IT, Uplo UL, int NB, class Ex, class D, class DB>
 BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const l3::Global<DB>& b, D* lmem, D* h, D* w) {
@@ -411,7 +377,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const auto l21 = gsub(b, r, k, m, kb);
                 trsm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
-                r2k<UL, false>(ex, p, l21, a22, NegOne{}, sm);
+                her2k<UL, NT, Cfg>(ex, p, l21, a22, NegOne{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, l21, hm, p, mhalf, One{}, sm);
                 trsm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
             } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
@@ -419,7 +385,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const auto u12 = gsub(b, k, r, kb, m);
                 trsm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f11, p, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
-                r2k<UL, true>(ex, p, u12, a22, NegOne{}, sm);
+                her2k<UL, TH, Cfg>(ex, p, u12, a22, NegOne{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, u12, p, mhalf, One{}, sm);
                 trsm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f22, p, One{}, sm);
             }
@@ -436,7 +402,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const l3::Global<D> wm{w, NB, kb, k};
                 trmm<Side::Right, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
-                r2k<UL, true>(ex, wm, l21, a11, One{}, sm);
+                her2k<UL, TH, Cfg>(ex, wm, l21, a11, One{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, hm, l21, wm, half, One{}, sm);
                 trmm<Side::Left, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
             } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
@@ -445,7 +411,7 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
                 const l3::Global<D> wm{w, n, k, kb};
                 trmm<Side::Left, UL, NT, Diag::NonUnit, Cfg>(ex, f11, p, wm, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
-                r2k<UL, false>(ex, wm, u12, a11, One{}, sm);
+                her2k<UL, NT, Cfg>(ex, wm, u12, a11, One{}, One{}, sm);
                 gemm<NT, NT, Cfg>(ex, u12, hm, wm, half, One{}, sm);
                 trmm<Side::Right, UL, TH, Diag::NonUnit, Cfg>(ex, f22, wm, p, One{}, sm);
             }

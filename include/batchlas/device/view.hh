@@ -127,57 +127,54 @@ template <class M> struct RtOpView {
 template <class M> BATCHLAS_DEVICE_INLINE RtOpView<M> op_view(const M& a, Transpose tr) { return {a, tr}; }
 
 // ---- Hermitian / symmetric full view of one stored triangle -------------------------------
-// herm_view<UL>(a)(i, j) = a(i, j) inside the stored UL triangle, conj(a(j, i)) outside (one
-// load per element; the other triangle is never read). DiagReal = true returns (re(a(i, i)), 0)
-// on the diagonal (LAPACK's assumption for a Hermitian matrix; it masks a poisoned Im(diag)).
-// sym_view is the same without the conj (complex symmetric, and every real matrix).
-template <Uplo UL, bool Conj, bool DiagReal, class M> struct HermView {
-    M a;
-    BATCHLAS_DEVICE_INLINE auto operator()(int i, int j) const {
-        using T = detail::view_elem2_t<M>;
-        using A = Arith<T>;
-        const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
-        const T v = stored ? static_cast<T>(a(i, j)) : static_cast<T>(a(j, i));
-        if constexpr (A::is_complex && DiagReal) {
-            if (i == j) return A::make(A::re(v), typename A::real_t(0));
-        }
-        if constexpr (A::is_complex && Conj) return stored ? v : A::conj(v);
-        else return v;
-    }
-    BATCHLAS_DEVICE_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DEVICE_INLINE int cols() const { return a.cols(); }
-};
-template <Uplo UL, bool DiagReal = false, class M> BATCHLAS_DEVICE_INLINE HermView<UL, true, DiagReal, M> herm_view(const M& a) { return {a}; }
-template <Uplo UL, class M> BATCHLAS_DEVICE_INLINE HermView<UL, false, false, M> sym_view(const M& a) { return {a}; }
-
-// The general Hermitian view (Im(diag) always dropped): herm_view<UL, Storage, Load>.
+// One view, HermView<U, ST, Load, Conj, DiagReal, M>: (i, j) reads the stored triangle's element
+// at (i, j) or its mirror (j, i), conjugated outside the triangle when Conj (complex T),
+// (re, 0) on the diagonal when DiagReal (LAPACK's assumption for a Hermitian matrix; it masks a
+// poisoned Im(diag)). U: the stored triangle, known at compile time (UploC<UL>) or at run time
+// (Uplo). The spellings:
+//   herm_view<UL, DiagReal = false>(a)       Full, alg::TwoLoads, Conj
+//   sym_view<UL>(a)                          the same without the conj (complex symmetric)
+//   herm_view<UL, Storage, Load>(a)          DiagReal, Conj; Storage::Band takes (ab, n, kd)
+//   herm_view<Load = OneLoad>(a, uplo)       uplo at run time; Full, DiagReal, Conj
 //   Storage::Full        a is the n x n matrix, its UL triangle stored
 //   Storage::Band        a is LAPACK band storage of the UL band (kd + 1 rows, n columns):
 //                        Lower AB(i - j, j) = A(i, j) for 0 <= i - j <= kd, Upper AB(kd + i - j, j);
 //                        outside the band the view reads 0
-//   alg::OneLoad           one load at the selected index; alg::TwoLoads: one load per branch
+//   alg::OneLoad         one load at the selected index; alg::TwoLoads: one load per branch
 //                        (the stored and the mirrored element are separate loads, so a caller's
-//                        guard folds into one CFG: syev's herm_load)
+//                        guard folds into one CFG)
+// .col(j) is column j as a vector.
 enum class Storage { Full, Band };
 namespace alg {
 struct OneLoad {};
 struct TwoLoads {};
 }  // namespace alg
-template <Uplo UL, Storage ST, class Load, class M> struct HermViewOf {
+template <Uplo UL> using UploC = std::integral_constant<Uplo, UL>;
+template <class H> struct HermCol {
+    H h;
+    int j;
+    using value_type = typename H::value_type;
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return h(i, j); }
+    BATCHLAS_DEVICE_INLINE int size() const { return h.rows(); }
+};
+template <class U, Storage ST, class Load, bool Conj, bool DiagReal, class M> struct HermView {
     static_assert(std::is_same_v<Load, alg::OneLoad> || std::is_same_v<Load, alg::TwoLoads>, "herm_view: alg::OneLoad or alg::TwoLoads");
+    using value_type = detail::view_elem2_t<M>;
     M a;
     int n;
     int kd;
-    BATCHLAS_DEVICE_INLINE auto operator()(int i, int j) const {
-        using T = detail::view_elem2_t<M>;
+    U ul;
+    BATCHLAS_DEVICE_INLINE value_type operator()(int i, int j) const {
+        using T = value_type;
         using A = Arith<T>;
-        const bool stored = UL == Uplo::Lower ? i >= j : i <= j;
+        const bool lower = static_cast<Uplo>(ul) == Uplo::Lower;
+        const bool stored = lower ? i >= j : i <= j;
         const int si = stored ? i : j, sj = stored ? j : i;  // the stored element's indices
         T v;
         if constexpr (ST == Storage::Band) {
-            const int d = UL == Uplo::Lower ? si - sj : sj - si;
+            const int d = lower ? si - sj : sj - si;
             if (d > kd) return A::zero();
-            const int br = UL == Uplo::Lower ? d : kd - d;
+            const int br = lower ? d : kd - d;
             v = static_cast<T>(a(br, sj));
         } else {
             static_assert(ST == Storage::Full, "herm_view: Storage::Full or Storage::Band");
@@ -189,22 +186,36 @@ template <Uplo UL, Storage ST, class Load, class M> struct HermViewOf {
             }
         }
         if constexpr (A::is_complex) {
-            if (i == j) return A::make(A::re(v), typename A::real_t(0));
-            return stored ? v : A::conj(v);
-        } else {
-            return v;
+            if constexpr (DiagReal) {
+                if (i == j) return A::make(A::re(v), typename A::real_t(0));
+            }
+            if constexpr (Conj) return stored ? v : A::conj(v);
         }
+        return v;
     }
     BATCHLAS_DEVICE_INLINE int rows() const { return n; }
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
+    BATCHLAS_DEVICE_INLINE HermCol<HermView> col(int j) const { return {*this, j}; }
 };
-template <Uplo UL, Storage ST, class Load = alg::OneLoad, class M> BATCHLAS_DEVICE_INLINE HermViewOf<UL, ST, Load, M> herm_view(const M& a) {
-    static_assert(ST == Storage::Full, "herm_view<UL, Storage::Band>: pass kd and n, herm_view<UL, Storage::Band>(ab, n, kd)");
-    return {a, a.rows(), 0};
+template <Uplo UL, bool DiagReal = false, class M>
+BATCHLAS_DEVICE_INLINE HermView<UploC<UL>, Storage::Full, alg::TwoLoads, true, DiagReal, M> herm_view(const M& a) {
+    return {a, a.rows(), 0, {}};
+}
+template <Uplo UL, class M> BATCHLAS_DEVICE_INLINE HermView<UploC<UL>, Storage::Full, alg::TwoLoads, false, false, M> sym_view(const M& a) {
+    return {a, a.rows(), 0, {}};
 }
 template <Uplo UL, Storage ST, class Load = alg::OneLoad, class M>
-BATCHLAS_DEVICE_INLINE HermViewOf<UL, ST, Load, M> herm_view(const M& ab, int n, int kd) {
-    return {ab, n, kd};
+BATCHLAS_DEVICE_INLINE HermView<UploC<UL>, ST, Load, true, true, M> herm_view(const M& a) {
+    static_assert(ST == Storage::Full, "herm_view<UL, Storage::Band>: pass kd and n, herm_view<UL, Storage::Band>(ab, n, kd)");
+    return {a, a.rows(), 0, {}};
+}
+template <Uplo UL, Storage ST, class Load = alg::OneLoad, class M>
+BATCHLAS_DEVICE_INLINE HermView<UploC<UL>, ST, Load, true, true, M> herm_view(const M& ab, int n, int kd) {
+    return {ab, n, kd, {}};
+}
+template <class Load = alg::OneLoad, class M>
+BATCHLAS_DEVICE_INLINE HermView<Uplo, Storage::Full, Load, true, true, M> herm_view(const M& a, Uplo uplo) {
+    return {a, a.rows(), 0, uplo};
 }
 
 // x(i - k) for 0 <= i - k < x.size(), else 0, over n elements (k = 1: the down-shift that puts
@@ -314,12 +325,12 @@ template <class T, int Bytes> struct Packet {
 };
 
 // ---- generated and remapped vectors ---------------------------------------------------------
-// fn_vec(n, f): element i is f(i) (by value). mapped(x, f): f(x(i)). slice(x, s, n, step):
-// x(s + i * step). gathered(x, p): x(p[i]).
+// fn_vec(n, f): element i is f(i), as f returns it (a reference f returns writes through).
+// mapped(x, f): f(x(i)). slice(x, s, n, step): x(s + i * step). gathered(x, p): x(p[i]).
 template <class F> struct FnVec {
     int n;
     F f;
-    BATCHLAS_DEVICE_INLINE auto operator()(int i) const { return f(i); }
+    BATCHLAS_DEVICE_INLINE decltype(auto) operator()(int i) const { return f(i); }
     BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
 template <class F> BATCHLAS_DEVICE_INLINE FnVec<F> fn_vec(int n, F f) { return {n, f}; }

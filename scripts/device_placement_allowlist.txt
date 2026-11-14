@@ -1,13 +1,7 @@
 # device_placement_tests allowlist: today's A.0 and layout violations (scripts/check_device_placement.py).
 # One `<rule> <file> <name>` per line; work packages delete lines, never add them.
 # Regenerate: python3 scripts/check_device_placement.py --write-allowlist
-duplicate include/batchlas/device/arith.hh store/include/batchlas/device/operand.hh
-duplicate include/batchlas/device/lapack/sb2st.hh fn_vec/include/batchlas/device/view.hh
-duplicate include/batchlas/device/lapack/sytrd.hh dotc/include/batchlas/device/level1.hh
-duplicate include/batchlas/device/level1.hh dotc/include/batchlas/device/lapack/sytrd.hh
 duplicate include/batchlas/device/level3.hh gemm_sub/src/ops/potri/potri_v2.hh
-duplicate include/batchlas/device/operand.hh store/include/batchlas/device/arith.hh
-duplicate include/batchlas/device/view.hh fn_vec/include/batchlas/device/lapack/sb2st.hh
 duplicate src/ops/potri/potri_v2.hh gemm_sub/include/batchlas/device/level3.hh
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::abs2_scaled
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::colsum_colperlane
@@ -81,7 +75,6 @@ layout-detail-use src/ops/syev/kernels/syev_blocked.cc device::detail::batched_i
 layout-detail-use src/ops/syev/kernels/syev_blocked.cc device::detail::batched_rc
 layout-detail-use src/ops/syev/kernels/syev_blocked.cc device::detail::dgmm_left_at
 layout-detail-use src/ops/syev/kernels/syev_blocked.cc device::detail::phase_similarity
-layout-detail-use src/ops/syev/kernels/syev_blocked.cc device::detail::sign_similarity
 layout-detail-use src/ops/syev/kernels/syev_cta.cc device::detail::batched_item
 layout-detail-use src/ops/syev/kernels/syev_cta.cc device::detail::batched_rc
 layout-detail-use src/ops/syev/kernels/syev_cta.cc device::detail::dgmm_left_at
@@ -100,21 +93,19 @@ layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::rot_ro
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::rot_round_right
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::round_robin_pair
 layout-detail-use src/ops/syev/kernels/syev_jacobi_cta.cc device::detail::sym_schur2
+layout-detail-use src/ops/syev/stedc/stedc.cc device::detail::denominators
+layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::denominators
 layout-detail-use src/ops/syev/stedc/stedc_merge_kernels.cc device::detail::rescale
-layout-detail-use src/ops/syev/stedc/stedc_secular.cc device::detail::fold
 layout-detail-use src/ops/syev/steqr/steqr_cta.cc device::detail::QSharedCache
-layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::SplitTol
-layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::lanst_max
-layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::tridiag_rot
-layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::tridiag_split
-layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::virt_get
+layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::wg_forward
+layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::wg_solve_2x2
+layout-detail-use src/ops/syev/steqr/steqr_legacy.cc device::detail::wg_sweep
 layout-detail-use src/ops/syev/steqr/steqr_wg.cc device::detail::wg_forward
 layout-detail-use src/ops/syev/steqr/steqr_wg.cc device::detail::wg_solve_2x2
 layout-detail-use src/ops/syev/steqr/steqr_wg.cc device::detail::wg_sweep
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st.cc device::detail::extract_narrow
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st.cc device::detail::finalize_tridiag
-layout-detail-use src/ops/syev/sytrd/sytrd_sb2st.cc device::detail::fn_vec
-layout-detail-use src/ops/syev/sytrd/sytrd_sb2st.cc device::detail::rot_by
+layout-detail-use src/ops/syev/sytrd/sytrd_sb2st.cc device::detail::lartg_out
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st_cta.cc device::detail::finalize_tridiag
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st_cta.cc device::detail::givens_on
 layout-detail-use src/ops/syev/sytrd/sytrd_sb2st_hh.cc device::detail::HermBandLower
@@ -128,7 +119,6 @@ layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::iterate
 layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::reorthogonalize
 layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::stein_params
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::Pack16
-layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::herm
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::pack16_elems
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::ArgMaxScratch
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::RevMat

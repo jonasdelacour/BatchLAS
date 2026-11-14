@@ -3,7 +3,7 @@
 // Device LA Level 3, register tier (v22 design A.2 level3.hh): one work-item's whole operands in
 // register Tiles (every index a compile-time constant after unrolling). The in-group forms over
 // executors and the tuned gemm components join here in L3a-L3d (design B).
-//   gemm<TA, TB, Shape, Ops>   C := alpha op(A) op(B) + beta C  (epilogue store<Shape, Ops>)
+//   gemm<TA, TB, Shape, Ops>   C := alpha op(A) op(B) + beta C  (epilogue store_epi<Shape, Ops>)
 //   gemm_sub<Ops>              C -= A B (the factorizations' trailing update; Ops::msub)
 //   trsm<Side, UL, TR, DG, Ops>  op(A) X = alpha B (Left) or X op(A) = alpha B (Right), in place
 
@@ -45,7 +45,7 @@ BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>&
             T acc = Ar::zero();
 #pragma unroll
             for (int k = 0; k < K; ++k) Ar::mac(acc, detail::tile_op<TA>(A, i, k), detail::tile_op<TB>(B, k, j));
-            store<Shape, Ops>(alpha, acc, beta, C(i, j));
+            store_epi<Shape, Ops>(alpha, acc, beta, C(i, j));
         }
 }
 
