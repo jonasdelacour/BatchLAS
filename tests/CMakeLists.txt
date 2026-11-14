@@ -1011,7 +1011,7 @@ endif()
 # examples/device/: the device API guide's worked examples (docs/design/device-la.md), each a
 # smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_lapack_* tests.
 if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
-    foreach(_example potrf_any_n)
+    foreach(_example potrf_any_n getrs_any_n syev_any_n gemm_group)
         add_executable(device_example_${_example} "${PROJECT_SOURCE_DIR}/examples/device/${_example}.cc")
         batchlas_configure_binary_target(device_example_${_example})
         batchlas_gpu_test_command(_example_cmd device_example_${_example})

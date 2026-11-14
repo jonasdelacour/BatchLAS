@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Generate the database pages of the documentation site.
 
-Three pages are derived from the tree on every docs build, so they cannot drift:
+Four pages are derived from the tree on every docs build, so they cannot drift:
 
   results_database.md   one row per raw result file in benchmarks/results/:
                         campaign, op, dtype, machine, when it was committed,
@@ -15,6 +15,8 @@ Three pages are derived from the tree on every docs build, so they cannot drift:
                         choice.hh), table keys and tuner grid, and for each
                         tuned/<op>.<device>.txt table its provenance
                         and which family ranks first over which n range.
+  device_api.md         every public batchlas::device function's signature, by
+                        header (device_api_page.py).
 
 Usage:
     python3 docs/tools/gen_db_pages.py --out build/docs/generated
@@ -33,6 +35,8 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, ".github", "ci"))
 import check_evidence_anchors as evidence  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import device_api_page  # noqa: E402
 
 RESULTS = os.path.join("benchmarks", "results")
 DTYPES = ("cdouble", "cfloat", "double", "float")
@@ -358,7 +362,7 @@ def selection_page(root):
 def write(out_dir, root):
     os.makedirs(out_dir, exist_ok=True)
     pages = {"results_database.md": results_page(root), "evidence_index.md": evidence_page(root),
-             "selection_tables.md": selection_page(root)}
+             "selection_tables.md": selection_page(root), "device_api.md": device_api_page.page(root)}
     for name, text in pages.items():
         with open(os.path.join(out_dir, name), "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -412,6 +416,8 @@ def self_test():
             ("selection keys", "Table keys: `n:log:3`, `batch:log`." in sel),
             ("selection table row", "| float | sm_89 | converted 2, deep 1 | 2026-10-04 | `tiny` 2 (n 1..4), `lpanel:8` 1 (n 64..64) |" in sel),
         ]
+        checks.append(("device api scan", device_api_page.self_test()[0]))
+        checks.append(("device api page", "{#design_device_la_api}" in pages["device_api.md"]))
         bad = [name for name, ok in checks if not ok]
         if bad:
             print("gen_db_pages --self-test: FAILED: %s" % ", ".join(bad))

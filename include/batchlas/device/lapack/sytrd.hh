@@ -472,7 +472,7 @@ template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
 ///   tier::Blocked<NB> Uplo::Lower, any n, one matrix in global memory per WorkGroup<256>; A leaves
 ///                     in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of the upper
 ///                     triangle is not referenced. ws.global is this matrix's slice.
-/// ws: buffer_size<routine::sytrd<UL>, Tier, T>(n) for ONE problem (Cta: local tile + v + w;
+/// ws: `buffer_size<routine::sytrd<UL>, Tier, T>(n)` for ONE problem (Cta: local tile + v + w;
 /// Blocked: global W, v, wcol and local vip, wip and the L3 stage). COLLECTIVE over the executor.
 /// Returns 0, or -2 when A is not square with 1 <= n (<= N for Cta). live == false (a dead slot of
 /// a packed launch, same n): A, d, e and tau are neither read nor written (ws is its scratch),

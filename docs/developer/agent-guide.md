@@ -196,6 +196,8 @@ Findings and before/after tables: @ref design_build_performance.
   -> `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
   (`Queue`, `Matrix`/`MatrixView`, mempool, `sg_partition`, `include/batchlas/util`).
   `scripts/affected_tests.py` maps a diff to binaries (callers included; over-selects by design).
+  The in-kernel API's tests have no `device` label: select them with `-R '^device_'`
+  (`device_core_*`, `device_lapack_*` and the `device_example_*` programs of `examples/device/`).
 - **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` is two entries: `X` (quick cases) and
   `X_heavy` (label `heavy`: saturating-batch race guards, table sweeps). Run `X_heavy` before
   claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not. A binary
@@ -326,6 +328,10 @@ ledgers and staleness: @ref design_tuning_data.
 - The workspace arena belongs to the `Queue`: never a per-call `Queue`. Leak long-lived SYCL
   objects held in statics (destruction after the runtime hangs).
 - Pivots are packed 1-based int32 everywhere; `cusolverDnXgetrs` wants int64.
+- In-kernel `batchlas::device` ops follow the conventions C1-C11 of @ref design_device_la (netlib
+  name and argument order, ws then opts then live, `int info`, one `buffer_size<R, Tier, T>`);
+  write a call from its launch frame and the four checked programs in `examples/device/`, and read
+  an exact signature on the generated @ref design_device_la_api page, never from memory.
 - `linalg::qr` is absent on purpose; located-but-unfixed defects: `docs/design/known-defects.md`.
 
 ## 10. Measurement Rules (benchmarks lie silently here)
