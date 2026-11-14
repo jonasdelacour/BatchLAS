@@ -18,7 +18,7 @@ namespace batchlas::device::l3 {
 
 // Element-wise copies on purpose: LLVM folds a trivial global->private->local copy pair into
 // a byte-loop memmove (AdaptiveCpp's emitter needs patch 0005 to compile it at all).
-template <typename T>
+template <class T>
 struct alignas(4 * sizeof(T)) Vec4 {
     T x, y, z, w;
     Vec4() = default;
@@ -35,21 +35,21 @@ struct alignas(4 * sizeof(T)) Vec4 {
 
 #else
 
-template <typename T>
+template <class T>
 using Vec4 = T __attribute__((ext_vector_type(4)));
 
 #endif
 
-template <typename T>
+template <class T>
 inline constexpr bool supports_packet4_v = std::is_same_v<T, float>;
 
-template <typename T, int Width>
+template <class T, int Width>
 inline constexpr bool supports_packet_v = false;
 
-template <typename T>
+template <class T>
 inline constexpr bool supports_packet_v<T, 4> = supports_packet4_v<T>;
 
-template <typename T, int Width>
+template <class T, int Width>
 inline bool supports_aligned_packet_loads(const T* ptr, int ld, int stride) {
     if constexpr (!supports_packet_v<T, Width>) {
         static_cast<void>(ptr);
@@ -62,7 +62,7 @@ inline bool supports_aligned_packet_loads(const T* ptr, int ld, int stride) {
     }
 }
 
-template <typename T, int Width>
+template <class T, int Width>
 inline sycl::vec<T, Width> packet_load_aligned(const T* ptr, int offset) {
     return *reinterpret_cast<const sycl::vec<T, Width>*>(ptr + offset);
 }

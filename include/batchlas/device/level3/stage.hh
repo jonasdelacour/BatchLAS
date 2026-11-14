@@ -20,7 +20,7 @@ namespace batchlas::device::l3 {
 
 // op(X)(row, col) of a column-major X: the conjugate (core conj: std::conj, by reference) only
 // for a complex ConjTrans.
-template <typename T>
+template <class T>
 inline T operand_value(const T* ptr,
                        int ld,
                        int batch_offset,
@@ -35,7 +35,7 @@ inline T operand_value(const T* ptr,
     return conjugate ? device::conj(value) : value;
 }
 
-template <typename T, Transpose Op>
+template <class T, Transpose Op>
 struct OperandAccessor {
     static T load(const T* ptr, int ld, int batch_offset, int row, int col) {
         return operand_value(ptr, ld, batch_offset, row, col, Op);

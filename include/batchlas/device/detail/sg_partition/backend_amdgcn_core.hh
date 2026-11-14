@@ -86,7 +86,7 @@ constexpr int quad_bcast(uint32_t P, uint32_t s) {
 struct Sel16 {
     uint32_t lo, hi;
 };
-template <typename F>
+template <class F>
 constexpr Sel16 sel16(F f) {
     Sel16 s{0, 0};
     for (uint32_t j = 0; j < 8; ++j) s.lo |= (f(j) & 15u) << (4 * j);
@@ -397,7 +397,7 @@ BATCHLAS_AMDGCN_FN void barrier() {
     __builtin_amdgcn_wave_barrier();
 }
 
-template <typename T, typename F>
+template <class T, class F>
 BATCHLAS_AMDGCN_FN T per_word(const T& v, F&& f) {
     static_assert(sizeof(T) % 4 == 0, "reduce moves whole 32-bit words");
     constexpr uint32_t n = sizeof(T) / 4;
@@ -410,12 +410,12 @@ BATCHLAS_AMDGCN_FN T per_word(const T& v, F&& f) {
     return out;
 }
 
-template <int Ctrl, typename T>
+template <int Ctrl, class T>
 BATCHLAS_AMDGCN_FN T dpp_t(const T& v) {
     return per_word(v, [](uint32_t w) { return dpp<Ctrl>(w); });
 }
 
-template <uint32_t Lane, typename T>
+template <uint32_t Lane, class T>
 BATCHLAS_AMDGCN_FN T readlane_t(const T& v) {
     return per_word(v, [](uint32_t w) { return readlane(w, Lane); });
 }
@@ -423,7 +423,7 @@ BATCHLAS_AMDGCN_FN T readlane_t(const T& v) {
 // All-lanes reduction for a commutative, associative Op. A whole-wave chunk
 // combines its row results in SGPRs (bitwise-uniform, no crossbar); a 32-lane
 // chunk of a wave64 swaps rows by ds_swizzle (gfx9) or permlanex16.
-template <uint32_t P, typename T, typename Op>
+template <uint32_t P, class T, class Op>
 BATCHLAS_AMDGCN_FN T reduce(T v, Op op) {
     static_assert(P <= kWave, "partition wider than the wave");
     if constexpr (P >= 2) v = op(v, dpp_t<enc::kReduceCtrl[0]>(v));

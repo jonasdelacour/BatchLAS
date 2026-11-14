@@ -99,7 +99,7 @@ TYPED_TEST(DeviceCoreLevel2Test, GerFlatAndRegisterRow) {
         if (r < m) {  // the register-row form: item r holds row r of B
             batchlas::device::Frag<T, 16> row;
             batchlas::device::load_row(row, batchlas::device::mat(b, m, n, ld), r, n);
-            batchlas::device::ger_row<true>(alpha, x[r], batchlas::device::vec(y, n), row, n);
+            batchlas::device::ger_row<batchlas::Transpose::ConjTrans>(alpha, x[r], batchlas::device::vec(y, n), row, n);
             batchlas::device::store_row(row, batchlas::device::mat(b, m, n, ld), r, n);
         }
     });

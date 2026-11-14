@@ -64,29 +64,29 @@ inline constexpr bool kMaskedByDefault = false;
 #endif
 
 // Any trivially copyable T moves as ceil(sizeof(T)/4) 32-bit words.
-template <typename T>
+template <class T>
 inline constexpr uint32_t kWords = static_cast<uint32_t>((sizeof(T) + 3) / 4);
 
-template <typename T>
+template <class T>
 struct Words {
     uint32_t w[kWords<T>];
 };
 
-template <typename T>
+template <class T>
 inline Words<T> to_words(const T& v) {
     Words<T> out{};
     std::memcpy(out.w, &v, sizeof(T));
     return out;
 }
 
-template <typename T>
+template <class T>
 inline T from_words(const Words<T>& in) {
     T v;
     std::memcpy(&v, in.w, sizeof(T));
     return v;
 }
 
-template <typename T, typename F>
+template <class T, class F>
 inline T map_words(const T& v, F&& f) {
     static_assert(std::is_trivially_copyable_v<T>, "partition collectives need a trivially copyable T");
     if constexpr (sizeof(T) == 4) {
@@ -105,7 +105,7 @@ inline constexpr bool is_pow2_v = P != 0 && (P & (P - 1)) == 0;
 // Runs f(ops), where ops is a backend-like type whose primitives f calls. A
 // backend with a region() hook chooses ops once for the region (NVPTX tests
 // warp convergence once), so a multi-word value or a whole scan pays once.
-template <typename B, typename F>
+template <class B, class F>
 inline decltype(auto) region(F&& f) {
     if constexpr (requires { B::region(f); }) {
         return B::region(f);
@@ -150,7 +150,7 @@ inline SubGroupPartition<P, Masked> make_partition(sycl::sub_group sg) {
     return SubGroupPartition<P, Masked>(sg);
 }
 
-template <typename G>
+template <class G>
 inline constexpr bool is_sub_group_partition_v = false;
 template <size_t P, bool M>
 inline constexpr bool is_sub_group_partition_v<SubGroupPartition<P, M>> = true;
@@ -160,7 +160,7 @@ inline constexpr bool is_sub_group_partition_v<SubGroupPartition<P, M>> = true;
 // ---------------------------------------------------------------------------
 
 // Value of local lane `local_id` of this chunk.
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T select_from_group(SubGroupPartition<P, M> part, T v, uint32_t local_id) {
     using B = typename SubGroupPartition<P, M>::backend;
     return sgp::region<B>([&](auto ops) {
@@ -171,7 +171,7 @@ inline T select_from_group(SubGroupPartition<P, M> part, T v, uint32_t local_id)
 }
 
 // Value of local lane (id ^ mask); mask < P.
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T permute_group_by_xor(SubGroupPartition<P, M> part, T v, uint32_t mask) {
     using B = typename SubGroupPartition<P, M>::backend;
     return sgp::region<B>([&](auto ops) {
@@ -182,7 +182,7 @@ inline T permute_group_by_xor(SubGroupPartition<P, M> part, T v, uint32_t mask) 
 }
 
 // Value of local lane id + delta; unspecified when that leaves the chunk.
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T shift_group_left(SubGroupPartition<P, M> part, T v, uint32_t delta = 1) {
     using B = typename SubGroupPartition<P, M>::backend;
     return sgp::region<B>([&](auto ops) {
@@ -193,7 +193,7 @@ inline T shift_group_left(SubGroupPartition<P, M> part, T v, uint32_t delta = 1)
 }
 
 // Value of local lane id - delta; unspecified when that leaves the chunk.
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T shift_group_right(SubGroupPartition<P, M> part, T v, uint32_t delta = 1) {
     using B = typename SubGroupPartition<P, M>::backend;
     return sgp::region<B>([&](auto ops) {
@@ -203,12 +203,12 @@ inline T shift_group_right(SubGroupPartition<P, M> part, T v, uint32_t delta = 1
     });
 }
 
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T group_broadcast(SubGroupPartition<P, M> part, T v, uint32_t local_id = 0) {
     return select_from_group(part, v, local_id);
 }
 
-template <size_t P, bool M, typename T>
+template <size_t P, bool M, class T>
 inline T sg_leader_broadcast(SubGroupPartition<P, M> part, T v) {
     return select_from_group(part, v, 0u);
 }
@@ -261,7 +261,7 @@ inline bool none_of_group(SubGroupPartition<P, M> part, bool pred) {
 // ...); the result of a reduction is the same on every lane of the chunk.
 // ---------------------------------------------------------------------------
 
-template <size_t P, bool M, typename T, typename Op>
+template <size_t P, bool M, class T, class Op>
 inline T reduce_over_group(SubGroupPartition<P, M> part, T v, Op op) {
     using B = typename SubGroupPartition<P, M>::backend;
     if constexpr (B::template has_native_reduce<T, Op>) {
@@ -274,7 +274,7 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-template <size_t P, bool M, typename T, typename Op>
+template <size_t P, bool M, class T, class Op>
 inline T inclusive_scan_over_group(SubGroupPartition<P, M> part, T v, Op op) {
     using B = typename SubGroupPartition<P, M>::backend;
     const uint32_t lid = part.get_local_linear_id();
@@ -291,7 +291,7 @@ BATCHLAS_UNROLL_FULL
     });
 }
 
-template <size_t P, bool M, typename T, typename Op>
+template <size_t P, bool M, class T, class Op>
 inline T exclusive_scan_over_group(SubGroupPartition<P, M> part, T v, T init, Op op) {
     const T inc = inclusive_scan_over_group(part, v, op);
     const T prev = shift_group_right(part, inc, 1u);
@@ -307,7 +307,7 @@ inline T exclusive_scan_over_group(SubGroupPartition<P, M> part, T v, T init, Op
 // collective: the votes span the sub-group and the caller pads short chunks
 // with no-op work. `v` must be uniform across the chunk.
 // ---------------------------------------------------------------------------
-template <typename Group>
+template <class Group>
 inline constexpr bool lockstep_spans_subgroup_v = false;
 
 template <size_t P, bool M>

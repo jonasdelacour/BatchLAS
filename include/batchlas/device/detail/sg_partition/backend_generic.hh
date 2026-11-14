@@ -48,10 +48,10 @@ struct GenericBackend {
     static void barrier(const sycl::sub_group& sg, uint32_t) { sycl::group_barrier(sg); }
 
     // Optional; when false the front end reduces with a shfl_xor butterfly.
-    template <typename T, typename Op>
+    template <class T, class Op>
     static constexpr bool has_native_reduce = false;
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T reduce(const sycl::sub_group&, uint32_t, T v, Op) { return v; }
 };
 

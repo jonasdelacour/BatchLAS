@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // device_core_operand_tests: operand.hh additions (design A.2) against host references.
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts and Im(diag) != 0
-// (load_row<Herm> must drop it); every unit_head form read at the head (whose stored value is
+// (load_row<Part, Transpose::ConjTrans> must drop it); every unit_head form read at the head (whose stored value is
 // poisoned NaN and must never be returned), above and below it; lane-cyclic register vectors
 // with R = 3 registers on 8- and 32-lane executors, k on both sides of every register boundary;
 // neighbour exchange at the lane wrap (lane 0 / lane size - 1); a row window c0 > 0 that
@@ -105,7 +105,7 @@ TYPED_TEST(DeviceCoreOperandTest, RowMovesOnATrianglePlusLaneVecAndStridedAndLoc
         const auto A = batchlas::device::mat(a, n, n, ld);
         if (r < n) {
             batchlas::device::Frag<T, N> f;
-            batchlas::device::load_row<batchlas::device::Part::Lower, true>(f, A, r, c0, n - c0);
+            batchlas::device::load_row<batchlas::device::Part::Lower, batchlas::Transpose::ConjTrans>(f, A, r, c0, n - c0);
             for (int j = 0; j < N; ++j) out[r * N + j] = f[j];
             batchlas::device::store_row<batchlas::device::Part::StrictUpper>(f, batchlas::device::mat(st, n, n, ld), r, c0, n - c0);
         }

@@ -340,8 +340,8 @@ BATCHLAS_DEVICE_INLINE void lasr(const Thread&, int n, const Rots& rots, const X
     }
 }
 // x := x G(0) G(1) ... G(n-2): lasr<Pivot::Variable, Direct::Forward, Conv>.
-template <class Conv = alg::RotTransposed, class Rots, class X> BATCHLAS_DEVICE_INLINE void lasr(const Thread& th, int n, const Rots& rots, const X& x) {
-    lasr<Pivot::Variable, Direct::Forward, Conv>(th, n, rots, x);
+template <class Conv = alg::RotTransposed, class Rots, class X> BATCHLAS_DEVICE_INLINE void lasr(const Thread& ex, int n, const Rots& rots, const X& x) {
+    lasr<Pivot::Variable, Direct::Forward, Conv>(ex, n, rots, x);
 }
 // A := A G(0) ... G(n-2) on every owned row (dlasr SIDE = R): each row runs the serial chain.
 template <class Conv = alg::RotTransposed, class Ex, class Rots, class MA>
@@ -966,20 +966,24 @@ template <int TN, class Ex, class MT, class MB> BATCHLAS_DEVICE_INLINE void tile
     });
 }
 // The off-diagonal pair of a mirror in one column loop: B(i0 + r, j0 + c) = t(r, c) and
-// B(j0 + r, i0 + c) = op(t(c, r)).
-template <bool Conj, int TN, class Ex, class MT, class MB>
+// B(j0 + r, i0 + c) = op(t(c, r)) (TR: Trans t^T, ConjTrans t^H).
+template <Transpose TR, int TN, class Ex, class MT, class MB>
 BATCHLAS_DEVICE_INLINE void tile_store_pair(const Ex& ex, const MT& t, const MB& b, int i0, int j0) {
+    static_assert(TR != Transpose::NoTrans, "tile_store_pair: TR is Trans or ConjTrans");
+    constexpr bool conj = TR == Transpose::ConjTrans;
     using T = typename MB::value_type;
     const int r = ex.lrow();
     detail::tile_cols<TN>(ex, [&](int c) {
         if (i0 + r < b.rows() && j0 + c < b.cols()) b(i0 + r, j0 + c) = t(r, c);
-        if (j0 + r < b.rows() && i0 + c < b.cols()) b(j0 + r, i0 + c) = conj_if<Conj>(static_cast<T>(t(c, r)));
+        if (j0 + r < b.rows() && i0 + c < b.cols()) b(j0 + r, i0 + c) = conj_if<conj>(static_cast<T>(t(c, r)));
     });
 }
 // A diagonal tile (i0 == j0) of a mirror: the referenced member of each pair, op(t(c, r))
-// opposite; with Conj the diagonal is forced real.
-template <bool Conj, int TN, class Ex, class U, class MT, class MB>
+// opposite; with TR = ConjTrans the diagonal is forced real.
+template <Transpose TR, int TN, class Ex, class U, class MT, class MB>
 BATCHLAS_DEVICE_INLINE void tile_store_diag(const Ex& ex, U uplo, const MT& t, const MB& b, int i0) {
+    static_assert(TR != Transpose::NoTrans, "tile_store_diag: TR is Trans or ConjTrans");
+    constexpr bool conj = TR == Transpose::ConjTrans;
     using T = typename MB::value_type;
     const bool lower = detail::is_lower(uplo);
     const int r = ex.lrow();
@@ -987,8 +991,8 @@ BATCHLAS_DEVICE_INLINE void tile_store_diag(const Ex& ex, U uplo, const MT& t, c
         const int i = i0 + r, j = i0 + c;
         if (i >= b.rows() || j >= b.cols()) return;
         const bool referenced = lower ? (r >= c) : (r <= c);
-        T value = referenced ? static_cast<T>(t(r, c)) : conj_if<Conj>(static_cast<T>(t(c, r)));
-        if constexpr (Conj) {
+        T value = referenced ? static_cast<T>(t(r, c)) : conj_if<conj>(static_cast<T>(t(c, r)));
+        if constexpr (conj) {
             if (i == j) value = force_real(value);
         }
         b(i, j) = value;

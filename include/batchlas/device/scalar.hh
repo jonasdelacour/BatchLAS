@@ -93,7 +93,7 @@ struct LartgExact {};
 struct LartgFast {};
 struct Promote {};
 }  // namespace alg
-template <class W = void, class T> inline LartgResult<T> lartg(const T& f, const T& g) {
+template <class W = void, class T> BATCHLAS_DEVICE_HELPER LartgResult<T> lartg(const T& f, const T& g) {
     using R = real_t<T>;
     if constexpr (std::is_same_v<W, alg::LartgExact>) {
         return lartg<void>(f, g);
@@ -315,7 +315,7 @@ template <class Conv = alg::LarfgLapack, class T> BATCHLAS_DEVICE_INLINE LarfgSc
     return out;
 }
 
-template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
+template <class Conv, class T> BATCHLAS_DEVICE_HELPER LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
     static_assert(std::is_same_v<Conv, alg::Phase> || std::is_same_v<Conv, alg::RealBeta>,
                   "larfg_scalars(alpha, xnorm, len): alg::Phase or alg::RealBeta");
     using R = real_t<T>;
@@ -347,7 +347,7 @@ template <class Conv, class T> inline LarfgScalars<T> larfg_scalars(const T& alp
 }
 template <class Conv, class T>
     requires std::is_same_v<Conv, alg::PhaseN1>
-inline LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int) {
+BATCHLAS_DEVICE_HELPER LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int) {
     return larfg_scalars<alg::Phase>(alpha, xnorm, 2);  // len >= 2: no len <= 1 identity
 }
 
@@ -439,7 +439,7 @@ template <class T> BATCHLAS_DEVICE_INLINE real_t<T> sign_nonzero_real(T x) {
 // whichever is closer to c. Tie: alg::TieLowest (rt1, the open-coded steqr form) or
 // alg::TieHighest (rt2: the CTA Wilkinson strategy). Plain inline, operands by reference (the
 // forms it replaces).
-template <class Tie = alg::TieLowest, class R> inline R eig2x2_nearest(const R& a, const R& b, const R& c) {
+template <class Tie = alg::TieLowest, class R> BATCHLAS_DEVICE_HELPER R eig2x2_nearest(const R& a, const R& b, const R& c) {
     static_assert(std::is_same_v<Tie, alg::TieLowest> || std::is_same_v<Tie, alg::TieHighest>,
                   "eig2x2_nearest: alg::TieLowest or alg::TieHighest");
     const auto [rt1, rt2] = lae2(a, b, c);
@@ -466,7 +466,7 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> house2(R a0, R a1) {
 // guard, the Jacobi cosine 1 + t^2); Exact 1 / sqrt_a on every target. Elsewhere 1 / sqrt_a.
 enum class InvSqrtEdge { Lapack, FiniteGeOne, Exact };
 
-template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> inline R inv_sqrt(R a, R sqrt_a) {
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> BATCHLAS_DEVICE_HELPER R inv_sqrt(R a, R sqrt_a) {
 #if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
     if constexpr (std::is_same_v<R, float> && E != InvSqrtEdge::Exact) {
         float y;
@@ -480,7 +480,7 @@ template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> inline R inv_sqrt(R a, R
     (void)a;
     return R(1) / sqrt_a;
 }
-template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> inline R inv_sqrt(R a) { return inv_sqrt<E>(a, sycl::sqrt(a)); }
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> BATCHLAS_DEVICE_HELPER R inv_sqrt(R a) { return inv_sqrt<E>(a, sycl::sqrt(a)); }
 
 // Multiply by the reciprocal when it is finite and nonzero, else divide (the sfmin arm), else
 // (an exact zero d) the caller's value. make() decides once per pivot; apply() branches on the

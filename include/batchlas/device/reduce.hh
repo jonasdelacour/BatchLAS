@@ -2,8 +2,8 @@
 #pragma once
 // Device LA reductions and lane exchanges (v22 design A.2 reduce.hh): one complex-aware xor
 // shuffle, ONE butterfly (any mask range, either order, any associative op), the leader-only
-// shift fold, the reduce-scatter, the ArgMax pair with its merge rule, and the Group-scope
-// allreduce of any op through Scratch. A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).
+// shift fold, the reduce-scatter and the ArgMax pair with its merge rule (allreduce, with or
+// without Scratch, is level1.hh's). A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).
 
 #include <climits>
 #include <cstdint>
@@ -279,38 +279,6 @@ BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_allreduce(const Ex& ex, ArgMax<R> a, con
             const int k = ex.group_reduce(key, sycl::minimum<int>());
             return {k == INT_MAX ? none : (low ? k : -k), m};
         }
-    }
-}
-
-// op over every item of a WorkGroup<WG, SG> (any op, any T), uniform result: a butterfly per
-// sub-group, team leaders write Scratch (scratch_elements<reduce_op::Reduce, Ex, T>() slots), one
-// barrier, then every item folds the nteams entries in team order. trailing_barrier = false
-// skips the barrier that lets the caller reuse the scratch at once (pass it when the next
-// write to the scratch is behind another barrier anyway). Sub-scope executors (SubGroup,
-// Partition, Teams) take the butterfly alone and ignore the scratch.
-template <class Ex, class T, int Slots, class Op>
-BATCHLAS_DEVICE_HELPER T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op, bool trailing_barrier = true) {
-    if constexpr (is_work_group_v<Ex>) {
-        static_assert(Slots >= Ex::nteams, "allreduce: the scratch holds one slot per sub-group");
-        v = butterfly<1, Ex::sg_size>(ex.sub(), v, op);
-        if constexpr (Ex::nteams == 1) {
-            return v;
-        } else {
-            if (ex.lane() == 0) scr.p[ex.team()] = v;
-            ex.barrier();
-            T r = scr.p[0];
-#pragma unroll
-            for (int t = 1; t < Ex::nteams; ++t) r = op(r, scr.p[t]);
-            if (trailing_barrier) ex.barrier();
-            return r;
-        }
-    } else if constexpr (requires { ex.part; }) {
-        return butterfly<1, Ex::size>(ex.part, v, op);
-    } else if constexpr (is_thread_v<Ex>) {
-        return v;
-    } else {
-        static_assert(Ex::nteams == 1 || Ex::size < Ex::sg_size || Ex::size == Ex::sg_size, "allreduce: unsupported executor");
-        return butterfly<1, Ex::size>(ex.sub(), v, op);
     }
 }
 

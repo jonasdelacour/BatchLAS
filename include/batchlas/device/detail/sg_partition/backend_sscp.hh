@@ -86,7 +86,7 @@ namespace batchlas::sgp {
 
 namespace sscp_detail {
 // Full-warp redux.sync; reached only when on_ptx() && target_arch() >= 80.
-template <typename T, typename Op>
+template <class T, class Op>
 __attribute__((always_inline, convergent)) inline T redux(T v, Op) {
     using nvptx_detail::is_op_v;
     constexpr bool kSigned = std::is_same_v<T, int32_t>;
@@ -133,7 +133,7 @@ struct SscpBackend {
         else Gen::barrier(sg, b);
     }
 
-    template <typename F>
+    template <class F>
     static decltype(auto) region(F&& f) {
         if (sycl_impl::on_ptx()) return Nv::region(f);
         return f(Gen{});
@@ -142,11 +142,11 @@ struct SscpBackend {
     // NvptxBackend's redux leg keys on __SYCL_CUDA_ARCH__, which SSCP never defines, so the P = 32
     // integer redux.sync is gated here on the JIT target instead.
     static constexpr bool kRedux32 = P >= 32;
-    template <typename T, typename Op>
+    template <class T, class Op>
     static constexpr bool has_native_reduce =
         Nv::template has_native_reduce<T, Op> || (kRedux32 && nvptx_detail::redux_ok_v<T, Op>);
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T reduce(const sycl::sub_group& sg, uint32_t b, T v, Op op) {
         if constexpr (kRedux32 && nvptx_detail::redux_ok_v<T, Op>) {
             if (sycl_impl::on_ptx() && sycl_impl::target_arch() >= 80) return sscp_detail::redux(v, op);

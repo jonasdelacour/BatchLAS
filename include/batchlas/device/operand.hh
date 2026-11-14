@@ -301,10 +301,13 @@ BATCHLAS_DEVICE_INLINE void neighbor_exchange(const Ex& ex, const Frag<T, R, L>&
 }
 
 // RowFrag row moves on part P of a matrix, columns c0 .. c0 + N - 1: f[j] := A(r, c0 + j) for
-// (r, c0 + j) in P and j < live; outside P, Herm reads conj(A(c0 + j, r)) (the stored mirror of a
-// Hermitian matrix, Im(diag) dropped), else zero. store_row writes only (r, c0 + j) in P, j < live.
-template <Part P, bool Herm = false, class T, int N, class MA>
+// (r, c0 + j) in P and j < live; outside P, TS = ConjTrans reads conj(A(c0 + j, r)) (the stored
+// mirror of a Hermitian matrix, Im(diag) dropped), TS = NoTrans zero. store_row writes only
+// (r, c0 + j) in P, j < live.
+template <Part P, Transpose TS = Transpose::NoTrans, class T, int N, class MA>
 BATCHLAS_DEVICE_INLINE void load_row(Frag<T, N, RowFrag>& f, const MA& a, int r, int c0, int live = N) {
+    static_assert(TS != Transpose::Trans, "load_row: TS is NoTrans (zero outside P) or ConjTrans (the Hermitian mirror)");
+    constexpr bool herm = TS == Transpose::ConjTrans;
     using A = Arith<T>;
 #pragma unroll
     for (int j = 0; j < N; ++j) {
@@ -312,8 +315,8 @@ BATCHLAS_DEVICE_INLINE void load_row(Frag<T, N, RowFrag>& f, const MA& a, int r,
         T v = A::zero();
         if (j < live) {
             if (detail::in_part<P>(r, c)) v = static_cast<T>(a(r, c));
-            else if constexpr (Herm) v = A::conj(static_cast<T>(a(c, r)));
-            if constexpr (Herm && A::is_complex)
+            else if constexpr (herm) v = A::conj(static_cast<T>(a(c, r)));
+            if constexpr (herm && A::is_complex)
                 if (r == c) v = A::make(A::re(v), real_t<T>(0));
         }
         f[j] = v;

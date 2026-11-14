@@ -100,7 +100,7 @@ TYPED_TEST(DeviceCoreLevel1Test, DotPartialDotSlabUpperBound) {
     T* out = d.template alloc<T>(3, T(0));
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
-        const T p = batchlas::device::dot_partial<true>(ex, batchlas::device::vec(x, n), batchlas::device::vec(y, n));
+        const T p = batchlas::device::dot_partial<batchlas::Transpose::ConjTrans>(ex, batchlas::device::vec(x, n), batchlas::device::vec(y, n));
         const T s = ex.team_reduce(p);
         if (ex.leader()) {
             out[0] = s;

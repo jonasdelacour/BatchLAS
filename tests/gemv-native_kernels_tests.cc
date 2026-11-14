@@ -224,7 +224,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const int lane = int(sg.get_local_linear_id());
             const int i = lane % m, jsub = lane / m;
             D acc{};
-            if (!al.zero && jsub < P) acc = device::dot_partial<false, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
+            if (!al.zero && jsub < P) acc = device::dot_partial<Transpose::Trans, Fma>(device::Slot<P>{jsub}, A(b).row(i), X(b));
             acc = device::shift_reduce<P>(sg, acc, AddOf{}, device::Dyn{m});
             if (lane < m) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(i));
         });
@@ -235,7 +235,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const std::int64_t b = g / out;
             const int j = int(g - b * out);
             D acc{};
-            if (!al.zero) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
+            if (!al.zero) acc = device::dot_partial<Transpose::Trans, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
             acc = device::shift_reduce<32>(team.sg, acc, AddOf{});
             if (team.leader()) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });
@@ -252,7 +252,7 @@ template <class T, Shape S> void body_case(Dev& dev, Transpose tr, bool alpha_ze
             const std::int64_t b = gc / out;
             const int j = int(gc - b * out);
             D acc{};
-            if (!al.zero && active) acc = device::dot_partial<false, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
+            if (!al.zero && active) acc = device::dot_partial<Transpose::Trans, Fma>(team, device::conj_if(A(b).col(j), conj), X(b));
             acc = device::shift_reduce<P>(team.part, acc, AddOf{});
             if (team.leader() && active) device::store_epi<device::epi::MacChain, Fma>(al, acc, be, Y(b)(j));
         });

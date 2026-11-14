@@ -332,9 +332,9 @@ template <Scope S, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE void reduce_each(const Ex& ex, std::array<T, K>& v, Op op = {}) {
     reduce_each<S>(ex, v, op, std::make_index_sequence<K>{});
 }
-template <class Ex, class T, std::size_t K, std::size_t... I>
-BATCHLAS_DEVICE_INLINE void team_reduce_each(const Ex& ex, std::array<T, K>& v, std::index_sequence<I...>) {
-    ((v[I] = ex.team_reduce(v[I])), ...);
+template <class Ex, class T, std::size_t K, class Op, std::size_t... I>
+BATCHLAS_DEVICE_INLINE void team_reduce_each(const Ex& ex, std::array<T, K>& v, Op op, std::index_sequence<I...>) {
+    ((v[I] = ex.team_reduce(v[I], op)), ...);
 }
 
 // Sub-group-size contract of the packed exchange: it assumes nteams = WG / SG hardware
@@ -351,24 +351,26 @@ template <class Ex> BATCHLAS_DEVICE_INLINE bool packed_contract_holds(const Ex& 
            static_cast<int>(sg.get_group_linear_range()) == Ex::nteams;
 }
 
-// K sums from ONE scratch exchange: per-team butterfly, lane 0 writes K values, one barrier,
-// every item reads nteams*K in a fixed order (uniform result), one trailing barrier so the
-// scratch may be reused.
-template <int K, class Ex, class T, int Slots>
-BATCHLAS_DEVICE_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
+// K reductions (op; sycl::plus<T> sums with Arith<T>::add) from ONE scratch exchange: per-team
+// butterfly, lane 0 writes K values, one barrier, every item reads nteams*K in a fixed order
+// (uniform result), one trailing barrier so the scratch may be reused (trailing_barrier = false
+// skips it: the next write to the scratch is behind another barrier anyway).
+template <int K, class Ex, class T, int Slots, class Op = sycl::plus<T>>
+BATCHLAS_DEVICE_INLINE std::array<T, K> packed_reduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v, Op op = {},
+                                                      bool trailing_barrier = true) {
     if constexpr (is_runtime_v<Ex>) {
-        reduce_each<Scope::Group>(ex, v);
+        reduce_each<Scope::Group>(ex, v, op);
         return v;
     } else if constexpr (!is_work_group_v<Ex> || Ex::nteams == 1) {
-        team_reduce_each(ex, v, std::make_index_sequence<K>{});
+        team_reduce_each(ex, v, op, std::make_index_sequence<K>{});
         return v;
     } else {
-        static_assert(Slots >= Ex::nteams * K, "packed_sum: Scratch smaller than scratch_elements<reduce_op::ReduceN<K>, Ex, T>()");
+        static_assert(Slots >= Ex::nteams * K, "allreduce: Scratch smaller than scratch_elements<reduce_op::ReduceN<K>, Ex, T>()");
         if (!packed_contract_holds(ex)) {
-            reduce_each<Scope::Group>(ex, v);
+            reduce_each<Scope::Group>(ex, v, op);
             return v;
         }
-        team_reduce_each(ex, v, std::make_index_sequence<K>{});
+        team_reduce_each(ex, v, op, std::make_index_sequence<K>{});
         if (ex.lane() == 0) {
 #pragma unroll
             for (int k = 0; k < K; ++k) scr.p[ex.team() * K + k] = v[k];
@@ -380,9 +382,12 @@ BATCHLAS_DEVICE_INLINE std::array<T, K> packed_sum(const Ex& ex, Scratch<T, Slot
 #pragma unroll 4  // a full unroll hoists nteams*K loads into registers (WG 1024: > 64 regs)
         for (int s = 1; s < Ex::nteams; ++s) {
 #pragma unroll
-            for (int k = 0; k < K; ++k) out[k] = Arith<T>::add(out[k], scr.p[s * K + k]);
+            for (int k = 0; k < K; ++k) {
+                if constexpr (std::is_same_v<Op, sycl::plus<T>>) out[k] = Arith<T>::add(out[k], scr.p[s * K + k]);
+                else out[k] = op(out[k], scr.p[s * K + k]);
+            }
         }
-        ex.barrier(Mem::Local);
+        if (trailing_barrier) ex.barrier(Mem::Local);
         return out;
     }
 }
@@ -399,27 +404,29 @@ template <class Ex, class T, int Slots, class F>
 BATCHLAS_DEVICE_INLINE T reduce(const Ex& ex, Scratch<T, Slots> scr, int n, F&& f) {
     T acc = Arith<T>::zero();
     for_each_owned(ex, n, [&](int i) { acc = Arith<T>::add(acc, f(i)); });
-    return detail::packed_sum<1>(ex, scr, std::array<T, 1>{acc})[0];
+    return detail::packed_reduce<1>(ex, scr, std::array<T, 1>{acc})[0];
 }
 
 namespace detail {
-// The item's partial sum. On Fit<Ex> the item's one product (0 past x.size()): no accumulator,
-// so no +0 seed to add (the sytd2 form).
-template <bool Conj, class Ops = arith::Explicit, class Ex, class X, class Y>
+// The item's partial sum (TR: Trans x^T y, ConjTrans x^H y). On Fit<Ex> the item's one product
+// (0 past x.size()): no accumulator, so no +0 seed to add (the sytd2 form).
+template <Transpose TR, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
+    static_assert(TR != Transpose::NoTrans, "dot_partial: TR is Trans or ConjTrans");
+    constexpr bool conj = TR == Transpose::ConjTrans;
     using T = elem_t<X>;
     using Ar = arith_t<Ops, T>;
     if constexpr (is_fit_v<Ex>) {
         const int i = ex.lid();
         const bool in = i >= 0 && i < x.size();
         T p;
-        if constexpr (Conj) p = in ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
+        if constexpr (conj) p = in ? Ar::mul(Ar::conj(x(i)), y(i)) : Ar::zero();
         else p = in ? Ar::mul(x(i), y(i)) : Ar::zero();
         return p;
     } else {
         T acc = Ar::zero();
         for_each_owned(ex, x.size(), [&](int i) {
-            if constexpr (Conj) Ar::mac_conj(acc, x(i), y(i));
+            if constexpr (conj) Ar::mac_conj(acc, x(i), y(i));
             else Ar::mac(acc, x(i), y(i));
         });
         return acc;
@@ -430,16 +437,17 @@ BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
 // x^T y (no conjugation)
 template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot(const Ex& ex, const X& x, const Y& y) {
-    return detail::scope_reduce<S>(ex, detail::dot_partial<false, Ops>(ex, x, y));
+    return detail::scope_reduce<S>(ex, detail::dot_partial<Transpose::Trans, Ops>(ex, x, y));
 }
 // x^H y
 template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
-    return detail::scope_reduce<S>(ex, detail::dot_partial<true, Ops>(ex, x, y));
+    return detail::scope_reduce<S>(ex, detail::dot_partial<Transpose::ConjTrans, Ops>(ex, x, y));
 }
 
 namespace detail {
-template <int K, bool Conj, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLINE auto dotn_partial(const Ex& ex, const Xs& xs, const Y& y) {
+template <int K, Transpose TR, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLINE auto dotn_partial(const Ex& ex, const Xs& xs, const Y& y) {
+    static_assert(TR != Transpose::NoTrans, "dotN: TR is Trans or ConjTrans");
     using T = elem_t<Y>;
     std::array<T, K> acc;
 #pragma unroll
@@ -448,7 +456,7 @@ template <int K, bool Conj, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLINE 
         const T yi = y(i);
 #pragma unroll
         for (int k = 0; k < K; ++k) {
-            if constexpr (Conj) Arith<T>::mac_conj(acc[k], xs[k](i), yi);
+            if constexpr (TR == Transpose::ConjTrans) Arith<T>::mac_conj(acc[k], xs[k](i), yi);
             else Arith<T>::mac(acc[k], xs[k](i), yi);
         }
     });
@@ -456,13 +464,15 @@ template <int K, bool Conj, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLINE 
 }
 }  // namespace detail
 
-// {xs[k]^T y} (Conj: xs[k]^H y) for k < K. With Scratch on a WorkGroup: one packed exchange.
-template <int K, bool Conj = false, class Ex, class T, int Slots, class X, class Y>
+// {op(xs[k]) y} (TR: Trans xs[k]^T y, ConjTrans xs[k]^H y) for k < K. With Scratch on a
+// WorkGroup: one packed exchange.
+template <int K, Transpose TR = Transpose::Trans, class Ex, class T, int Slots, class X, class Y>
 BATCHLAS_DEVICE_INLINE std::array<T, K> dotN(const Ex& ex, Scratch<T, Slots> scr, const std::array<X, K>& xs, const Y& y) {
-    return detail::packed_sum<K>(ex, scr, detail::dotn_partial<K, Conj>(ex, xs, y));
+    return detail::packed_reduce<K>(ex, scr, detail::dotn_partial<K, TR>(ex, xs, y));
 }
 namespace detail {
-template <bool Conj, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVICE_INLINE auto dot_many_partial(const Ex& ex, const Y& y, const Xs&... xs) {
+template <Transpose TR, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVICE_INLINE auto dot_many_partial(const Ex& ex, const Y& y, const Xs&... xs) {
+    constexpr bool conj = TR == Transpose::ConjTrans;
     using T = elem_t<Y>;
     using Ar = arith_t<Ops, T>;
     constexpr int K = sizeof...(Xs);
@@ -472,7 +482,7 @@ template <bool Conj, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVICE_
     for_each_owned(ex, y.size(), [&](int i) {
         const T yi = y(i);
         int k = 0;
-        ((Conj ? Ar::mac_conj(acc[k++], xs(i), yi) : Ar::mac(acc[k++], xs(i), yi)), ...);
+        ((conj ? Ar::mac_conj(acc[k++], xs(i), yi) : Ar::mac(acc[k++], xs(i), yi)), ...);
     });
     return acc;
 }
@@ -483,23 +493,23 @@ template <bool Conj, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVICE_
 template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class T, int Slots, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<T, Slots> scr, const Y& y, const Xs&... xs) {
     static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
-    return detail::packed_sum<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<TR == Transpose::ConjTrans, Ops>(ex, y, xs...));
+    return detail::packed_reduce<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<TR, Ops>(ex, y, xs...));
 }
 // Without Scratch: one loop over y, then one scope-S reduction per x in argument order (on a
 // WorkGroup, portable::reduce_over_group each: the legacy kernels' trees, bit-identical).
 template <Transpose TR = Transpose::Trans, Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
     static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
-    auto acc = detail::dot_many_partial<TR == Transpose::ConjTrans, Ops>(ex, y, xs...);
+    auto acc = detail::dot_many_partial<TR, Ops>(ex, y, xs...);
     detail::reduce_each<S>(ex, acc);
     return acc;
 }
 
 // Without Scratch: K independent reductions of scope S (on a sub-group or partition these are
 // shuffles only, so nothing is exchanged).
-template <int K, bool Conj = false, Scope S = Scope::Own, class Ex, class X, class Y>
+template <int K, Transpose TR = Transpose::Trans, Scope S = Scope::Own, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const Y& y) {
-    auto acc = detail::dotn_partial<K, Conj>(ex, xs, y);
+    auto acc = detail::dotn_partial<K, TR>(ex, xs, y);
     detail::reduce_each<S>(ex, acc);
     return acc;
 }
@@ -658,10 +668,19 @@ BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, std::array<T, K>
     detail::reduce_each<S>(ex, v, op);
     return v;
 }
-// K sums in one packed exchange through Scratch (scratch_elements<reduce_op::ReduceN<K>, Ex, T>()).
-template <class Ex, class T, int Slots, std::size_t K>
-BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v) {
-    return detail::packed_sum<int(K)>(ex, scr, v);
+// Through Scratch, over every item of the executor: v (a T, or std::array<T, K>: K values in ONE
+// packed exchange, scratch_elements<reduce_op::ReduceN<K>, Ex, T>() slots) reduced with op (any
+// associative op; the default sums), uniform result. trailing_barrier = false skips the barrier
+// that lets the caller reuse the scratch at once. Sub-scope executors (SubGroup, Partition,
+// Teams) and Thread reduce in their team and ignore the scratch.
+template <class Ex, class T, int Slots, std::size_t K, class Op = sycl::plus<T>>
+BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v, Op op = {},
+                                                  bool trailing_barrier = true) {
+    return detail::packed_reduce<int(K)>(ex, scr, v, op, trailing_barrier);
+}
+template <class Ex, class T, int Slots, class Op = sycl::plus<T>>
+BATCHLAS_DEVICE_INLINE T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op = {}, bool trailing_barrier = true) {
+    return detail::packed_reduce<1>(ex, scr, std::array<T, 1>{v}, op, trailing_barrier)[0];
 }
 
 // sum |x_i|^2 for one operand (-> R) or K operands of equal size in one loop (-> std::array<R, K>,
@@ -859,11 +878,11 @@ template <class Ops = arith::Fma, class Ex, class T, class X> BATCHLAS_DEVICE_IN
     });
 }
 
-// This item's partial x^T y (Conj: x^H y) over its owned elements; no reduction (the caller
-// combines partials, e.g. through a Scratch exchange shared with other sums).
-template <bool Conj = false, class Ops = arith::Explicit, class Ex, class X, class Y>
+// This item's partial op(x) y (TR: Trans x^T y, ConjTrans x^H y) over its owned elements; no
+// reduction (the caller combines partials, e.g. through a Scratch exchange shared with other sums).
+template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
-    return detail::dot_partial<Conj, Ops>(ex, x, y);
+    return detail::dot_partial<TR, Ops>(ex, x, y);
 }
 
 // acc += x(t) y(t) for t < N with kk0 + t < k, in index order: one item's dot over a staged slab.

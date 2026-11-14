@@ -135,10 +135,10 @@ Event expand_mirrored(Queue& ctx,
             sycl::group_barrier(item.get_group());
             // A diagonal tile writes the referenced member of each pair (the two writes would collide).
             if (ti == tj) {
-                device::tile_store_diag<Conjugate, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
+                device::tile_store_diag<Conjugate ? Transpose::ConjTrans : Transpose::Trans, kMirrorTile>(ex, lower ? Uplo::Lower : Uplo::Upper, t, o_b, src_row0);
                 return;
             }
-            device::tile_store_pair<Conjugate, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
+            device::tile_store_pair<Conjugate ? Transpose::ConjTrans : Transpose::Trans, kMirrorTile>(ex, t, o_b, src_row0, src_col0);
         });
     });
 

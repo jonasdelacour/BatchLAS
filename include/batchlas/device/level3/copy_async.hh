@@ -19,7 +19,7 @@ namespace batchlas::device::l3 {
 // (dst_local is dst's shared-window address; .cg needs 16 bytes), a plain copy elsewhere, ordered
 // the same way by the barrier after the wait.
 // evidence: docs/perf/gemm.md#gemm-wp-n2-the-u4-stack-frame-and-zero-filled-predicated-copies
-template <int Bytes, typename T>
+template <int Bytes, class T>
 inline void copy_async_zfill(T* dst, [[maybe_unused]] std::uint32_t dst_local, const T* src, std::uint32_t src_bytes) {
     static_assert(Bytes == 4 || Bytes == 8 || Bytes == 16, "cp.async copies 4, 8 or 16 bytes");
     static_assert(Bytes % sizeof(T) == 0, "whole elements per copy");
@@ -36,7 +36,7 @@ inline void copy_async_zfill(T* dst, [[maybe_unused]] std::uint32_t dst_local, c
 #endif
 }
 // A bool would read as src_bytes = 1.
-template <int Bytes, typename T>
+template <int Bytes, class T>
 void copy_async_zfill(T*, std::uint32_t, const T*, bool) = delete;
 
 inline void copy_async_commit() {

@@ -68,7 +68,7 @@ struct Mask {
     }
     static void barrier(uint32_t base) { __nvvm_bar_warp_sync(mask(base)); }
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T butterfly(uint32_t base, T v, Op op) {
         constexpr uint32_t kW = static_cast<uint32_t>((sizeof(T) + 3) / 4);
 BATCHLAS_UNROLL_FULL
@@ -85,7 +85,7 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-template <typename Op, typename T>
+template <class Op, class T>
 inline constexpr bool is_op_v = std::is_same_v<Op, T>;
 
 // The NVPTX device pass's sm_XY0: DPC++, or AdaptiveCpp multipass CUDA (cuda:sm_XY); 0 elsewhere.
@@ -99,7 +99,7 @@ inline constexpr bool is_op_v = std::is_same_v<Op, T>;
 
 // redux.sync (sm_80+) only with the full mask: a per-chunk mask makes ptxas
 // serialise the warp into WARPSYNC.EXCLUSIVE groups, slower than a butterfly.
-template <typename T, typename Op>
+template <class T, class Op>
 inline constexpr bool redux_ok_v =
     (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) &&
     (is_op_v<Op, sycl::plus<T>> || is_op_v<Op, sycl::plus<>> || is_op_v<Op, sycl::minimum<T>> ||
@@ -107,7 +107,7 @@ inline constexpr bool redux_ok_v =
      is_op_v<Op, sycl::bit_and<T>> || is_op_v<Op, sycl::bit_and<>> || is_op_v<Op, sycl::bit_or<T>> ||
      is_op_v<Op, sycl::bit_or<>> || is_op_v<Op, sycl::bit_xor<T>> || is_op_v<Op, sycl::bit_xor<>>);
 
-template <typename T, typename Op>
+template <class T, class Op>
 inline T redux_full(T v, Op) {
 #if BATCHLAS_NVPTX_ARCH >= 800
     constexpr uint32_t kAll = ~0u;
@@ -207,7 +207,7 @@ struct NvptxBackend {
     }
 
     // f gets the chunk-mask ops for a masked chunk, the full-mask (lockstep) backend otherwise.
-    template <typename F>
+    template <class F>
     static decltype(auto) region(F&& f) {
         if constexpr (kDynamic) {
             return f(NvptxChunkOps<P>{});
@@ -217,12 +217,12 @@ struct NvptxBackend {
 
     // P = 32 integer reductions are one redux.sync. A masked P < 32 partition
     // takes every reduction as one chunk-mask butterfly.
-    template <typename T, typename Op>
+    template <class T, class Op>
     static constexpr bool has_native_reduce =
         (P >= 32 && nvptx_detail::kHasRedux && nvptx_detail::redux_ok_v<T, Op>) ||
         (kDynamic && std::is_trivially_copyable_v<T>);
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T reduce(const sycl::sub_group&, uint32_t base, T v, Op op) {
         if constexpr (P >= 32 && nvptx_detail::kHasRedux && nvptx_detail::redux_ok_v<T, Op>) {
             return nvptx_detail::redux_full(v, op);

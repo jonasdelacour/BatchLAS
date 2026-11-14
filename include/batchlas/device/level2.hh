@@ -259,14 +259,17 @@ template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class 
 BATCHLAS_DEVICE_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     geru<Alg, Ops>(ex, alpha, x, y, a);
 }
-template <bool Conj = false, class Ops = arith::Explicit, class AS, class T, class Y, int N>
+// TR: Trans a[j] += xr alpha y(j) (ger), ConjTrans a[j] += xr alpha conj(y(j)) (gerc).
+template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class AS, class T, class Y, int N>
 BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, N, RowFrag>& arow, int live = N) {
+    static_assert(TR != Transpose::NoTrans, "ger_row: TR is Trans (x y^T) or ConjTrans (x y^H)");
+    constexpr bool conj = TR == Transpose::ConjTrans;
     using Ar = arith_t<Ops, T>;
     const auto alpha = as_tag(alpha_);
 #pragma unroll
     for (int j = 0; j < N; ++j) {
         if (j >= live) continue;
-        const T yj = tag_mul(alpha, Conj ? Ar::conj(static_cast<T>(y(j))) : static_cast<T>(y(j)));
+        const T yj = tag_mul(alpha, conj ? Ar::conj(static_cast<T>(y(j))) : static_cast<T>(y(j)));
         Ar::mac(arow[j], xr, yj);
     }
 }
@@ -470,9 +473,9 @@ BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
 // The memory-vector form takes x by const view (the view, not the data, is const).
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
-BATCHLAS_DEVICE_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
+BATCHLAS_DEVICE_INLINE void trmv(const Thread& ex, const MA& a, const X& x) {
     X xv = x;
-    trmv<UL, TR, DG, Ops>(th, a, xv, x.size());
+    trmv<UL, TR, DG, Ops>(ex, a, xv, x.size());
 }
 
 // ---- level 2 (design A.2) -----------------------------------------------------------------------
@@ -773,9 +776,9 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, const DV& d, X& x, i
 // The memory-vector form takes x by const view (the view, not the data, is const).
 template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
-BATCHLAS_DEVICE_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
+BATCHLAS_DEVICE_INLINE void trsv(const Thread& ex, const MA& a, const X& x) {
     X xv = x;
-    trsv<UL, TR, DG, Div, alg::Serial, Ops>(th, a, xv, x.size());
+    trsv<UL, TR, DG, Div, alg::Serial, Ops>(ex, a, xv, x.size());
 }
 
 // A := diag(d) A (Side::Left) or A diag(d) (Side::Right) in place, or C := the same of B (four

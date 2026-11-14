@@ -24,28 +24,28 @@ namespace spirv_detail {
 inline constexpr auto kScope = __spv::Scope::Subgroup;
 inline constexpr uint32_t kClustered = static_cast<uint32_t>(__spv::GroupOperation::ClusteredReduce);
 
-template <typename Op, template <typename> class F, typename T>
+template <class Op, template <class> class F, class T>
 inline constexpr bool is_op_v = std::is_same_v<Op, F<T>> || std::is_same_v<Op, F<void>>;
 
 // T with a native clustered instruction: 32/64-bit integers and float/double.
-template <typename T>
+template <class T>
 inline constexpr bool is_int_v = std::is_integral_v<T> && !std::is_same_v<T, bool> &&
                                  (sizeof(T) == 4 || sizeof(T) == 8);
-template <typename T>
+template <class T>
 inline constexpr bool is_fp_v = std::is_same_v<T, float> || std::is_same_v<T, double>;
 
-template <typename T>
+template <class T>
 struct is_complex : std::false_type {};
-template <typename R>
+template <class R>
 struct is_complex<std::complex<R>> : std::bool_constant<is_fp_v<R>> {};
 
 // Canonical fixed-width type, so long / long long pick one overload.
-template <typename T>
+template <class T>
 using int_t = std::conditional_t<std::is_signed_v<T>,
                                  std::conditional_t<sizeof(T) == 4, int32_t, int64_t>,
                                  std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>>;
 
-template <typename T, typename Op>
+template <class T, class Op>
 inline constexpr bool scalar_supported_v =
     (is_fp_v<T> && (is_op_v<Op, sycl::plus, T> || is_op_v<Op, sycl::multiplies, T> ||
                     is_op_v<Op, sycl::minimum, T> || is_op_v<Op, sycl::maximum, T>)) ||
@@ -54,11 +54,11 @@ inline constexpr bool scalar_supported_v =
                      is_op_v<Op, sycl::bit_and, T> || is_op_v<Op, sycl::bit_or, T> ||
                      is_op_v<Op, sycl::bit_xor, T>));
 
-template <typename T, typename Op>
+template <class T, class Op>
 inline constexpr bool supported_v =
     scalar_supported_v<T, Op> || (is_complex<T>::value && is_op_v<Op, sycl::plus, T>);
 
-template <uint32_t P, typename T, typename Op>
+template <uint32_t P, class T, class Op>
 inline T clustered_scalar(T v) {
     if constexpr (is_fp_v<T>) {
         if constexpr (is_op_v<Op, sycl::plus, T>) return __spirv_GroupNonUniformFAdd(kScope, kClustered, v, P);
@@ -134,10 +134,10 @@ struct SpirvBackend {
         }
     }
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static constexpr bool has_native_reduce = P > 1u && spirv_detail::supported_v<T, Op>;
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T reduce(const sycl::sub_group&, uint32_t, T v, Op) {
         if constexpr (spirv_detail::is_complex<T>::value) {
             using R = typename T::value_type;

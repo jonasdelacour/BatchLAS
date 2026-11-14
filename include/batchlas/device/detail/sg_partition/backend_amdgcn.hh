@@ -18,7 +18,7 @@ namespace batchlas::sgp {
 namespace amdgcn_detail {
 
 // core::reduce's mirror steps need an order-independent op.
-template <typename T, typename Op>
+template <class T, class Op>
 inline constexpr bool commutative_op_v =
     std::is_same_v<Op, sycl::plus<T>> || std::is_same_v<Op, sycl::plus<>> ||
     std::is_same_v<Op, sycl::multiplies<T>> || std::is_same_v<Op, sycl::multiplies<>> ||
@@ -28,7 +28,7 @@ inline constexpr bool commutative_op_v =
     std::is_same_v<Op, sycl::bit_or<T>> || std::is_same_v<Op, sycl::bit_or<>> ||
     std::is_same_v<Op, sycl::bit_xor<T>> || std::is_same_v<Op, sycl::bit_xor<>>;
 
-template <typename T>
+template <class T>
 inline constexpr bool word_arith_v =
     std::is_arithmetic_v<T> && !std::is_same_v<T, bool> && (sizeof(T) == 4 || sizeof(T) == 8);
 
@@ -67,11 +67,11 @@ struct AmdgcnBackend {
 
     static void barrier(const sycl::sub_group&, uint32_t) { amdgcn::barrier(); }
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static constexpr bool has_native_reduce =
         P > 1u && amdgcn_detail::word_arith_v<T> && amdgcn_detail::commutative_op_v<T, Op>;
 
-    template <typename T, typename Op>
+    template <class T, class Op>
     static T reduce(const sycl::sub_group&, uint32_t, T v, Op op) {
         return amdgcn::reduce<P>(v, op);
     }

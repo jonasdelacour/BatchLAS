@@ -76,8 +76,8 @@ BATCHLAS_UNROLL_FULL
             for (int y = 0; y < N; ++y) Ar::msub(c(x, y), at[x][k], bt[k][y]);
 }
 template <class Ops = arith::Explicit, class T, int M, int K, int N>
-BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& th, const Tile<T, M, K>& A, const Tile<T, K, N>& B, Tile<T, M, N>& C) {
-    gemm_sub<K, Ops>(th, A, B, C);
+BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& ex, const Tile<T, M, K>& A, const Tile<T, K, N>& B, Tile<T, M, N>& C) {
+    gemm_sub<K, Ops>(ex, A, B, C);
 }
 
 // Triangular solve on a register tile B, overwritten by X. Left: op(A) X = alpha B with A M x M;

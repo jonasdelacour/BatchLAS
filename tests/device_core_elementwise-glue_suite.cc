@@ -354,11 +354,11 @@ TYPED_TEST(DeviceCoreGlueTest, TileTransposeAndMirrorMatchHost) {
                 device::tile_load<TM>(ex, a, r0, c0, t);
                 sycl::group_barrier(it.get_group());
                 if (lower) {
-                    if (ti == tj) device::tile_store_diag<true, TM>(ex, Uplo::Lower, t, o, r0);
-                    else device::tile_store_pair<true, TM>(ex, t, o, r0, c0);
+                    if (ti == tj) device::tile_store_diag<Transpose::ConjTrans, TM>(ex, Uplo::Lower, t, o, r0);
+                    else device::tile_store_pair<Transpose::ConjTrans, TM>(ex, t, o, r0, c0);
                 } else {
-                    if (ti == tj) device::tile_store_diag<false, TM>(ex, device::UpperC{}, t, o, r0);
-                    else device::tile_store_pair<false, TM>(ex, t, o, r0, c0);
+                    if (ti == tj) device::tile_store_diag<Transpose::Trans, TM>(ex, device::UpperC{}, t, o, r0);
+                    else device::tile_store_pair<Transpose::Trans, TM>(ex, t, o, r0, c0);
                 }
             });
         const auto g = this->dev.down(O, std::size_t(kBatch) * po);
