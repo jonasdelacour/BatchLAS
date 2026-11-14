@@ -118,7 +118,7 @@ BATCHLAS_DEVICE_INLINE void labrd_item(const PanelEx& ex, int32_t b, const AV& A
     const auto Ab = device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
     const auto Xb = device::mat(X.data() + static_cast<int64_t>(b) * X.stride(), m, nb, X.ld());
     const auto Yb = device::mat(Y.data() + static_cast<int64_t>(b) * Y.stride(), n, nb, Y.ld());
-    device::labrd<T>(ex, Ab, Xb, Yb, device::item(D, b), device::item(E, b), device::item(TAUQ, b), device::item(TAUP, b),
+    device::labrd(ex, Ab, Xb, Yb, device::item(D, b), device::item(E, b), device::item(TAUQ, b), device::item(TAUP, b),
                      device::vec(work, nb, 0), device::vec(work, nb, nb), j0, ib);
 }
 

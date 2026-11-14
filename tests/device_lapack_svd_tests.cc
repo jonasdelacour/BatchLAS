@@ -5,13 +5,14 @@
 //                        sub-groups, the tier picked by with_tier) and the host route (a WG of 32)
 //                        must agree BIT FOR BIT on A (pads and stride gaps included), d, e, tauq,
 //                        taup (inc / stride gaps included); and Q B P^T must reproduce A.
-//   with_tier / upto / gebrd_buffer_size  the tier per n at every Cta boundary, each device filter
+//   with_tier / upto / buffer_size  the tier per n at every Cta boundary, each device filter
 //                        on its own, the op-named throw, buffer_size == the carved plan.
 //   tier::Blocked (one matrix per work-group of 256, the caller's global slice per matrix):
 //     bdsqr              vs the host bdsqr (bdsqr<Thread>, one item per matrix) on uniform, graded with
 //                        an interior and a bottom zero diagonal (both zero-shift chases) and NaN
 //                        items: info per item, s, and U diag(s) V^H == B from identity seeds;
-//                        the Thread executor (one item per matrix) BIT FOR BIT the host's.
+//                        the Thread executor (one item per matrix) BIT FOR BIT the host's;
+//                        BdsqrOptions sort_desc = false (the host's values unsorted) and maxit = 1.
 //     bdsdc             vs the host bdsdc (host stedc; the device runs the in-group one at 2n) on
 //                        uniform, graded and exact-zero-d items (repair): info, s, U S V^H == B,
 //                        orthogonality, the values-only s bit for bit the with-vectors s.
@@ -22,7 +23,7 @@
 //                        U S V^H == A, U and V^H unitary; m > n, m < n (the adjoint path), All /
 //                        Thin / None, pads of every output unchanged.
 //     with_tier          gesvd: Blocked<16> for every n >= 1, each device filter, the throw;
-//                        gesvd_buffer_size == the driver plan, its local bytes independent of m, n.
+//                        buffer_size<routine::gesvd> == the driver plan, its local bytes independent of m, n.
 // Guards (agent guide section 8): ld = n + 3, a matrix stride and vector strides that are not
 // ld * n / n, d with inc 2; pads, gaps and outputs poisoned with a large FINITE value the kernel
 // would accept; batch 1024 with period-3 items bit-identical to their representative (SLM tiles
@@ -198,7 +199,7 @@ protected:
         device::with_tier<device::routine::gebrd, R, CtaTiers>(q().get_device(), n, [&]<class Tier>(Tier) {
             constexpr int P = Tier::n_max;
             constexpr int mats = kWg / P;
-            const std::size_t lb = device::gebrd_buffer_size<Tier, R>(n).local_bytes;
+            const std::size_t lb = device::buffer_size<device::routine::gebrd, Tier, R>(n).local_bytes;
             const int groups = (kBatch + mats - 1) / mats;
             q().submit([&](sycl::handler& h) {
                    sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(lb * (mats + 1)), h);
@@ -299,7 +300,7 @@ TYPED_TEST(DeviceApiSvd, WithTierPicksTheCtaWidthPerN) {
         const std::pair<int, int> want[] = {{1, 4}, {4, 4}, {5, 8}, {8, 8}, {9, 16}, {16, 16}, {17, 32}, {32, 32}, {33, 1016}, {0, -1}};
         for (const auto& [n, p] : want) EXPECT_EQ(pick(big, n), p) << "n " << n;
         constexpr std::size_t t32 = std::size_t(32) * 32 * sizeof(T);
-        static_assert(device::gebrd_buffer_size<device::tier::Blocked<16>, T>(17).local_bytes < t32 - 1);
+        static_assert(device::buffer_size<device::routine::gebrd, device::tier::Blocked<16>, T>(17).local_bytes < t32 - 1);
         EXPECT_EQ(pick({t32, {32}, 1024, true}, 17), 32) << "a local memory of exactly one Cta<32> tile";
         EXPECT_EQ(pick({t32 - 1, {32}, 1024, true}, 17), 1016) << "one byte short of a Cta<32> tile: Blocked<16> fits";
         EXPECT_EQ(pick({t32 - 1, {32}, 1024, true}, 16), 16) << "Cta<16> still fits";
@@ -327,7 +328,7 @@ TYPED_TEST(DeviceApiSvd, UptoAndBufferSizeMatchThePlan) {
             constexpr auto plan = device::detail::gebrd_cta_plan<P, T>();
             static_assert(plan.tile.offset == 0 && plan.tile.count == std::size_t(P) * P);
             for (int n = 1; n <= P; ++n) {
-                const auto sz = device::gebrd_buffer_size<Tier, T>(n);
+                const auto sz = device::buffer_size<device::routine::gebrd, Tier, T>(n);
                 EXPECT_EQ(sz.local_bytes, std::size_t(P) * P * sizeof(T)) << "P " << P << " n " << n;
                 EXPECT_EQ(sz.global_bytes, 0u);
                 EXPECT_EQ(sz, plan.size);
@@ -537,11 +538,12 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
             T* const vp = v2.p;
             std::int32_t* const ip = i2.p;
             const int ld = U.ld, st = U.stride;
-            launch_blocked(this->q(), device::bdsqr_buffer_size<device::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const device::Workspace& w) {
+            launch_blocked(this->q(), device::buffer_size<device::routine::bdsqr, device::tier::Blocked<1>, T>(n),
+                           [=](const auto& ex, int b, const device::Workspace& w) {
                 const std::ptrdiff_t q = b;
                 const int r = device::bdsqr<device::tier::Blocked<1>>(ex, device::vec(dp + q * sd, n), device::vec(ep + q * se, std::max(n - 1, 0)),
-                                                              device::vec(sp + q * ss, n), w, device::mat(up + q * st, n, n, ld),
-                                                              device::mat(vp + q * st, n, n, ld));
+                                                              device::vec(sp + q * ss, n), device::mat(up + q * st, n, n, ld),
+                                                              device::mat(vp + q * st, n, n, ld), w, device::BdsqrOptions<T>{true});
                 if (ex.leader()) ip[b] = r;
             });
             // The Thread executor from a one-item-per-matrix user kernel (device Mat operands, the
@@ -563,13 +565,47 @@ TYPED_TEST(DeviceApiSvd, BdsqrBlockedMatchesTheHostBdsqr) {
                                       const std::ptrdiff_t q = static_cast<std::ptrdiff_t>(id[0]);
                                       iq[q] = device::bdsqr<device::tier::Blocked<1>>(device::Thread{}, device::vec(dq + q * sd, n),
                                                                               device::vec(eq + q * se, std::max(n - 1, 0)), device::vec(sq + q * ss, n),
-                                                                              device::Workspace{}, device::mat(uq + q * st, n, n, ld),
-                                                                              device::mat(vq + q * st, n, n, ld));
+                                                                              device::mat(uq + q * st, n, n, ld), device::mat(vq + q * st, n, n, ld),
+                                                                              device::Workspace{});
+                                  })
+                    .wait_and_throw();
+            }
+            // BdsqrOptions reaches the sweep: values only, unsorted (s4: the host's values in some
+            // order) and capped at one iteration (i5: info 1 wherever one sweep cannot converge).
+            DevBuf<T> d4(this->q(), d), e4(this->q(), e), s4(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
+            DevBuf<T> d5(this->q(), d), e5(this->q(), e), s5(this->q(), std::vector<T>(std::size_t(ss) * kBatch, poison<T>()));
+            DevBuf<std::int32_t> i5(this->q(), std::vector<std::int32_t>(kBatch, -7));
+            {
+                T *const d4p = d4.p, *const e4p = e4.p, *const s4p = s4.p, *const d5p = d5.p, *const e5p = e5.p, *const s5p = s5.p;
+                std::int32_t* const i5p = i5.p;
+                this->q()
+                    .parallel_for(sycl::range<1>(std::size_t(kBatch)),
+                                  [=](sycl::id<1> id) {
+                                      const std::ptrdiff_t q = static_cast<std::ptrdiff_t>(id[0]);
+                                      const device::Thread th{};
+                                      const auto ev = [&](T* p) { return device::vec(p + q * se, std::max(n - 1, 0)); };
+                                      (void)device::bdsqr(th, device::vec(d4p + q * sd, n), ev(e4p), device::vec(s4p + q * ss, n),
+                                                          device::Workspace{}, device::BdsqrOptions<T>{false});
+                                      i5p[q] = device::bdsqr(th, device::vec(d5p + q * sd, n), ev(e5p), device::vec(s5p + q * ss, n),
+                                                             device::Workspace{}, device::BdsqrOptions<T>{true, T(0), 1});
                                   })
                     .wait_and_throw();
             }
             const auto hi = i1.down(), gi = i2.down();
             const auto hs = s1.down(), gs = s2.down();
+            {
+                const auto us = s4.down();
+                const auto capped = i5.down();
+                long order_bad = 0, cap_bad = 0;
+                for (int b = 0; b < 2; ++b) {  // the finite representatives
+                    std::vector<T> got(us.begin() + std::ptrdiff_t(b) * ss, us.begin() + std::ptrdiff_t(b) * ss + n);
+                    std::sort(got.begin(), got.end(), [](T x, T y) { return x > y; });
+                    for (int i = 0; i < n; ++i) order_bad += got[i] != hs[std::size_t(b) * ss + i];
+                    cap_bad += n >= 31 && capped[b] != 1;
+                }
+                EXPECT_EQ(order_bad, 0) << "BdsqrOptions{sort_desc = false}: not the host's values, sorted";
+                EXPECT_EQ(cap_bad, 0) << "BdsqrOptions{maxit = 1}: a capped sweep reported convergence";
+            }
             EXPECT_EQ(first_diff(hs, s3.down()), -1) << "Thread s vs the host's";
             EXPECT_EQ(first_diff(u1.down(), u3.down()), -1) << "Thread U vs the host's";
             EXPECT_EQ(first_diff(v1.down(), v3.down()), -1) << "Thread V^H vs the host's";
@@ -647,12 +683,14 @@ TYPED_TEST(DeviceApiSvd, BdsdcBlockedMatchesTheHostBdsdc) {
             T* const vp = v2.p;
             std::int32_t* const ip = i2.p;
             const int ld = U.ld, st = U.stride;
-            launch_blocked(this->q(), device::bdsdc_buffer_size<device::tier::Blocked<1>, T>(n), [=](const auto& ex, int b, const device::Workspace& w) {
+            launch_blocked(this->q(), device::buffer_size<device::routine::bdsdc, device::tier::Blocked<1>, T>(n),
+                           [=](const auto& ex, int b, const device::Workspace& w) {
                 const std::ptrdiff_t q = b;
                 const auto dd = device::vec(dp + q * sd, n), ee = device::vec(ep + q * se, std::max(n - 1, 0));
-                const int r = device::bdsdc(ex, dd, ee, device::vec(sp + q * ss, n), w, device::mat(up + q * st, n, n, ld), device::mat(vp + q * st, n, n, ld));
+                const int r = device::bdsdc(ex, dd, ee, device::vec(sp + q * ss, n), device::mat(up + q * st, n, n, ld), device::mat(vp + q * st, n, n, ld), w,
+                                            device::BdsdcOptions{true});
                 const auto none = device::mat(static_cast<T*>(nullptr), 0, 0, 1);
-                const int r3 = device::bdsdc(ex, dd, ee, device::vec(s3p + q * ss, n), w, none, none);
+                const int r3 = device::bdsdc(ex, dd, ee, device::vec(s3p + q * ss, n), none, none, w);
                 if (ex.leader()) ip[b] = r | (r3 << 4);
             });
             const auto hi = i1.down(), gi = i2.down();
@@ -718,7 +756,7 @@ TYPED_TEST(DeviceApiSvd, GebrdBlockedAndOrmbrReconstructA) {
         T* const tqp = tq.p;
         T* const tpp = tp.p;
         const int lda = A.ld, sa = A.stride, ldq = Q.ld, sq = Q.stride, ldp = Ph.ld, sp = Ph.stride;
-        launch_blocked(this->q(), device::gebrd_buffer_size<Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
+        launch_blocked(this->q(), device::buffer_size<device::routine::gebrd, Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
             const std::ptrdiff_t q = b;
             const auto Am = device::mat(ap + q * sa, m, n, lda);
             const auto tauq = device::vec(tqp + q * st, n), taup = device::vec(tpp + q * st, n);
@@ -805,7 +843,7 @@ template <SvdVectors JU, SvdVectors JVT, Backend B, class T> void check_gesvd_bl
     R* const sp = s2.p;
     std::int32_t* const ip = i2.p;
     const int lda = A.ld, sa = A.stride, ldu = U.ld, su = U.stride, ldv = Vh.ld, sv = Vh.stride;
-    launch_blocked(dq, device::gesvd_buffer_size<JU, JVT, Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
+    launch_blocked(dq, device::buffer_size<device::routine::gesvd<JU, JVT>, Blk, T>(m, n), [=](const auto& ex, int b, const device::Workspace& w) {
         const std::ptrdiff_t q = b;
         const int r = device::gesvd<JU, JVT, Blk>(ex, device::mat(ap + q * sa, m, n, lda), device::vec(sp + q * ss, k), device::mat(up + q * su, um, un, ldu),
                                               device::mat(vp + q * sv, vm, vn, ldv), w);
@@ -865,7 +903,7 @@ TYPED_TEST(DeviceApiSvd, GesvdBlockedMatchesThePinnedHostBlockedRoute) {
 }
 
 // with_tier picks Blocked<16> for every n >= 1 and drops it under each device filter; the throw
-// names gesvd and n; gesvd_buffer_size is the driver plan, its local bytes the same for all m, n.
+// names gesvd and n; buffer_size<routine::gesvd> is the driver plan, its local bytes the same for all m, n.
 TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
     using T = typename TypeParam::ScalarType;
     constexpr auto All = SvdVectors::All;
@@ -880,7 +918,7 @@ TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
         }
         return got;
     };
-    const std::size_t lb = device::gesvd_buffer_size<All, All, Blk, T>(64, 64).local_bytes;
+    const std::size_t lb = device::buffer_size<device::routine::gesvd<All, All>, Blk, T>(64, 64).local_bytes;
     const int no_fp64 = std::is_same_v<real_of<T>, double> ? -1 : 16;
     const device::DeviceLimits big{std::size_t(100) << 10, {16, 32}, 1024, true};
     EXPECT_EQ(pick(big, 1), 16);
@@ -895,7 +933,7 @@ TYPED_TEST(DeviceApiSvd, GesvdWithTierAndBufferSize) {
     const std::pair<int, int> shapes[] = {{1, 1}, {16, 17}, {64, 33}, {33, 64}};
     for (const auto& [m, n] : shapes) {
         const auto plan = device::detail::driver_plan<All, All, 16, T>(m, n);
-        EXPECT_EQ((device::gesvd_buffer_size<All, All, Blk, T>(m, n)), plan.size) << m << " x " << n;
+        EXPECT_EQ((device::buffer_size<device::routine::gesvd<All, All>, Blk, T>(m, n)), plan.size) << m << " x " << n;
         EXPECT_EQ(plan.size.local_bytes, lb) << "local bytes depend on neither m nor n";
         EXPECT_EQ(plan.at.count, m < n ? std::size_t(m) * n : 0u) << "A^H only on the m < n path";
         EXPECT_GE(plan.size.global_bytes, plan.bdsqr_global.offset + plan.bdsqr_global.count);

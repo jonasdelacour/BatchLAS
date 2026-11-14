@@ -18,6 +18,7 @@
 #include <batchlas/device/lapack/bdsqr.hh>
 #include <batchlas/device/lapack/gebrd.hh>
 #include <batchlas/device/lapack/ormbr.hh>
+#include <batchlas/device/launch.hh>
 #include <batchlas/device/level3/group.hh>
 
 namespace batchlas::device::detail {
@@ -133,8 +134,8 @@ template <SvdVectors JU, SvdVectors JVT, int NB, class T> constexpr GesvdBlocked
     b.taup = p.take<T>(WsSpace::Global, std::size_t(k));
     b.ur = p.take<R>(WsSpace::Global, kk);
     b.vr = p.take<R>(WsSpace::Global, kk);
-    const WorkspaceSize g = gebrd_buffer_size<tier::Blocked<NB>, T>(mm, k);
-    const WorkspaceSize q = bdsqr_buffer_size<tier::Blocked<1>, R>(k);
+    const WorkspaceSize g = device::buffer_size<routine::gebrd, tier::Blocked<NB>, T>(mm, k);
+    const WorkspaceSize q = device::buffer_size<routine::bdsqr, tier::Blocked<1>, R>(k);
     b.gebrd_local = p.take<std::byte>(WsSpace::Local, g.local_bytes);
     b.gebrd_global = p.take<std::byte>(WsSpace::Global, g.global_bytes);
     b.bdsqr_local = p.take<std::byte>(WsSpace::Local, q.local_bytes);
@@ -176,13 +177,13 @@ BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, co
         laset(ex, Zero{}, One{}, ur);
         laset(ex, Zero{}, One{}, vr);
         ex.barrier(Mem::Global);
-        info = bdsqr<tier::Blocked<1>>(ex, d, e, S, bws, ur, vr);
+        info = bdsqr<tier::Blocked<1>>(ex, d, e, S, ur, vr, bws);
         if (want_u) lacpy(ex, ur, U.sub(0, 0, k, k));
         if (want_vh) lacpy(ex, vr, Vh.sub(0, 0, k, k));
     } else {
         ex.barrier(Mem::Global);
-        info = bdsqr<tier::Blocked<1>>(ex, d, e, S, bws, U.sub(0, 0, want_u ? k : 0, want_u ? k : 0),
-                                       Vh.sub(0, 0, want_vh ? k : 0, want_vh ? k : 0));
+        info = bdsqr<tier::Blocked<1>>(ex, d, e, S, U.sub(0, 0, want_u ? k : 0, want_u ? k : 0),
+                                       Vh.sub(0, 0, want_vh ? k : 0, want_vh ? k : 0), bws);
     }
     ex.barrier(Mem::Global);
     if (want_u) (void)ormbr<Vect::Q, Side::Left, Transpose::NoTrans>(ex, A, tauq, U, Workspace{});
@@ -195,26 +196,23 @@ template <SvdVectors JU, SvdVectors JVT, class T> struct tiers<routine::gesvd<JU
     using type = tier::list<tier::Blocked<detail::blocked_nb>>;
 };
 // tier::Blocked<NB> (NB: gebrd's panel width): any m x n, every T, on a WorkGroup<256, 32>.
-// buffer_size(n) is the square problem's; gesvd_buffer_size<JU, JVT, Tier, T>(m, n) any other.
+// buffer_size(n) is the square problem's, buffer_size(m, n) any other.
 template <SvdVectors JU, SvdVectors JVT, int NB, class A, class T> struct tier_info<routine::gesvd<JU, JVT>, tier::Blocked<NB, A>, T> {
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::driver_plan<JU, JVT, NB, T>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::driver_plan<JU, JVT, NB, T>(m, n).size; }
 };
-template <SvdVectors JU, SvdVectors JVT, class Tier, class T> constexpr WorkspaceSize gesvd_buffer_size(int m, int n) {
-    using Tr = resolve_tier_t<routine::gesvd<JU, JVT>, T, Tier>;
-    return detail::driver_plan<JU, JVT, Tr::nb, T>(m, n).size;
-}
 
 // xGESVD of ONE m x n matrix A (any m, n >= 1), host order (A, S, U, Vh, ws) with jobu / jobvh as
 // template parameters: S receives the k = min(m, n) singular values, descending; U the m x m (All)
 // or m x k (Thin) left vectors, Vh the n x n (All) or k x n (Thin) right vectors as rows (a None
 // job's operand is not touched: pass an empty device::mat). A, U, Vh are global matrices (Mat,
 // ItemMat or l3::Global); A is overwritten. COLLECTIVE over a WorkGroup<256, 32> with the same
-// arguments; A visible on entry; outputs visible on return. Workspace: gesvd_buffer_size<JU, JVT,
-// Tier, T>(m, n). Returns the host blocked route's info: 0, 1 when bdsqr did not converge (or a
+// arguments; A visible on entry; outputs visible on return. Workspace: device::buffer_size<
+// routine::gesvd<JU, JVT>, Tier, T>(m, n). Returns the host blocked route's info: 0, 1 when bdsqr did not converge (or a
 // singular value is NaN); -2 / -3 / -4 for an S / U / Vh of the wrong size (nothing written).
 template <SvdVectors JU, SvdVectors JVT, class Tier, class Ex, class MA, class SV, class MU, class MV>
 BATCHLAS_DEVICE_INLINE int gesvd(const Ex& ex, const MA& A_, const SV& S, const MU& U_, const MV& Vh_, const Workspace& ws) {

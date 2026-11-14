@@ -91,7 +91,7 @@ inline void gebrd_cta_impl(Queue& ctx,
 
         using Tier = device::tier::Cta<static_cast<int>(P)>;
         // One matrix's local slice (P x P of T); the accessor holds probs_per_wg of them.
-        constexpr int32_t kSlice = static_cast<int32_t>(device::gebrd_buffer_size<Tier, T>(static_cast<int>(P)).local_bytes);
+        constexpr int32_t kSlice = static_cast<int32_t>(device::buffer_size<device::routine::gebrd, Tier, T>(static_cast<int>(P)).local_bytes);
         static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(T)), "gebrd_cta: the tile slice is P x P of T");
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 

@@ -61,10 +61,11 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
             Real* db = D.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(D.stride());
             Real* eb = (nn > 1) ? (E.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(E.stride())) : nullptr;
             Real* sb = out + static_cast<size_t>(b) * static_cast<size_t>(nn);
-            // device::bdsqr on one item (lapack/bdsqr.hh): U and Vh addressed as the host view's (i, j, b).
-            fail[b] = device::bdsqr<device::tier::Blocked<1>>(device::Thread{}, device::vec(db, nn), device::vec(eb, nn > 1 ? nn - 1 : 0), device::vec(sb, nn),
-                                                      device::Workspace{}, device::item(U, b, urows, ucols), device::item(Vh, b, vrows, vcols),
-                                                      descending, params);
+            // device::bdsqr's body on one item (lapack/bdsqr.hh), its tolerance and cap from the host:
+            // U and Vh addressed as the host view's (i, j, b).
+            fail[b] = device::detail::bdsqr_sweep<device::tier::Blocked<1>>(
+                device::Thread{}, device::vec(db, nn), device::vec(eb, nn > 1 ? nn - 1 : 0), device::vec(sb, nn),
+                device::item(U, b, urows, ucols), device::item(Vh, b, vrows, vcols), device::Workspace{}, descending, params);
         });
     });
 

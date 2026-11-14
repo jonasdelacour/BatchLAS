@@ -39,10 +39,6 @@ template <Vect VT, Side SD, Transpose TR, class T> struct tier_info<routine::orm
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <Vect VT, Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize ormbr_buffer_size(int n) {
-    using Ro = routine::ormbr<VT, SD, TR>;
-    return tier_info<Ro, resolve_tier_t<Ro, T, Tier>, T>::buffer_size(n);
-}
 
 // xORMBR, host order (A, tau, C, ws), vect / side / trans as template parameters (Vect::Q: tauq,
 // Vect::P: taup). Q / P has order C.rows() (Left) or C.cols() (Right), which must be A.rows() (Q)
