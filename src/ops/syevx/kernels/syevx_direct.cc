@@ -154,7 +154,7 @@ Event syevx_direct(Queue& ctx,
                     const int nn = static_cast<int>(n);
                     // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;
                     // V's columns [write, dst_cols) are exactly zero, as on the DirectSubset path.
-                    const int64_t count = device::syevx_select(
+                    const int count = device::detail::syevx_select(
                         ex, device::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
                         reverse, block, device::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
                         device::mat(src_ptr + bid * n * n, nn, nn, nn),
@@ -162,7 +162,7 @@ Event syevx_direct(Queue& ctx,
 
                     if (m_ptr != nullptr && ex.leader()) {
                         // The TRUE count: m[b] > capacity is the truncation signal.
-                        m_ptr[bid] = static_cast<int32_t>(count);
+                        m_ptr[bid] = count;
                     }
                 });
         });

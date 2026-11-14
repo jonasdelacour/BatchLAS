@@ -157,7 +157,7 @@ void stedc_merge_step(Queue& ctx,
             const device::RtGroup<> ex{item};
             const T v_sign2 = (rho[bid] >= T(0)) ? T(1) : T(-1);
             const auto z = device::vec(v.batch_item(bid));
-            device::laed2_merge_vector(ex, z, m, device::mat(E1view.batch_item(bid)).row(m - 1), device::mat(E2view.batch_item(bid)).row(0), v_sign2);
+            device::detail::laed2_merge_vector(ex, z, m, device::mat(E1view.batch_item(bid)).row(m - 1), device::mat(E2view.batch_item(bid)).row(0), v_sign2);
         });
     });
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -233,12 +233,13 @@ void stedc_merge_step(Queue& ctx,
                 // One root per item (laed4 on Thread, Q(:, k) its scratch, then the denominators);
                 // info_report is an atomic fetch_max over the items reporting one batch item.
                 device::for_each_owned(ex, n, [&](int k) {
-                    const auto root = device::laed4(device::Thread{}, poles, zb, n, k, abs_2rho, max_iter, Qn.col(k).head(n));
-                    temp_lambdas(k, bid) = root.origin + root.tau;
-                    if (!root.converged) {
+                    T origin, tau;
+                    const int info = device::laed4(device::Thread{}, poles, zb, n, k, abs_2rho, origin, tau, max_iter, Qn.col(k).head(n));
+                    temp_lambdas(k, bid) = origin + tau;
+                    if (info != 0) {
                         detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
                     }
-                    device::detail::denominators(device::Thread{}, Qn.col(k).head(n), poles, root.origin, root.tau);
+                    device::detail::denominators(device::Thread{}, Qn.col(k).head(n), poles, origin, tau);
                 });
             });
         });

@@ -152,9 +152,9 @@ BATCHLAS_DEVICE_HELPER int merge(const Ex& ex, const PEx& pex, int part_id, int 
         const auto zv = vec(P.z_a, dd);
         const VectorView<R> v(P.z_a, dd);
         laed3<R>(ex, pex, part_id, parts, dd, dv, zv, sycl::fabs(R(2) * rho), max_iter, true, Qp, Qp_rows, v, 0,
-                 [&](std::int32_t k, const laed4_root<R>& root) {
-                     P.lam[k] = root.origin + root.tau;
-                     bad += root.converged ? 0 : 1;
+                 [&](std::int32_t k, R origin, R tau, bool converged) {
+                     P.lam[k] = origin + tau;
+                     bad += converged ? 0 : 1;
                  });
     }
 
@@ -233,7 +233,7 @@ template <class Ex, class D, class R> constexpr void assert_types() {
 }  // namespace detail
 
 namespace routine {
-template <JobType J = JobType::EigenVectors> struct stedc {
+template <JobType J> struct stedc {
     static constexpr const char* name = "stedc";
 };
 }  // namespace routine
@@ -252,16 +252,13 @@ template <JobType J, class T> struct tier_info<routine::stedc<J>, tier::Blocked<
     static constexpr WorkspaceSize buffer_size(int n) { return detail::dc_layout<T>(n, J == JobType::NoEigenVectors).size; }
 };
 
-template <JobType J, class Tier, class T> constexpr WorkspaceSize stedc_buffer_size(int n) {
-    return tier_info<routine::stedc<J>, resolve_tier_t<routine::stedc<J>, T, Tier>, T>::buffer_size(n);
-}
-
 /// Eigenvalues w (ascending) and eigenvectors Z of one symmetric tridiagonal (d, e), argument order
 /// (d, e, w, Z, ws, opts) with jobz the template J = EigenVectors. COLLECTIVE over ex, a
 /// WorkGroup<256, 32> launched at sub-group size 32; d and e must be visible to every item on
 /// entry and are not written; w and Z (n x n or larger: its leading n x n block) are visible on
 /// return. Returns xSTEDC's info, uniform: 0, or 1 when a secular root ran out of
-/// opts.max_sec_iter. Workspace: stedc_buffer_size<J, Tier, T>(n), ws.global this matrix's slice.
+/// opts.max_sec_iter. Workspace: buffer_size<routine::stedc<J>, Tier, T>(n), ws.global this
+/// matrix's slice.
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Z, class R>
 BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Z& z, const Workspace& ws,
                               const StedcOptions<R>& opts) {

@@ -1080,9 +1080,9 @@ template <JobType J> struct steqr {
 };
 }  // namespace routine
 
-// The run-time knobs of the solve (the host SteqrParams fields of the same meaning). The Blocked
-// tier reads max_sweeps only (steqr_wg's shift, as the host route).
-struct steqr_opts {
+/// steqr's options: the run-time knobs of the solve (the host SteqrParams fields of the same
+/// meaning). The Blocked tier reads max_sweeps only (steqr_wg's shift, as the host route).
+struct SteqrOptions {
     int max_sweeps = 50;
     SteqrShiftStrategy shift = SteqrShiftStrategy::Lapack;
 };
@@ -1114,25 +1114,22 @@ template <JobType J, class T> struct tiers<routine::steqr<J>, T> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<1>>;
 };
 
-// Bytes of ONE problem's workspace (Cta: local Q with vectors; Blocked: global rotations and the
-// block table).
-template <JobType J, class Tier, class T> constexpr WorkspaceSize steqr_buffer_size(int n) {
-    return tier_info<routine::steqr<J>, resolve_tier_t<routine::steqr<J>, T, Tier>, T>::buffer_size(n);
-}
-
-// xSTEQR on one problem: d (n = d.size()), e (n - 1) and, for EigenVectors, z (n x n, the matrix
-// the rotations accumulate into: the identity, or sytrd's Q) are overwritten; eigenvalues
-// UNSORTED in d (the host route sorts in a separate pass).
-//   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
-//                     (every lane calls with its partition's problem); ws.local. Returns 1 when a
-//                     block did not converge within opts.max_sweeps.
-//   tier::Blocked<1>  any n, one problem per WorkGroup<256>, COLLECTIVE; the host steqr_wg
-//                     algorithm (same sweep body, same pass order); ws.global. Returns the number
-//                     of e(j) != 0 left (LAPACK's info). z may be complex (real rotations).
-// Returns 0 on success (uniform); -2 when n is outside [1, N].
+/// xSTEQR on one problem: d (n = d.size()), e (n - 1) and, for EigenVectors, z (n x n, the matrix
+/// the rotations accumulate into: the identity, or sytrd's Q) are overwritten; eigenvalues
+/// UNSORTED in d (the host route sorts in a separate pass).
+///   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
+///                     (every lane calls with its partition's problem); ws.local. Returns 1 when a
+///                     block did not converge within opts.max_sweeps.
+///   tier::Blocked<1>  any n, one problem per WorkGroup<256>, COLLECTIVE; the host steqr_wg
+///                     algorithm (same sweep body, same pass order); ws.global. Returns the number
+///                     of e(j) != 0 left (LAPACK's info). z may be complex (real rotations).
+/// Returns 0 on success (uniform); -2 when n is outside [1, N]. ws: ONE problem's
+/// buffer_size<routine::steqr<J>, Tier, T>(n) (Cta: local Q with vectors; Blocked: global
+/// rotations and the block table). live == false (a dead slot of a packed launch, same n): d, e
+/// and z are neither read nor written (ws is its scratch), every collective is reached; returns 0.
 template <JobType J, class Tier, class Ex, class D, class E, class Z>
 BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
-                              const steqr_opts& opts = {}) {
+                                 const SteqrOptions& opts = {}, bool live = true) {
     using T = std::remove_cv_t<elem_t<D>>;
     using R = routine::steqr<J>;
     using Tr = resolve_tier_t<R, T, Tier>;
@@ -1141,6 +1138,7 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
     if constexpr (tier::is_blocked_v<Tr>) {
         constexpr int WG = tier_info<R, Tr, T>::wg_size;
         static_assert(std::is_same_v<Ex, WorkGroup<WG>>, "steqr: tier::Blocked<1> runs on device::WorkGroup<256> (one problem per work-group)");
+        if (!live) return 0;  // one problem per work-group: the whole group is dead
         const int n = d.size();
         if (n < 1) return -2;
         return detail::steqr_wg_run<kVecs, WG, T>(ex, d, e, z, n, opts.max_sweeps, ws);
@@ -1155,8 +1153,8 @@ BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& 
         const detail::steqr_cta_plan<kVecs, N, T> plan{};
         detail::QSharedCache<T, P, P, kVecs, LP> qcache(carve_local(ws, plan.q).get(), 0, ex.lid(), n);
         const bool failed = detail::steqr_cta_run<T, P, kVecs>(ex.part, d, e, z, qcache, n, opts.max_sweeps,
-                                                                     opts.shift, true);
-        return failed ? 1 : 0;
+                                                                     opts.shift, live);
+        return live && failed ? 1 : 0;
     }
 }
 

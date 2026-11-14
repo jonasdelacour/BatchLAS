@@ -8,8 +8,8 @@
 //   stebz              the public op (design C): selected eigenvalues of one matrix on one
 //                      executor, any n; one item per wanted eigenvalue
 // Tier: one body for every n (no panel, nothing of the matrix in local memory): tier::Blocked<1>.
-// RANGE and ORDER stay run-time (detail::stebz_params): the host route serves every range from
-// one kernel, and the paths differ by one pair of Sturm counts (design C.2's tax is nil).
+// RANGE and ORDER stay run-time (StebzOptions): the host route serves every range from one
+// kernel, and the paths differ by one pair of Sturm counts (design C.2's tax is nil).
 
 #include <cstdint>
 #include <limits>
@@ -23,21 +23,22 @@
 
 namespace batchlas::device {
 
+/// stebz's options, dstebz's selection. value_range: RANGE = 'V', the eigenvalues in (vl, vu];
+/// else RANGE = 'I' (or 'A' with il = 0, iu = n - 1), indices il..iu, 0-based (the defaults select
+/// index 0 alone). descending: ORDER = descending output. abstol <= 0: eps * max(||T||, 1).
+/// max_iter: the bisection cap per eigenvalue (>= 1; StebzParams::max_iterations).
+template <class R> struct StebzOptions {
+    bool value_range = false;
+    std::int64_t il = 0, iu = 0;
+    R vl = R(0), vu = R(0), abstol = R(0);
+    bool descending = false;
+    std::int32_t max_iter = 128;
+};
+
 namespace detail {
 template <class R> struct Interval {
     R lo, hi;
     R e2max;  // max_i e_i^2 (dstebz's pivmin scale)
-};
-
-// dstebz's selection. value_range: RANGE = 'V', the eigenvalues in (vl, vu]; else RANGE = 'I'
-// (or 'A' with il = 0, iu = n - 1), indices il..iu, 0-based. descending: ORDER = descending
-// output. abstol <= 0: eps * max(||T||, 1). max_iter: the bisection cap per eigenvalue (>= 1).
-template <class R> struct stebz_params {
-    bool value_range;
-    std::int64_t il, iu;
-    R vl, vu, abstol;
-    bool descending;
-    std::int32_t max_iter;
 };
 
 // The workspace plan (design C.5): the leader's interval (lo, hi, pivmin) and the selection's
@@ -127,21 +128,17 @@ template <class T> struct tier_info<routine::stebz, tier::Blocked<1>, T> {
     static constexpr WorkspaceSize buffer_size(int) { return detail::stebz_layout<T>().size; }
 };
 
-template <class Tier, class T> constexpr WorkspaceSize stebz_buffer_size(int n) {
-    return tier_info<routine::stebz, resolve_tier_t<routine::stebz, T, Tier>, T>::buffer_size(n);
-}
-
-// Selected eigenvalues of one tridiagonal (d, e) by bisection, host order (d, e, w, m, ws,
-// params). COLLECTIVE over ex; d and e must be visible to every item on entry. w receives the
-// m selected eigenvalues (ascending unless p.descending); m is set on every item. Returns 0
-// (xSTEBZ's info: the bisection is capped, never fails). Exit: outputs visible on return.
-// Workspace: stebz_buffer_size<Tier, T>(n) (local only). The interval and the selection are
-// published through local memory by the leader, as the host route does.
+/// Selected eigenvalues of one tridiagonal (d, e) by bisection, host order (d, e, w, m, ws,
+/// opts). COLLECTIVE over ex; d and e must be visible to every item on entry. w receives the
+/// m selected eigenvalues (ascending unless p.descending); m is set on every item. Returns 0
+/// (xSTEBZ's info: the bisection is capped, never fails). Exit: outputs visible on return.
+/// Workspace: buffer_size<routine::stebz, Tier, T>(n) (local only). The interval and the
+/// selection are published through local memory by the leader, as the host route does.
 template <class Tier, class Ex, class D, class E, class W, class R>
 BATCHLAS_DEVICE_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, int& m, const Workspace& ws,
-                              const detail::stebz_params<R>& p) {
+                                 const StebzOptions<R>& p) {
     using T = elem_t<D>;
-    static_assert(std::is_same_v<T, R>, "stebz: params of the matrix's real type");
+    static_assert(std::is_same_v<T, R>, "stebz: options of the matrix's real type");
     static_assert(std::is_same_v<resolve_tier_t<routine::stebz, T, Tier>, tier::Blocked<1>>, "stebz: tier::Blocked<1>");
     constexpr auto L = detail::stebz_layout<T>();
     const auto bounds = carve_local(ws, L.bounds);

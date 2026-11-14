@@ -68,11 +68,12 @@ template <class T> std::vector<T> input(int n, int ld, Uplo ul) {
 template <Uplo UL, class Tier, class T> class ApiSytrdKernel;
 
 // The user's kernel: one problem per partition of N lanes, the tile in the work-group's local
-// memory at this partition's slice, the tier fixed at compile time.
-template <Uplo UL, class Tier, class T> void launch_device(Dev& dev, T* A, int n, int ld, T* d, T* e, T* tau, int* info) {
+// memory at this partition's slice, the tier fixed at compile time. Slots b >= live run dead.
+template <Uplo UL, class Tier, class T>
+void launch_device(Dev& dev, T* A, int n, int ld, T* d, T* e, T* tau, int* info, int live = kBatch) {
     constexpr int N = Tier::n_max;
     constexpr int ppw = 32 / N;
-    constexpr std::size_t lbytes = batchlas::device::sytrd_buffer_size<UL, Tier, T>(N).local_bytes;
+    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::sytrd<UL>, Tier, T>(N).local_bytes;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<sycl::uint4, 1> slm(sycl::range<1>((lbytes * ppw + 15) / 16), h);
            h.parallel_for<ApiSytrdKernel<UL, Tier, T>>(
@@ -86,9 +87,10 @@ template <Uplo UL, class Tier, class T> void launch_device(Dev& dev, T* A, int n
                                               raw + std::size_t(slot) * lbytes),
                                           nullptr};
                    const int nm1 = n > 1 ? n - 1 : 0;
+                   const bool on = b < live;
                    const int r = batchlas::device::sytrd<UL, Tier>(ex, batchlas::device::mat(A + std::size_t(b) * ld * n, n, n, ld), batchlas::device::vec(d + std::size_t(b) * n, n),
-                                                     batchlas::device::vec(e + std::size_t(b) * nm1, nm1), batchlas::device::vec(tau + std::size_t(b) * nm1, nm1), ws);
-                   if (ex.leader()) info[b] = r;
+                                                     batchlas::device::vec(e + std::size_t(b) * nm1, nm1), batchlas::device::vec(tau + std::size_t(b) * nm1, nm1), ws, on);
+                   if (on && ex.leader()) info[b] = r;
                });
        }).wait_and_throw();
 }
@@ -214,6 +216,44 @@ TYPED_TEST(DeviceApiSytrdTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
     EXPECT_EQ(bitdiff(dev.down(A, a0.size()), a0), 0);
 }
 
+// C9: the last three slots of the last sub-group (Cta<8>: four per sub-group) run with live =
+// false. Their A, d, e and tau stay as given; every live slot keeps the all-live run's bits.
+template <class T, Uplo UL> void dead_slots(Dev& dev) {
+    const int n = 7, ld = n + 3, nm1 = n - 1, live = kBatch - 3;
+    const auto a0 = input<T>(n, ld, UL);
+    const std::vector<T> d0(std::size_t(n) * kBatch, nan_v<T>()), e0(std::size_t(nm1) * kBatch, nan_v<T>());
+    struct Got {
+        std::vector<T> a, d, e, tau;
+    };
+    const auto run = [&](int nlive) {
+        T* A = dev.up(a0);
+        T* d = dev.up(d0);
+        T* e = dev.up(e0);
+        T* tau = dev.up(e0);
+        int* info = dev.alloc<int>(kBatch, 7);
+        launch_device<UL, batchlas::device::tier::Cta<8>, T>(dev, A, n, ld, d, e, tau, info, nlive);
+        return Got{dev.down(A, a0.size()), dev.down(d, d0.size()), dev.down(e, e0.size()), dev.down(tau, e0.size())};
+    };
+    const Got all = run(kBatch), part = run(live);
+    const auto split = [&](const std::vector<T>& g, const std::vector<T>& ref, const std::vector<T>& in, std::size_t per) {
+        int live_diff = 0, dead_diff = 0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            if (i < std::size_t(live) * per) live_diff += !same_bits(g[i], ref[i]);
+            else dead_diff += !same_bits(g[i], in[i]);
+        }
+        return std::pair{live_diff, dead_diff};
+    };
+    EXPECT_EQ(split(part.a, all.a, a0, std::size_t(ld) * n), std::pair(0, 0));
+    EXPECT_EQ(split(part.d, all.d, d0, n), std::pair(0, 0));
+    EXPECT_EQ(split(part.e, all.e, e0, nm1), std::pair(0, 0));
+    EXPECT_EQ(split(part.tau, all.tau, e0, nm1), std::pair(0, 0));
+    int solved = 0;  // the all-live run does write those slots: a write there is visible
+    for (std::size_t i = std::size_t(live) * n; i < d0.size(); ++i) solved += !same_bits(all.d[i], d0[i]);
+    EXPECT_GT(solved, 0);
+}
+TYPED_TEST(DeviceApiSytrdTest, DeadSlotsWriteNothingLower) { dead_slots<TypeParam, Uplo::Lower>(this->dev); }
+TYPED_TEST(DeviceApiSytrdTest, DeadSlotsWriteNothingUpper) { dead_slots<TypeParam, Uplo::Upper>(this->dev); }
+
 TEST(DeviceApiSytrdTier, WithTierPicksTheSmallestCtaAndThrowsPast32) {
     const batchlas::device::DeviceLimits lim{48 * 1024, {32}, 1024, true};
     for (int n = 1; n <= 32; ++n) {
@@ -233,10 +273,10 @@ TEST(DeviceApiSytrdTier, WithTierPicksTheSmallestCtaAndThrowsPast32) {
 }
 
 template <int N, class T> void expect_size() {
-    const auto s = batchlas::device::sytrd_buffer_size<Uplo::Lower, batchlas::device::tier::Cta<N>, T>(N);
+    const auto s = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, batchlas::device::tier::Cta<N>, T>(N);
     EXPECT_EQ(s.local_bytes, (std::size_t(N) * N + 2 * N) * sizeof(T)) << "N=" << N;
     EXPECT_EQ(s.global_bytes, 0u);
-    static_assert(batchlas::device::sytrd_buffer_size<Uplo::Upper, batchlas::device::tier::upto<N>, T>(N) == batchlas::device::sytrd_buffer_size<Uplo::Upper, batchlas::device::tier::Cta<N>, T>(N));
+    static_assert(batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Upper>, batchlas::device::tier::upto<N>, T>(N) == batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Upper>, batchlas::device::tier::Cta<N>, T>(N));
 }
 TEST(DeviceApiSytrdTier, BufferSizeIsTileVW) {
     expect_size<4, float>();
@@ -305,7 +345,7 @@ template <class T> BlockedOut<T> blocked_device(Dev& dev, int n, int ld, int bat
     T* e = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
     T* tau = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
     int* info = dev.alloc<int>(batch, 7);
-    const batchlas::device::WorkspaceSize sz = batchlas::device::sytrd_buffer_size<Uplo::Lower, BlockedTier, T>(n);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
     std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
     dev.run<WG>(batch, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
@@ -487,8 +527,8 @@ TYPED_TEST(DeviceApiSytrdBlockedTest, ChainedWithSteqrGivesTheHostEigenvalues) {
         Re* w = dev.alloc<Re>(std::size_t(n) * batch, std::numeric_limits<Re>::quiet_NaN());
         Re* er = dev.alloc<Re>(std::size_t(nm1) * batch, std::numeric_limits<Re>::quiet_NaN());
         int* info = dev.alloc<int>(batch, 7);
-        const batchlas::device::WorkspaceSize s1 = batchlas::device::sytrd_buffer_size<Uplo::Lower, BlockedTier, T>(n);
-        const batchlas::device::WorkspaceSize s2 = batchlas::device::steqr_buffer_size<JobType::NoEigenVectors, ST, Re>(n);
+        const batchlas::device::WorkspaceSize s1 = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
+        const batchlas::device::WorkspaceSize s2 = batchlas::device::buffer_size<batchlas::device::routine::steqr<JobType::NoEigenVectors>, ST, Re>(n);
         std::byte* g1 = dev.alloc<std::byte>(s1.global_bytes * std::size_t(batch) + s1.align, std::byte{0});
         std::byte* g2 = dev.alloc<std::byte>(s2.global_bytes * std::size_t(batch) + s2.align, std::byte{0});
         dev.run<WG>(batch, s1.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
@@ -557,7 +597,7 @@ template <class T> void expect_blocked_size(int n) {
     const std::size_t wip = r16(kNB * s);
     const std::size_t stage = r16(wip + kNB * s);
     const std::size_t elems = 1 * ((32 + 1) * 8 + (8 + 1) * 32);  // RegTiled<32, 32, 8>: A and B slabs
-    const auto got = batchlas::device::sytrd_buffer_size<Uplo::Lower, BlockedTier, T>(n);
+    const auto got = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
     EXPECT_EQ(got.global_bytes, r16(wc + n * s)) << "n=" << n;
     EXPECT_EQ(got.local_bytes, r16(stage + elems * s)) << "n=" << n;
 }

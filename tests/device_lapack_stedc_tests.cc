@@ -21,7 +21,7 @@
 //   - with_tier picks Blocked<1>, filters a 1 KB local memory and a sub-group size of 16, throws
 //     "stedc: no device tier admits n=0"; buffer_size equals the carve plan
 // Deliberate breaks, one per axis, each red on the 4090 (2026-11-06):
-//   merge passes sign 1 to laed2_merge_vector -> StedcMatchesHostRoute (residual)
+//   merge passes sign 1 to detail::laed2_merge_vector -> StedcMatchesHostRoute (residual)
 //   merge skips the final rank sort      -> StedcMatchesHostRoute (values)
 //   bottom_up drops the - |e(i)| tear    -> StedcMatchesHostRoute (values, residual)
 //   dc_layout carves tmp onto qp         -> StedcMatchesHostRoute (residual)
@@ -168,7 +168,7 @@ protected:
         if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
         bool fits = false;
         try {
-            device::with_tier<device::routine::stedc<>, T>(dev.q().get_device(), 1, [&](auto) { fits = true; });
+            device::with_tier<device::routine::stedc<JobType::EigenVectors>, T>(dev.q().get_device(), 1, [&](auto) { fits = true; });
         } catch (const batchlas::invalid_argument&) {
         }
         if (!fits) GTEST_SKIP() << "no stedc tier fits this device (work-group 256, sub-group 32)";
@@ -183,7 +183,7 @@ TYPED_TEST_SUITE(DeviceApiStedc, RealTypes);
 template <class T, JobType J>
 void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const MatrixView<T, MatrixFormat::Dense>& Z,
                 std::byte* gws, std::int32_t* info, std::int32_t max_sec_iter, int n) {
-    const device::WorkspaceSize sz = device::stedc_buffer_size<J, Tier, T>(n);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stedc<J>, Tier, T>(n);
     const auto Zk = Z.kernel_view();
     device::StedcOptions<T> p;
     p.max_sec_iter = max_sec_iter;
@@ -217,7 +217,7 @@ template <class T, JobType J> DeviceRun<T> run_device(Dev& dev, const Problem<T>
     r.w = dev.up(std::vector<T>(std::size_t(kBatch) * r.sw, poison<T>()));
     r.z = dev.up(std::vector<T>(std::size_t(kBatch) * r.sz, poison<T>()));
     r.info = dev.up(std::vector<std::int32_t>(kBatch, -7));
-    const auto gsz = device::stedc_buffer_size<J, Tier, T>(n);
+    const auto gsz = device::buffer_size<device::routine::stedc<J>, Tier, T>(n);
     std::byte* gws = dev.up(std::vector<std::byte>(gsz.global_bytes * kBatch, std::byte{0xff}));
     const VectorView<T> dview(d, n, kBatch, kInc, P.sd);
     const VectorView<T> eview(e, std::max(n - 1, 0), kBatch, kInc, P.se);
@@ -380,8 +380,8 @@ TYPED_TEST(DeviceApiStedc, StedcTierQueries) {
         std::string got = "none";
         device::with_tier<R, T>(lim, n, [&]<class Tr>(Tr) { got = std::is_same_v<Tr, Tier> ? "blocked1" : "other"; });
         EXPECT_EQ(got, "blocked1") << n;
-        const auto sz = device::stedc_buffer_size<JobType::EigenVectors, Tier, T>(n);
-        const auto szn = device::stedc_buffer_size<JobType::NoEigenVectors, Tier, T>(n);
+        const auto sz = device::buffer_size<device::routine::stedc<JobType::EigenVectors>, Tier, T>(n);
+        const auto szn = device::buffer_size<device::routine::stedc<JobType::NoEigenVectors>, Tier, T>(n);
         const auto L = device::detail::dc_layout<T>(n, false);
         EXPECT_EQ(sz, L.size);
         EXPECT_EQ(szn, device::detail::dc_layout<T>(n, true).size);

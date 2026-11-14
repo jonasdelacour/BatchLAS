@@ -61,12 +61,13 @@ void stedc_merge_fused(Queue& ctx,
                 const auto zb = vb.head(dd);
                 const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
                 device::for_each_owned(ex, dd, [&](int k) {
-                    const auto root = device::laed4(device::Thread{}, poles, zb, dd, k, abs_2rho, max_iter, Q.col(k));
-                    temp_lambdas(k, bid) = root.origin + root.tau;
-                    if (!root.converged) {
+                    T origin, tau;
+                    const int info = device::laed4(device::Thread{}, poles, zb, dd, k, abs_2rho, origin, tau, max_iter, Q.col(k));
+                    temp_lambdas(k, bid) = origin + tau;
+                    if (info != 0) {
                         detail::info_report(info_dev, detail::info_item(static_cast<int64_t>(bid), nodes_per_item), 1);
                     }
-                    device::detail::denominators(device::Thread{}, Q.col(k), poles, root.origin, root.tau);
+                    device::detail::denominators(device::Thread{}, Q.col(k), poles, origin, tau);
                 });
                 device::sync<device::Scope::Group>(ex, device::Mem::Global);
 

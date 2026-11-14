@@ -18,7 +18,7 @@ namespace detail {
 
 /// q(i) = (d(i) - origin) - tau, the root's denominators (at the origin pole exactly -tau; an
 /// exact zero is clamped to eps (|d(i)| + 1) to keep the Löwner reciprocal finite).
-template <typename T, typename Ex, typename QCol, typename DV>
+template <class T, class Ex, class QCol, class DV>
 BATCHLAS_DEVICE_HELPER void denominators(const Ex& ex, const QCol& q, const DV& d_prob, T origin, T tau) {
     map(
         ex, q,
@@ -37,7 +37,7 @@ BATCHLAS_DEVICE_HELPER void denominators(const Ex& ex, const QCol& q, const DV& 
 /// barrier. Iteration eid reads row eid of Q and writes only v(eid).
 // prod_scaled: the naive product leaves float range at n = 64.
 // evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
-template <typename T, typename Ex, typename QBatch, typename DV, typename VView>
+template <class T, class Ex, class QBatch, class DV, class VView>
 BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t first, std::int32_t stride, std::int32_t dd, QBatch& Q_bid,
                                  const DV& d_prob, const VView& v, std::int32_t bid) {
     if (!do_rescale) {
@@ -73,7 +73,7 @@ BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t 
 
 /// Q(:, eig) = z ./ Q(:, eig), divided by its Blue 2-norm; `first`/`stride` as in rescale
 /// (column eig reads z and touches only Q(:, eig)).
-template <typename T, typename Ex, typename QMat, typename VView>
+template <class T, class Ex, class QMat, class VView>
 BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::int32_t stride, std::int32_t dd, const QMat& Q, const VView& v,
                                    std::int32_t bid) {
     // Uniform trip count (see rescale): an inactive group runs every op on an empty column.
@@ -96,8 +96,9 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
 
 /// One merge's secular step, COLLECTIVE over the work-group wex. Roots k = first, first +
 /// stride, ... < dd are solved on pex (a partition of wex, or wex itself with (0, 1)); for each,
-/// on_root(k, root) runs on pex's leader and Q(:, k) receives the root's denominators. Then the
-/// weights v are Löwner-rescaled (do_rescale) and Q(:, 0..dd) becomes the merged eigenvectors.
+/// on_root(k, origin, tau, converged) runs on pex's leader (root origin + tau) and Q(:, k)
+/// receives the root's denominators. Then the weights v are Löwner-rescaled (do_rescale) and
+/// Q(:, 0..dd) becomes the merged eigenvectors.
 /// d_prob, z_prob: the dd sorted poles and weights (any memory); abs_2rho = |2 rho|; Q_bid: Q
 /// by (i, j) for the rescale; v(i, bid) / v.batch_item(bid): the weights (written).
 template <class T, class WEx, class PEx, class DV, class QMat, class QBatch, class VView, class OnRoot>
@@ -105,13 +106,13 @@ BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t f
                                const DV& z_prob, T abs_2rho, std::int32_t max_iter, bool do_rescale, const QMat& Q, QBatch& Q_bid,
                                const VView& v, std::int32_t bid, const OnRoot& on_root) {
     for (std::int32_t root_ix = first; root_ix < dd; root_ix += stride) {
-        laed4_root<T> root;
+        detail::SecularRoot<T> root;
         if (root_ix == dd - 1) {
             root = detail::solve_last(pex, d_prob, z_prob, dd, abs_2rho, max_iter);
         } else {
             root = detail::solve_inner(pex, d_prob, z_prob, dd, root_ix, abs_2rho, max_iter);
         }
-        if (pex.leader()) on_root(root_ix, root);
+        if (pex.leader()) on_root(root_ix, root.origin, root.tau, root.converged);
         detail::denominators(pex, Q.col(root_ix).head(dd), d_prob, root.origin, root.tau);
     }
 

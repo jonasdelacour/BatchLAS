@@ -84,7 +84,7 @@ Event stebz(Queue& ctx,
 
     auto* m_ptr = m.data();
     using Tier = device::tier::Blocked<1>;
-    const device::WorkspaceSize wsz = device::stebz_buffer_size<Tier, T>(static_cast<int>(n));
+    const device::WorkspaceSize wsz = device::buffer_size<device::routine::stebz, Tier, T>(static_cast<int>(n));
 
     // Thin launcher (design C.8): the body is the public device::stebz.
     ctx->submit([&](sycl::handler& h) {
@@ -98,7 +98,7 @@ Event stebz(Queue& ctx,
                 const device::RtGroup<> ex{item};
                 const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
-                const device::detail::stebz_params<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
+                const device::StebzOptions<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
                 int found = 0;
                 device::stebz<Tier>(ex, dv, ev, device::item(w, static_cast<int>(bid)), found,
                                 device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
