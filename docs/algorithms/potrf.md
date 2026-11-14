@@ -80,15 +80,15 @@ first entry of the nearest `tuned/potrf.<device>.txt` row that `can_run` admits;
 **`cta`.** The blocked identity with \f$b = 8\f$, each work-item owning a \f$\mathrm{TS}\times\mathrm{TS}\f$
 register tile, \f$\mathrm{TS} \in \{2,4\}\f$ ([`src/ops/potrf/kernels/potrf_cta.cc:L43-L46`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta.cc#L43-L46)). One load
 into SLM, Upper as \f$\tilde a_{ic} = \overline{a_{ci}}\f$ with the diagonal made real
-([`src/ops/potrf/kernels/potrf_cta_device.hh:L258-L271`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta_device.hh#L258-L271)), one store
-([`src/ops/potrf/kernels/potrf_cta_device.hh:L305-L316`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta_device.hh#L305-L316)). Per panel, three barrier-separated phases:
+([`include/batchlas/device/lapack/potrf.hh:L427-L435`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L427-L435), [`include/batchlas/device/lapack/potrf.hh:L453-L466`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L453-L466)), one store
+([`include/batchlas/device/lapack/potrf.hh:L729-L732`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L729-L732)). Per panel, three barrier-separated phases:
 
-1. \f$L_{11}\f$ on one sub-group by the `tiny` recurrence ([`src/ops/potrf/kernels/potrf_cta_device.hh:L61-L113`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta_device.hh#L61-L113)).
+1. \f$L_{11}\f$ on one sub-group by the `tiny` recurrence ([`include/batchlas/device/lapack/potrf.hh:L292-L333`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L292-L333)).
 2. \f$L_{21} = A_{21}L_{11}^{-H}\f$ row by row,
    \f$x_c = (a_{ic} - \sum_{p<c} x_p\overline{\ell_{cp}})/\ell_{cc}\f$
-   ([`src/ops/potrf/kernels/potrf_cta_device.hh:L132-L150`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta_device.hh#L132-L150)).
+   ([`include/batchlas/device/lapack/potrf.hh:L471-L494`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L471-L494)).
 3. \f$A_{22} \mathrel{-}= L_{21}L_{21}^H\f$, one tile per lower-triangle tile
-   ([`src/ops/potrf/kernels/potrf_cta_device.hh:L193-L233`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_cta_device.hh#L193-L233)).
+   ([`include/batchlas/device/lapack/potrf.hh:L525-L571`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L525-L571)).
 
 ## potrf: the left-looking panel kernel
 
@@ -100,10 +100,10 @@ per row \f$r\f$:
 G_{ri} = \sum_{k<j} \ell_{rk}\,\overline{\ell_{j+i,k}}, \qquad P_{ri} = a_{r,j+i} - G_{ri}
 \f]
 
-([`src/ops/potrf/kernels/potrf_lpanel_device.hh:L57-L136`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_lpanel_device.hh#L57-L136); \f$G\f$ at
-[`src/ops/potrf/kernels/potrf_lpanel_device.hh:L70-L118`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_lpanel_device.hh#L70-L118)). \f$P\f$ is factored
-in SLM by the unblocked recurrence ([`src/ops/potrf/kernels/potrf_lpanel_device.hh:L139-L176`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_lpanel_device.hh#L139-L176)) and
-stored before the next panel reads it ([`src/ops/potrf/kernels/potrf_lpanel_device.hh:L180-L188`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/potrf/kernels/potrf_lpanel_device.hh#L180-L188)).
+([`include/batchlas/device/lapack/potrf.hh:L907-L927`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L907-L927); \f$G\f$ at
+[`include/batchlas/device/lapack/potrf.hh:L912-L922`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L912-L922)). \f$P\f$ is factored
+in SLM by the unblocked recurrence ([`include/batchlas/device/lapack/potrf.hh:L928-L930`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L928-L930), [`include/batchlas/device/lapack/potrf.hh:L351-L393`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L351-L393)) and
+stored before the next panel reads it ([`include/batchlas/device/lapack/potrf.hh:L931`](https://github.com/jonasdelacour/BatchLAS/blob/2256c2c08680101badb7e1e27d221d5fddf6bceb/include/batchlas/device/lapack/potrf.hh#L931)).
 
 ## potrf: the blocked driver
 
