@@ -33,6 +33,15 @@ struct bdsqr {
 };
 }  // namespace routine
 
+// bdsqr's options. sort_desc: s descending, U's columns and Vh's rows permuted with it. tol: the
+// relative tolerance (<= 0: DBDSQR's tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100)). maxit:
+// the iteration cap (<= 0: DBDSQR's max(32, 6 n^2)).
+template <class R> struct BdsqrOptions {
+    bool sort_desc = true;
+    R tol = R(0);
+    int maxit = 0;
+};
+
 namespace detail {
 // DBDSQR's tolerance (tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100)) and its iteration cap
 // (maxitr * n^2, maxitr = 6, at least 32).
@@ -99,20 +108,13 @@ template <class T> struct tier_info<routine::bdsqr, tier::Blocked<1>, T> {
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sweep_plan<T>(n).size; }
 };
-template <class Tier, class T> constexpr WorkspaceSize bdsqr_buffer_size(int n) {
-    return tier_info<routine::bdsqr, resolve_tier_t<routine::bdsqr, T, Tier>, T>::buffer_size(n);
-}
 
-// xBDSQR of one bidiagonal, host order (d, e, s, ws, U, Vh, sort_desc[, params]). d (n) and e
-// (n - 1) are working storage (undefined on return); s receives the n singular values (|d| after
-// convergence, descending when sort_desc). U is accumulated when it has n columns and at least one
-// row, Vh when it has n rows and at least one column (pass a 0 x 0 operand to skip either).
-// COLLECTIVE over ex with the same arguments; d, e, U, Vh visible on entry; outputs visible on
-// return. Workspace: bdsqr_buffer_size<Tier, T>(n) on a work-group, none on Thread. Returns xBDSQR's
-// status as the host's flag: 0, or 1 when the sweep hit maxit or a singular value is NaN.
-template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV, class R>
-BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
-                              bool sort_desc, const detail::bdsqr_params<R>& p) {
+namespace detail {
+// xBDSQR's body with the tolerance and iteration cap resolved: the public bdsqr below (DBDSQR's
+// values for BdsqrOptions' zeros) and the host route (p formed on the host, a kernel argument).
+template <class Tier, class Ex, class D, class E, class S, class MU, class MV, class R>
+BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
+                                       bool sort_desc, const bdsqr_params<R>& p) {
     static_assert(std::is_same_v<elem_t<D>, R>, "bdsqr: params of the bidiagonal's real type");
     static_assert(std::is_same_v<resolve_tier_t<routine::bdsqr, R, Tier>, tier::Blocked<1>>, "bdsqr: tier::Blocked<1>");
     constexpr bool solo = is_thread_v<Ex>;
@@ -378,19 +380,30 @@ BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& 
     }
     return info;
 }
+}  // namespace detail
 
-// The defaults: DBDSQR's tolerance and iteration cap for n = d.size().
+// xBDSQR of one bidiagonal, (d, e, s, U, Vh, ws, opts). d (n) and e (n - 1) are working storage
+// (undefined on return); s receives the n singular values (|d| after convergence, descending when
+// opts.sort_desc). U is accumulated when it has n columns and at least one row, Vh when it has n
+// rows and at least one column (pass a 0 x 0 operand to skip either). COLLECTIVE over ex with the
+// same arguments; d, e, U, Vh visible on entry; outputs visible on return. Workspace:
+// device::buffer_size<routine::bdsqr, Tier, T>(n) on a work-group, none on Thread. Returns
+// xBDSQR's status as the host's flag: 0, or 1 when the sweep hit maxit or a singular value is NaN.
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
-BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
-                              bool sort_desc = true) {
-    return bdsqr<Tier>(ex, d, e, s, ws, U, Vh, sort_desc, detail::params<elem_t<D>>(d.size()));
+BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
+                              const BdsqrOptions<elem_t<D>>& opts = {}) {
+    using R = elem_t<D>;
+    const auto dflt = detail::params<R>(d.size());
+    const detail::bdsqr_params<R> p{opts.tol > R(0) ? opts.tol : dflt.tol, opts.maxit > 0 ? opts.maxit : dflt.maxit};
+    return detail::bdsqr_sweep<Tier>(ex, d, e, s, U, Vh, ws, opts.sort_desc, p);
 }
-// Singular values only (the host's values-only overload).
+// Singular values only.
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S>
-BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, bool sort_desc = true) {
+BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws,
+                              const BdsqrOptions<elem_t<D>>& opts = {}) {
     using R = elem_t<D>;
     const auto none = device::mat(static_cast<R*>(nullptr), 0, 0, 1);
-    return bdsqr<Tier>(ex, d, e, s, ws, none, none, sort_desc, detail::params<R>(d.size()));
+    return bdsqr<Tier>(ex, d, e, s, none, none, ws, opts);
 }
 
 }  // namespace batchlas::device

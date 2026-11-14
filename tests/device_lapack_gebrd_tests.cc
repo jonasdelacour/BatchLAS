@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The core views and ops the complex labrd panel (lapack/gebrd.hh labrd_panel) composes, against
+// The core views and ops the complex labrd panel (lapack/gebrd.hh labrd) composes, against
 // long-double host references, used the way the panel uses them: op_view<ConjTrans> and conj_view
 // as gemv_acc operands, a conj_view y0 that aliases y, a -0 fn_vec as y0, lacgv on a WorkGroup and
 // a Thread. Guards (agent guide section 8): non-natural ld and inc, complex data with nonzero

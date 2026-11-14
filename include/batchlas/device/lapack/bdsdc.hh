@@ -207,20 +207,23 @@ template <class T> struct tier_info<routine::bdsdc, tier::Blocked<1>, T> {
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<T>(n).size; }
 };
-template <class Tier, class T> constexpr WorkspaceSize bdsdc_buffer_size(int n) {
-    return tier_info<routine::bdsdc, resolve_tier_t<routine::bdsdc, T, Tier>, T>::buffer_size(n);
-}
 
-// The SVD of one upper bidiagonal, host order (d, e, s, ws, U, Vh, sort_desc): s receives the n
-// singular values (descending when sort_desc, else ascending), U (n x n or larger: its leading
-// n x n block) the left vectors as columns, Vh (the same) the right vectors as rows; an operand
-// smaller than n x n is not formed. d (n) and e (n - 1) are read only. COLLECTIVE over ex, a
-// WorkGroup<256, 32> launched at sub-group size 32, with the same arguments; d, e visible on
-// entry, outputs on return. Workspace: bdsdc_buffer_size<Tier, T>(n). Returns stedc's info: 0, or
+// bdsdc's options. sort_desc: s descending (else ascending), U's columns and Vh's rows with it.
+struct BdsdcOptions {
+    bool sort_desc = true;
+};
+
+// The SVD of one upper bidiagonal, (d, e, s, U, Vh, ws, opts): s receives the n singular values
+// (descending when opts.sort_desc, else ascending), U (n x n or larger: its leading n x n block)
+// the left vectors as columns, Vh (the same) the right vectors as rows; an operand smaller than
+// n x n is not formed. d (n) and e (n - 1) are read only. COLLECTIVE over ex, a WorkGroup<256, 32>
+// launched at sub-group size 32, with the same arguments; d, e visible on entry, outputs on
+// return. Workspace: device::buffer_size<routine::bdsdc, Tier, T>(n). Returns stedc's info: 0, or
 // 1 when a secular root ran out of iterations.
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
-BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws, const MU& U, const MV& Vh,
-                              bool sort_desc = true) {
+BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
+                              const BdsdcOptions& opts = {}) {
+    const bool sort_desc = opts.sort_desc;
     using R = std::remove_cv_t<elem_t<D>>;
     static_assert(std::is_floating_point_v<R>, "bdsdc: a real T");
     static_assert(std::is_same_v<resolve_tier_t<routine::bdsdc, R, Tier>, tier::Blocked<1>>, "bdsdc: tier::Blocked<1>");

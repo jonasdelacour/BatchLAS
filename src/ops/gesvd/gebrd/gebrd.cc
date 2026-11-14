@@ -2,6 +2,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/device.hh>
+#include <batchlas/device/interop.hh>
 #include <batchlas/device/lapack/gebrd.hh>
 
 #include <src/math-helpers.hh>
@@ -15,6 +16,14 @@ namespace batchlas {
 
 namespace {
 
+// Item b of a host vector view through its own operator()(i, b): device::item's ItemVec swaps two
+// registers of the float kernel's SASS.
+template <class T> struct ItemOf {
+    VectorView<T> v;
+    int32_t b;
+    T& operator()(int i) const { return v(i, b); }
+    int size() const { return v.size(); }
+};
 
 // One work-item per matrix, every T (device::gebd2). The launch sits in a function per type, so
 // each scalar type compiles one kernel whatever the Backend.
@@ -29,6 +38,7 @@ Event gebd2_launch(Queue& ctx,
     const int32_t m = static_cast<int32_t>(a.rows());
     const int32_t n = static_cast<int32_t>(a.cols());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
+    using RealT = typename base_type<T>::type;
 
     ctx->submit([&](sycl::handler& cgh) {
         auto A = a.kernel_view();
@@ -40,7 +50,8 @@ Event gebd2_launch(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
-            device::gebd2<T>(device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()), b, D, E, TAUQ, TAUP);
+            (void)device::gebd2(device::Thread{}, device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()),
+                                ItemOf<RealT>{D, b}, ItemOf<RealT>{E, b}, ItemOf<T>{TAUQ, b}, ItemOf<T>{TAUP, b});
         });
     });
 
