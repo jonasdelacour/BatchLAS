@@ -65,7 +65,7 @@ Event trsm_native_sg_left(Queue& ctx,
     // which wins where the unrolled form's occupancy is lowest.
     // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
     constexpr bool kRolled = (sycl_device::dev_is_complex_v<D> && N >= 16) || (N == 32 && QC == 16);
-    constexpr int kUnrollS = kRolled ? 1 : N;
+    using StepAlg = std::conditional_t<kRolled, device::alg::LanePerRowRolled, device::alg::LanePerRow>;
 
     const Canonical can = canonicalise(Side::Left, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
@@ -119,7 +119,7 @@ Event trsm_native_sg_left(Queue& ctx,
                 if (okr && !unit) dd = L.diag(r);   // not L(r, r): see CanonTri::diag
                 // V1's fallback, per matrix: any non-finite reciprocal in this
                 // matrix's N lanes switches all of them to division.
-                const auto dg = device::guarded_recip<Ar>(ex, dd);
+                const auto dg = device::guarded_recip<Ar>(ex, dd, unit);
 
                 const int c0 = chunk * QC;
                 const int live_c = okr ? q - c0 : 0;   // columns c0.. of B this lane loads and stores
@@ -128,7 +128,8 @@ Event trsm_native_sg_left(Queue& ctx,
                 device::load_row(x, device::MapCols{Bc, c0, scale}, r, live_c);
                 // The division path sits behind a sub-group-uniform branch: as a
                 // per-lane select it kept QC divisions live at every step (2x at q=64).
-                device::trsm_lower_rowfrag<kUnrollS, Ar>(ex, nL, dg, n, unit, x);
+                device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, device::alg::DiagApply, StepAlg, device::arith::Fma,
+                             device::alg::Axpy>(ex, nL, dg, x, n);
                 device::store_row(x, device::ColsFrom{Bc, c0}, r, live_c);
             });
     });

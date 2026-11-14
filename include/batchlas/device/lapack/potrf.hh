@@ -36,6 +36,7 @@
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/lapack_aux.hh>
 #include <batchlas/device/level1.hh>
+#include <batchlas/device/level2.hh>
 #include <batchlas/device/level3/group.hh>
 #include <batchlas/device/operand.hh>
 #include <batchlas/device/scalar.hh>
@@ -467,28 +468,20 @@ template <class Ex, class MS, class MD> BATCHLAS_DEVICE_INLINE void lacpy_herm_l
 
 // X := X L^{-H} for the m x kb block X, one row at a time in a Frag<NB> (rows Cyclic over ex, no
 // barrier); L is kb x kb lower (kb <= NB) whose diagonal is read from the real vector `ldiag`.
-// Divides by the diagonal, as reference trsm does (potf2 scales by a reciprocal).
+// Each row is core trsv on conj(L) (x L^H = b is conj(L) x^T = b^T), sub of mul in the x * a
+// order (alg::UnfusedRight) and divided by the diagonal, as reference trsm does (potf2 scales
+// by a reciprocal).
 template <Side S, Uplo UL, Transpose TR, int NB, class Ex, class ML, class DV, class MX>
 BATCHLAS_DEVICE_HELPER void trsm_rowfrag(const Ex& ex, const ML& l, const DV& ldiag, const MX& x, int kb) {
     static_assert(S == Side::Right && UL == Uplo::Lower && TR == Transpose::ConjTrans,
                   "trsm_rowfrag: only Right / Lower / ConjTrans is implemented");
     using D = typename MX::value_type;
-    using A = arith_t<arith::Fma, D>;
     const int m = x.rows();
     for (int row = ex.lid(); row < m; row += detail::size_of(ex)) {
         Frag<D, NB> xr;
         load_row(xr, x, row, kb);
-        BATCHLAS_UNROLL_FULL
-        for (int c = 0; c < NB; ++c) {
-            if (c < kb) {
-                D s = xr[c];
-                BATCHLAS_UNROLL_FULL
-                for (int q = 0; q < NB; ++q) {
-                    if (q < c) s = A::sub(s, A::mul(xr[q], A::conj(l(c, q))));
-                }
-                xr[c] = A::div_real(s, ldiag(c));
-            }
-        }
+        trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, alg::RealDiv, alg::Serial, arith::Fma, alg::UnfusedRight>(Thread{}, conj_view(l), ldiag,
+                                                                                                                    xr, kb);
         store_row(xr, x, row, kb);
     }
 }

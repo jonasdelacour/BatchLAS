@@ -173,6 +173,9 @@ Event trsm_native_v1(Queue& ctx,
                 device::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
                 ex.barrier(device::Mem::Global);
                 const device::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
+                // L x = b row by row: the dot from zero, then b(s) read and subtracted, TpDiag's step.
+                const auto Lp = device::packed<Uplo::Lower, device::PackOrder::ByRows>(static_cast<const D*>(sLc), N);
+                using device::alg::DiagApply, device::alg::DotThenSub, device::alg::SerialRows, device::arith::Fma;
 
                 device::Frag<D, N> x;
                 if constexpr (kStageLeft) {
@@ -186,7 +189,8 @@ BATCHLAS_UNROLL_FULL
                         ex.barrier(device::Mem::Global);
                         device::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
                         ex.barrier(device::Mem::Global);
-                        device::trsv_lower_rows<N, TILE_ROWS, Ar>(x, k * TILE_ROWS, sLc, dg, [&](int s) {
+                        device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<TILE_ROWS>, Fma, DotThenSub>(
+                            device::Thread{}, Lp, dg, x, N, k * TILE_ROWS, [&](int s) {
                             D rhs{};
                             if (live && s < n) rhs = Ar::mul(alpha_d, my_col[s - k * TILE_ROWS]);
                             return rhs;
@@ -202,7 +206,8 @@ BATCHLAS_UNROLL_FULL
                     }
                 } else {
                     const auto bu = device::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(u);
-                    device::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+                    device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<N>, Fma, DotThenSub>(
+                        device::Thread{}, Lp, dg, x, N, 0, [&](int s) {
                         D rhs{};
                         if (live && s < n) rhs = Ar::mul(alpha_d, bu(s));
                         return rhs;

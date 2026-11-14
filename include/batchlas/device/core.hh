@@ -191,10 +191,24 @@ template <int W> struct ColDot {        // gemv T/C: W consecutive lanes per out
     static constexpr int width = W;
 };
 struct LanePerRow {};                   // trsv: lane i holds x(i); column j reaches the lanes by bcast
-// trsv, Diag::NonUnit: Div (x / a_ii), Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
+struct LanePerRowRolled {};             // trsv LanePerRow on a RowFrag block, its step loop rolled
+template <int R> struct SerialRows {    // trsv Serial on R rows from r0, the rhs read after the dot
+    static constexpr int rows = R;
+};
+template <int W> struct SplitDot {      // trsv / trmv (Conj)Trans: W accumulators per column dot
+    static_assert(W > 0 && (W & (W - 1)) == 0, "alg::SplitDot: W is a power of two");
+    static constexpr int width = W;
+};
+// trsv, Diag::NonUnit: Div (x / a_ii), Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)), DiagApply
+// (a diagonal step object's apply).
 struct Div {};
 struct Recip {};
 struct RealDiv {};
+struct DiagApply {};
+// trsv updates besides Fused / Unfused (level2.hh).
+struct UnfusedRight {};
+struct DotThenSub {};
+struct Axpy {};
 }  // namespace alg
 
 // The diagonal a copy / unit-head view gives: Keep (stored), Unit (1), Real ((re, 0)), Zero (0).

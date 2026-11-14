@@ -23,17 +23,45 @@ namespace batchlas::device {
 // or outside P it gets 0; a tile load with padding). DiagFill (what B's diagonal gets inside P):
 // DiagFill::Keep (copied), Real ((re, 0): a Hermitian diagonal), Unit (1, A not read).
 // Alg: for_each_owned_2d's walk (alg::RowOwner: item r copies whole rows r mod size, the
-// row-copy form). A conjugated source without a transpose is conj_view(A) (view.hh).
+// row-copy form), or alg::RowMirror (P = Lower / Upper, NoTrans, EdgeZeroPad, DiagFill::Real,
+// one row per item: B := the Hermitian matrix whose P triangle A stores; item r reads row r of
+// the triangle, coalesced, and writes it and its conjugate mirror, so a barrier must precede
+// reads of other rows). live == false (a masked-off item): op(A) is empty, so only
+// EdgeZeroPad writes (zeros). A conjugated source without a transpose is conj_view(A) (view.hh).
 namespace alg {
 struct EdgeNone {};
 struct EdgeGuard {};
 struct EdgeZeroPad {};
+struct RowMirror {};
 }  // namespace alg
 template <Part P = Part::Full, Transpose OP = Transpose::NoTrans, class Alg = alg::Walk, class Edge = alg::EdgeNone,
           DiagFill DF = DiagFill::Keep, class Ex, class MA, class MB>
-BATCHLAS_DEVICE_INLINE void lacpy(const Ex& ex, const MA& a, const MB& b) {
+BATCHLAS_DEVICE_INLINE void lacpy(const Ex& ex, const MA& a, const MB& b, bool live = true) {
     using T = typename MB::value_type;
-    if constexpr (std::is_same_v<Edge, alg::EdgeNone> && DF == DiagFill::Keep) {
+    if constexpr (std::is_same_v<Alg, alg::RowMirror>) {
+        static_assert((P == Part::Lower || P == Part::Upper) && OP == Transpose::NoTrans && std::is_same_v<Edge, alg::EdgeZeroPad> &&
+                          DF == DiagFill::Real,
+                      "lacpy: alg::RowMirror is the Hermitian completion of a Lower / Upper triangle (EdgeZeroPad, DiagFill::Real)");
+        using A = Arith<T>;
+        const int n = a.rows(), r = ex.lid();
+        if (r < 0 || r >= b.rows()) return;
+        if (live && r < n) {
+            for (int c = 0; c < n; ++c) {
+                if (P == Part::Upper ? r > c : r < c) continue;
+                T v = a(r, c);
+                if (r == c) {
+                    if constexpr (A::is_complex) v = A::make(A::re(v), real_t<T>(0));
+                } else {
+                    b(c, r) = A::conj(v);
+                }
+                b(r, c) = v;
+            }
+            for (int c = n; c < b.cols(); ++c) b(r, c) = A::zero();
+        } else {
+            for (int c = 0; c < b.cols(); ++c) b(r, c) = A::zero();
+        }
+    } else if constexpr (std::is_same_v<Edge, alg::EdgeNone> && DF == DiagFill::Keep) {
+        if (!live) return;
         for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int j) {
             if (!detail::in_part<P>(i, j)) return;
             if constexpr (OP == Transpose::NoTrans) b(i, j) = a(i, j);
@@ -49,7 +77,7 @@ BATCHLAS_DEVICE_INLINE void lacpy(const Ex& ex, const MA& a, const MB& b) {
         const int ar = OP == Transpose::NoTrans ? a.rows() : a.cols();
         const int ac = OP == Transpose::NoTrans ? a.cols() : a.rows();
         for_each_owned_2d<Alg>(ex, b.rows(), b.cols(), [&](int i, int j) {
-            const bool inside = std::is_same_v<Edge, alg::EdgeNone> || (i < ar && j < ac);
+            const bool inside = live && (std::is_same_v<Edge, alg::EdgeNone> || (i < ar && j < ac));
             if (!detail::in_part<P>(i, j) || !inside) {
                 if constexpr (std::is_same_v<Edge, alg::EdgeZeroPad>) b(i, j) = A::zero();
                 return;
