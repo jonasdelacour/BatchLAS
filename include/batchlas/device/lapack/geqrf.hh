@@ -140,16 +140,19 @@ template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y
 // xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and butterflies: no
 // static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Scalars: larfg_scalars<
 // alg::LarfgLapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), the
-// apply uses conj(tau) (zgeqr2's); tau[j] per reflector, kmax <= min(m, n). COLLECTIVE.
-// ex and a by value: the body is simplified before it is inlined, and through references it
-// keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
-template <class Ex, class MA, class D>
-inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
+// apply uses conj(tau) (zgeqr2's); tau(j) per reflector, the first tau.size() <= min(m, n)
+// columns are reduced. COLLECTIVE.
+// ex, a and tau by value, and plain inline: the body is simplified before it is inlined, and
+// through references it keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
+template <class Ex, class MA, class VT>
+inline void geqr2(const Ex ex, const MA a, const VT tau) {
+    using D = typename MA::value_type;
     using R = real_t<D>;
     using F = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
     constexpr bool sub = Ex::sub_whole;
     const int lanes = ex.team_size();
     const int m = a.rows(), n = a.cols();
+    const int kmax = tau.size();
 
     for (int j = 0; j < kmax; ++j) {
         ex.barrier(Mem::Global);  // B1 -- the previous reflector's column writes are visible.
@@ -177,7 +180,7 @@ inline void geqr2(const Ex ex, const MA a, int kmax, D* tau) {
                 for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { a(r, j) = F::div(a(r, j), h.scale); });
             }
         }
-        if (ex.leader()) tau[j] = h.tau;
+        if (ex.leader()) tau(j) = h.tau;
         ex.barrier(Mem::Global);  // B3 -- beta and v are published to the teams about to read them.
 
         // Uniform over the barriers' scope (two collectives there): cannot desync B1/B2/B3.
@@ -261,14 +264,15 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 }
 }  // namespace detail
 
-// xGEQR2 on an m x n panel (a, ld), n <= N, a row per item of the work-group ex (RtGroup<
-// Scope::Group>); m <= its size, kmax <= min(m, n), launch-uniform. Rows >= m run every barrier
-// (no early return). sred: 2 reals, sw: N scalars per sub-group, plus 1 (butterflies, never
-// reduce_over_group: the 48 KB hole).
-template <int N, class D, class Real, class Ex>
-BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, D* a, int ld, int m, int n, int kmax, D* tau_ptr, Real* sred, D* sw) {
+// xGEQR2 on an m x n panel a (a global Mat), n <= N, a row per item of the work-group ex
+// (RtGroup<Scope::Group>); m <= its size; tau.size() <= min(m, n) reflectors, launch-uniform.
+// Rows >= m run every barrier (no early return). Scratch (local): sred 2 reals, sw N scalars per
+// sub-group, plus 1 (butterflies, never reduce_over_group: the 48 KB hole).
+template <int N, class Ex, class MA, class VT, class Real, class D>
+BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, const MA& a, const VT& tau, Real* sred, D* sw) {
     static_assert(Ex::runtime && !Ex::sub_whole, "geqr2_reg: ex is an RtGroup<Scope::Group>");
-    detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, a, ld, m, n, kmax, tau_ptr, sred, sw);
+    static_assert(std::is_same_v<typename MA::value_type, D>, "geqr2_reg: sw holds a's scalar type");
+    detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, &a(0, 0), static_cast<int>(a.ld), a.rows(), a.cols(), tau.size(), &tau(0), sred, sw);
 }
 
 // ---- xGEQRF: the public in-kernel op (v22 design C.7 Blocked) --------------------------------
@@ -316,7 +320,7 @@ BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>&
     for (int j0 = 0; j0 < k; j0 += NB) {
         const int ib = k - j0 < NB ? k - j0 : NB;
         const int j2 = j0 + ib, mp = m - j0, n2 = n - j2;
-        geqr2(pex, mat_wide(a.p + j0 + static_cast<std::ptrdiff_t>(j0) * a.ld, mp, ib, a.ld), ib, tau + j0);
+        geqr2(pex, mat_wide(a.p + j0 + static_cast<std::ptrdiff_t>(j0) * a.ld, mp, ib, a.ld), vec(tau + j0, ib));
         ex.barrier(Mem::Global);  // the panel's last column update visible before V is packed
         if (n2 <= 0) break;       // uniform
         const l3::Global<T> a22{a.p + j0 + static_cast<std::ptrdiff_t>(j2) * a.ld, a.ld, mp, n2};
@@ -341,42 +345,36 @@ template <class T> struct tiers<routine::geqrf, T> {
     using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
 };
 
-/// The workspace of one m x n matrix for geqrf<Tier> (host and device; constexpr).
-template <class Tier, class T> constexpr WorkspaceSize geqrf_buffer_size(int m, int n) {
-    return tier_info<routine::geqrf, resolve_tier_t<routine::geqrf, T, Tier>, T>::buffer_size(m, n);
-}
-
 /// @brief ?GEQRF in a kernel: A = Q R in place for one m x n matrix (any m, n).
 ///
-/// R overwrites A's upper triangle, the reflectors' vectors (LAPACK storage, unit diagonal
+/// R overwrites a's upper triangle, the reflectors' vectors (LAPACK storage, unit diagonal
 /// implied) the part below it, tau their k = min(m, n) scalars (xLARFG's convention; the apply
-/// uses conj(tau), zgeqr2's). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; A visible
-/// on entry, A and tau visible on return. One tier per kernel (with_tier<routine::geqrf, T>).
+/// uses conj(tau), zgeqr2's). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; a visible
+/// on entry, a and tau visible on return. One tier per kernel (with_tier<routine::geqrf, T>).
 /// @param ex   the executor
-/// @param A    this matrix (l3::Global, a global Mat or device::item)
-/// @param tau  k scalars: a T* or a unit-stride vector operand
+/// @param a    this matrix (l3::Global, a global Mat or device::item)
+/// @param tau  k scalars, a unit-stride vector operand (device::vec)
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
-///             geqrf_buffer_size<Tier, T>(m, n); contents undefined on return
+///             buffer_size<routine::geqrf, Tier, T>(m, n); contents undefined on return
 /// @return 0, or -i for a bad i-th argument after the executor (2: tau shorter than k, 3: no
 ///         global workspace), uniform
 template <class Tier, class Ex, class MA, class Tau>
-BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& A, const Tau& tau, const Workspace& ws) {
-    using T = std::remove_cvref_t<decltype(A(0, 0))>;
+BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& a, const Tau& tau, const Workspace& ws) {
+    using T = std::remove_cvref_t<decltype(a(0, 0))>;
     using Tr = resolve_tier_t<routine::geqrf, T, Tier>;
     static_assert(HasTier<routine::geqrf, Tr, T>, "geqrf: this tier is not offered for this scalar type");
     static_assert(detail::geqrf_is_blocked_v<Tr>, "geqrf: only tier::Blocked<NB> is offered");
+    static_assert(!std::is_pointer_v<Tau>, "geqrf: tau is a vector operand (device::vec)");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
-    larfb_check_ex<Cfg, Ex>();
-    const auto a = l3::global_of(A);
-    const int k = a.m < a.n ? a.m : a.n;
-    if constexpr (requires { tau.size(); }) {
-        if (static_cast<int>(tau.size()) < k) return -2;
-    }
+    detail::larfb_check_ex<Cfg, Ex>();
+    const auto ag = l3::global_of(a);
+    const int k = ag.m < ag.n ? ag.m : ag.n;
+    if (static_cast<int>(tau.size()) < k) return -2;
     if (ws.global == nullptr) return -3;
     if (k <= 0) return 0;
     Plan p;
-    const auto s = detail::geqrf_take<Tr::nb, Cfg, T>(p, a.m, a.n);
-    detail::geqrf_blocked_run<Tr::nb, Cfg>(ex, a, larfb_tau_base(tau), s, ws);
+    const auto s = detail::geqrf_take<Tr::nb, Cfg, T>(p, ag.m, ag.n);
+    detail::geqrf_blocked_run<Tr::nb, Cfg>(ex, ag, &tau(0), s, ws);
     return 0;
 }
 

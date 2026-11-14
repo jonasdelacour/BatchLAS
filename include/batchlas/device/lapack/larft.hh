@@ -31,32 +31,32 @@ BATCHLAS_DEVICE_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, cons
 
 }  // namespace detail
 
-// T (ib x ib, upper) from V (m x ib, unit diagonal stored) and tau(0:ib). Two barriers: Y_j =
-// -tau_j V^H v_j parks in T's strict lower row j; the trmv owner reads back only its rows; the
-// scratch is cleared last. tau_j == 0 gives a zero column above T(j, j).
-template <class Ex, class MV, class MT, class VT>
-BATCHLAS_DEVICE_INLINE void larft(const Ex& ex, const MV& V, const MT& Tm, const VT& tau) {
+// t (ib x ib, upper) from v (m x ib, unit diagonal stored) and tau(0:ib), netlib's (V, TAU, T)
+// order. Two barriers: Y_j = -tau_j V^H v_j parks in t's strict lower row j; the trmv owner reads
+// back only its rows; the scratch is cleared last. tau_j == 0 gives a zero column above t(j, j).
+template <class Ex, class MV, class VT, class MT>
+BATCHLAS_DEVICE_INLINE void larft(const Ex& ex, const MV& v, const VT& tau, const MT& t) {
     using T = typename MT::value_type;
     using A = Arith<T>;
-    const int m = V.rows(), ib = V.cols();
+    const int m = v.rows(), ib = v.cols();
     for (int j = 1; j < ib; ++j) {
         const T tj = tau(j);
         if (A::is_zero(tj)) continue;
-        gemv<Transpose::ConjTrans>(ex, A::neg(tj), V.sub(j, 0, m - j, j), assume_published(V.col(j).tail(j)), Zero{},
-                                   Tm.row(j).head(j));
+        gemv<Transpose::ConjTrans>(ex, A::neg(tj), v.sub(j, 0, m - j, j), assume_published(v.col(j).tail(j)), Zero{},
+                                   t.row(j).head(j));
     }
     ex.barrier(Mem::Global);
 
     using DiagVec = Vec<T, Dyn, Dyn, MT::mem, Cyclic, typename MT::base_type, typename MT::index_type>;
-    copy(ex, tau, DiagVec{Tm.p, Dyn{ib}, Dyn{int(Tm.ld) + 1}, Tm.off});  // T(j, j) := tau_j
-    for (int j = 1; j < ib; ++j) {  // T(0:j, j) := T(0:j, 0:j) Y_j, or 0 when tau_j == 0
-        const auto t_col = Tm.col(j).head(j);
+    copy(ex, tau, DiagVec{t.p, Dyn{ib}, Dyn{int(t.ld) + 1}, t.off});  // t(j, j) := tau_j
+    for (int j = 1; j < ib; ++j) {  // t(0:j, j) := t(0:j, 0:j) Y_j, or 0 when tau_j == 0
+        const auto t_col = t.col(j).head(j);
         if (A::is_zero(static_cast<T>(tau(j)))) map(ex, t_col, [] { return A::zero(); });
-        else detail::trmv_upper_row_owner(ex, Tm.sub(0, 0, j, j), assume_published(Tm.row(j).head(j)), t_col);
+        else detail::trmv_upper_row_owner(ex, t.sub(0, 0, j, j), assume_published(t.row(j).head(j)), t_col);
     }
     ex.barrier(Mem::Global);
 
-    laset<Part::StrictLower>(ex, Zero{}, Zero{}, Tm);
+    laset<Part::StrictLower>(ex, Zero{}, Zero{}, t);
 }
 
 }  // namespace batchlas::device

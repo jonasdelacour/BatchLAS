@@ -3,9 +3,9 @@
 // sy2sb: a Hermitian (real: symmetric) matrix -> lower band of semibandwidth kd (LAPACK
 // xSYTRD_SY2SB / xHETRD_HE2HB) inside the caller's kernel, one matrix per work-group, any n and kd.
 // The host sytrd_sy2sb's algorithm on in-group ops: per panel geqr2, larft, then Q^H A Q (gemm, hemm, her2k).
-// Public op (v22 design C.2/C.4/C.5): sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws); tier::Blocked<NB>
-// (NB = 32 or 64, the Level 3 tile): A and the panel scratch in global memory, only the tile
-// staging in local memory. Sizes: sy2sb_buffer_size<UL, Tier, T>(n, kd); with_tier:
+// Public op (v22 design C.2/C.4/C.5): sy2sb<UL, Tier>(ex, a, ab, tau, kd, ws); tier::Blocked<NB>
+// (NB = 32 or 64, the Level 3 tile): a and the panel scratch in global memory, only the tile
+// staging in local memory. Sizes: buffer_size<routine::sy2sb<UL, KDMax>, Tier, T>(n, kd); with_tier:
 // routine::sy2sb<UL, KDMax>. copy_band_col is also the host route's band copy.
 
 #include <algorithm>
@@ -101,16 +101,9 @@ BATCHLAS_DEVICE_INLINE void two_sided_lower(const Ex& ex, const MA& strip, const
 
 }  // namespace detail
 
-// Bytes of ONE matrix's workspace for sy2sb<UL, Tier> at (n, kd); zero when nothing is reduced
-// (kd == 0 or n <= kd).
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize sy2sb_buffer_size(int n, int kd) {
-    static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
-    return detail::panel_layout<Tier, std::remove_cv_t<T>>(n, kd).size;
-}
-
 namespace routine {
 // with_tier's tag: KDMax is the band width the tier filter sizes the workspace for.
-template <Uplo UL, int KDMax = 32> struct sy2sb {
+template <Uplo UL, int KDMax> struct sy2sb {
     static_assert(KDMax >= 0, "routine::sy2sb: KDMax >= 0");
     static constexpr const char* name = "sy2sb";
     static constexpr int kd_max = KDMax;
@@ -118,31 +111,38 @@ template <Uplo UL, int KDMax = 32> struct sy2sb {
 };
 }  // namespace routine
 
+// buffer_size(n, kd): ONE matrix's workspace at (n, kd), zero when nothing is reduced (kd == 0 or
+// n <= kd); buffer_size(n) at the tag's kd_at(n).
 template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sy2sb<UL, KDMax>, tier::Blocked<NB, A>, T> {
     static constexpr int wg_size = detail::cfg_t<tier::Blocked<NB, A>, T>::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return sy2sb_buffer_size<UL, tier::Blocked<NB, A>, T>(n, routine::sy2sb<UL, KDMax>::kd_at(n)); }
+    static constexpr WorkspaceSize buffer_size(int n, int kd) {
+        static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
+        return detail::panel_layout<tier::Blocked<NB, A>, std::remove_cv_t<T>>(n, kd).size;
+    }
+    static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, routine::sy2sb<UL, KDMax>::kd_at(n)); }
 };
 template <Uplo UL, int KDMax, class T> struct tiers<routine::sy2sb<UL, KDMax>, T> {
     using type = tier::list<tier::Blocked<32>>;
 };
 
-// sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws): the n x n Hermitian A (lower triangle read; the strict
-// upper is never read or written) -> its lower band, AB(r, j) = band A(j + r, j) for r <= kd, rows
-// past min(kd, n - 1 - j) zero; A's lower triangle below the band holds the reflectors and tau
+// sy2sb<UL, Tier>(ex, a, ab, tau, kd, ws): the n x n Hermitian a (lower triangle read; the strict
+// upper is never read or written) -> its lower band, ab(r, j) = band a(j + r, j) for r <= kd, rows
+// past min(kd, n - 1 - j) zero; a's lower triangle below the band holds the reflectors and tau
 // (n - kd) their scalars, as host sytrd_sy2sb. kd == 0 or n <= kd: the band is copied, tau not
-// written. ex: a WorkGroup of tier_info::wg_size items in sub-groups of 32 (collective; A visible
-// on entry). A, AB: a global Mat, ItemMat or l3::Global (AB: at least kd + 1 rows, n columns);
-// tau: a vector operand. ws: this matrix's slice of sy2sb_buffer_size<UL, Tier, T>(n, kd).
-// Returns 0, or -i for a bad i-th argument after the executor (1 A not square, 2 AB too small,
-// 3 tau shorter than n - kd, 4 kd < 0), uniform; nothing is written then. Outputs visible on return.
+// written. ex: a WorkGroup of tier_info::wg_size items in sub-groups of 32 (collective; a visible
+// on entry). a, ab: a global Mat, ItemMat or l3::Global (ab: at least kd + 1 rows, n columns);
+// tau: a vector operand. ws: this matrix's slice of buffer_size<routine::sy2sb<UL, KDMax>, Tier,
+// T>(n, kd) (any KDMax). Returns 0, or -i for a bad i-th argument after the executor (1 a not
+// square, 2 ab too small, 3 tau shorter than n - kd, 4 kd < 0), uniform; nothing is written then.
+// Outputs visible on return.
 template <Uplo UL, class Tier, class Ex, class MA, class MB, class Tau>
-BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const Tau& tau, int kd, const Workspace& ws) {
+BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& a_in, const MB& ab_in, const Tau& tau, int kd, const Workspace& ws) {
     static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
-    const auto ag = l3::global_of(A);
-    const auto bg = l3::global_of(AB);
+    const auto ag = l3::global_of(a_in);
+    const auto bg = l3::global_of(ab_in);
     using T = std::remove_cv_t<std::remove_reference_t<decltype(ag(0, 0))>>;
     using Cfg = detail::cfg_t<Tier, T>;
     static_assert(Ex::size == Cfg::threads && Ex::sg_size == 32, "sy2sb: ex is a WorkGroup<tier_info::wg_size, 32>");
@@ -176,7 +176,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
     for (int i = 0; i + kd < n; i += kd) {
         const int pn = n - i - kd, pk = pn < kd ? pn : kd;
         const auto v = a.sub(i + kd, i, pn, pk);
-        geqr2(rex, v, pk, taup);
+        geqr2(rex, v, vec(taup, pk));
         ex.barrier(Mem::Global);
         // Columns [i, i + pk) are final; the strip and A22 below write columns >= i + pk only.
         for_each_owned(ex, pk, [&](int c) BATCHLAS_DEVICE_BODY {
@@ -187,7 +187,7 @@ BATCHLAS_DEVICE_INLINE int sy2sb(const Ex& ex, const MA& A, const MB& AB, const 
         lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, alg::EdgeZeroPad, DiagFill::Unit>(ex, v, w);
         ex.barrier(Mem::Global);
         const auto tf = mat(tfp, pk, pk, pk);
-        larft(ex, w, tf, vec(taup, pk));
+        larft(ex, w, vec(taup, pk), tf);
         ex.barrier(Mem::Global);
         detail::two_sided_lower<Cfg>(ex, a.sub(i + kd, i + pk, pn, kd - pk), a.sub(i + kd, i + kd, pn, pn), w, tf,
                                            carve_global(ws, lay.p), carve_global(ws, lay.y), carve_global(ws, lay.m1),

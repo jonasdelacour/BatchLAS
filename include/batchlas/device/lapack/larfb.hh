@@ -40,53 +40,48 @@ template <Side SD> constexpr std::size_t larfb_work_elems(int m, int n, int k) {
     return 2 * static_cast<std::size_t>(k > 0 ? k : 0) * q;
 }
 
-/// The executor a blocked QR op runs on: a WorkGroup of Cfg::threads items in 32-wide sub-groups
-/// (larft's gemv packs over 32 lanes).
+namespace detail {
+// The executor a blocked QR op runs on: a WorkGroup of Cfg::threads items in 32-wide sub-groups
+// (larft's gemv packs over 32 lanes).
 template <class Cfg, class Ex> BATCHLAS_DEVICE_INLINE constexpr void larfb_check_ex() {
     static_assert(is_work_group_v<Ex>, "larfb: the executor is a WorkGroup<WG, 32>");
     static_assert(Ex::size == Cfg::threads, "larfb: the WorkGroup has the tier's l3 Cfg::threads items");
     static_assert(Ex::sg_size == 32, "larfb: sub-group size 32 (larft)");
 }
+}  // namespace detail
 
-/// This matrix's tau as a pointer: a T* passes through, a vector operand gives &tau(0) (unit
-/// stride, as geqrf writes it).
-template <class Tau> BATCHLAS_DEVICE_INLINE auto larfb_tau_base(const Tau& tau) {
-    if constexpr (std::is_pointer_v<Tau>) return tau;
-    else return &tau(0);
-}
-
-/// @brief ?LARFB (Forward, Columnwise) in a kernel: C := op(H) C (Left) or C op(H) (Right).
+/// @brief ?LARFB (Forward, Columnwise) in a kernel: c := op(H) c (Left) or c op(H) (Right).
 ///
-/// H = I - V T V^H; op(H) = H for NoTrans, H^H for ConjTrans (Trans on a real T). V (k columns,
+/// H = I - V T V^H; op(H) = H for NoTrans, H^H for ConjTrans (Trans on a real T). v (k columns,
 /// m rows for Left, n for Right) has its unit diagonal and zero upper triangle STORED, as larft
-/// takes it; T is k x k upper (its strict lower is not read). W1 = V^H C, W2 = op(T) W1, C -= V W2
+/// takes it; t is k x k upper (its strict lower is not read). W1 = V^H C, W2 = op(T) W1, C -= V W2
 /// (Left; Right: W1 = C V, W2 = W1 op(T), C -= W2 V^H). Collective over a WorkGroup of
-/// Cfg::threads items; inputs visible on entry, C visible on return. Operands: l3::Global, a
+/// Cfg::threads items; inputs visible on entry, c visible on return. Operands: l3::Global, a
 /// global Mat or device::item.
 /// @param work  larfb_work_elems<SD>(m, n, k) elements of global memory (W1 then W2, packed)
 /// @param smem  the work-group's l3::Smem<Cfg>
 template <Side SD, Transpose TR, Direct DR, class Cfg, class Ex, class MV, class MT, class MC, class W>
     requires l3::Config<Cfg>
-BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& V, const MT& Tm, const MC& C, W* work, l3::Smem<Cfg> smem) {
+BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const MC& c, W* work, l3::Smem<Cfg> smem) {
     static_assert(DR == Direct::Forward, "larfb: Direct::Forward (larft's only direction)");
     using T = typename Cfg::value_type;
     static_assert(std::is_same_v<std::remove_cv_t<W>, T>, "larfb: work holds the Cfg's scalar type");
     static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "larfb: complex Trans is not H^H; use ConjTrans");
     constexpr Transpose OT = TR == Transpose::NoTrans ? Transpose::NoTrans : Transpose::ConjTrans;
-    const auto v = l3::global_of(V);
-    const auto c = l3::global_of(C);
-    const int k = v.n, m = c.m, n = c.n;
+    const auto vg = l3::global_of(v);
+    const auto cg = l3::global_of(c);
+    const int k = vg.n, m = cg.m, n = cg.n;
     if (k <= 0 || m <= 0 || n <= 0) return;  // uniform: before any barrier
     if constexpr (SD == Side::Left) {
         const l3::Global<T> w1{work, k, k, n}, w2{work + static_cast<std::ptrdiff_t>(k) * n, k, k, n};
-        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, v, c, Zero{}, w1, smem);
-        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, Tm, w1, w2, smem);
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, v, w2, One{}, c, smem);
+        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, vg, cg, Zero{}, w1, smem);
+        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, vg, w2, One{}, cg, smem);
     } else {
         const l3::Global<T> w1{work, m, m, k}, w2{work + static_cast<std::ptrdiff_t>(m) * k, m, m, k};
-        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, c, v, Zero{}, w1, smem);
-        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, Tm, w1, w2, smem);
-        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, v, One{}, c, smem);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, cg, vg, Zero{}, w1, smem);
+        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, smem);
+        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, vg, One{}, cg, smem);
     }
 }
 
@@ -103,7 +98,7 @@ BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& 
     lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, alg::EdgeNone, DiagFill::Unit>(ex, panel, v);
     laset<Part::StrictUpper>(ex, Zero{}, Zero{}, v);
     ex.barrier(Mem::Global);  // V complete before larft's gemv reads its columns
-    larft(ex, v, mat(tbuf, ib, ib, ldt), vec(tau + i0, ib));
+    larft(ex, v, vec(tau + i0, ib), mat(tbuf, ib, ib, ldt));
     ex.barrier(Mem::Global);  // T complete before the trmm stages it
     larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, work, smem);
 }

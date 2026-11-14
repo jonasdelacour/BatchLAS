@@ -76,47 +76,41 @@ template <Side SD, Transpose TR, class T> struct tiers<routine::ormqr<SD, TR>, T
     using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
 };
 
-/// The workspace of one matrix for ormqr<SD, TR, Tier> with C of m x n (host and device; constexpr).
-template <Side SD, Transpose TR, class Tier, class T> constexpr WorkspaceSize ormqr_buffer_size(int m, int n) {
-    return tier_info<routine::ormqr<SD, TR>, resolve_tier_t<routine::ormqr<SD, TR>, T, Tier>, T>::buffer_size(m, n);
-}
-
 /// @brief ?ORMQR / ?UNMQR in a kernel: C := op(Q) C (Left) or C op(Q) (Right) for one matrix.
 ///
-/// A holds geqrf's k = min(A.rows(), A.cols()) reflectors below its diagonal, Q = H_1 ... H_k of
-/// order A.rows() (= C.rows() for Left, C.cols() for Right); op(Q) = Q (NoTrans) or Q^H
-/// (ConjTrans; Trans on a real T). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; A, C
-/// and tau visible on entry, C visible on return; A and tau are not written. One tier per kernel
+/// a holds geqrf's k = min(a.rows(), a.cols()) reflectors below its diagonal, Q = H_1 ... H_k of
+/// order a.rows() (= c.rows() for Left, c.cols() for Right); op(Q) = Q (NoTrans) or Q^H
+/// (ConjTrans; Trans on a real T). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; a, c
+/// and tau visible on entry, c visible on return; a and tau are not written. One tier per kernel
 /// (with_tier<routine::ormqr<SD, TR>, T> on the host).
 /// @param ex   the executor
-/// @param A    this matrix's reflectors (l3::Global, a global Mat or device::item)
-/// @param tau  k scalars: a T* or a unit-stride vector operand
-/// @param C    this matrix's C, overwritten
+/// @param a    this matrix's reflectors (l3::Global, a global Mat or device::item)
+/// @param tau  k scalars, a unit-stride vector operand (device::vec)
+/// @param c    this matrix's C, overwritten
 /// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
-///             ormqr_buffer_size<SD, TR, Tier, T>(C.rows(), C.cols())
-/// @return 0, or -i for a bad i-th argument after the executor (1: A.rows() is not Q's order,
+///             buffer_size<routine::ormqr<SD, TR>, Tier, T>(c.rows(), c.cols())
+/// @return 0, or -i for a bad i-th argument after the executor (1: a.rows() is not Q's order,
 ///         2: tau shorter than k, 4: no global workspace), uniform
 template <Side SD, Transpose TR, class Tier, class Ex, class MA, class Tau, class MC>
-BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& A, const Tau& tau, const MC& C, const Workspace& ws) {
-    using T = std::remove_cvref_t<decltype(A(0, 0))>;
+BATCHLAS_DEVICE_INLINE int ormqr(const Ex& ex, const MA& a, const Tau& tau, const MC& c, const Workspace& ws) {
+    using T = std::remove_cvref_t<decltype(a(0, 0))>;
     using Tr = resolve_tier_t<routine::ormqr<SD, TR>, T, Tier>;
     static_assert(HasTier<routine::ormqr<SD, TR>, Tr, T>, "ormqr: this tier is not offered for this scalar type");
     static_assert(tier::is_blocked_v<Tr>, "ormqr: only tier::Blocked<NB> is offered");
     static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "ormqr: complex Trans; use ConjTrans");
+    static_assert(!std::is_pointer_v<Tau>, "ormqr: tau is a vector operand (device::vec)");
     using Cfg = larfb_cfg_t<typename Tr::alg_type, T>;
-    larfb_check_ex<Cfg, Ex>();
-    const auto a = l3::global_of(A);
-    const auto c = l3::global_of(C);
-    const int k = a.m < a.n ? a.m : a.n;
-    if (a.m != (SD == Side::Left ? c.m : c.n)) return -1;
-    if constexpr (requires { tau.size(); }) {
-        if (static_cast<int>(tau.size()) < k) return -2;
-    }
+    detail::larfb_check_ex<Cfg, Ex>();
+    const auto ag = l3::global_of(a);
+    const auto cg = l3::global_of(c);
+    const int k = ag.m < ag.n ? ag.m : ag.n;
+    if (ag.m != (SD == Side::Left ? cg.m : cg.n)) return -1;
+    if (static_cast<int>(tau.size()) < k) return -2;
     if (ws.global == nullptr) return -4;
-    if (k <= 0 || c.m <= 0 || c.n <= 0) return 0;
+    if (k <= 0 || cg.m <= 0 || cg.n <= 0) return 0;
     Plan p;
-    const auto s = detail::ormqr_take<SD, Tr::nb, Cfg, T>(p, c.m, c.n);
-    detail::ormqr_wy_blocks<SD, TR, Tr::nb, Cfg>(ex, a, c, k, static_cast<const T*>(larfb_tau_base(tau)), s, ws);
+    const auto s = detail::ormqr_take<SD, Tr::nb, Cfg, T>(p, cg.m, cg.n);
+    detail::ormqr_wy_blocks<SD, TR, Tr::nb, Cfg>(ex, ag, cg, k, static_cast<const T*>(&tau(0)), s, ws);
     return 0;
 }
 

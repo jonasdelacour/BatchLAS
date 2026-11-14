@@ -146,49 +146,81 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const W
 }
 }  // namespace detail
 
-/// @brief Workspace of ONE matrix for ortho() on k columns (constexpr, host and device).
-/// @tparam Algo  CGS2, Cholesky, Chol2 or ShiftChol3
-/// @tparam Tier  tier::Cta<N> or tier::Blocked<NB> (see ortho())
-/// @tparam Cfg   the l3::cfg preset of the Level 3 forms; void for CGS2 tier::Cta
-/// @param[in] k  the number of columns
-/// @return local and global bytes; the caller's global buffer holds batch times global_bytes
-template <Transpose TR, OrthoAlgorithm Algo, class Tier, class T, class Cfg = void> constexpr WorkspaceSize ortho_buffer_size(int k) {
-    detail::check<TR, Algo, Tier, Cfg, T>();
-    return detail::ortho_layout<Algo, Tier, Cfg, T>(k).size;
+namespace routine {
+// ortho's tag: everything of ortho<TR, Tier, Cfg, Alg> but the tier, since Cfg (the Level 3 forms'
+// l3::cfg preset, void for CGS2 tier::Cta) sizes the stages and Alg the plan.
+template <Transpose TR, class Cfg, OrthoAlgorithm Alg> struct ortho {
+    static constexpr const char* name = "ortho";
+};
+}  // namespace routine
+
+namespace detail {
+// The Level 3 forms run on a WorkGroup<Cfg::threads, 32>; CGS2 tier::Cta (Cfg void) on any
+// WorkGroup or RtGroup, launched by launch<> as 128 items.
+template <class Cfg> constexpr int ortho_wg_size() {
+    if constexpr (l3::Config<Cfg>) return Cfg::threads;
+    else return 128;
 }
+}  // namespace detail
+
+/// buffer_size(k): ONE matrix's local and global bytes for ortho() on k columns; the caller's
+/// global buffer holds batch times global_bytes.
+template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int N, class A, class T>
+struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Cta<N, A>, T> {
+    static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
+    static constexpr bool admits(int k) { return k >= 0 && k <= N; }
+    static constexpr WorkspaceSize buffer_size(int k) {
+        detail::check<TR, Alg, tier::Cta<N, A>, Cfg, T>();
+        return detail::ortho_layout<Alg, tier::Cta<N, A>, Cfg, T>(k).size;
+    }
+};
+template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int NB, class A, class T>
+struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Blocked<NB, A>, T> {
+    static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
+    static constexpr bool admits(int k) { return k >= 0; }
+    static constexpr WorkspaceSize buffer_size(int k) {
+        detail::check<TR, Alg, tier::Blocked<NB, A>, Cfg, T>();
+        return detail::ortho_layout<Alg, tier::Blocked<NB, A>, Cfg, T>(k).size;
+    }
+};
 
 /// @brief The host ortho() inside a kernel: the k columns of the m x k A (k <= m) become an
 /// orthonormal basis of their span, one matrix per work-group.
 /// @tparam TR    Transpose::NoTrans (the columns)
-/// @tparam Algo  CGS2: tier::Cta<N> (k <= N, the coefficients in local memory) or tier::Blocked<NB>
+/// @tparam Tier  CGS2: tier::Cta<N> (k <= N, the coefficients in local memory) or tier::Blocked<NB>
 ///               (any k, block CGS2 over NB columns on the in-group gemm); Cholesky, Chol2,
 ///               ShiftChol3: tier::Cta<N> (k <= N, any m; herk + potrf<Lower, Cta<N>> + trsm)
 /// @tparam Cfg   the l3::cfg preset of every form except CGS2 tier::Cta (void there)
+/// @tparam Alg   CGS2, Cholesky, Chol2 or ShiftChol3
 /// @param[in]     ex  a WorkGroup (collective; WorkGroup<Cfg::threads, 32> on the Level 3 forms, an
 ///                    RtGroup also runs CGS2 tier::Cta); A visible to every item on entry
 /// @param[in,out] a   A, a Mat over global memory (col(), sub()); visible to every item on return
-/// @param[in]     ws  this matrix's slice of ortho_buffer_size<TR, Algo, Tier, T, Cfg>(k)
+/// @param[in]     ws  this matrix's slice of buffer_size<routine::ortho<TR, Cfg, Alg>, Tier, T>(k)
 /// @return 0; -2 when k exceeds a tier::Cta<N> bound (A untouched); for the Cholesky algorithms
 ///         potrf's info k > 0 when a pass's Gram matrix is not positive definite (that pass leaves
 ///         A as the previous pass left it); uniform
-template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg = void, class Ex, class MA>
+template <Transpose TR, class Tier, class Cfg, OrthoAlgorithm Alg, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;
-    detail::check<TR, Algo, Tier, Cfg, T>();
+    detail::check<TR, Alg, Tier, Cfg, T>();
     const int k = a.cols();
-    const auto lay = detail::ortho_layout<Algo, Tier, Cfg, T>(k);
-    if constexpr (detail::is_chol_v<Algo>) {
+    const auto lay = detail::ortho_layout<Alg, Tier, Cfg, T>(k);
+    if constexpr (detail::is_chol_v<Alg>) {
         constexpr int N = Tier::n_max;
         if (k > N) return -2;
         if (k == 0) return 0;
         const l3::Smem<Cfg> sm{carve_local(ws, lay.smem).get_raw()};
         const Workspace pws{carve_local(ws, lay.chol), nullptr};
         T* const g = carve_global(ws, lay.gram);
-        int info = detail::cholqr_pass<N, Algo == OrthoAlgorithm::ShiftChol3>(ex, a, g, pws, sm);
-        if constexpr (Algo != OrthoAlgorithm::Cholesky) {
+        int info = detail::cholqr_pass<N, Alg == OrthoAlgorithm::ShiftChol3>(ex, a, g, pws, sm);
+        if constexpr (Alg != OrthoAlgorithm::Cholesky) {
             if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
         }
-        if constexpr (Algo == OrthoAlgorithm::ShiftChol3) {
+        if constexpr (Alg == OrthoAlgorithm::ShiftChol3) {
             if (info == 0) info = detail::cholqr_pass<N, false>(ex, a, g, pws, sm);
         }
         return info;

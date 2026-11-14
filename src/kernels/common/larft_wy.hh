@@ -48,10 +48,11 @@ sycl::event larft_forward_columnwise_wg(Queue& q,
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
                 const device::WorkGroup<WG, 32> ex{it};
-                device::larft(
-                    ex, device::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v),
-                    device::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t),
-                    device::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib));
+                // V, T, tau in this order: [=] captures in first-use order, the kernel's argument order.
+                const auto v = device::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v);
+                const auto t = device::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t);
+                const auto tau = device::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib);
+                device::larft(ex, v, tau, t);
             });
     });
 }

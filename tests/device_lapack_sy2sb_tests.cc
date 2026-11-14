@@ -47,8 +47,8 @@ constexpr int kWG = 256;
 constexpr int kPeriod = 3;
 using Blk32 = batchlas::device::tier::Blocked<32>;
 using Blk64 = batchlas::device::tier::Blocked<64>;
-static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower>, Blk32, float>::wg_size == kWG);
-static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower>, Blk64, std::complex<double>>::wg_size == kWG);
+static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>::wg_size == kWG);
+static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk64, std::complex<double>>::wg_size == kWG);
 
 template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
 template <class T> double re_of(T v) {
@@ -105,7 +105,7 @@ template <class T, class Tier> Out<T> run_device(Dev& dev, const Problem<T>& p, 
     const int ab_rows = g.ab_rows < 0 ? p.kd + 1 : g.ab_rows, tau_len = g.tau_len < 0 ? p.ntau : g.tau_len;
     const int a_cols = g.a_cols < 0 ? n : g.a_cols;
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const batchlas::device::WorkspaceSize sz = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, std::max(kd, 0));
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, T>(n, std::max(kd, 0));
     T* a = dev.up(p.a);
     T* ab = dev.up(p.ab);
     T* tau = dev.up(p.tau);
@@ -321,8 +321,8 @@ template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem
     using R = real_of<T>;
     const int n = p.n, kd = p.kd, lda = p.lda, ldab = p.ldab, ntau = p.ntau, nm1 = std::max(0, n - 1);
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const batchlas::device::WorkspaceSize s1 = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Tier, T>(n, kd);
-    const batchlas::device::WorkspaceSize s2 = batchlas::device::sb2st_buffer_size<Uplo::Lower, Blk32, T>(n, kd);
+    const batchlas::device::WorkspaceSize s1 = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, T>(n, kd);
+    const batchlas::device::WorkspaceSize s2 = batchlas::device::buffer_size<batchlas::device::routine::sb2st<Uplo::Lower, 32>, Blk32, T>(n, kd);
     T* a = dev.up(p.a);
     T* ab = dev.up(p.ab);
     T* tau = dev.up(p.tau);
@@ -417,8 +417,8 @@ static_assert(kLay.smem.space == batchlas::device::WsSpace::Local && kLay.smem.c
 static_assert(kLay.size.local_bytes >= kLay.smem.count * sizeof(std::complex<double>));
 static_assert(kLay.taup.offset == 0 && kLay.v.offset % 16 == 0 && kLay.v.offset >= 5 * sizeof(std::complex<double>));
 static_assert(kLay.m2.offset + 5 * 5 * sizeof(std::complex<double>) <= kLay.size.global_bytes && kLay.v.count == 32 * 5);
-static_assert(batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(8, 8) == batchlas::device::WorkspaceSize{});
-static_assert(batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(9, 0) == batchlas::device::WorkspaceSize{});
+static_assert(batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>(8, 8) == batchlas::device::WorkspaceSize{});
+static_assert(batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>(9, 0) == batchlas::device::WorkspaceSize{});
 
 template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
@@ -432,7 +432,7 @@ template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, i
 
 TEST(DeviceApiSy2sbHost, WithTierFiltersAndBufferSizeIsTheCarve) {
     const int n = 100;
-    const batchlas::device::WorkspaceSize need = batchlas::device::sy2sb_buffer_size<Uplo::Lower, Blk32, float>(n, 16);
+    const batchlas::device::WorkspaceSize need = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>(n, 16);
     EXPECT_EQ(need, (batchlas::device::tier_info<Lower16, Blk32, float>::buffer_size(n)));
     EXPECT_EQ(need, (batchlas::device::detail::panel_layout<Blk32, float>(n, 16).size));
     batchlas::device::DeviceLimits lim{need.local_bytes, {32}, 1024, true};

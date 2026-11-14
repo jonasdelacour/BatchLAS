@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Public device API of the util family (v22 design C.10), each op called from a user-style kernel:
-//   norm<NT>      (lapack/norm.hh)         vs the host norm (a thin launcher): bit-identical
+//   lange<NT>     (core lapack_aux.hh)     vs the host norm (a thin launcher): bit-identical
 //   lascl         (core lapack_aux.hh)     vs the host lascl (a thin launcher): bit-identical
 //   ritz_values   (lapack/ritz_values.hh)  the tier-free form and tier::Blocked<NB> (in-group gemm)
 //                                          vs a long-double reference
@@ -29,7 +29,6 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/matrix.hh>
-#include <batchlas/device/lapack/norm.hh>
 #include <batchlas/device/lapack/ortho.hh>
 #include <batchlas/device/lapack/ritz_values.hh>
 
@@ -95,7 +94,7 @@ template <NormType NT, int WG, class T> std::vector<real_of<T>> device_norm(Dev&
     dev.q().parallel_for(one_wg_per_item(WG), [=](sycl::nd_item<1> it) {
         const batchlas::device::WorkGroup<WG> ex{it};
         const int b = int(it.get_group_linear_id());
-        const auto r = batchlas::device::norm<NT>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, n, ld));
+        const auto r = batchlas::device::lange<NT>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, n, ld));
         if (ex.leader()) out[b] = r;
     }).wait_and_throw();
     return dev.down(out, kBatch);
@@ -250,7 +249,7 @@ TYPED_TEST(DeviceApiUtil, RitzValuesMatchesReference) {
 template <class Tier, class T> std::vector<real_of<T>> device_ritz_blocked(Dev& dev, const T* ad, const Host<T>& A, const T* vd, const Host<T>& V) {
     using R = real_of<T>;
     const int n = A.m, k = V.n;
-    const auto sz = batchlas::device::ritz_values_buffer_size<Tier, T, L3Cfg<T>>(n, k);
+    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ritz_values<L3Cfg<T>>, Tier, T>(n, k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     R* w = dev.alloc<R>(std::size_t(kBatch) * k, R(-1));
     const int lda = A.ld, sa = A.stride, ldv = V.ld, sv = V.stride;
@@ -324,7 +323,7 @@ template <class T> std::vector<LD<T>> ref_cgs2(const Host<T>& a, int b) {
 // sub-group), the global workspace NaN.
 template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> std::vector<int> device_ortho(Dev& dev, T* a, const Host<T>& s, int k) {
     constexpr auto TR = Transpose::NoTrans;
-    const auto sz = batchlas::device::ortho_buffer_size<TR, AL, Tier, T, Cfg>(k);
+    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, Cfg, AL>, Tier, T>(k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     auto* info = dev.alloc<int>(kBatch, -99);
     const int m = s.m, ld = s.ld, stride = s.stride;
@@ -334,7 +333,7 @@ template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> std::vector<
             const batchlas::device::WorkGroup<128, 32> ex{it};
             const int b = int(it.get_group_linear_id());
             const batchlas::device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), batchlas::device::global_slice(gws, sz, b)};
-            const int r = batchlas::device::ortho<TR, AL, Tier, Cfg>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, k, ld), ws);
+            const int r = batchlas::device::ortho<TR, Tier, Cfg, AL>(ex, batchlas::device::mat(a + std::size_t(b) * stride, m, k, ld), ws);
             if (ex.leader()) info[b] = r;
         });
     }).wait_and_throw();
@@ -475,16 +474,16 @@ TYPED_TEST(DeviceApiUtil, OrthoPastCeilingAndWorkspace) {
     // Each slot rounded up to the 16-byte alignment, in its space. The Level 3 stages of a
     // 32 x 32 x 8 tile: (TileM + 1) TileK + (TileK + 1) TileN = 264 + 288 values.
     const std::size_t stages = r16(552 * sizeof(T));
-    const auto cta = batchlas::device::ortho_buffer_size<TR, AL, batchlas::device::tier::Cta<16>, T>(12);
+    const auto cta = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, void, AL>, batchlas::device::tier::Cta<16>, T>(12);
     EXPECT_EQ(cta.local_bytes, r16(12 * sizeof(T)));
     EXPECT_EQ(cta.global_bytes, 0u);
-    const auto blk = batchlas::device::ortho_buffer_size<TR, AL, batchlas::device::tier::Blocked<32>, T, L3Cfg<T>>(12);
+    const auto blk = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, L3Cfg<T>, AL>, batchlas::device::tier::Blocked<32>, T>(12);
     EXPECT_EQ(blk.local_bytes, stages);
     EXPECT_EQ(blk.global_bytes, r16(r16(12 * 32 * sizeof(T)) + 32 * sizeof(T)));  // H (k x NB), h (NB)
-    const auto chol = batchlas::device::ortho_buffer_size<TR, OrthoAlgorithm::Chol2, batchlas::device::tier::Cta<16>, T, L3Cfg<T>>(12);
+    const auto chol = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, L3Cfg<T>, OrthoAlgorithm::Chol2>, batchlas::device::tier::Cta<16>, T>(12);
     EXPECT_EQ(chol.local_bytes, (stages + batchlas::device::buffer_size<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Cta<16>, T>(12).local_bytes));
     EXPECT_EQ(chol.global_bytes, r16(12 * 12 * sizeof(T)));  // the Gram matrix
-    const auto rz = batchlas::device::ritz_values_buffer_size<batchlas::device::tier::Blocked<3>, T, L3Cfg<T>>(45, 7);
+    const auto rz = batchlas::device::buffer_size<batchlas::device::routine::ritz_values<L3Cfg<T>>, batchlas::device::tier::Blocked<3>, T>(45, 7);
     EXPECT_EQ(rz.local_bytes, stages);
     EXPECT_EQ(rz.global_bytes, r16(45 * 3 * sizeof(T)));  // A V(:, blk), n x NB
 }
