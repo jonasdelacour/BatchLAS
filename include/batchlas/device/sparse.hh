@@ -6,13 +6,13 @@
 // units, the detail row elimination, the iluk_apply solve). Element expressions match the
 // hand kernels they replaced (int64 offsets where those used them), so the host kernels keep
 // their SASS.
-//   spmm<TA, TB, Tier>(ex, A, B, C, alpha, beta[, ws])     C := alpha op(A) op(B) + beta C
+//   spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C[, ws])     C := alpha op(A) op(B) + beta C
 //   iluk_factorize<Tier>(ex, A, plan, M, opts[, ws])       M := ILU(k) of A in plan's pattern
 //   iluk_apply<Tier>(ex, M, rhs, out[, ws])                out := (L U)^{-1} rhs, one column
 // Tiers: tier::Blocked<NC> for spmm (NC = the column block of one item's accumulators) and
 // tier::Blocked<1> for the two ILU ops (level-scheduled, a barrier per level); all admit any n,
 // read and write their operands where the caller put them (global, or local memory the caller
-// sized) and need no workspace (*_buffer_size == {}).
+// sized) and need no workspace (device::buffer_size<R, Tier, T>(n) == {}).
 
 #include <cmath>
 #include <cstddef>
@@ -247,10 +247,6 @@ template <Transpose TA, Transpose TB, int NC, class T> struct tier_info<routine:
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <Transpose TA, Transpose TB, class Tier, class T> constexpr WorkspaceSize spmm_buffer_size(int n) {
-    using R = routine::spmm<TA, TB>;
-    return tier_info<R, resolve_tier_t<R, T, Tier>, T>::buffer_size(n);
-}
 
 namespace detail {
 // One gather unit (A NoTrans): row r of A times op(B)'s column block c0 .. c0 + NC into C(r, :).
@@ -311,7 +307,7 @@ BATCHLAS_DEVICE_INLINE void scatter_row(int width, T alpha, const OB& b, int i, 
 // C := beta C, a barrier, then the scatter by relaxed atomics, whose order is unspecified.
 // Collective: inputs visible on entry; returns 0 after a barrier (C visible to the executor).
 template <Transpose TA, Transpose TB, class Tier, class Ex, class AM, class BM, class CM, class T>
-BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, const AM& A, const BM& B, const CM& C, T alpha, T beta, const Workspace& = {}) {
+BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, T alpha, const AM& A, const BM& B, T beta, const CM& C, const Workspace& ws = {}) {
     static_assert(std::is_same_v<typename AM::value_type, T>, "spmm: alpha, beta and A share one scalar type");
     using Ti = resolve_tier_t<routine::spmm<TA, TB>, T, Tier>;
     static_assert(requires { Ti::nb; }, "spmm: the tier is tier::Blocked<NC>");
@@ -404,9 +400,6 @@ template <class T> struct tier_info<routine::iluk_apply, tier::Blocked<1>, T> {
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <class Tier, class T> constexpr WorkspaceSize iluk_apply_buffer_size(int n) {
-    return tier_info<routine::iluk_apply, resolve_tier_t<routine::iluk_apply, T, Tier>, T>::buffer_size(n);
-}
 
 namespace detail {
 // |x| for the drop and pivot tests of the factorization and the solve: std::abs for a real T,
@@ -440,7 +433,7 @@ template <class T> inline T shifted_pivot(const T& pivot, const T& diagonal_shif
 // levels), on a work-group executor; rhs and out are vectors (v(i)), distinct. Collective; returns
 // 0 after the last barrier. Native arithmetic (Annex-G complex), as the host route.
 template <class Tier, class Ex, class T, class RV, class YV>
-BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, const RV& rhs, const YV& y, const Workspace& = {}) {
+BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<T>& M, const RV& rhs, const YV& y, const Workspace& ws = {}) {
     static_assert(std::is_same_v<resolve_tier_t<routine::iluk_apply, T, Tier>, tier::Blocked<1>>, "iluk_apply: the tier is tier::Blocked<1>");
     using Ar = arith_t<arith::Native, T>;
     for (int lv = 0; lv < M.l_levels; ++lv) {
@@ -529,9 +522,6 @@ template <class T> struct tier_info<routine::iluk_factorize, tier::Blocked<1>, T
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <class Tier, class T> constexpr WorkspaceSize iluk_factorize_buffer_size(int n) {
-    return tier_info<routine::iluk_factorize, resolve_tier_t<routine::iluk_factorize, T, Tier>, T>::buffer_size(n);
-}
 
 namespace detail {
 // A usable pivot (kernel-safe: an unusable one sets *status and returns 1, nothing throws): the
@@ -642,7 +632,7 @@ BATCHLAS_DEVICE_INLINE void eliminate_row(const W& at, int i, const int* step_pt
 // uniform across the executor; elimination continues past it with pivot 1. Collective.
 template <class Tier, class Ex, class AV, class MV, class T>
 BATCHLAS_DEVICE_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukPlan& plan, const MV& M, const IlukOptions<T>& opts,
-                                       const Workspace& = {}) {
+                                       const Workspace& ws = {}) {
     static_assert(std::is_same_v<resolve_tier_t<routine::iluk_factorize, T, Tier>, tier::Blocked<1>>,
                   "iluk_factorize: the tier is tier::Blocked<1>");
     for_each_owned(ex, plan.nnz, [&](int s) { M(s) = T(0); });
