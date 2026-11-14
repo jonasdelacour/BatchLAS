@@ -4,8 +4,7 @@
 //   int potri<UL, Tier>(ex, A, ws)        A's UL triangle: potrf's factor -> that of A^-1
 //   int trtri<UL, DG, Tier>(ex, A, ws)    the UL triangle T -> T^-1 (DG = Unit: diagonal implied)
 //   int lauum<UL, Tier>(ex, A, ws)        L -> L^H L (Lower), U -> U U^H (Upper), in its triangle
-//   WorkspaceSize potri_buffer_size<UL, Tier, T>(n), trtri_buffer_size<UL, DG, Tier, T>(n),
-//                 lauum_buffer_size<UL, Tier, T>(n)
+//   WorkspaceSize buffer_size<routine::potri<UL> | trtri<UL, DG> | lauum<UL>, Tier, T>(n)
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: LAPACK's blocked trtri and lauum over
 //                      NB-wide blocks on the in-group L3 (trsm, trmm, gemm, herk); ws.local = the
 //                      L3 stages, ws.global = an n x NB panel of T per matrix (trmm is out of place)
@@ -222,20 +221,6 @@ template <Uplo UL, Diag DG, class T> struct tiers<routine::trtri<UL, DG>, T> {
 template <Uplo UL, class T> struct tiers<routine::lauum<UL>, T> {
     using type = tier::list<tier::Blocked<32>>;
 };
-
-// The workspace of one matrix (host and device). Tier may be tier::upto<NMax>.
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potri_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::potri<UL>, T, Tier>;
-    return tier_info<routine::potri<UL>, Tr, T>::buffer_size(n);
-}
-template <Uplo UL, Diag DG, class Tier, class T> constexpr WorkspaceSize trtri_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::trtri<UL, DG>, T, Tier>;
-    return tier_info<routine::trtri<UL, DG>, Tr, T>::buffer_size(n);
-}
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize lauum_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::lauum<UL>, T, Tier>;
-    return tier_info<routine::lauum<UL>, Tr, T>::buffer_size(n);
-}
 
 // A's UL triangle, potrf's factor of the Hermitian positive definite A, := that of A^-1 (the other
 // triangle neither read nor written); returns info (see the file head).

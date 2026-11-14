@@ -3,7 +3,7 @@
 // LAPACK xPOTRS inside a kernel (v22 design C.2, C.4-C.7): A X = B with A = L L^H (Lower) or
 // U^H U (Upper) from potrf, X overwriting B. Public entry:
 //   int potrs<UL, Tier>(ex, A, B, ws)          0, or -i for argument i (uniform over ex)
-//   WorkspaceSize potrs_buffer_size<UL, Tier, T>(n)
+//   WorkspaceSize buffer_size<routine::potrs<UL>, Tier, T>(n)
 //   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n and nrhs: the two triangular solves are the
 //                      in-group L3 trsm (level3/group.hh) over NB-wide diagonal blocks;
 //                      ws.local = the L3 stages (the same slot potrf's Blocked plan starts with)
@@ -98,12 +98,6 @@ template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrs<U
 template <Uplo UL, class T> struct tiers<routine::potrs<UL>, T> {
     using type = tier::list<tier::Blocked<32>>;
 };
-
-// The workspace of one matrix (host and device); nrhs does not enter it. Tier may be tier::upto<NMax>.
-template <Uplo UL, class Tier, class T> constexpr WorkspaceSize potrs_buffer_size(int n) {
-    using Tr = resolve_tier_t<routine::potrs<UL>, T, Tier>;
-    return tier_info<routine::potrs<UL>, Tr, T>::buffer_size(n);
-}
 
 // B := A^-1 B for the n x nrhs B, A's UL triangle holding potrf's factor (the other triangle not
 // read); returns 0 or -i (see the file head).

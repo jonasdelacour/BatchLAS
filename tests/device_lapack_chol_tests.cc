@@ -322,7 +322,7 @@ template <class T, Uplo UL, class Tier> void potrf_case(Dev& d, int n) {
     T* dh = d.up(p.h);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto kv = kview(dd, p.s);
-    run_blocked(d, kBatch, batchlas::device::potrf_buffer_size<UL, Tier, T>(n), info,
+    run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Tier, T>(n), info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(kv, b), w); });
     const auto hinfo = host_potrf(d, dh, p.s, UL);
     const auto got = d.down(dd, p.h.size()), host = d.down(dh, p.h.size());
@@ -377,7 +377,7 @@ template <class T, Uplo UL, class Tier> void potrs_case(Dev& d, int n) {
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
     const auto kb = kview(db, sb);
-    run_blocked(d, kBatch, batchlas::device::potrs_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+    run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::potrs<UL>, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
         return batchlas::device::potrs<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b), w);
     });
     host_potrs(d, df, p.s, dbh, sb, UL);
@@ -403,7 +403,7 @@ template <class T, Uplo UL, class Tier> void posv_case(Dev& d, int n) {
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
     const auto kb = kview(db, sb);
-    run_blocked(d, kBatch, batchlas::device::posv_buffer_size<UL, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+    run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::posv<UL>, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
         return batchlas::device::posv<UL, Tier>(ex, batchlas::device::item(ka, b), batchlas::device::item(kb, b), w);
     });
     const auto hinfo = host_posv(d, dah, p.s, dbh, sb, UL);
@@ -447,7 +447,7 @@ template <class T, Uplo UL, class Tier> void potri_case(Dev& d, int n) {
     T* dah = d.up(factor);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, p.s);
-    run_blocked(d, kBatch, batchlas::device::potri_buffer_size<UL, Tier, T>(n), info,
+    run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::potri<UL>, Tier, T>(n), info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Tier>(ex, batchlas::device::item(ka, b), w); });
     const auto hinfo = host_potri(d, dah, p.s, UL);
     const auto got = d.down(da, factor.size()), host = d.down(dah, factor.size());
@@ -496,7 +496,7 @@ template <class T, Uplo UL, class Tier> void trtri_unit_case(Dev& d, int n) {
     T* da = d.up(h);
     std::int32_t* info = d.alloc<std::int32_t>(kBatch, -7);
     const auto ka = kview(da, s);
-    run_blocked(d, kBatch, batchlas::device::trtri_buffer_size<UL, Diag::Unit, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+    run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::trtri<UL, Diag::Unit>, Tier, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
         return batchlas::device::trtri<UL, Diag::Unit, Tier>(ex, batchlas::device::item(ka, b), w);
     });
     const auto got = d.down(da, h.size());
@@ -621,16 +621,16 @@ TYPED_TEST(DeviceApiCholTest, SaturatingBatchIsBitIdentical) {
         const auto gi = this->dev.down(info, kSat);
         return int(std::count(gi.begin(), gi.end(), 0));
     };
-    run_blocked(this->dev, kSat, batchlas::device::potrf_buffer_size<UL, Big<T>, T>(n), info,
+    run_blocked(this->dev, kSat, batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Big<T>, T>(n), info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
     EXPECT_EQ(all_zero(), kSat) << "potrf info";
     EXPECT_EQ(same_as_item0(this->dev.down(da, p.h.size()), p.s), 0) << "potrf: an item differs from item 0";
-    run_blocked(this->dev, kSat, batchlas::device::posv_buffer_size<UL, Big<T>, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+    run_blocked(this->dev, kSat, batchlas::device::buffer_size<batchlas::device::routine::posv<UL>, Big<T>, T>(n), info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
         return batchlas::device::posv<UL, Big<T>>(ex, batchlas::device::item(kp, b), batchlas::device::item(kb, b), w);
     });
     EXPECT_EQ(all_zero(), kSat) << "posv info";
     EXPECT_EQ(same_as_item0(this->dev.down(db, b0.size()), sb), 0) << "posv: an X differs from item 0's";
-    run_blocked(this->dev, kSat, batchlas::device::potri_buffer_size<UL, Big<T>, T>(n), info,
+    run_blocked(this->dev, kSat, batchlas::device::buffer_size<batchlas::device::routine::potri<UL>, Big<T>, T>(n), info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
     EXPECT_EQ(all_zero(), kSat) << "potri info";
     EXPECT_EQ(same_as_item0(this->dev.down(da, p.h.size()), p.s), 0) << "potri: an item differs from item 0";
@@ -660,7 +660,7 @@ TYPED_TEST(DeviceApiCholTest, ArgumentsAreMinusI) {
         EXPECT_EQ(gi[0], want) << what;
         EXPECT_EQ(gi[1], want) << what;
     };
-    const auto potrf_ws = batchlas::device::potrf_buffer_size<UL, Tier, T>(n);
+    const auto potrf_ws = batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Tier, T>(n);
     run_blocked(this->dev, 2, potrf_ws, info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Tier>(ex, batchlas::device::item(ka, b, n, n - 1), w); });
     expect(-2, "potrf, A not square");
@@ -710,7 +710,7 @@ TYPED_TEST(DeviceApiCholTest, WithTierFilters) {
         EXPECT_EQ((pick<Posv, T>(big, n)), nb) << n;
         EXPECT_EQ((pick<Potri, T>(big, n)), "blocked32") << n;
     }
-    const std::size_t potrs_local = batchlas::device::potrs_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<32>, T>(1).local_bytes;
+    const std::size_t potrs_local = batchlas::device::buffer_size<batchlas::device::routine::potrs<Uplo::Upper>, batchlas::device::tier::Blocked<32>, T>(1).local_bytes;
     const batchlas::device::DeviceLimits starved{potrs_local - 1, {32}, 1024, true};
     EXPECT_EQ((pick<Potrs, T>(starved, 64)), "throw");
     const batchlas::device::DeviceLimits sg16{std::size_t(1) << 20, {16}, 1024, true};
@@ -729,7 +729,7 @@ TYPED_TEST(DeviceApiCholTest, BufferSizeIsTheCarvedPlan) {
     using D = batchlas::device::detail::dev_scalar_t<T>;
     using Cfg = batchlas::device::detail::PotrfBlockedCfg<T>;
     constexpr auto pl = batchlas::device::detail::PotrfBlockedPlan<T, 16>::make();
-    const auto sz = batchlas::device::potrf_buffer_size<Uplo::Lower, batchlas::device::tier::Blocked<16>, T>(1000);
+    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Blocked<16>, T>(1000);
     EXPECT_EQ(sz, pl.size);
     EXPECT_EQ(pl.smem.offset, 0u);
     EXPECT_EQ(pl.smem.count, std::size_t(Cfg::smem_elems));
@@ -740,16 +740,16 @@ TYPED_TEST(DeviceApiCholTest, BufferSizeIsTheCarvedPlan) {
     EXPECT_LE(pl.fail.offset + sizeof(int), sz.local_bytes);
     EXPECT_EQ(pl.blk.offset % 16 + pl.diag.offset % 16 + pl.fail.offset % 16, 0u);
     EXPECT_EQ(sz.global_bytes, 0u);
-    EXPECT_EQ((batchlas::device::posv_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<16>, T>(7)), sz);
-    const auto rs = batchlas::device::potrs_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<16>, T>(7);
+    EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::posv<Uplo::Upper>, batchlas::device::tier::Blocked<16>, T>(7)), sz);
+    const auto rs = batchlas::device::buffer_size<batchlas::device::routine::potrs<Uplo::Upper>, batchlas::device::tier::Blocked<16>, T>(7);
     EXPECT_EQ(rs.local_bytes, (batchlas::device::l3::smem_bytes<Cfg>() + 15) / 16 * 16);
     EXPECT_EQ(rs.global_bytes, 0u);
     for (int n : {1, 33, 1000}) {
-        const auto ps = batchlas::device::potri_buffer_size<Uplo::Lower, batchlas::device::tier::Blocked<32>, T>(n);
+        const auto ps = batchlas::device::buffer_size<batchlas::device::routine::potri<Uplo::Lower>, batchlas::device::tier::Blocked<32>, T>(n);
         EXPECT_EQ(ps.local_bytes, rs.local_bytes) << n;
         EXPECT_EQ(ps.global_bytes, (std::size_t(n) * 32 * sizeof(T) + 15) / 16 * 16) << n;
-        EXPECT_EQ((batchlas::device::trtri_buffer_size<Uplo::Upper, Diag::Unit, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
-        EXPECT_EQ((batchlas::device::lauum_buffer_size<Uplo::Upper, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
+        EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::trtri<Uplo::Upper, Diag::Unit>, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
+        EXPECT_EQ((batchlas::device::buffer_size<batchlas::device::routine::lauum<Uplo::Upper>, batchlas::device::tier::Blocked<32>, T>(n)), ps) << n;
     }
 }
 
@@ -784,8 +784,8 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         const auto V = view(da, p.s);
         const std::size_t bytes = p.h.size() * sizeof(T);
         auto reset = [&](const T* from) { d.q().memcpy(da, from, bytes).wait(); };
-        const auto potrf_ws = batchlas::device::potrf_buffer_size<UL, Big<T>, T>(n);
-        const auto potri_ws = batchlas::device::potri_buffer_size<UL, Big<T>, T>(n);
+        const auto potrf_ws = batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Big<T>, T>(n);
+        const auto potri_ws = batchlas::device::buffer_size<batchlas::device::routine::potri<UL>, Big<T>, T>(n);
         std::byte* gbuf = d.alloc<std::byte>(std::max<std::size_t>(potri_ws.global_bytes * kTimeBatch, 1), std::byte{0});
         T* const h0 = d.up(p.h);
         const double dev_potrf = median_ms(ctx, [&]() {

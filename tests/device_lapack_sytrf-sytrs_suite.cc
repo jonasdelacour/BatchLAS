@@ -522,7 +522,7 @@ TYPED_TEST(DeviceLapackSytrfTest, SyconvColumnByHand) {
     this->dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const device::RtGroup<> g(it);
         const auto M = device::mat(L, n, n, ld);
-        device::for_each_owned(g, n, [&](int j) { device::syconv_col<T>(M, P, n, j, E); });
+        device::for_each_owned(g, n, [&](int j) { device::detail::syconv_col<T>(M, P, n, j, E); });
     });
     const auto got = this->dev.down(L, h.size());
     const auto ge = this->dev.down(E, he.size());
