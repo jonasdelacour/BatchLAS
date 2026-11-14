@@ -118,6 +118,9 @@ struct BflyDown {};
 struct BflyAsc {};
 struct TieLowest {};   // among equal keys: the lower index (root)
 struct TieHighest {};  // the higher index (root)
+struct TieRt {         // either, a launch value (sytrf: Upper takes the higher logical index)
+    bool low;
+};
 }  // namespace alg
 
 // Op tags for scratch_elements.
@@ -187,8 +190,7 @@ template <int W> struct ColDot {        // gemv T/C: W consecutive lanes per out
     static constexpr int width = W;
 };
 struct LanePerRow {};                   // trsv: lane i holds x(i); column j reaches the lanes by bcast
-// Triangular-solve diagonal: UnitDiag (not read), Div, Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
-struct UnitDiag {};
+// trsv, Diag::NonUnit: Div (x / a_ii), Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
 struct Div {};
 struct Recip {};
 struct RealDiv {};

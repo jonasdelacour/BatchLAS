@@ -42,7 +42,6 @@ namespace {
 
 template <typename D> using Tile = device::detail::RevMat<D>;
 template <typename D> using Vec = device::detail::RevVec<D>;
-using device::detail::ArgMaxScratch;
 using device::detail::rev_mat;
 
 template <typename T>
@@ -126,7 +125,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
                 const Tile<D> S = rev_mat(tp, kLdt, n, false);
                 int* const gp = piv + b * n;
                 device::detail::sytrf_cta_run(
-                    all, g, sgid == 0, G, S, n, upper, ArgMaxScratch<R>{&red[0], &redi[0]},
+                    all, g, sgid == 0, G, S, n, upper, device::argmax_slots<device::Mem::Global, true>(&red[0], &redi[0]),
                     [&](int k, int v) {
                         gp[k] = v;
                         pp[k] = v;
@@ -213,7 +212,7 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                 const device::RtGroup<> g(it);
                 const Tile<D> G = rev_mat(ap + b * stra, lda, n, upper);
                 int* const gp = piv + b * n;
-                const int st = device::sytf2(G, n, upper, g, ArgMaxScratch<R>{&red[0], &redi[0]},
+                const int st = device::sytf2(G, n, upper, g, device::argmax_slots<device::Mem::Global, true>(&red[0], &redi[0]),
                                                         [&](int k, int v) { gp[k] = v; });
                 if (lid == 0) info[b] = st;
             });
@@ -319,7 +318,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const device::RtGroup<> g(it);
-                const ArgMaxScratch<R> am{&red[0], &redi[0]};
+                const auto am = device::argmax_slots<device::Mem::Global, true>(&red[0], &redi[0]);
                 D* const item = ap + b * stra;
                 const Tile<D> S = rev_mat(item, lda, n, upper);
                 int* const gp = piv + b * n;

@@ -102,37 +102,6 @@ inline void build_perm(const int* ps, int n, int* perm, int* kind) {
     }
 }
 
-// x := op(L)^-1 x for L unit lower n x n (the strict lower triangle read) on a 32-lane executor,
-// x lane-cyclic (lane l holds row l + 32 r in x[r]); NoTrans by columns, Trans by rows, each step's
-// element by frag_bcast: no reduction, no barrier. Collective. Pending core: trsv<alg::LanePerRow>
-// over a multi-register lane-cyclic Frag with the sub(mul) update.
-template <Transpose TR, class Ex, class ML, class T, int R>
-BATCHLAS_DEVICE_INLINE void trsv_frag(const Ex& ex, const ML& l, int n, Frag<T, R, Cyclic>& x) {
-    static_assert(Ex::size == 32, "sytrs trsv_frag: a 32-lane executor");
-    using A = arith_t<arith::Fma, T>;
-    const int lane = ex.lane();
-    if constexpr (TR == Transpose::NoTrans) {
-        for (int k = 0; k + 1 < n; ++k) {
-            const T xk = frag_bcast(ex, x, k);
-            BATCHLAS_UNROLL_FULL
-            for (int r = 0; r < R; ++r) {
-                const int t = lane + 32 * r;
-                if (t > k && t < n) x[r] = A::sub(x[r], A::mul(l(t, k), xk));
-            }
-        }
-    } else {
-        static_assert(TR == Transpose::Trans, "sytrs trsv_frag: NoTrans or Trans");
-        for (int i = n - 1; i > 0; --i) {
-            const T xi = frag_bcast(ex, x, i);
-            BATCHLAS_UNROLL_FULL
-            for (int r = 0; r < R; ++r) {
-                const int t = lane + 32 * r;
-                if (t < i) x[r] = A::sub(x[r], A::mul(l(i, t), xi));
-            }
-        }
-    }
-}
-
 // x := D^-1 x for D block diagonal with 1 x 1 / 2 x 2 blocks: kind[t] as ldl_dsolve_row's, the
 // diagonal on d(t, t), e[k] the off-diagonal of the block starting at k. The partner rows come
 // from neighbor_exchange.
@@ -306,12 +275,14 @@ inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, cons
 }
 
 // L w = y, w := D^-1 w, L^T z = w on one 32-lane executor; x[r] holds logical row lane + 32 r.
-// Collective.
+// The unit-lower solves are core trsv<alg::LanePerRow> on the lane-cyclic Frag, sub of mul
+// (no reduction, no barrier). Collective.
 template <class Ex, typename D, int R>
 inline void sytrs_regs(const Ex& ex, const detail::Staged<D>& S, Frag<D, R, Cyclic>& x) {
-    detail::trsv_frag<Transpose::NoTrans>(ex, S, S.n, x);
+    static_assert(Ex::size == 32, "sytrs_regs: a 32-lane executor");
+    trsv<Uplo::Lower, Transpose::NoTrans, Diag::Unit, alg::Div, alg::LanePerRow, arith::Fma, alg::Unfused>(ex, S, x, S.n);
     detail::ldl_dsolve_frag(ex, S, S.kind, S.e, S.n, x);
-    detail::trsv_frag<Transpose::Trans>(ex, S, S.n, x);
+    trsv<Uplo::Lower, Transpose::Trans, Diag::Unit, alg::Div, alg::LanePerRow, arith::Fma, alg::Unfused>(ex, S, x, S.n);
 }
 
 // Every right-hand side of one item, sub-group `sgid` of `nsg` taking columns sgid, sgid + nsg, ...

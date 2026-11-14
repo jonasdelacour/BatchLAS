@@ -3,7 +3,7 @@
 // ?GETRS's device steps (the fused and composed host tiers run them), in detail until core
 // Level 3 / lapack_aux has SASS-identical forms of them. Everything else comes from core
 // (RtGroup, for_each_owned, lacpy, laswp, lapmr, conj_if, op_view, shift_reduce, select, arith::Fma):
-//   trsm_lane          op(A)^{-1} Y, one sub-group, lane i owns row i, shuffles only
+//   trsm_lane          op(A)^{-1} Y, one sub-group, lane i owns row i: core trsv<LanePerRow> per column
 //   gemm_nr            C -= op(A) X with X.cols() <= NR accumulators
 // Arithmetic is arith::Fma: sycl_device::dev_mul / fma_acc / dev_div bit for bit.
 // The public op getrs<TR, Tier>(ex, A, B, ipiv, ws): tier::Blocked (any n, nrhs) is LAPACK's
@@ -21,8 +21,7 @@
 namespace batchlas::device::detail {
 
 // Y(:, c) := op(A)^{-1} Y(:, c) for c = c0, c0 + cs, ... < Y.cols(), lane i owning row i (rows
-// >= A.rows() idle). Lower runs forward, Upper backward; Unit skips the last pivot, which
-// updates nothing. Collective: every lane calls it; the lane guards are inside.
+// >= A.rows() idle), sub of mul. Collective.
 template <Uplo UL, Diag DG, int SG, class MA, class MY>
 BATCHLAS_DEVICE_INLINE void trsm_lane(const SubGroup<SG>& ex, const MA& a, const MY& y, int c0, int cs) {
     using T = typename MY::value_type;
@@ -31,25 +30,7 @@ BATCHLAS_DEVICE_INLINE void trsm_lane(const SubGroup<SG>& ex, const MA& a, const
     const int jb = a.rows();
     for (int c = c0; c < y.cols(); c += cs) {
         T v = (lane < jb) ? y(lane, c) : Ar::zero();
-        auto pivot = [&](int s) {
-            if constexpr (DG == Diag::NonUnit) {
-                if (lane == s) v = Ar::div(v, a(s, s));
-            }
-            return batchlas::portable::group_broadcast(ex.sg, v, s);
-        };
-        if constexpr (UL == Uplo::Lower) {
-            const int end = DG == Diag::Unit ? jb - 1 : jb;
-            for (int s = 0; s < end; ++s) {
-                const T vs = pivot(s);
-                if (lane > s && lane < jb) v = Ar::sub(v, Ar::mul(a(lane, s), vs));
-            }
-        } else {
-            const int stop = DG == Diag::Unit ? 1 : 0;
-            for (int s = jb - 1; s >= stop; --s) {
-                const T vs = pivot(s);
-                if (lane < s) v = Ar::sub(v, Ar::mul(a(lane, s), vs));
-            }
-        }
+        trsv<UL, Transpose::NoTrans, DG, alg::Div, alg::LanePerRow, arith::Fma, alg::Unfused>(ex, a, v, jb);
         if (lane < jb) y(lane, c) = v;
     }
 }

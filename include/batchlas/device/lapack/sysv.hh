@@ -58,7 +58,7 @@ BATCHLAS_DEVICE_INLINE int sysv_run(tier::Cta<N>, const Ex& ex, const MA& A, con
     const SubGroup<32> g{ex.sub()};
     detail::sytrf_cta_run(
         ex, g, detail::sytrf_team(ex) == 0, detail::sytrf_view(A, rev), detail::rev_mat(tp, ldt, n, false), n, rev,
-        detail::ArgMaxScratch<R>{nullptr, nullptr},
+        argmax_slots<Mem::Global, true>(static_cast<R*>(nullptr), static_cast<int*>(nullptr)),
         [&](int k, int v) {
             ipiv[k] = v;
             pp[k] = v;

@@ -313,7 +313,7 @@ TYPED_TEST(DeviceLapackGetf2Test, Getf2ExplicitSwapEveryExecutor) {
 // ---- ?GETF2 by lazy relabel on a RowFrag --------------------------------------------------------
 
 // A test-local pivot policy for one matrix per partition (getrf_tiny.cc's shape): the key is
-// (order << 8) | lane, so the winner's lane comes back with its row; maxloc_bfly_up.
+// (order << 8) | lane, so the winner's lane comes back with its row; argmax_allreduce.
 template <int N, class Px> struct KeyPivot {
     const Px& px;
     int n, lane, base;
@@ -321,9 +321,9 @@ template <int N, class Px> struct KeyPivot {
     std::int32_t& info;
     template <class R> device::detail::PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = rowid >= j && rowid < n;
-        device::detail::MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), ((cand ? rowid : rowid + N) << 8) | lane};
-        device::detail::maxloc_bfly_up(px, a);
-        return {a.i >> 8, a.i & 0xff};
+        const device::ArgMax<R> a = device::argmax_allreduce(px, device::ArgMax<R>{((cand ? rowid : rowid + N) << 8) | lane, (cand && (mag == mag)) ? mag : R(-1)},
+                                                             device::alg::TieLowest{}, device::None{}, 0, R(-1));
+        return {a.index >> 8, a.index & 0xff};
     }
     void record(int j, device::detail::PivotWinner w) const {
         if (lane == 0) ipiv[j] = base + w.row + 1;
@@ -431,7 +431,7 @@ TYPED_TEST(DeviceLapackGetf2Test, Getf2RelabelMatchesExplicitSwapBitForBit) {
 
 // ---- pivot search, rscl_col, ger_trailing --------------------------------------------------------
 
-// iamax_col on 96-wide groups (3 sub-groups: a non-power-of-two slot scan), one sub-group and a
+// getf2's iamax on 96-wide groups (3 sub-groups: a non-power-of-two slot scan), one sub-group and a
 // static WorkGroup: a tie on one owner and across owners (lowest index wins), NaN skipped,
 // all-NaN and empty -> m (the "none" row), and a start row r0 > 0 that returns an ABSOLUTE row.
 TYPED_TEST(DeviceLapackGetf2Test, IamaxColTiesNanEveryExecutor) {
@@ -460,10 +460,16 @@ TYPED_TEST(DeviceLapackGetf2Test, IamaxColTiesNanEveryExecutor) {
         const auto xv = device::mat_wide(xd + std::size_t(c) * n, c == 3 ? 0 : n, 1, n);
         const int r0 = c == 4 ? 78 : 0;
         const device::RtGroup<device::Scope::Group> eg{it};
-        const int ig = device::detail::iamax_col(eg, xv, r0, 0, 32, vs, is);
+        auto col = [&](const auto& ex, R* v, int* i) {  // getf2's call
+            const int m = xv.rows();
+            return device::iamax<device::alg::NanSkip>(ex, [&](int r) -> D { return xv(r, 0); }, device::Range{r0, m}, device::alg::TieLowest{},
+                                                      device::argmax_slots(v, i), device::None{}, m, 32)
+                .index;
+        };
+        const int ig = col(eg, vs, is);
         eg.barrier();
-        const int isub = device::detail::iamax_col(device::RtGroup<device::Scope::Sub>{it}, xv, r0, 0, 32, vs, is);
-        const int iwg = device::detail::iamax_col(device::WorkGroup<96>{it}, xv, r0, 0, 32, vs + 32, is + 32);
+        const int isub = col(device::RtGroup<device::Scope::Sub>{it}, vs, is);
+        const int iwg = col(device::WorkGroup<96>{it}, vs + 32, is + 32);
         if (eg.leader()) o[c * nexec] = ig, o[c * nexec + 1] = isub, o[c * nexec + 2] = iwg;
     });
     const auto g = this->dev.down(o, ho.size());

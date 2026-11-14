@@ -501,24 +501,6 @@ template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto a
     return nan ? std::numeric_limits<R>::quiet_NaN() : m;
 }
 
-// 0-based index of max |re| + |im|; ties -> the lowest index; NaN policy (NaN::First): the
-// lowest index holding a NaN wins over every number; n <= 0 -> -1. Three collectives.
-template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE int iamax(const Ex& ex, const X& x) {
-    using R = real_t<elem_t<X>>;
-    R best = R(-1);
-    int bi = INT_MAX, nani = INT_MAX;
-    for_each_owned(ex, x.size(), [&](int i) {
-        const R a = abs1(x(i));
-        if (sycl::isnan(a)) nani = i < nani ? i : nani;
-        else if (a > best) { best = a; bi = i; }
-    });
-    nani = detail::scope_reduce<S>(ex, nani, sycl::minimum<int>());
-    if (nani != INT_MAX) return nani;
-    const R m = detail::scope_reduce<S>(ex, best, sycl::maximum<R>());
-    const int idx = detail::scope_reduce<S>(ex, best == m ? bi : INT_MAX, sycl::minimum<int>());
-    return idx == INT_MAX ? -1 : idx;
-}
-
 // LAPACK lassq without the incoming pair: scale = max |component|, scale^2 * ssq = sum |x_i|^2,
 // computed in two passes so no square overflows or underflows to zero.
 template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto lassq(const Ex& ex, const X& x) {
@@ -710,54 +692,53 @@ BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred) {
     return find_first<S>(ex, x.size(), [&](int i) { return pred(x(i)); });
 }
 
-// argmax over i of key(x(i)): {index, key} (ArgMax, tie::, nan::: reduce.hh). Tie: alg::TieLowest | alg::TieHighest index among equal
-// keys. NaN: alg::NanFirst (the lowest index holding a NaN key wins, as iamax), alg::NanSkip (NaN keys
-// never win; all NaN -> {-1, -inf-like}). Key: alg::KeyAbs1 (|re| + |im|, BLAS), alg::KeyAbs (hypot),
-// alg::KeyReal (re). Uniform result; n <= 0 -> index -1.
+// iamax (?IAMAX; ?GETF2's and ?SYTF2's pivot search): {index, key} of the maximum of key(x(i))
+// over i in r (default all of x), i != skip (K = None: none left out). Key: alg::KeyAbs1
+// (|re| + |im|, LAPACK's cabs1), alg::KeyAbs (hypot), alg::KeyReal (re). NaN: alg::NanAsInf (a
+// NaN key ranks as +inf: found), alg::NanSkip (a NaN never beats a number). tie: alg::TieLowest,
+// alg::TieHighest or alg::TieRt{low}. Group scope: ArgMaxSlots (their barriers) or None (two
+// group collectives); lanes: argmax_allreduce (reduce.hh). No candidate:
+// {none, seed}, seed -1 (KeyReal: -inf). Uniform; COLLECTIVE.
 namespace alg {
 struct KeyAbs1 {};
 struct KeyAbs {};
 struct KeyReal {};
 }  // namespace alg
-template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class Key = alg::KeyAbs1, Scope S = Scope::Own, class Ex, class X>
-BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> argmax(const Ex& ex, const X& x) {
+template <class NaN = alg::NanAsInf, class Key = alg::KeyAbs1, class Ex, class X, class Tie = alg::TieLowest, class S = None,
+          class K = None, class W = None>
+BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> iamax(const Ex& ex, const X& x, Range r, const Tie& tie = {}, S slots = {},
+                                                    K skip = {}, int none = -1, W lanes = {}) {
     using T = elem_t<X>;
     using R = real_t<T>;
-    constexpr bool low = std::is_same_v<Tie, alg::TieLowest>;
-    static_assert(low || std::is_same_v<Tie, alg::TieHighest>, "argmax: alg::TieLowest or alg::TieHighest");
-    static_assert(std::is_same_v<NaN, alg::NanFirst> || std::is_same_v<NaN, alg::NanSkip>, "argmax: alg::NanFirst or alg::NanSkip");
-    auto keyf = [](const T& v) -> R {
-        if constexpr (std::is_same_v<Key, alg::KeyAbs1>) return abs1(v);
-        else if constexpr (std::is_same_v<Key, alg::KeyAbs>) return modulus(v);
-        else return Arith<T>::re(v);
-    };
-    const R lowest = -std::numeric_limits<R>::infinity();
-    R best = lowest;
-    int bi = low ? INT_MAX : -1, nani = INT_MAX;
-    for_each_owned(ex, x.size(), [&](int i) {
-        const R a = keyf(x(i));
-        if (sycl::isnan(a)) {
-            if constexpr (std::is_same_v<NaN, alg::NanFirst>) nani = i < nani ? i : nani;
-        } else if (a > best || (a == best && !low)) {
-            best = a;
-            bi = i;
-        } else if (low && a == best && bi == INT_MAX) {
-            bi = i;  // the first -inf key
+    static_assert(std::is_same_v<NaN, alg::NanAsInf> || std::is_same_v<NaN, alg::NanSkip>, "iamax: alg::NanAsInf or alg::NanSkip");
+    const R seed = std::is_same_v<Key, alg::KeyReal> ? -std::numeric_limits<R>::infinity() : R(-1);
+    ArgMax<R> best{none, seed};
+    for_each_owned(ex, r, [&](int i) BATCHLAS_DEVICE_BODY {
+        if constexpr (!std::is_same_v<K, None>) {
+            if (i == skip) return;
+        }
+        const T xi = x(i);
+        R v;
+        if constexpr (std::is_same_v<Key, alg::KeyAbs1>) v = abs1<T>(xi);
+        else if constexpr (std::is_same_v<Key, alg::KeyAbs>) v = modulus(xi);
+        else v = Arith<T>::re(xi);
+        // NanSkip needs no map here: every compare with a NaN is false, so it is never taken.
+        if constexpr (std::is_same_v<NaN, alg::NanAsInf>) v = sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v;
+        // An item's indices ascend: a static tie needs no index compare.
+        if constexpr (std::is_same_v<Tie, alg::TieLowest>) {
+            if (v > best.value) best.value = v, best.index = i;
+        } else if constexpr (std::is_same_v<Tie, alg::TieHighest>) {
+            if (v >= best.value) best.value = v, best.index = i;
+        } else {
+            detail::argmax_take(best, v, i, tie);
         }
     });
-    if constexpr (std::is_same_v<NaN, alg::NanFirst>) {
-        nani = detail::scope_reduce<S>(ex, nani, sycl::minimum<int>());
-        if (nani != INT_MAX) return {nani, std::numeric_limits<R>::quiet_NaN()};
-    }
-    const R m = detail::scope_reduce<S>(ex, best, sycl::maximum<R>());
-    int idx;
-    if constexpr (low) {
-        idx = detail::scope_reduce<S>(ex, best == m ? bi : INT_MAX, sycl::minimum<int>());
-        idx = idx == INT_MAX ? -1 : idx;
-    } else {
-        idx = detail::scope_reduce<S>(ex, best == m ? bi : -1, sycl::maximum<int>());
-    }
-    return {idx, m};
+    return argmax_allreduce(ex, best, tie, slots, none, seed, lanes);
+}
+template <class NaN = alg::NanAsInf, class Key = alg::KeyAbs1, class Ex, class X, class Tie = alg::TieLowest>
+    requires(requires(const X& v) { v.size(); })
+BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> iamax(const Ex& ex, const X& x, const Tie& tie = {}) {
+    return iamax<NaN, Key>(ex, x, Range{0, x.size()}, tie);
 }
 
 // max key over x with a NaN policy: alg::NanPropagate (any NaN -> NaN, as amax) or alg::NanSkip
@@ -920,24 +901,6 @@ template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(cons
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
     return detail::butterfly_inline<1, Ex::size, alg::BflyAsc>(ex, cand, sycl::minimum<int>());
-}
-
-// argmax over x(i), i in [r.lo, r.hi) except i == skip, through a Group-scope exchange: per-item
-// candidates merged by argmax_merge<Tie, NaN> in ONE allreduce (reduce.hh) over Scratch<ArgMax<R>>
-// (scratch_elements<reduce_op::Reduce, Ex, ArgMax<R>>() slots). Uniform; no candidate -> index -1.
-template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class Key = alg::KeyAbs1, class Ex, class R, int Slots, class X>
-BATCHLAS_DEVICE_INLINE ArgMax<R> argmax(const Ex& ex, Scratch<ArgMax<R>, Slots> scr, const X& x, Range r, int skip = -1) {
-    using T = elem_t<X>;
-    auto keyf = [](const T& v) -> R {
-        if constexpr (std::is_same_v<Key, alg::KeyAbs1>) return abs1(v);
-        else if constexpr (std::is_same_v<Key, alg::KeyAbs>) return modulus(v);
-        else return Arith<T>::re(v);
-    };
-    ArgMax<R> best{-1, R(0)};
-    for_each_owned(ex, r, [&](int i) {
-        if (i != skip) best = argmax_merge<Tie, NaN>(best, ArgMax<R>{i, keyf(x(i))});
-    });
-    return allreduce(ex, scr, best, ArgMaxMerge<Tie, NaN>{});
 }
 
 // ---- Cyclic rows of a static extent N (N % size == 0): item l owns rows l + k*size ----------

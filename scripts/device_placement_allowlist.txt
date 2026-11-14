@@ -12,9 +12,7 @@ layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::colsum_col
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::frag_rank1
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::frag_scale_to_row
 layout-detail-use src/ops/geqrf/kernels/geqrf_tiny.cc device::detail::xor_butterfly
-layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::MaxLoc
 layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::ger_frag_bcast
-layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::maxloc_bfly_up
 layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::pivot_key
 layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::pivot_key_lane
 layout-detail-use src/ops/gesv/kernels/gesv_tiny.cc device::detail::pivot_key_order
@@ -121,7 +119,6 @@ layout-detail-use src/ops/syev/tridiag/stein.cc device::detail::stein_params
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::Pack16
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::herm
 layout-detail-use src/ops/sygst/kernels/sygst_diag.cc device::detail::pack16_elems
-layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::ArgMaxScratch
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::RevMat
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::RevVec
 layout-detail-use src/ops/sytrf/kernels/sytrf_kernels.cc device::detail::Staged

@@ -198,7 +198,7 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
         const auto sg = it.get_sub_group();
         if (SgOnly && sg.get_group_linear_id() != 0) return;
         R* sv = reinterpret_cast<R*>(lm);
-        const device::detail::ArgMaxScratch<R> am{sv, reinterpret_cast<int*>(sv + 64)};
+        const auto am = device::argmax_slots<device::Mem::Global, true>(sv, reinterpret_cast<int*>(sv + 64));
         const device::detail::SumScratch<R> ss{sv, sv + 32};
         const T* xb = x + b * n;
         const T* yb = y + b * n;
@@ -206,12 +206,12 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
         auto xv = [=](int i) -> const T& { return xb[i]; };
         auto yv = [=](int i) -> const T& { return yb[i]; };
         auto body = [&](const auto& g) {
-            const auto lo = device::detail::iamax_bk(g, am, xv, device::Range{3, n}, true);
-            const auto hi = device::detail::iamax_bk(g, am, xv, device::Range{3, n}, false);
-            const auto sk = device::detail::iamax_bk<true>(g, am, xv, device::Range{0, n}, true, lo.index);
-            const auto em = device::detail::iamax_bk(g, am, xv, device::Range{n, n}, true);
-            const auto nl = device::detail::iamax_bk(g, am, yv, device::Range{0, n}, true);
-            const auto nh = device::detail::iamax_bk(g, am, yv, device::Range{0, n}, false);
+            const auto lo = device::iamax(g, xv, device::Range{3, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
+            const auto hi = device::iamax(g, xv, device::Range{3, n}, device::alg::TieRt{false}, am, device::None{}, -1, 32);
+            const auto sk = device::iamax(g, xv, device::Range{0, n}, device::alg::TieLowest{}, am, lo.index, -1, 32);
+            const auto em = device::iamax(g, xv, device::Range{n, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
+            const auto nl = device::iamax(g, yv, device::Range{0, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
+            const auto nh = device::iamax(g, yv, device::Range{0, n}, device::alg::TieRt{false}, am, device::None{}, -1, 32);
             T p0 = A::zero(), p1 = A::zero(), pe = A::zero();
             device::for_each_owned(g, device::Range{60, n}, [&](int i) {
                 p0 = A::add(p0, A::mul(xb[i], zb[i]));
@@ -399,7 +399,7 @@ TYPED_TEST(DeviceLapackSytrfTest, LdlBlockSolves) {
 
 // ---- register-distributed sweeps --------------------------------------------------------------
 
-// trsv_frag NoTrans then Trans (unit lower; the diagonal and the strict upper triangle are NaN),
+// trsv<LanePerRow> on a lane-cyclic Frag, NoTrans then Trans (unit lower; the diagonal and the strict upper triangle are NaN),
 // and ldl_dsolve_frag with a 2 x 2 block on rows 31 / 32 (across the register boundary), n = 50,
 // R = 2, one sub-group per item, ld n + 3.
 TYPED_TEST(DeviceLapackSytrfTest, TrsvFragAndDsolveFrag) {
@@ -449,10 +449,10 @@ TYPED_TEST(DeviceLapackSytrfTest, TrsvFragAndDsolveFrag) {
             x[r] = t < n ? bb[t] : T(0);
             y[r] = x[r];
         }
-        device::detail::trsv_frag<Transpose::NoTrans>(ex, L, n, x);
+        device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::Unit, device::alg::Div, device::alg::LanePerRow, device::arith::Fma, device::alg::Unfused>(ex, L, x, n);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[lane + 32 * r] = x[r];
-        device::detail::trsv_frag<Transpose::Trans>(ex, L, n, x);
+        device::trsv<Uplo::Lower, Transpose::Trans, Diag::Unit, device::alg::Div, device::alg::LanePerRow, device::arith::Fma, device::alg::Unfused>(ex, L, x, n);
         for (int r = 0; r < RR; ++r)
             if (lane + 32 * r < n) o[n + lane + 32 * r] = x[r];
         device::detail::ldl_dsolve_frag(ex, Dm, kp, ep + b * n, n, y);

@@ -3401,7 +3401,7 @@ TYPED_TEST(LuTest, TinyArgmaxIgnoresANaNCandidate) {
 // only one that reaches the property -- and the tie-break direction it pins is ALSO
 // what keeps a pad row (highest rowid in the partition) from winning an all-zero
 // column, which is the guard T4 turned out not to be.
-// Arms break (c), `oi < a.i` -> `oi > a.i` in maxloc_merge (lapack/getrf.hh detail).
+// Arms break (c), `oi < bi` -> `oi > bi` in tie_prefers<alg::TieLowest> (reduce.hh detail).
 // evidence: docs/perf/lu.md#armed-breaks
 TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
     using T = typename TestFixture::T;

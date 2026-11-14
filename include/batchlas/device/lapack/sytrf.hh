@@ -65,48 +65,12 @@ template <class T> struct RevVec {
 // ---- deterministic group reductions -----------------------------------------------------------
 // The 32-lane butterfly, then with more than one sub-group the sub-group results in sub-group
 // order through caller scratch (width / 32 slots, two barriers): the same value on every item,
-// whatever the width. Pending core: allreduce / argmax over RtGroup<Group> (run-time nteams), a
-// run-time tie rule and nan::AsInf; until then the cross-sub-group fold stays here.
-template <class R> struct ArgMaxScratch {
-    R* v;
-    int* i;
-};
+// whatever the width. The pivot search is core iamax on standalone, Global-fenced ArgMaxSlots
+// (reduce.hh) with the same schedule.
 template <class R> struct SumScratch {
     R* re;
     R* im;  // complex only
 };
-
-// (ov, oi) beats (bv, bi): a larger value; on a tie the preferred index.
-template <class R> BATCHLAS_DEVICE_HELPER bool argmax_beats(R ov, int oi, R bv, int bi, bool prefer_low) {
-    return ov > bv || (ov == bv && (prefer_low ? oi < bi : oi > bi));
-}
-
-template <class Ex, class R> BATCHLAS_DEVICE_HELPER void argmax_reduce(const Ex& ex, ArgMaxScratch<R> scr, R& v, int& idx, bool prefer_low) {
-    auto sg = ex.sub();
-    // Member by member: AdaptiveCpp's Metal backend miscompiles a select of the whole struct.
-    const ArgMax<R> m = butterfly<1, 32>(sg, ArgMax<R>{idx, v}, [&](const ArgMax<R>& a, const ArgMax<R>& o) {
-        const bool take = argmax_beats(o.value, o.index, a.value, a.index, prefer_low);
-        return ArgMax<R>{take ? o.index : a.index, take ? o.value : a.value};
-    });
-    v = m.value;
-    idx = m.index;
-    const int nsg = detail::size_of(ex) / 32;
-    if (nsg == 1) return;
-    if (sg.leader()) {
-        scr.v[sg.get_group_linear_id()] = v;
-        scr.i[sg.get_group_linear_id()] = idx;
-    }
-    sync<Scope::Group>(ex, Mem::Global);
-    v = scr.v[0];
-    idx = scr.i[0];
-    for (int s = 1; s < nsg; ++s)
-        if (argmax_beats(scr.v[s], scr.i[s], v, idx, prefer_low)) {
-            v = scr.v[s];
-            idx = scr.i[s];
-        }
-    sync<Scope::Group>(ex, Mem::Global);
-}
-
 template <class Ex, class R> BATCHLAS_DEVICE_HELPER R sum_reduce_real(const Ex& ex, R v, R* slots) {
     auto sg = ex.sub();
     v = butterfly<1, 32>(sg, v, sycl::plus<R>());
@@ -128,31 +92,6 @@ template <class Ex, class T, class R> BATCHLAS_DEVICE_HELPER T sum_reduce(const 
     } else {
         return sum_reduce_real(ex, v, scr.re);
     }
-}
-
-// A NaN key ranks above every number, so a NaN column is found and no lane's pick depends on a
-// NaN compare.
-template <class R> BATCHLAS_DEVICE_HELPER R nan_as_inf(R v) { return sycl::isnan(v) ? std::numeric_limits<R>::infinity() : v; }
-
-// ?SYTF2's pivot search: the arg-max over i in r of nan_as_inf(abs1(x(i))) (LAPACK's CABS1),
-// ties to the lower index (prefer_low) or the higher; with Skip, index `skip` is left out. An
-// empty range gives {-1, -1}. Uniform; the barriers of argmax_reduce.
-template <bool Skip = false, class Ex, class R, class X>
-BATCHLAS_DEVICE_INLINE ArgMax<R> iamax_bk(const Ex& ex, ArgMaxScratch<R> scr, const X& x, Range r, bool prefer_low, int skip = -1) {
-    R cv = R(-1);
-    int ci = -1;
-    for_each_owned(ex, r, [&](int i) BATCHLAS_DEVICE_BODY {
-        if constexpr (Skip) {
-            if (i == skip) return;
-        }
-        const R v = nan_as_inf(abs1(x(i)));
-        if (argmax_beats(v, i, cv, ci, prefer_low)) {
-            cv = v;
-            ci = i;
-        }
-    });
-    argmax_reduce(ex, scr, cv, ci, prefer_low);
-    return {ci, cv};
 }
 
 // ---- Bunch-Kaufman ----------------------------------------------------------------------------
@@ -211,10 +150,11 @@ template <class D> BATCHLAS_DEVICE_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t 
 
 // ?sytf2, lower form, on the logical tile. `piv_out(phys_k, value)` stores LAPACK's ipiv entry
 // (1-based; a 2x2 pivot writes -(p+1) at both of its positions); item 0 calls it. Returns info.
-template <typename D, typename R, typename Ex, typename PivOut>
-inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detail::ArgMaxScratch<R> am,
-                 PivOut&& piv_out) {
+// am: the pivot search's standalone, Global-fenced ArgMaxSlots (unread on a SubGroup).
+template <typename D, typename Ex, typename AM, typename PivOut>
+inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, AM am, PivOut&& piv_out) {
     using A = arith_t<arith::Fma, D>;
+    using R = real_t<D>;
     const R alpha = detail::bk_alpha<R>();
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
     int info = 0;
@@ -224,14 +164,14 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detai
         int kp = k;
         const R absakk = abs1(S(k, k));
         // ?sytf2's I?AMAX takes the first maximum in storage order: the smallest physical row,
-        // which for the reversed (upper) form is the largest logical one.
-        const auto col = detail::iamax_bk(g, am, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, !rev);
+        // which for the reversed (upper) form is the largest logical one. 32: the sub-group width.
+        const auto col = iamax(g, [&](int i) -> D& { return S(i, k); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
         const R colmax = col.value < R(0) ? R(0) : col.value;
         const int imax = col.index;
         const int stage = detail::bk_stage(g, absakk, colmax, alpha);
         if (stage == detail::kBkNeedRow) {
-            const auto row = detail::iamax_bk<true>(
-                g, am, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, true, imax);
+            const auto row = iamax(g, [&](int j) -> D& { return j > imax ? S(j, imax) : S(imax, j); }, Range{k, n}, alg::TieLowest{}, am,
+                                   imax, -1, 32);
             detail::bk_choice(g, absakk, colmax, row.value, abs1(S(imax, imax)), alpha, k, imax, kp, kstep);
         }
         if (stage == detail::kBkZero) {
@@ -294,10 +234,11 @@ inline int sytf2(const detail::RevMat<D>& S, int n, bool rev, const Ex& g, detai
 // evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
 // The loops stay hand-written: as device ops the W zero-fill unrolled fully at device link and the
 // column update moved loads and FMAs (complex<float> registers 68 -> 128).
-template <typename D, typename R, typename Ex, typename PivOut>
+template <typename D, typename Ex, typename AM, typename PivOut>
 inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, int k0, int nb, int start, bool rev,
-                 const Ex& g, detail::ArgMaxScratch<R> am, int& info, PivOut&& piv_out) {
+                 const Ex& g, AM am, int& info, PivOut&& piv_out) {
     using A = arith_t<arith::Fma, D>;
+    using R = real_t<D>;
     const R alpha = detail::bk_alpha<R>();
     const int lid = g.lid(), nl = detail::size_of(g);
     auto phys = [&](int i) { return rev ? n - 1 - i : i; };
@@ -320,27 +261,14 @@ inline int lasyf(const detail::RevMat<D>& S, const detail::RevMat<D>& W, int n, 
         int kstep = 1;
         int kp = k;
         const R absakk = abs1(W(k, c));
-        R cv = R(-1);
-        int ci = -1;
-        for (int i = k + 1 + lid; i < n; i += nl) {
-            const R v = detail::nan_as_inf(abs1(W(i, c)));
-            if (detail::argmax_beats(v, i, cv, ci, !rev)) { cv = v; ci = i; }
-        }
-        detail::argmax_reduce(g, am, cv, ci, !rev);
-        const R colmax = cv < R(0) ? R(0) : cv;
-        const int imax = ci;
+        const auto col = iamax(g, [&](int i) -> D& { return W(i, c); }, Range{k + 1, n}, alg::TieRt{!rev}, am, None{}, -1, 32);
+        const R colmax = col.value < R(0) ? R(0) : col.value;
+        const int imax = col.index;
         const int stage = detail::bk_stage(g, absakk, colmax, alpha);
         if (stage == detail::kBkNeedRow) {
             update_col(k, c + 1, imax, [&](int i) { return i < imax ? S(imax, i) : S(i, imax); });
-            R rv = R(-1);
-            int ri = -1;
-            for (int j = k + lid; j < n; j += nl) {
-                if (j == imax) continue;
-                const R v = detail::nan_as_inf(abs1(W(j, c + 1)));
-                if (detail::argmax_beats(v, j, rv, ri, true)) { rv = v; ri = j; }
-            }
-            detail::argmax_reduce(g, am, rv, ri, true);
-            detail::bk_choice(g, absakk, colmax, rv, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
+            const auto row = iamax(g, [&](int j) -> D& { return W(j, c + 1); }, Range{k, n}, alg::TieLowest{}, am, imax, -1, 32);
+            detail::bk_choice(g, absakk, colmax, row.value, abs1(W(imax, c + 1)), alpha, k, imax, kp, kstep);
             if (kstep == 1 && kp != k)
                 for (int i = k + lid; i < n; i += nl) W(i, c) = W(i, c + 1);
             sync<Scope::Group>(g, Mem::Global);
@@ -529,9 +457,9 @@ template <class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int sytrf_check
 // the logical lower triangle of G into the local tile S; then the factoring sub-group g (the
 // items with `factors`) runs ?sytf2 on S, copies the factor back to G, and its leader calls
 // info_out(info). Returns ?sytf2's info on g, 0 elsewhere. No trailing barrier.
-template <class All, class Sub, typename D, typename R, typename PivOut, typename InfoOut>
+template <class All, class Sub, typename D, typename AM, typename PivOut, typename InfoOut>
 BATCHLAS_DEVICE_INLINE int sytrf_cta_run(const All& all, const Sub& g, bool factors, const RevMat<D>& G, const RevMat<D>& S, int n,
-                                         bool rev, ArgMaxScratch<R> am, PivOut&& piv_out, InfoOut&& info_out) {
+                                         bool rev, AM am, PivOut&& piv_out, InfoOut&& info_out) {
     lacpy<Part::Lower, Transpose::NoTrans, alg::DivMod>(all, G, S);
     sync<Scope::Group>(all, Mem::Global);
     int st = 0;
@@ -553,7 +481,8 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Cta<N>, const Ex& ex, const MA& A, in
     const RevMat<D> S = rev_mat(carve_local(ws, pl.tile).get_raw(), N + 1, n, false);
     const SubGroup<32> g{ex.sub()};
     // One sub-group factors: its arg-max never reaches the cross-sub-group scratch.
-    const int st = sytrf_cta_run(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev, ArgMaxScratch<R>{nullptr, nullptr},
+    const int st = sytrf_cta_run(ex, g, sytrf_team(ex) == 0, sytrf_view(A, rev), S, n, rev,
+                                    argmax_slots<Mem::Global, true>(static_cast<R*>(nullptr), static_cast<int*>(nullptr)),
                                     [&](int k, int v) { ipiv[k] = v; }, NoOp{});
     sync<Scope::Group>(ex, Mem::Global);
     if constexpr (Ex::sub_whole) return st;
@@ -566,7 +495,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<1>, const Ex& ex, const MA& A
     using R = real_t<D>;
     constexpr bool rev = UL == Uplo::Upper;
     constexpr auto pl = sytrf_wg_plan<R>();
-    const ArgMaxScratch<R> am{carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw()};
+    const auto am = argmax_slots<Mem::Global, true>(carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw());
     // sytf2's verdicts are uniform and each step ends on a barrier: info is uniform, A visible.
     return sytf2(sytrf_view(A, rev), A.rows(), rev, ex, am, [&](int k, int v) { ipiv[k] = v; });
 }
@@ -581,7 +510,6 @@ template <Uplo UL, int NB, class Ex, class MA>
     requires(NB > 1)
 BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& A, int* ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;
-    using R = real_t<D>;
     using Cfg = sytrf_l3_cfg<D>;
     using Ar = arith_t<typename Cfg::ops, D>;
     static_assert(!is_runtime_v<Ex> && Ex::size == Cfg::threads, "sytrf tier::Blocked<NB>: a WorkGroup<256, 32> executor");
@@ -589,7 +517,7 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
     constexpr Uplo tri = rev ? Uplo::Upper : Uplo::Lower;
     const int n = A.rows();
     const auto pl = sytrf_blocked_plan<NB, D>(n);
-    const ArgMaxScratch<R> am{carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw()};
+    const auto am = argmax_slots<Mem::Global, true>(carve_local(ws, pl.v).get_raw(), carve_local(ws, pl.i).get_raw());
     const l3::Smem<Cfg> sm{carve_local(ws, pl.smem).get_raw()};
     D* const w = carve_global(ws, pl.w);
     D* const a0 = &A(0, 0);

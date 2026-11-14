@@ -236,7 +236,7 @@ void run_reductions(Dev& dev, int n, int inc, std::vector<T>& hx, std::vector<T>
                 if (ex.leader()) ob[kDot] = r0, ob[kDotc] = r1, ob[kAsum] = r2, ob[kAmax] = r3, ob[kReduce] = r4;
             }
             if constexpr (P < 0 || P == 1) {
-                const T r0 = T(device::nrm2<device::alg::Scaled>(ex, xv)), r1 = T(device::nrm2<device::alg::Unscaled>(ex, xv)), r2 = T(real_of<T>(device::iamax(ex, xv)));
+                const T r0 = T(device::nrm2<device::alg::Scaled>(ex, xv)), r1 = T(device::nrm2<device::alg::Unscaled>(ex, xv)), r2 = T(real_of<T>(device::iamax(ex, xv).index));
                 if (ex.leader()) ob[kNrm2] = r0, ob[kNrm2U] = r1, ob[kIamax] = r2;
             }
             if constexpr (P < 0 || P == 2) {
@@ -352,8 +352,8 @@ TYPED_TEST(DeviceCoreOpsTest, IamaxTiesNanAndNrm2Thresholds) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<WG> ex{it};
         const auto xv = device::vec(x + std::ptrdiff_t(b) * n, n);
-        const int im = device::iamax(ex, xv);
-        const int im_sub = device::iamax(device::SubGroup<32>{it.get_sub_group()}, xv);
+        const int im = device::iamax(ex, xv).index;
+        const int im_sub = device::iamax(device::SubGroup<32>{it.get_sub_group()}, xv).index;
         const R am = device::amax(ex, xv), nr = device::nrm2<device::alg::Scaled>(ex, xv), nu = device::nrm2<device::alg::Unscaled>(ex, xv);
         const R nb = device::nrm2<device::alg::Blue>(ex, xv);
         if (ex.leader()) io[2 * b] = im, io[2 * b + 1] = im_sub, ro[3 * b] = am, ro[3 * b + 1] = nr, ro[3 * b + 2] = nb;
@@ -1477,7 +1477,7 @@ TYPED_TEST(DeviceCoreOpsTest, ScalarLapackMatchesReferenceLapack) {
 // ---- reductions --------------------------------------------------------------------------------
 
 // Per item: sumsq (Fused, and Unfused over two operands in one loop), nrm2 Blue / Unscaled /
-// Scaled, find_first, argmax under each tie / NaN / key policy, amax_by<Skip>, allreduce of an
+// Scaled, find_first, iamax under each tie / NaN / key policy, amax_by<Skip>, allreduce of an
 // array, on WorkGroup, RtGroup @96, Teams<128, 16> (one item per team) and Thread. Items
 // b % 3 == 1 carry a NaN at index 40 and a tie of the maximum at 100 / 500; items b % 3 == 2
 // are scaled to 1e30 (float) / 1e300 (double), where the unscaled sum overflows.
@@ -1510,11 +1510,11 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         const auto su = device::sumsq<device::alg::Unfused>(ex, yv, xv);
         const R bl = device::nrm2<device::alg::Blue>(ex, xv), un = device::nrm2<device::alg::Unscaled>(ex, yv), sc = device::nrm2<device::alg::Scaled>(ex, xv);
         const int ff = device::find_first(ex, xv, [](const T& v) { return device::abs1(v) > real_of<T>(0.99); });
-        const auto alo = device::argmax(ex, xv);
-        const auto ahi = device::argmax<device::alg::TieHighest, device::alg::NanSkip>(ex, xv);
-        const auto ask = device::argmax<device::alg::TieLowest, device::alg::NanSkip>(ex, xv);
-        const auto aab = device::argmax<device::alg::TieLowest, device::alg::NanSkip, device::alg::KeyAbs>(ex, yv);
-        const auto are = device::argmax<device::alg::TieLowest, device::alg::NanSkip, device::alg::KeyReal>(ex, yv);
+        const auto alo = device::iamax(ex, xv);
+        const auto ahi = device::iamax<device::alg::NanSkip>(ex, xv, device::alg::TieHighest{});
+        const auto ask = device::iamax<device::alg::NanSkip>(ex, xv, device::alg::TieRt{true});
+        const auto aab = device::iamax<device::alg::NanSkip, device::alg::KeyAbs>(ex, yv);
+        const auto are = device::iamax<device::alg::NanSkip, device::alg::KeyReal>(ex, yv);
         const R ams = device::amax_by<device::alg::NanSkip>(ex, xv);
         const auto all = device::allreduce(ex, std::array<R, 2>{R(ex.lid() + 1), R(1)});
         if (ex.leader()) {
@@ -1569,11 +1569,11 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
         }
         EXPECT_VERIFY(T, Check::blas, n, rel(T(r[kUnsc]), LD<T>(ny), ny)) << where << " nrm2 Unscaled";
         EXPECT_EQ(int(std::real(r[kFirst])), ff) << where << " find_first";
-        EXPECT_EQ(int(std::real(r[kArgLo])), alo) << where << " argmax Lowest/First";
-        EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " argmax Highest/Skip (the tie of item 1)";
-        EXPECT_EQ(int(std::real(r[kArgSkip])), ask) << where << " argmax Skip";
-        EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " argmax alg::KeyAbs";
-        EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " argmax alg::KeyReal";
+        EXPECT_EQ(int(std::real(r[kArgLo])), alo) << where << " iamax Lowest/AsInf";
+        EXPECT_EQ(int(std::real(r[kArgHi])), ahi) << where << " iamax Highest/Skip (the tie of item 1)";
+        EXPECT_EQ(int(std::real(r[kArgSkip])), ask) << where << " iamax Skip (TieRt low)";
+        EXPECT_EQ(int(std::real(r[kArgAbs])), aab) << where << " iamax alg::KeyAbs";
+        EXPECT_EQ(int(std::real(r[kArgRe])), are) << where << " iamax alg::KeyReal";
         EXPECT_EQ(std::real(r[kAmaxSkip]), R(amax)) << where << " amax_by<Skip> is exact";
         const int w = make_ex.width;
         EXPECT_EQ(std::real(r[kAll0]), R(w * (w + 1) / 2)) << where << " allreduce[0]";

@@ -3,8 +3,8 @@
 // Guards (agent-guide section 8): complex data with nonzero imaginary parts through every shuffle;
 // partial mask ranges (Lo > 1, Hi < 32) so a butterfly that crosses its block is visible; both
 // orders; the leader-only contract of shift_reduce checked on the leader alone; argmax ties
-// (Lowest and Highest), NaN (First and Skip), empty candidates, and a WG = 1024 launch where
-// every one of 1024 items must be bit-identical to its period-3 representative (SLM scratch).
+// (Lowest, Highest, TieRt), empty candidates, and a WG = 1024 iamax (NaN AsInf and Skip) where
+// every one of 1024 items must be bit-identical to its period-3 representative (SLM slots).
 // Red set (each break was made once, 2026-11-04, and this suite failed): the butterfly mask loop
 // starting at Hi instead of Hi / 2; AtomicMinSlot: fetch_min replaced by fetch_max.
 #include <tests/device_core_common.hh>
@@ -80,34 +80,35 @@ TYPED_TEST(DeviceCoreReduceTest, ShuffleXorMovesBothPartsAndShiftReduceFeedsTheL
     }
 }
 
-TEST(DeviceCoreReduceHost, ArgmaxMergeTieAndNanRules) {
+TEST(DeviceCoreReduceHost, ArgmaxMergeTieRules) {
     using A = batchlas::device::ArgMax<float>;
-    const float nan = std::numeric_limits<float>::quiet_NaN();
+    namespace alg = batchlas::device::alg;
     const A none{-1, -std::numeric_limits<float>::infinity()};
-    const A a{3, 2.f}, b{1, 2.f}, c{5, 7.f}, n1{4, nan}, n2{2, nan};
-    auto low = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>(x, y); };
-    auto high = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieHighest, batchlas::device::alg::NanFirst>(x, y); };
-    auto skip = [](A x, A y) { return batchlas::device::argmax_merge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>(x, y); };
+    const A a{3, 2.f}, b{1, 2.f}, c{5, 7.f};
+    auto low = [](A x, A y) { return batchlas::device::argmax_merge(x, y, alg::TieLowest{}); };
+    auto high = [](A x, A y) { return batchlas::device::argmax_merge(x, y, alg::TieHighest{}); };
+    auto rt = [](A x, A y, bool lo) { return batchlas::device::argmax_merge(x, y, alg::TieRt{lo}); };
     EXPECT_EQ(low(a, b).index, 1);
     EXPECT_EQ(low(b, a).index, 1);
     EXPECT_EQ(high(a, b).index, 3);
     EXPECT_EQ(high(b, a).index, 3);
+    EXPECT_EQ(rt(a, b, true).index, 1);
+    EXPECT_EQ(rt(b, a, false).index, 3);
     EXPECT_EQ(low(a, c).index, 5);
+    EXPECT_EQ(high(c, a).index, 5);
     EXPECT_EQ(low(none, a).index, 3);
     EXPECT_EQ(low(a, none).index, 3);
-    EXPECT_EQ(low(c, n1).index, 4);
-    EXPECT_EQ(low(n1, n2).index, 2);
-    EXPECT_EQ(skip(c, n1).index, 5);
-    EXPECT_EQ(skip(n1, a).index, 3);
 }
 
-// argmax of |x| over a WG = 1024 work-group through allreduce(ex, Scratch, ArgMax, merge): ties
-// planted at two indices; 1024 items, items repeat with period 3 and must be bit-identical.
-TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIdentical) {
+// iamax of |x| over a WG = 1024 work-group through standalone ArgMaxSlots (the pivot search's
+// slot fold; three calls back to back reuse the slots): ties planted at two indices; 1024 items,
+// items repeat with period 3 and must be bit-identical.
+TYPED_TEST(DeviceCoreReduceTest, WorkGroupIamaxThroughSlotsIsUniformAndBitIdentical) {
     using T = TypeParam;
     using R = real_of<T>;
+    namespace alg = batchlas::device::alg;
     auto& d = this->dev;
-    constexpr int WG = 1024, n = 1000, items = 1024, period = 3;
+    constexpr int WG = 1024, n = 1000, items = 1024, period = 3, nt = WG / 32;
     std::vector<T> x_h(std::size_t(n) * period);
     for (int p = 0; p < period; ++p)
         for (int i = 0; i < n; ++i) x_h[p * n + i] = val<T>(p * 7919 + i);
@@ -120,19 +121,17 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupArgmaxThroughScratchIsUniformAndBitIde
     int* lo = d.template alloc<int>(items, -7);
     int* hi = d.template alloc<int>(items, -7);
     int* sk = d.template alloc<int>(items, -7);
-    using AM = batchlas::device::ArgMax<R>;
-    constexpr int slots = batchlas::device::scratch_elements<batchlas::device::reduce_op::Reduce, batchlas::device::WorkGroup<WG>, AM>();
-    d.template run<WG>(items, sizeof(AM) * slots, [=](sycl::nd_item<1> it, unsigned char* lm) {
+    d.template run<WG>(items, (sizeof(R) + sizeof(int)) * nt, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
-        const T* xb = x + (b % period) * n;
-        const batchlas::device::Scratch<AM, slots> scr{reinterpret_cast<AM*>(lm)};
-        const int i = ex.lid();
-        const AM mine = i < n ? AM{i, batchlas::device::abs1(xb[i])} : AM{-1, R(0)};
-        const AM l = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>{});
-        const AM h = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieHighest, batchlas::device::alg::NanFirst>{});
-        const AM s = batchlas::device::allreduce(ex, scr, mine, batchlas::device::ArgMaxMerge<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>{});
-        if (i == 517) {  // a non-leader item reads the uniform result
+        const auto xv = batchlas::device::vec(x + (b % period) * n, n);
+        const auto slots = batchlas::device::argmax_slots<batchlas::device::Mem::Local, true>(reinterpret_cast<R*>(lm),
+                                                                                              reinterpret_cast<int*>(lm + sizeof(R) * nt));
+        const batchlas::device::Range r{0, n};
+        const auto l = batchlas::device::iamax(ex, xv, r, alg::TieLowest{}, slots);
+        const auto h = batchlas::device::iamax(ex, xv, r, alg::TieHighest{}, slots);
+        const auto s = batchlas::device::iamax<alg::NanSkip>(ex, xv, r, alg::TieRt{true}, slots);
+        if (ex.lid() == 517) {  // a non-leader item reads the uniform result
             lo[b] = l.index;
             hi[b] = h.index;
             sk[b] = s.index;
