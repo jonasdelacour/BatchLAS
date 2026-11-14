@@ -3,12 +3,12 @@
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
 // The bodies are device LA op sequences (partial dot, lane fold, fused epilogue)
 // that keep the hand code's fma chain, int64 index arithmetic and shuffle trees:
-// core ops plus fold_down (src/ops/gemv/gemv_native_v2.hh: a run-time-stride shift fold).
+// core ops only (the run-time-stride lane fold is core shift_reduce with a Dyn stride).
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies
 
 #include <src/ops/gemv/gemv_native.hh>
-#include <src/ops/gemv/gemv_native_v2.hh>
 
+#include <batchlas/device.hh>
 #include <batchlas/device/arith.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
@@ -284,7 +284,7 @@ Event gemv_seg_notrans(Queue& ctx,
                 const auto yb = op.yvec(b, op.m);
                 D acc{};
                 if (!alpha_zero && jsub < W) acc = device::dot_partial<false, Fma>(device::Slot<W>{jsub}, Ai, xb);
-                acc = dla::fold_down<W>(sg, acc, device::Dyn{seg});  // lanes i + seg*t onto lane i
+                acc = device::shift_reduce<W>(sg, acc, [](D u, D w) { return device::Arith<D>::add(u, w); }, device::Dyn{seg});  // lanes i + seg*t onto lane i
                 if (lane < seg)
                     device::store_epi<device::epi::MacChain, Fma>(device::MaybeZero{op.alpha, alpha_zero}, acc, device::MaybeZero{op.beta, beta_zero}, yb(i));
             });

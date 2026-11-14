@@ -494,9 +494,9 @@ TYPED_TEST(DeviceLapackPotrfCtaTest, HerkTilesLowerThroughRescaledPrefix) {
     herk_case<T, 4>(this->dev, 3, 8);  // one tile, trimmed both ways
 }
 
-// ---- LPANEL: frag_load_row_herm_lower, lacpy_conj_pad, gemv_n_slm_bcast,
-// frag_store_row_herm_lower, potf2_panel_rows, composed as potrf_lpanel_body does on a Slot<>
-// slot narrower than the work-group (the packed-G case) --------------------------------------
+// ---- LPANEL: potrf_blocked_run<alg::LeftLooking> (frag_load_row_herm_lower, lacpy<DivMod,
+// EdgeZeroPad> of conj_view, gemv_n_slm_bcast, frag_store_row_herm_lower, potf2_panel_rows) on a
+// Slot<> narrower than the work-group (the packed-G case) ------------------------------------
 
 template <class T, class D, int NB, int WG, int SLOT>
 void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<int>& info) {
@@ -508,7 +508,6 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
     D* a = reinterpret_cast<D*>(dev.up(m.h));
     int* inf = dev.up(std::vector<int>(kBatch, -7));
     dev.template run<WG>(kBatch / G, per * G, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        using Ar = device::arith_t<device::arith::Fma, D>;
         const int lid = static_cast<int>(it.get_local_linear_id());
         const int slot = lid / SLOT, tid = lid % SLOT;
         const int b = static_cast<int>(it.get_group_linear_id()) * G + slot;
@@ -516,39 +515,9 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
         D* sB = reinterpret_cast<D*>(mine);
         D* sA = reinterpret_cast<D*>(mine + b_bytes);
         int* fail = reinterpret_cast<int*>(mine + b_bytes + std::size_t(slda) * NB * sizeof(D));
-        const device::Slot<> ex{tid, SLOT};
-        const auto A = device::mat_wide(a + std::ptrdiff_t(b) * ldg * n, n, n, ldg);
-        const auto P = device::detail::slm_mat(sA, n, NB, slda);
-        const auto B = device::detail::slm_tile<NB, NB>(sB);
-        auto bar = [&] { sycl::group_barrier(it.get_group()); };
-        if (ex.leader()) *fail = 0;
-        bar();
-        const int row = tid;
-        bool ok = true;
-        for (int j = 0; j < n; j += NB) {
-            const int ib = std::min(NB, n - j);
-            const bool panel_ok = ok, live = ok && row >= j && row < n;
-            device::Frag<D, NB> rp, rS;
-            device::detail::frag_load_row_herm_lower<NB>(rp, A, row, j, ib, live);
-            device::fill(rS, Ar::zero());
-            for (int k = 0; k < j; k += NB) {
-                const int kb = std::min(NB, j - k);
-                device::detail::lacpy_conj_pad<NB>(ex, A.sub(j, k, ib, kb), B);
-                bar();
-                if (live) {
-                    device::Frag<D, NB> rA;
-                    device::load_row(rA, A.sub(0, k, n, kb), row, kb);
-                    device::detail::gemv_n_slm_bcast<NB>(rS, rA, sB);
-                }
-                bar();
-            }
-            if (live) device::detail::frag_store_row_herm_lower<NB>(P, row, j, ib, [&](int i) { return Ar::sub(rp[i], rS[i]); });
-            bar();
-            ok = device::potf2_panel_rows<device::detail::InvSqrt>(ex, P, j, ib, n, ok, fail, bar);
-            if (panel_ok) device::lacpy<device::Part::Lower>(ex, P.sub(j, 0, n - j, ib), A.sub(j, j, n - j, ib));
-            bar();
-        }
-        if (ex.leader()) inf[b] = *fail;
+        const int r = device::detail::potrf_blocked_run<Uplo::Lower, NB, device::alg::LeftLooking>(
+            it, tid, SLOT, true, sA, slda, sB, fail, a + std::ptrdiff_t(b) * ldg * n, ldg, n);
+        if (tid == 0) inf[b] = r;
     });
     out = dev.down(reinterpret_cast<const T*>(a), m.h.size());
     info = dev.down(inf, kBatch);

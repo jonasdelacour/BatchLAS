@@ -142,8 +142,8 @@ bool getrs_perm_gather_launch(Queue& ctx,
                     device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Stepped>(ex, bm.sub(0, cb, n, cw),
                                                                                  tv.sub(0, 0, n, cw));
                     ex.barrier(device::Mem::Global);
-                    device::detail::lapmr_copy<device::alg::Stepped>(ex, tv, device::vec<device::Mem::Local>(idxs, n),
-                                                         bm.sub(0, cb, n, cw));
+                    device::lapmr<device::Direct::Forward, device::alg::Stepped, 0>(ex, tv, device::vec<device::Mem::Local>(idxs, n),
+                                                                                   bm.sub(0, cb, n, cw));
                     // The write-back must finish before the next chunk overwrites the tile.
                     ex.barrier(device::Mem::Global);
                 }

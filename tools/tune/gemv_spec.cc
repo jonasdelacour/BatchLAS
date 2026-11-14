@@ -94,7 +94,6 @@ public:
             // cta and direct are both in gemv_native.cc: common only.
             "src/ops/gemv/kernels/gemv_native.cc",
             "src/ops/gemv/gemv_native.hh",
-            "src/ops/gemv/gemv_native_v2.hh",
             "src/ops/gemv/choice.hh",
             "include/batchlas/device.hh",
             "include/batchlas/device/arith.hh",

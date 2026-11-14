@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The compositions of bdsdc's Golub-Kahan kernels (BdsdcBuildGk, BdsdcExtract) against host
-// references: core interleave / slice / map_many over the gesvd_glue adaptors (item_n, col_of,
-// row_of, sub_of; src/ops/gesvd/gesvd-ormbr_v2.hh). Guards (agent guide section 8): non-natural
+// references: core interleave / slice / map_many over the item operands (item(v, b, n), ItemMat
+// col / row / sub; device/interop.hh). Guards (agent guide section 8): non-natural
 // ld, inc and batch stride, poisoned slots checked untouched, complex data, a disabled term over
 // poison, batch 1024 with period-3 data where every item must be bit-identical to its
 // representative, n straddling the WG (1 or 2 owned elements), a WG = 1024 launch, and both
@@ -19,7 +19,7 @@
 #include <vector>
 
 #include <batchlas/device.hh>
-#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
@@ -112,7 +112,7 @@ template <class T> double rel(T got, LD<T> ref, long double scale) {
     return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
 }
 
-// ---- interleave from item_n operands into a slice of an item vector -------------------------
+// ---- interleave from item(v, b, n) operands into a slice of an item vector -------------------------
 // Thread runs on lane 0 (BdsdcBuildGk's executor); WG 64 with n = 101 owns 1 or 2 per item.
 template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) {
     constexpr int n = 101, ainc = 2, astride = 2 * n * ainc + 3, step = 3, ylen = 2 * n * step + 4;
@@ -128,9 +128,9 @@ template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) 
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto y = device::slice(device::item(yv, b), 1, 2 * n, step);
         if constexpr (OnThread) {
-            if (it.get_local_linear_id() == 0) device::interleave(device::Thread{}, device::gesvd_glue::item_n(av, b, n), device::gesvd_glue::item_n(bv, b, nb), y);
+            if (it.get_local_linear_id() == 0) device::interleave(device::Thread{}, device::item(av, b, n), device::item(bv, b, nb), y);
         } else {
-            device::interleave(device::WorkGroup<WG>{it}, device::gesvd_glue::item_n(av, b, n), device::gesvd_glue::item_n(bv, b, nb), y);
+            device::interleave(device::WorkGroup<WG>{it}, device::item(av, b, n), device::item(bv, b, nb), y);
         }
     });
     const auto g = dev.down(py, hy.size());
@@ -179,7 +179,7 @@ template <class T, int WG> void run_dgmv_many(Dev& dev) {
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::WorkGroup<WG> wg{it};
-        const auto z = device::gesvd_glue::col_of(device::item(zm, b, 2 * n, 2), 1);
+        const auto z = device::col(device::item(zm, b, 2 * n, 2), 1);
         const auto s = device::item(sv, b);
         const auto zv = device::slice(z, 0, n, 2), zu = device::slice(z, 1, n, 2);
         const auto s0 = device::slice(s, 0, n, 2), s1 = device::slice(s, 1, n, 2);
@@ -190,9 +190,9 @@ template <class T, int WG> void run_dgmv_many(Dev& dev) {
                 if (on) y(k) = device::tag_mul(device::as_tag(al), device::Arith<T>::mul(static_cast<T>(d(k)), static_cast<T>(x(k))));
             };
         };
-        const auto orow = device::gesvd_glue::row_of(device::item(om, b, 3, n), 1);
-        device::map_many(wg, orow.size(), scaled(true, alpha, s0, zv, orow), scaled(true, device::One{}, s1, zu, device::gesvd_glue::col_of(P, 2)),
-                     scaled(false, off_alpha, s0, zu, device::gesvd_glue::col_of(P, 0)));
+        const auto orow = device::row(device::item(om, b, 3, n), 1);
+        device::map_many(wg, orow.size(), scaled(true, alpha, s0, zv, orow), scaled(true, device::One{}, s1, zu, device::col(P, 2)),
+                     scaled(false, off_alpha, s0, zu, device::col(P, 0)));
     });
     const auto go = dev.down(po, ho.size());
     const auto gp = dev.down(pp, hp.size());
@@ -221,7 +221,7 @@ TYPED_TEST(DeviceLapackBdsdcTest, DgmvManyLinesAndSlices) {
     run_dgmv_many<TypeParam, 1024>(this->dev);
 }
 
-// ---- item_n, row_of and col_of address item b like the host views (non-natural ld, inc, stride) -----
+// ---- item(v, b, n), row and col address item b like the host views (non-natural ld, inc, stride) -----
 TYPED_TEST(DeviceLapackBdsdcTest, ItemNRowColAddressing) {
     using T = TypeParam;
     using R = real_of<T>;
@@ -236,9 +236,9 @@ TYPED_TEST(DeviceLapackBdsdcTest, ItemNRowColAddressing) {
         if (it.get_local_linear_id() != 0) return;
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto A = device::item(km, b, m, n);
-        const auto x = device::gesvd_glue::item_n(vv, b, vk);
-        const auto rw = device::gesvd_glue::row_of(device::gesvd_glue::sub_of(A, 0, 0, m, n - 1), r0);
-        const auto cl = device::gesvd_glue::col_of(A, c0);
+        const auto x = device::item(vv, b, vk);
+        const auto rw = device::row(device::window(A, 0, 0, m, n - 1), r0);
+        const auto cl = device::col(A, c0);
         for (int j = 0; j < rw.size(); ++j) rw(j) = T(R(b * 1000 + 100 + j));
         for (int i = 0; i < cl.size(); ++i) cl(i) = T(R(b * 1000 + 200 + i));
         for (int i = 0; i < x.size(); ++i) x(i) = T(R(-(b * 1000 + i)));

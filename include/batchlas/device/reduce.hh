@@ -18,7 +18,7 @@
 namespace batchlas::device {
 
 namespace alg {
-struct NanFirst {};
+struct NanAsInf {};  // iamax: a NaN key ranks as +inf (found, and no compare sees a NaN)
 struct NanSkip {};
 struct NanPropagate {};
 }  // namespace alg
@@ -107,14 +107,14 @@ BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi)
     return v;
 }
 
-// Shift fold of Count lanes: lane 0 of each aligned Count-lane block ends with
-// op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partial values (the
-// result is LEADER-ONLY: broadcast it if every lane needs it). Count <= the partition width.
-template <int Count, class Part, class T, class Op = sycl::plus<T>>
-BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}) {
+// Shift fold of lanes {l + s t : t < Count} onto head lane l (stride s: Unit, Ext or a run-time
+// Dyn), op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partials (LEADER-ONLY
+// result: broadcast it if every lane needs it). Count * s <= the partition width.
+template <int Count, class Part, class T, class Op = sycl::plus<T>, class Stride = Unit>
+BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}, Stride stride = {}) {
     static_assert(detail::is_pow2(Count), "shift_reduce: Count is a power of two");
 #pragma unroll
-    for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(d)));
+    for (int d = Count / 2; d >= 1; d >>= 1) v = op(v, shuffle_down(part, v, static_cast<std::uint32_t>(int(stride) * d)));
     return v;
 }
 
@@ -161,38 +161,126 @@ template <int K, class Ex, class X> BATCHLAS_DEVICE_INLINE auto reduce_scatter(c
     return T(x[0]);
 }
 
-// The better of two ArgMax candidates under one tie and NaN rule (the merge of every argmax
-// reduction): an empty candidate (index < 0) loses; alg::NanFirst: a NaN value wins and among
-// NaNs the lower index; alg::NanSkip: a NaN value never beats a number; otherwise the larger value,
-// equal values by Tie (alg::TieLowest: lower index, alg::TieHighest: higher index). Commutative and
-// associative, so every butterfly order gives the same pair.
-template <class Tie = alg::TieLowest, class NaN = alg::NanFirst, class R>
-BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b) {
-    static_assert(std::is_same_v<Tie, alg::TieLowest> || std::is_same_v<Tie, alg::TieHighest>, "argmax_merge: alg::TieLowest or alg::TieHighest");
-    static_assert(std::is_same_v<NaN, alg::NanFirst> || std::is_same_v<NaN, alg::NanSkip>, "argmax_merge: alg::NanFirst or alg::NanSkip");
-    constexpr bool low = std::is_same_v<Tie, alg::TieLowest>;
-    if (b.index < 0) return a;
-    if (a.index < 0) return b;
-    const bool an = sycl::isnan(a.value), bn = sycl::isnan(b.value);
-    if (an || bn) {
-        if constexpr (std::is_same_v<NaN, alg::NanFirst>) {
-            if (an && bn) return a.index <= b.index ? a : b;
-            return an ? a : b;
-        } else {
-            if (an && bn) return a.index <= b.index ? a : b;
-            return an ? b : a;
-        }
+// ---- the pivot search's merge and fold (iamax, level1.hh) ------------------------------------
+// One rule: (ov, oi) beats (bv, bi) when larger, or equal with the index the Tie prefers
+// (alg::TieLowest, alg::TieHighest, or alg::TieRt{low} at run time). Keys reach it NaN-free
+// (iamax maps them by its NaN policy), so the rule is commutative and associative and every
+// butterfly order gives the same pair. An empty candidate carries the seed key and loses.
+namespace detail {
+template <class Tie> BATCHLAS_DEVICE_INLINE bool tie_prefers(const Tie& tie, int oi, int bi) {
+    if constexpr (std::is_same_v<Tie, alg::TieLowest>) return oi < bi;
+    else if constexpr (std::is_same_v<Tie, alg::TieHighest>) return oi > bi;
+    else {
+        static_assert(std::is_same_v<Tie, alg::TieRt>, "iamax: alg::TieLowest, alg::TieHighest or alg::TieRt");
+        return tie.low ? oi < bi : oi > bi;
     }
-    if (a.value != b.value) return a.value > b.value ? a : b;
-    if constexpr (low) return a.index <= b.index ? a : b;
-    else return a.index >= b.index ? a : b;
 }
-
-template <class Tie = alg::TieLowest, class NaN = alg::NanFirst> struct ArgMaxMerge {
+// A 32-bit key compares bitwise: a short-circuit `||` became a branch per butterfly step (getrf
+// tiny float: BRA 319 -> 383, +7%). A 64-bit key short-circuits: the equality compare runs on the
+// 1:64 FP64 pipe only after a tie (sytrf double, bitwise: 1.016-1.021x, short-circuit <= 1.007x).
+template <class R, class Tie> BATCHLAS_DEVICE_INLINE bool argmax_beats(R ov, int oi, R bv, int bi, const Tie& tie) {
+    if constexpr (sizeof(R) > 4) return ov > bv || (ov == bv && tie_prefers(tie, oi, bi));
+    else return (ov > bv) | ((ov == bv) & tie_prefers(tie, oi, bi));
+}
+// a := (ov, oi) when it beats a (members assigned one by one: AdaptiveCpp's Metal backend
+// miscompiles a select of the whole struct).
+template <class R, class Tie> BATCHLAS_DEVICE_INLINE void argmax_take(ArgMax<R>& a, R ov, int oi, const Tie& tie) {
+    if (argmax_beats(ov, oi, a.value, a.index, tie)) {
+        a.value = ov;
+        a.index = oi;
+    }
+}
+}  // namespace detail
+template <class R, class Tie = alg::TieLowest>
+BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b, const Tie& tie = {}) {
+    ArgMax<R> r = a;
+    detail::argmax_take(r, b.value, b.index, tie);
+    return r;
+}
+template <class Tie = alg::TieLowest> struct ArgMaxMerge {
+    Tie tie{};
     template <class R> BATCHLAS_DEVICE_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
-        return argmax_merge<Tie, NaN>(a, b);
+        return argmax_merge(a, b, tie);
     }
 };
+
+// nteams value and index slots of local memory for a Group-scope pivot exchange. Fence is the
+// barriers'. Standalone = false: ONE barrier, and the caller's next barrier precedes the next
+// write to the slots (getrf's B1); true: self-contained, a second barrier frees the slots on
+// return and an executor of one team takes neither (sytrf, whose matrix the Global fence orders).
+template <class VS, class IS, Mem Fence = Mem::Local, bool Standalone = false> struct ArgMaxSlots {
+    static constexpr Mem fence = Fence;
+    static constexpr bool standalone = Standalone;
+    VS v;
+    IS i;
+};
+template <Mem Fence = Mem::Local, bool Standalone = false, class VS, class IS>
+BATCHLAS_DEVICE_INLINE ArgMaxSlots<VS, IS, Fence, Standalone> argmax_slots(VS v, IS i) {
+    return {v, i};
+}
+template <class S> inline constexpr bool is_argmax_slots_v = false;
+template <class VS, class IS, Mem F, bool St> inline constexpr bool is_argmax_slots_v<ArgMaxSlots<VS, IS, F, St>> = true;
+
+// Every item's candidate a to the executor's winner, uniform. The team folds by an xor butterfly
+// (a Partition over its P lanes, masks 1 .. P/2, the tiny tiers' order; a sub-group over its
+// `lanes` (None: team_size_of; a runtime executor's caller passes the width it read once), masks
+// lanes/2 .. 1). At Group scope lane 0 of team t then writes slots[t], ONE barrier, and every
+// item scans the slots in team order from {none, seed}; with no slots (None) two group
+// collectives fold it (the key, then the index).
+template <class Ex, class R, class Tie, class S, class W = None>
+BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_allreduce(const Ex& ex, ArgMax<R> a, const Tie& tie, S slots, int none, R seed, W lanes = {}) {
+    if constexpr (requires { ex.part; }) {
+        constexpr int P = Ex::team_size;
+#pragma unroll
+        for (std::uint32_t mk = 1u; mk < static_cast<std::uint32_t>(P); mk <<= 1) {
+            const R ov = detail::xor_shuffle(ex.part, a.value, mk);
+            const int oi = detail::xor_shuffle(ex.part, a.index, mk);
+            detail::argmax_take(a, ov, oi, tie);
+        }
+        return a;
+    } else if constexpr (is_thread_v<Ex>) {
+        return a;
+    } else {
+        const auto sg = ex.sub();
+        int w;
+        if constexpr (std::is_same_v<W, None>) w = detail::team_size_of(ex);
+        else w = lanes;
+        for (std::uint32_t off = static_cast<std::uint32_t>(w) / 2u; off > 0u; off >>= 1) {
+            const R ov = detail::xor_shuffle(sg, a.value, off);
+            const int oi = detail::xor_shuffle(sg, a.index, off);
+            detail::argmax_take(a, ov, oi, tie);
+        }
+        if constexpr (Ex::natural_scope == Scope::Sub) {
+            return a;
+        } else if constexpr (is_argmax_slots_v<S>) {
+            if constexpr (S::standalone) {
+                if (detail::nteams_of(ex) == 1) return a;
+            }
+            if (ex.lane() == 0) {
+                slots.v[static_cast<std::size_t>(ex.team())] = a.value;
+                slots.i[static_cast<std::size_t>(ex.team())] = a.index;
+            }
+            ex.barrier(S::fence);
+            ArgMax<R> r{none, seed};
+            const int nt = detail::nteams_of(ex);
+            for (int t = 0; t < nt; ++t) {  // the legacy statements: ptxas unrolls this scan by them
+                const R v = slots.v[static_cast<std::size_t>(t)];
+                const int ii = slots.i[static_cast<std::size_t>(t)];
+                detail::argmax_take(r, v, ii, tie);
+            }
+            if constexpr (S::standalone) ex.barrier(S::fence);
+            return r;
+        } else {
+            const R m = ex.group_reduce(a.value, sycl::maximum<R>());
+            bool low;
+            if constexpr (std::is_same_v<Tie, alg::TieRt>) low = tie.low;
+            else low = std::is_same_v<Tie, alg::TieLowest>;
+            const int key = a.value == m ? (low ? a.index : -a.index) : INT_MAX;
+            const int k = ex.group_reduce(key, sycl::minimum<int>());
+            return {k == INT_MAX ? none : (low ? k : -k), m};
+        }
+    }
+}
 
 // op over every item of a WorkGroup<WG, SG> (any op, any T), uniform result: a butterfly per
 // sub-group, team leaders write Scratch (scratch_elements<reduce_op::Reduce, Ex, T>() slots), one

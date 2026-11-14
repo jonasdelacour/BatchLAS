@@ -107,7 +107,7 @@ TYPED_TEST(PotrfLpanelTest, ResidualAcrossPanelBoundaries) {
 // IT DOES NOT GUARD B6, and nothing here does. Deleting B6 was planted and measured GREEN at
 // batch 1024 in this case and at 4096/16384 through factor_bench, all four types, n to 512:
 // the 8 dependent global loads of the next panel's prefetch apparently cover the window on
-// this card. B6 is held by the DATA-FLOW argument in potrf_lpanel_device.hh alone -- the
+// this card. B6 is held by the DATA-FLOW argument in potrf.hh BlockedLeft alone -- the
 // panel-end store writes global columns the NEXT panel's left-looking staging reads, from
 // other work-items, and only B6 orders them. Unfalsifiable on this hardware is not optional:
 // do not delete it because no test goes red.
@@ -334,7 +334,7 @@ TYPED_TEST(PotrfLpanelTest, PackedBatchIsIndependentAndTheTailSlotsAreInert) {
     }
 
     // 4G + 3 leaves the LAST work-group partly dead, which is the case the `store` flag
-    // in potrf_lpanel_body exists for.
+    // in potrf_blocked_run<alg::LeftLooking> exists for.
     const int batch = 4 * G + 3;
     ASSERT_NE(batch % G, 0) << "batch is a multiple of G: no dead slots, nothing proved";
 

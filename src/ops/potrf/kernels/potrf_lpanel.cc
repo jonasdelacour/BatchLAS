@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Native batched POTRF: the LPANEL tier's launcher and capability surface; the device code
-// is in potrf_lpanel_device.hh. This TU must stay in EXTENSIONS_CTA_SOURCES next to
-// potrf_cta.cc and potrf_blocked.cc -- one device-code cluster, because the blocked driver's
-// leaf and this kernel are meant to become interchangeable and the tests compare the two.
-// evidence: docs/perf/potrf.md#the-lpanel-tier
+// is device::potrf's tier::Blocked body with alg::LeftLooking (lapack/potrf.hh). This TU
+// must stay in EXTENSIONS_CTA_SOURCES next to potrf_cta.cc and potrf_blocked.cc -- one
+// device-code cluster, because the blocked driver's leaf and this kernel are meant to become
+// interchangeable and the tests compare the two. evidence: docs/perf/potrf.md#the-lpanel-tier
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/kernels/common/info_target.hh>
 #include <src/kernels/common/launch.hh>
-#include <src/ops/potrf/kernels/potrf_lpanel_device.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <src/sycl/device_scalar.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
@@ -79,7 +80,7 @@ struct PotrfLpanelLaunch {
     bool fits = false;
 };
 
-// G > 1 is legal here and NOT in potrf_cta.cc: every barrier in potrf_lpanel_body is a
+// G > 1 is legal here and NOT in potrf_cta.cc: every barrier in alg::LeftLooking is a
 // WORK-GROUP barrier and the schedule depends only on (n, NB), which the packed matrices
 // share, so the extra matrices are synchronised with each other harmlessly rather than
 // raced. evidence: docs/perf/potrf.md#why-lpanel-may-pack-on-work-group-barriers
@@ -153,8 +154,8 @@ unsigned potrf_lpanel_debug_launch(Queue& ctx, int n, int batch, int min_blocks_
 namespace {
 
 // Masked: the batch mask folds into `live` (I2), a template so the unmasked instance is the kernel
-// as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768). The body is
-// instantiated per Masked: shared by both kernels it stayed out of line (float NB = 16, 11% slower).
+// as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768). The body must
+// inline into each kernel: shared out of line by both, float NB = 16 ran 11% slower.
 template <typename T, int NB, bool Masked>
 Event potrf_lpanel_launch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -165,7 +166,6 @@ Event potrf_lpanel_launch(Queue& ctx,
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = typename DM::real;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
     D* a_ptr = reinterpret_cast<D*>(A.data_ptr());
@@ -225,11 +225,11 @@ Event potrf_lpanel_launch(Queue& ctx,
                 // every batch item but the first reads the wrong matrix.
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(live ? matrix_id : 0) * stride_a;
 
-                potrf_native::potrf_lpanel_body<D, R, NB, Masked>(it, tid, L, live, sA, slda, sB, fl,
-                                                          Ag, ldg, n);
+                const int linfo = device::detail::potrf_blocked_run<Uplo::Lower, NB, device::alg::LeftLooking, Masked>(
+                    it, tid, L, live, sA, slda, sB, fl, Ag, ldg, n);
 
                 // One writer per matrix; `fail` is published by B6 of the last panel.
-                if (live && tid == 0) info_ptr[matrix_id] = *fl;
+                if (live && tid == 0) info_ptr[matrix_id] = linfo;
             });
     });
 

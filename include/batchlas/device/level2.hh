@@ -14,7 +14,9 @@
 
 #include <type_traits>
 
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/device/level1.hh>
+#include <batchlas/device/view.hh>
 
 namespace batchlas::device {
 
@@ -269,6 +271,88 @@ BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, 
     }
 }
 
+// Register-tile form on the Thread executor: A := x y^T + A, one Ops::mac per entry, row by row
+// (x, y register Frags: the memory-operand forms above read y per column).
+template <class Ops = arith::Explicit, class T, int R, int C, class L1, class L2>
+BATCHLAS_DEVICE_INLINE void ger(const Thread&, const Frag<T, R, L1>& x, const Frag<T, C, L2>& y, Tile<T, R, C>& a) {
+    using Ar = arith_t<Ops, T>;
+BATCHLAS_UNROLL_FULL
+    for (int i = 0; i < R; ++i) {
+BATCHLAS_UNROLL_FULL
+        for (int j = 0; j < C; ++j) Ar::mac(a(i, j), x[i], y[j]);
+    }
+}
+
+// ---- per-item forward substitution ----------------------------------------------------------
+// x(s) := (b(s) - L(s, 0:s) x(0:s)) / L(s, s) for s in [s0, s0+STEP), s < N; b(s) is read
+// after the row's dot product. Not core trsv: the dot is accumulated then subtracted (core
+// msubs into x(s)), the diagonal is TpDiag's guarded reciprocal, and b is read lazily.
+template <int N, int STEP, class Ar, class T, class Rhs>
+BATCHLAS_DEVICE_INLINE void trsv_lower_rows(Frag<T, N>& x, int s0, const T* ap, const TpDiag<T>& d, Rhs&& b) {
+    BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < STEP; ++j) {
+        const int s = s0 + j;
+        if (s >= N) continue;
+        T acc = Ar::zero();
+        BATCHLAS_UNROLL_FULL
+        for (int t = 0; t < N; ++t) {
+            if (t < s) Ar::mac(acc, ap[PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, t, 0)], x[t]);
+        }
+        const T rhs = b(s);
+        x[s] = d.template apply<Ar>(s, Ar::sub(rhs, acc));
+    }
+}
+
+// ---- partition (RowFrag) forward substitution -------------------------------------------------
+// The diagonal of row lid(): its reciprocal, and divide = any reciprocal in the partition is
+// non-finite (a bit_or team_reduce, shuffles only).
+template <class T> struct GuardedRecip {
+    T d, rinv;
+    bool divide;
+};
+template <class Ar, int P, class T> BATCHLAS_DEVICE_INLINE GuardedRecip<T> guarded_recip(const Partition<P>& ex, T d) {
+    const T rinv = Ar::recip(d);
+    int bad = Ar::isfinite(rinv) ? 0 : 1;
+    bad = ex.team_reduce(bad, sycl::bit_or<int>());
+    return {d, rinv, bad != 0};
+}
+
+// X := L^{-1} X for X (P x QC, row r in lane r) on the partition; nl holds -L(r, 0:r) (the
+// AXPY multipliers), d the row's diagonal. Rows n..P-1 are identity padding. Step s scales
+// row s by 1/L(s, s), then every lane does x += nl[s] * x_s (x_s = ex.bcast from lane s). The
+// division branch is sub-group-uniform. Unroll = 1 keeps the step loop rolled (nl indexed at
+// run time: local memory, fewer registers). A distributed trsv: core trsv is Thread-only.
+template <int Unroll, class Ar, int P, int QC, class T>
+BATCHLAS_DEVICE_INLINE void trsm_lower_rowfrag(const Partition<P>& ex, const Frag<T, P>& nl, const GuardedRecip<T>& d,
+                                            int n, bool unit, Frag<T, QC>& x) {
+    // lane % P, not ex.lid() (lane & (P-1)): the AND form shifts ptxas' register allocation in
+    // the unrolled P=16 kernels by 3-4% of the instructions.
+    const int r = static_cast<int>(ex.part.get_local_linear_id()) % P;
+    const bool any_divide = sycl::any_of_group(ex.part, d.divide);
+#pragma unroll Unroll
+    for (int s = 0; s < P; ++s) {
+        if (s >= n) {
+            if constexpr (Unroll == 1) break;
+            else continue;
+        }
+        if (r == s && !unit) {
+            if (any_divide) [[unlikely]] {
+                BATCHLAS_UNROLL_FULL
+                for (int j = 0; j < QC; ++j) x[j] = d.divide ? Ar::div(x[j], d.d) : Ar::mul(x[j], d.rinv);
+            } else {
+                BATCHLAS_UNROLL_FULL
+                for (int j = 0; j < QC; ++j) x[j] = Ar::mul(x[j], d.rinv);
+            }
+        }
+        const T l = nl[s];
+        BATCHLAS_UNROLL_FULL
+        for (int j = 0; j < QC; ++j) {
+            const T xs = ex.bcast(x[j], static_cast<std::uint32_t>(s));
+            Ar::mac(x[j], l, xs);
+        }
+    }
+}
+
 // ---- subtract-from and multi-term gemv, triangular solve / multiply -------------------------
 
 // y := b - A x (NoTrans, RowOwner): the running value starts at b(r) and every term is
@@ -316,10 +400,10 @@ BATCHLAS_DEVICE_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, cons
     });
 }
 
-// x := op(A)^{-1} x (trsv) or op(A) x (trmv) in place, A n x n triangular (UL stored), on one
-// item: x is a register Frag<T, N> (n <= N live entries, every index a compile-time constant:
-// sygst trsv_frag, potrf trsm_rowfrag) or a memory vector (runtime n). Entries past n are not
-// touched. Diag::Unit never reads the diagonal; the opposite triangle is never read.
+// x := op(A) x (trmv) in place, A n x n triangular (UL stored), on one item: x is a register
+// Frag<T, N> (n <= N live entries, every index a compile-time constant) or a memory vector
+// (runtime n). Entries past n are not touched. Diag::Unit never reads the diagonal; the opposite
+// triangle is never read. trsv (below) solves with the same operands.
 namespace detail {
 template <class X> constexpr int tri_cap_of(const X*) { return 0; }
 template <class T, int N, class L> constexpr int tri_cap_of(const Frag<T, N, L>*) { return N; }
@@ -331,55 +415,6 @@ template <Transpose TR, class T, class MA> BATCHLAS_DEVICE_INLINE T op_at(const 
     else return Arith<T>::conj(static_cast<T>(a(j, i)));
 }
 }  // namespace detail
-
-template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
-BATCHLAS_DEVICE_INLINE void trsv(const Thread&, const MA& a, X& x, int n) {
-    using T = typename MA::value_type;
-    using Ar = arith_t<Ops, T>;
-    constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
-    // op(A) lower triangular <=> forward substitution.
-    constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
-    if constexpr (N > 0) {
-        if constexpr (lower) {
-#pragma unroll
-            for (int i = 0; i < N; ++i) {
-                if (i >= n) break;
-                T xi = x[i];
-#pragma unroll
-                for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
-                x[i] = xi;
-            }
-        } else {
-#pragma unroll
-            for (int i = N - 1; i >= 0; --i) {
-                if (i >= n) continue;
-                T xi = x[i];
-#pragma unroll
-                for (int j = i + 1; j < N; ++j)
-                    if (j < n) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
-                x[i] = xi;
-            }
-        }
-    } else {
-        if constexpr (lower) {
-            for (int i = 0; i < n; ++i) {
-                T xi = x(i);
-                for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
-                x(i) = xi;
-            }
-        } else {
-            for (int i = n - 1; i >= 0; --i) {
-                T xi = x(i);
-                for (int j = i + 1; j < n; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                if constexpr (DG == Diag::NonUnit) xi = Ar::div(xi, detail::op_at<TR, T>(a, i, i));
-                x(i) = xi;
-            }
-        }
-    }
-}
 
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
 BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
@@ -415,13 +450,7 @@ BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
             for (int i = 0; i < n; ++i) x(i) = row(i, xs);
     }
 }
-// Memory-vector forms take x by const view (the view, not the data, is const).
-template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
-    requires(requires(const X& v) { v.size(); })
-BATCHLAS_DEVICE_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
-    X xv = x;
-    trsv<UL, TR, DG, Ops>(th, a, xv, x.size());
-}
+// The memory-vector form takes x by const view (the view, not the data, is const).
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
 BATCHLAS_DEVICE_INLINE void trmv(const Thread& th, const MA& a, const X& x) {
@@ -494,31 +523,45 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
     }
 }
 
-// x := op(A)^{-1} x for A n x n triangular (UL stored), diagonal policy DG (alg::UnitDiag,
-// Div, Recip or RealDiv; core.hh):
-//   alg::Serial      one item (Thread); x a register Frag (n <= N) or a memory vector
-//   alg::LanePerRow  lane i holds x(i) in the register x (n <= the executor's size); step j
-//                    finalises x(j) on lane j and broadcasts it, the later lanes update. COLLECTIVE.
+// x := op(A)^{-1} x in place for A n x n triangular (UL stored; the opposite triangle is never
+// read), entries past n untouched. Diag::Unit never reads the diagonal (nor takes the last
+// pivot, which updates nothing); Diag::NonUnit divides by it under Div (alg::Div, alg::Recip or
+// alg::RealDiv; core.hh). Upd: alg::Fused (Ops::msub) or alg::Unfused (sub of mul, two
+// roundings: getrs / sytrs). Alg:
+//   alg::Serial      one item (Thread); x a register Frag<T, N> (n <= N live entries, every index
+//                    a compile-time constant) or a memory vector (runtime n)
+//   alg::LanePerRow  row t on lane t % size: x the lane's register (n <= size) or a lane-cyclic
+//                    Frag<T, R, Cyclic> (row lane + size r in x[r]); step j finalises row j and
+//                    broadcasts it, the rows it reaches update. No barrier. COLLECTIVE.
 namespace detail {
-template <class DG, class Ar, class T> BATCHLAS_DEVICE_INLINE T trsv_diag_apply(T xi, const T& aii) {
-    if constexpr (std::is_same_v<DG, alg::UnitDiag>) return xi;
-    else if constexpr (std::is_same_v<DG, alg::Div>) return Ar::div(xi, aii);
-    else if constexpr (std::is_same_v<DG, alg::Recip>) return Ar::mul(xi, Ar::recip(aii));
+template <Diag DG, class Div, class Ar, class T> BATCHLAS_DEVICE_INLINE T trsv_diag_apply(T xi, const T& aii) {
+    if constexpr (DG == Diag::Unit) return xi;
+    else if constexpr (std::is_same_v<Div, alg::Div>) return Ar::div(xi, aii);
+    else if constexpr (std::is_same_v<Div, alg::Recip>) return Ar::mul(xi, Ar::recip(aii));
     else {
-        static_assert(std::is_same_v<DG, alg::RealDiv>, "trsv: alg::UnitDiag, Div, Recip or RealDiv");
+        static_assert(std::is_same_v<Div, alg::RealDiv>, "trsv: alg::Div, alg::Recip or alg::RealDiv");
         return Ar::div_real(xi, Ar::re(aii));
     }
 }
+template <class Upd, class Ar, class T> BATCHLAS_DEVICE_INLINE void trsv_update(T& x, const T& a, const T& xj) {
+    if constexpr (std::is_same_v<Upd, alg::Fused>) Ar::msub(x, a, xj);
+    else {
+        static_assert(std::is_same_v<Upd, alg::Unfused>, "trsv: alg::Fused or alg::Unfused");
+        x = Ar::sub(x, Ar::mul(a, xj));
+    }
+}
 }  // namespace detail
-template <Uplo UL, Transpose TR, class DG, class Alg = alg::Serial, class Ops = arith::Explicit, class Ex, class MA, class X>
+template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Alg = alg::Serial, class Ops = arith::Explicit,
+          class Upd = alg::Fused, class Ex, class MA, class X>
 BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
-    using T = typename MA::value_type;
+    using T = std::remove_cvref_t<decltype(std::declval<const MA&>()(0, 0))>;  // OpView has no value_type
     using Ar = arith_t<Ops, T>;
-    constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
+    constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);  // forward substitution
     auto diag = [&](int i) -> T {
-        if constexpr (std::is_same_v<DG, alg::UnitDiag>) return Ar::one();
+        if constexpr (DG == Diag::Unit) return Ar::one();
         else return detail::op_at<TR, T>(a, i, i);
     };
+    auto upd = [&](T& xi, int i, int j, const T& xj) { detail::trsv_update<Upd, Ar>(xi, detail::op_at<TR, T>(a, i, j), xj); };
     if constexpr (std::is_same_v<Alg, alg::Serial>) {
         static_assert(is_thread_v<Ex>, "trsv: alg::Serial is a Thread algorithm");
         constexpr int N = detail::tri_cap_of(static_cast<const X*>(nullptr));
@@ -529,8 +572,8 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
                     if (i >= n) break;
                     T xi = x[i];
 #pragma unroll
-                    for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                    x[i] = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
+                    for (int j = 0; j < i; ++j) upd(xi, i, j, x[j]);
+                    x[i] = detail::trsv_diag_apply<DG, Div, Ar>(xi, diag(i));
                 }
             } else {
 #pragma unroll
@@ -539,34 +582,64 @@ BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
                     T xi = x[i];
 #pragma unroll
                     for (int j = i + 1; j < N; ++j)
-                        if (j < n) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), x[j]);
-                    x[i] = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
+                        if (j < n) upd(xi, i, j, x[j]);
+                    x[i] = detail::trsv_diag_apply<DG, Div, Ar>(xi, diag(i));
                 }
             }
         } else if constexpr (lower) {
             for (int i = 0; i < n; ++i) {
                 T xi = x(i);
-                for (int j = 0; j < i; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                x(i) = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
+                for (int j = 0; j < i; ++j) upd(xi, i, j, static_cast<T>(x(j)));
+                x(i) = detail::trsv_diag_apply<DG, Div, Ar>(xi, diag(i));
             }
         } else {
             for (int i = n - 1; i >= 0; --i) {
                 T xi = x(i);
-                for (int j = i + 1; j < n; ++j) Ar::msub(xi, detail::op_at<TR, T>(a, i, j), static_cast<T>(x(j)));
-                x(i) = detail::trsv_diag_apply<DG, Ar>(xi, diag(i));
+                for (int j = i + 1; j < n; ++j) upd(xi, i, j, static_cast<T>(x(j)));
+                x(i) = detail::trsv_diag_apply<DG, Div, Ar>(xi, diag(i));
             }
         }
     } else {
         static_assert(std::is_same_v<Alg, alg::LanePerRow>, "trsv: alg::Serial or alg::LanePerRow");
-        static_assert(std::is_same_v<X, T>, "trsv<LanePerRow>: x is the lane's register element");
         const int l = ex.lid();
-        for (int s = 0; s < n; ++s) {
-            const int j = lower ? s : n - 1 - s;
-            if (l == j) x = detail::trsv_diag_apply<DG, Ar>(x, diag(j));
-            const T xj = ex.bcast(x, j);
-            if (lower ? (l > j && l < n) : (l < j)) Ar::msub(x, detail::op_at<TR, T>(a, l, j), xj);
+        auto step = [&](int j) BATCHLAS_DEVICE_BODY {
+            if constexpr (detail::tri_cap_of(static_cast<const X*>(nullptr)) == 0) {  // the lane's register
+                if constexpr (DG == Diag::NonUnit) {
+                    if (l == j) x = detail::trsv_diag_apply<DG, Div, Ar>(x, diag(j));
+                }
+                const T xj = ex.bcast(x, j);
+                if (lower ? (l > j && l < n) : (l < j)) upd(x, l, j, xj);
+            } else {
+                constexpr int R = detail::tri_cap_of(static_cast<const X*>(nullptr));
+                static_assert(R > 0, "trsv<LanePerRow>: x is the lane's register or a lane-cyclic Frag");
+                constexpr int P = Ex::size;
+                if constexpr (DG == Diag::NonUnit) {
+                    BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < R; ++r)
+                        if (l + P * r == j) x[r] = detail::trsv_diag_apply<DG, Div, Ar>(x[r], diag(j));
+                }
+                const T xj = frag_bcast(ex, x, j);
+                BATCHLAS_UNROLL_FULL
+                for (int r = 0; r < R; ++r) {
+                    const int t = l + P * r;
+                    if (lower ? (t > j && t < n) : (t < j)) upd(x[r], t, j, xj);
+                }
+            }
+        };
+        const int last = DG == Diag::Unit ? 1 : 0;
+        if constexpr (lower) {
+            for (int j = 0; j < n - last; ++j) step(j);
+        } else {
+            for (int j = n - 1; j >= last; --j) step(j);
         }
     }
+}
+// The memory-vector form takes x by const view (the view, not the data, is const).
+template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Ops = arith::Explicit, class MA, class X>
+    requires(requires(const X& v) { v.size(); })
+BATCHLAS_DEVICE_INLINE void trsv(const Thread& th, const MA& a, const X& x) {
+    X xv = x;
+    trsv<UL, TR, DG, Div, alg::Serial, Ops>(th, a, xv, x.size());
 }
 
 // A := diag(d) A (Side::Left) or A diag(d) (Side::Right) in place, or C := the same of B (four

@@ -6,6 +6,7 @@
 // column-major, for_each_owned_2d), so ops on the same executor compose without a barrier
 // unless one reads an element another item wrote (each op says so).
 
+#include <cstddef>
 #include <type_traits>
 
 #include <batchlas/device/level1.hh>
@@ -818,21 +819,260 @@ template <class Ex, class X> BATCHLAS_DEVICE_INLINE void lacgv(const Ex& ex, con
     }
 }
 
-// LAPACK xTRTTP / xTPTTR: the UL triangle of the n x n A to / from packed storage AP (by
-// columns, PackedTri<UL>, view.hh). 2-D flat ownership over A; elements outside UL untouched.
-template <Uplo UL, class Ex, class MA, class AP> BATCHLAS_DEVICE_INLINE void trttp(const Ex& ex, const MA& a, const AP& ap) {
-    const int n = a.rows();
-    constexpr Part P = UL == Uplo::Lower ? Part::Lower : Part::Upper;
-    for_each_owned_2d(ex, n, n, [&](int i, int j) {
-        if (detail::in_part<P>(i, j)) ap(PackedTri<UL>::index(i, j, n)) = a(i, j);
+// ---- triangle masks, geam and the SLM tile moves of transpose / mirror (src/util/elementwise.cc,
+// transpose.cc, src/kernels/common/triangular_expand.hh) -----------------------------------------
+// Uplo / Diag: a UploC / DiagC tag folds at compile time, a plain enum is read at run time
+// (the legacy spelling, so a 1:1 port stays 1:1).
+template <Uplo U> struct UploC {
+    static constexpr Uplo value = U;
+};
+template <Diag D> struct DiagC {
+    static constexpr Diag value = D;
+};
+using LowerC = UploC<Uplo::Lower>;
+using UpperC = UploC<Uplo::Upper>;
+
+namespace detail {
+template <class U> BATCHLAS_DEVICE_INLINE constexpr bool is_lower([[maybe_unused]] U u) {
+    if constexpr (std::is_same_v<U, Uplo>) return u == Uplo::Lower;
+    else return U::value == Uplo::Lower;
+}
+template <class D> BATCHLAS_DEVICE_INLINE constexpr bool is_unit([[maybe_unused]] D d) {
+    if constexpr (std::is_same_v<D, Diag>) return d == Diag::Unit;
+    else return D::value == Diag::Unit;
+}
+}  // namespace detail
+
+// Upper keeps j - i >= k, Lower keeps j - i <= k (k = 0: the triangle with its diagonal).
+template <class U = Uplo> struct Tri {
+    U uplo{};
+    int k = 0;
+};
+template <class U> BATCHLAS_DEVICE_INLINE Tri<U> tri(U uplo, int k = 0) { return {uplo, k}; }
+
+// C := A inside r, 0 outside (tril / triu with an offset). A may alias C.
+template <class Ex, class U, class MA, class MC> BATCHLAS_DEVICE_INLINE void trimask(const Ex& ex, const Tri<U>& r, const MA& a, const MC& c) {
+    using T = typename MC::value_type;
+    const bool lower = detail::is_lower(r.uplo);
+    for_each_owned_2d(ex, c.rows(), c.cols(), [&](int i, int j) {
+        const bool keep = lower ? j - i <= r.k : j - i >= r.k;
+        c(i, j) = keep ? static_cast<T>(a(i, j)) : Arith<T>::zero();
     });
 }
-template <Uplo UL, class Ex, class AP, class MA> BATCHLAS_DEVICE_INLINE void tpttr(const Ex& ex, const AP& ap, const MA& a) {
-    const int n = a.rows();
-    constexpr Part P = UL == Uplo::Lower ? Part::Lower : Part::Upper;
-    for_each_owned_2d(ex, n, n, [&](int i, int j) {
-        if (detail::in_part<P>(i, j)) a(i, j) = ap(PackedTri<UL>::index(i, j, n));
+
+// O := the dense op(A) of a triangular A stored in uplo: the stored strict triangle, zeros
+// opposite, A's diagonal or ones (Diag::Unit: the diagonal is never read). Storage outside the
+// referenced triangle is never read.
+template <class Ex, class U, class D, class MA, class MO>
+BATCHLAS_DEVICE_INLINE void tri_expand(const Ex& ex, U uplo, D diag, const MA& a, const MO& o) {
+    using T = typename MO::value_type;
+    const bool lower = detail::is_lower(uplo);
+    const bool unit = detail::is_unit(diag);
+    for_each_owned_2d(ex, o.rows(), o.cols(), [&](int i, int j) {
+        T value;
+        if (i == j) {
+            value = unit ? Arith<T>::one() : static_cast<T>(a(i, j));
+        } else if (lower ? (i > j) : (i < j)) {
+            value = a(i, j);
+        } else {
+            value = Arith<T>::zero();
+        }
+        o(i, j) = value;
     });
+}
+
+// C := alpha A + beta B (explicit arithmetic); beta == Zero never reads B. C may alias A or B.
+template <class Ex, class AS, class MA, class BS, class MB, class MC>
+BATCHLAS_DEVICE_INLINE void geam(const Ex& ex, AS alpha_, const MA& a, BS beta_, const MB& b, const MC& c) {
+    using T = typename MC::value_type;
+    const auto alpha = as_tag(alpha_);
+    const auto beta = as_tag(beta_);
+    for_each_owned_2d(ex, c.rows(), c.cols(), [&](int i, int j) {
+        if constexpr (std::is_same_v<tag_t<BS>, Zero>) c(i, j) = tag_mul(alpha, static_cast<T>(a(i, j)));
+        else c(i, j) = Arith<T>::add(tag_mul(alpha, static_cast<T>(a(i, j))), tag_mul(beta, static_cast<T>(b(i, j))));
+    });
+}
+
+// ---- SLM tiles on a Grid2D with a static group shape ----------------------------------------
+// The item owns tile row r = lrow() and columns c = lcol() + s * GC < TN. The tile t is any
+// Mat (Mem::Local); elements past the global operand's edge load as zero and are not stored.
+// The caller owns the barrier between a load and a store of other items' elements.
+namespace detail {
+template <int TN, class Ex, class F> BATCHLAS_DEVICE_INLINE void tile_cols(const Ex& ex, F&& f) {
+    constexpr int GC = Ex::static_group_cols;
+    static_assert(GC > 0, "glue tile ops: Grid2D needs a static group shape");
+    if constexpr (TN == GC) {
+        f(ex.lcol());
+    } else {
+        for (int c = ex.lcol(); c < TN; c += GC) f(c);
+    }
+}
+}  // namespace detail
+
+// t(r, c) = A(i0 + r, j0 + c)
+template <int TN, class Ex, class MA, class MT> BATCHLAS_DEVICE_INLINE void tile_load(const Ex& ex, const MA& a, int i0, int j0, const MT& t) {
+    using T = typename MT::value_type;
+    const int r = ex.lrow();
+    detail::tile_cols<TN>(ex, [&](int c) {
+        const int i = i0 + r, j = j0 + c;
+        t(r, c) = (i < a.rows() && j < a.cols()) ? static_cast<T>(a(i, j)) : Arith<T>::zero();
+    });
+}
+// t(c, r) = A(i0 + r, j0 + c): the tile stored transposed.
+template <int TN, class Ex, class MA, class MT> BATCHLAS_DEVICE_INLINE void tile_load_trans(const Ex& ex, const MA& a, int i0, int j0, const MT& t) {
+    using T = typename MT::value_type;
+    const int r = ex.lrow();
+    detail::tile_cols<TN>(ex, [&](int c) {
+        const int i = i0 + r, j = j0 + c;
+        T v = Arith<T>::zero();
+        if (i < a.rows() && j < a.cols()) v = a(i, j);
+        t(c, r) = v;
+    });
+}
+// B(i0 + r, j0 + c) = t(r, c)
+template <int TN, class Ex, class MT, class MB> BATCHLAS_DEVICE_INLINE void tile_store(const Ex& ex, const MT& t, const MB& b, int i0, int j0) {
+    const int r = ex.lrow();
+    detail::tile_cols<TN>(ex, [&](int c) {
+        const int i = i0 + r, j = j0 + c;
+        if (i < b.rows() && j < b.cols()) b(i, j) = t(r, c);
+    });
+}
+// The off-diagonal pair of a mirror in one column loop: B(i0 + r, j0 + c) = t(r, c) and
+// B(j0 + r, i0 + c) = op(t(c, r)).
+template <bool Conj, int TN, class Ex, class MT, class MB>
+BATCHLAS_DEVICE_INLINE void tile_store_pair(const Ex& ex, const MT& t, const MB& b, int i0, int j0) {
+    using T = typename MB::value_type;
+    const int r = ex.lrow();
+    detail::tile_cols<TN>(ex, [&](int c) {
+        if (i0 + r < b.rows() && j0 + c < b.cols()) b(i0 + r, j0 + c) = t(r, c);
+        if (j0 + r < b.rows() && i0 + c < b.cols()) b(j0 + r, i0 + c) = conj_if<Conj>(static_cast<T>(t(c, r)));
+    });
+}
+// A diagonal tile (i0 == j0) of a mirror: the referenced member of each pair, op(t(c, r))
+// opposite; with Conj the diagonal is forced real.
+template <bool Conj, int TN, class Ex, class U, class MT, class MB>
+BATCHLAS_DEVICE_INLINE void tile_store_diag(const Ex& ex, U uplo, const MT& t, const MB& b, int i0) {
+    using T = typename MB::value_type;
+    const bool lower = detail::is_lower(uplo);
+    const int r = ex.lrow();
+    detail::tile_cols<TN>(ex, [&](int c) {
+        const int i = i0 + r, j = i0 + c;
+        if (i >= b.rows() || j >= b.cols()) return;
+        const bool referenced = lower ? (r >= c) : (r <= c);
+        T value = referenced ? static_cast<T>(t(r, c)) : conj_if<Conj>(static_cast<T>(t(c, r)));
+        if constexpr (Conj) {
+            if (i == j) value = force_real(value);
+        }
+        b(i, j) = value;
+    });
+}
+
+// LAPACK xTRTTP (to_packed) / xTPTTR of columns [c0, c1) of the ul triangle of the n x n a(r, c)
+// (a reference) to / from packed storage ap (by columns, PackedTri<ul>, view.hh): a pointer
+// (64-bit offsets) or an ap(k) operand. ul and the direction are run-time values (one kernel
+// serves both); column by column, each column's rows Cyclic over ex; elements outside ul untouched.
+template <class Ex, class MA, class AP>
+BATCHLAS_DEVICE_INLINE void trttp(const Ex& ex, Uplo ul, bool to_packed, int n, const MA& a, const AP& ap, int c0, int c1) {
+    const bool lower = ul == Uplo::Lower;
+    for (int c = c0; c < c1; ++c) {
+        const std::ptrdiff_t cc = c;
+        const std::ptrdiff_t off = lower ? cc * n - cc * (cc - 1) / 2 - cc : cc * (cc + 1) / 2;
+        for_each_owned(ex, Range{lower ? c : 0, lower ? n : c + 1}, [&](int r) BATCHLAS_DEVICE_BODY {
+            auto&& g = a(r, c);
+            auto&& p = [&]() -> decltype(auto) {
+                if constexpr (std::is_pointer_v<AP>) return ap[off + r];
+                else return ap(static_cast<int>(off + r));
+            }();
+            if (to_packed)
+                p = g;
+            else
+                g = p;
+        });
+    }
+}
+template <Uplo UL, class Ex, class MA, class AP> BATCHLAS_DEVICE_INLINE void trttp(const Ex& ex, const MA& a, const AP& ap) {
+    trttp(ex, UL, true, a.rows(), a, ap, 0, a.rows());
+}
+template <Uplo UL, class Ex, class AP, class MA> BATCHLAS_DEVICE_INLINE void tpttr(const Ex& ex, const AP& ap, const MA& a) {
+    trttp(ex, UL, false, a.rows(), a, ap, 0, a.rows());
+}
+
+// ---- trsm's row-packed lower triangle (local memory) -------------------------------------------
+// Row-major by row: (s, t <= s) at s(s+1)/2 + t, PackedTri<Uplo::Lower, PackOrder::ByRows> (view.hh).
+// ap := diag(L(0:n, 0:n), I) as an N x N packed lower triangle; no barrier.
+template <int N, class Ex, class L, class T> BATCHLAS_DEVICE_INLINE void tp_pack_lower(const Ex& ex, const L& l, int n, T* ap) {
+    using Ar = Arith<T>;
+    constexpr std::size_t elems = static_cast<std::size_t>(N) * (N + 1) / 2;
+    const std::size_t stride = static_cast<std::size_t>(detail::size_of(ex));
+    for (std::size_t idx = ex.lid(); idx < elems; idx += stride) {
+        int s = 0;
+        while (PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s + 1, 0, 0) <= static_cast<int>(idx)) ++s;
+        const int t = static_cast<int>(idx) - PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, 0, 0);
+        T v;
+        if (s >= n || t >= n) v = (s == t) ? Ar::one() : Ar::zero();
+        else v = l(s, t);
+        ap[idx] = v;
+    }
+}
+
+// rd(s) := 1 / ap(s, s) for s < n (1 when unit or s >= n). A non-finite reciprocal is
+// replaced by 1 and stores 1 into *bad (work-group-scope relaxed atomic); no barrier.
+template <int N, class Ar, class Ex, class T>
+BATCHLAS_DEVICE_INLINE void tp_diag_recip(const Ex& ex, const T* ap, int n, bool unit, T* rd, int* bad) {
+    const int stride = detail::size_of(ex);
+    for (int s = ex.lid(); s < N; s += stride) {
+        T r = Ar::one();
+        if (s < n && !unit) {
+            const T d = ap[PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, s, 0)];
+            r = Ar::recip(d);
+            if (!Ar::isfinite(r)) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group,
+                                 sycl::access::address_space::local_space>(bad[0])
+                    .store(1);
+                r = Ar::one();
+            }
+        }
+        rd[s] = r;
+    }
+}
+
+// ---- Side::Left staging tile ------------------------------------------------------------------
+// tile(r, c) := src(r0 + r, c0 + c) inside src, else 0, for r < TR and c < executor width;
+// tile is column-major with leading dimension LDT. The flat index is distributed Cyclic.
+template <int TR, int LDT, class Ex, class Src, class T>
+BATCHLAS_DEVICE_INLINE void lacpy_tile_in(const Ex& ex, const Src& src, int r0, int c0, T* tile) {
+    const int stride = detail::size_of(ex);
+    for (int i = ex.lid(); i < TR * stride; i += stride) {
+        const int r = i % TR;
+        const int c = i / TR;
+        const int s = r0 + r;
+        const int col = c0 + c;
+        T v = Arith<T>::zero();
+        if (s < src.rows() && col < src.cols()) v = src(s, col);
+        tile[c * LDT + r] = v;
+    }
+}
+
+// dst(r0 + r, c0 + c) := tile(r, c) where that element is inside dst.
+template <int TR, int LDT, class Ex, class T, class Dst>
+BATCHLAS_DEVICE_INLINE void lacpy_tile_out(const Ex& ex, const T* tile, const Dst& dst, int r0, int c0) {
+    const int stride = detail::size_of(ex);
+    for (int i = ex.lid(); i < TR * stride; i += stride) {
+        const int r = i % TR;
+        const int c = i / TR;
+        const int s = r0 + r;
+        const int col = c0 + c;
+        if (s < dst.rows() && col < dst.cols()) dst(s, col) = tile[c * LDT + r];
+    }
+}
+
+// p[j] := x[s0 + j] for j < TR, s0 + j < N (a window of the Frag; core store has no offset).
+template <int TR, int N, class T> BATCHLAS_DEVICE_INLINE void frag_copy_out(const Frag<T, N>& x, int s0, T* p) {
+    BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < TR; ++j) {
+        const int s = s0 + j;
+        if (s < N) p[j] = x[s];
+    }
 }
 
 }  // namespace batchlas::device

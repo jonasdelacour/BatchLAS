@@ -4,8 +4,8 @@
 // (inc 3) on memory vectors; sizes that are not a multiple of the executor (n = 37 on 32 items),
 // odd and even reverse lengths; rscl's both arms (a finite reciprocal, and d below 1 / max where
 // the reciprocal overflows); a product of 3000 factors that overflows and underflows a plain
-// product; argmax ties (Lowest / Highest), a NaN (First / Skip), the skip index holding the
-// maximum, a range that excludes it, on a WG = 1024 work-group through the Scratch exchange;
+// product; iamax ties (Lowest / Highest / TieRt), a NaN (AsInf / Skip), the skip index holding the
+// maximum, a range that excludes it, on a WG = 1024 work-group through standalone ArgMaxSlots;
 // lockstep team loops whose trip count must equal on every team. Red set (each break made once,
 // 2026-11-04, and this suite failed): for_each_team_owned's lockstep trip count nout / nteams
 // (no ceiling: the last outputs lost).
@@ -157,7 +157,7 @@ TYPED_TEST(DeviceCoreLevel1Test, ProdScaledSurvivesWhatAPlainProductCannot) {
     }
 }
 
-TYPED_TEST(DeviceCoreLevel1Test, ArgmaxThroughScratchHonoursRangeSkipTieAndNaN) {
+TYPED_TEST(DeviceCoreLevel1Test, IamaxThroughSlotsHonoursRangeSkipTieAndNaN) {
     using T = TypeParam;
     using R = real_of<T>;
     auto& d = this->dev;
@@ -175,12 +175,14 @@ TYPED_TEST(DeviceCoreLevel1Test, ArgmaxThroughScratchHonoursRangeSkipTieAndNaN) 
     using AM = batchlas::device::ArgMax<R>;
     d.template run<WG>(1, 32 * sizeof(AM), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG, 32> ex{it};
-        const batchlas::device::Scratch<AM, 32> scr{reinterpret_cast<AM*>(lm)};
+        namespace alg = batchlas::device::alg;
+        const auto scr = batchlas::device::argmax_slots<batchlas::device::Mem::Local, true>(reinterpret_cast<R*>(lm),
+                                                                                            reinterpret_cast<int*>(lm + 32 * sizeof(R)));
         const batchlas::device::Range r{1, 2999};
-        const auto a = batchlas::device::argmax<batchlas::device::alg::TieLowest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
-        const auto b = batchlas::device::argmax<batchlas::device::alg::TieHighest>(ex, scr, batchlas::device::vec(x, n), r, 2001);
-        const auto c = batchlas::device::argmax<batchlas::device::alg::TieLowest, batchlas::device::alg::NanFirst>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
-        const auto e = batchlas::device::argmax<batchlas::device::alg::TieLowest, batchlas::device::alg::NanSkip>(ex, scr, batchlas::device::vec(xn, n), r, 2001);
+        const auto a = batchlas::device::iamax(ex, batchlas::device::vec(x, n), r, alg::TieLowest{}, scr, 2001);
+        const auto b = batchlas::device::iamax(ex, batchlas::device::vec(x, n), r, alg::TieHighest{}, scr, 2001);
+        const auto c = batchlas::device::iamax(ex, batchlas::device::vec(xn, n), r, alg::TieLowest{}, scr, 2001);
+        const auto e = batchlas::device::iamax<alg::NanSkip>(ex, batchlas::device::vec(xn, n), r, alg::TieRt{true}, scr, 2001);
         if (ex.leader()) {
             idx[0] = a.index;
             idx[1] = b.index;

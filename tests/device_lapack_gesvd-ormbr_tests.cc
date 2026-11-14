@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The gesvd / ormbr private device pieces (src/ops/gesvd/gesvd-ormbr_v2.hh) against host references:
+// The gesvd / ormbr private device pieces (device/interop.hh: item(v, b, n), ItemMat col / row / sub) against host references:
 // core's Grid1D<true> / ElemAt<true> / ElemIn executors driving core ops in the compositions the
-// glue kernels use, the item_n / col_of / row_of / sub_of adaptors with core flip / mapped /
+// glue kernels use, the item(v, b, n) / col / row / window adaptors with core flip / mapped /
 // shifted over them, core dgmm, and bdgram, bdmv_div, tridiag_abs_offdiag. Core ops themselves are
 // covered by the device_core tests.
 // Guards (agent-guide section 8): non-natural ld / inc / stride, views longer than the n an
@@ -19,7 +19,8 @@
 #include <limits>
 #include <vector>
 
-#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <src/queue.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 
@@ -172,7 +173,7 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, Elem2DrivesCoreCopies) {
 }
 
 // The ormbr compositions: AQ := 0 then its strict lower (1:, 1:) := A(0:, 1:)^H on ElemIn over
-// sub_of(item()); a non-square ElemIn block (its far column bound is not implied by the
+// window(item()); a non-square ElemIn block (its far column bound is not implied by the
 // triangle); the P panel V := unit lower of A(i0:, i0+1:)^H on ElemAt<true> (laset<Upper> + lacpy).
 TYPED_TEST(DeviceLapackGesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
     using T = TypeParam;
@@ -188,12 +189,12 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
         const device::ElemAt<true> ex{row, col};
         const auto aq = device::item(qk, b, N, N);
         device::laset(ex, device::Zero{}, device::Zero{}, aq);
-        device::lacpy<device::Part::StrictLower, Transpose::ConjTrans>(ex.sub(1, 1), device::gesvd_glue::sub_of(device::item(ak, b, N, N), 0, 1, N - 1, N - 1),
-                                                               device::gesvd_glue::sub_of(aq, 1, 1, N - 1, N - 1));
+        device::lacpy<device::Part::StrictLower, Transpose::ConjTrans>(ex.sub(1, 1), device::window(device::item(ak, b, N, N), 0, 1, N - 1, N - 1),
+                                                               device::window(aq, 1, 1, N - 1, N - 1));
     });
     this->dev.grid(Mf, Nf, [=](int b, int r, int c) {
         const auto src = device::mat(static_cast<const T*>(a) + off(b, sa), rm, rn, lda);
-        const auto dst = device::gesvd_glue::sub_of(device::mat(fp + off(b, sf), Mf, Nf, ldf), 1, 2, rm, rn);
+        const auto dst = device::window(device::mat(fp + off(b, sf), Mf, Nf, ldf), 1, 2, rm, rn);
         device::lacpy<device::Part::StrictLower>(device::ElemAt<true>{r, c}.sub(1, 2), src, dst);
     });
     this->dev.grid(mv, ib, [=](int b, int r, int c) {
@@ -222,12 +223,12 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, BlockCompositionsWriteExactlyTheirPart) {
             }
     }
     EXPECT_EQ(bad_v, 0) << "P panel: laset<Upper> + lacpy<StrictLower, ConjTrans> on ElemAt";
-    EXPECT_EQ(bad_q, 0) << "AQ: laset + lacpy<StrictLower, ConjTrans> on ElemIn over sub_of";
+    EXPECT_EQ(bad_q, 0) << "AQ: laset + lacpy<StrictLower, ConjTrans> on ElemIn over window";
     EXPECT_EQ(bad_f, 0) << "lacpy<StrictLower> on a non-square ElemIn block";
 }
 
-// map on Grid1D<true> over flip() / mapped() of item_n views longer than n (finalize_*_values);
-// Thread copy / map through col_of / row_of, and a zero column through laset on sub_of
+// map on Grid1D<true> over flip() / mapped() of item(v, b, n) views longer than n (finalize_*_values);
+// Thread copy / map through col / row, and a zero column through laset on window
 // (build_hermitian_vectors, build_bidiag_vectors, patch_zero_left_vectors).
 TYPED_TEST(DeviceLapackGesvdOrmbrTest, AdaptorsAddressTheirElement) {
     using T = TypeParam;
@@ -249,16 +250,16 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, AdaptorsAddressTheirElement) {
     const KernelMatrixView<T, MatrixFormat::Dense> qk(q, N, N, ld, s, kBatch), uk(u, N, N, ld, s, kBatch), wk(w, N, N, ld, s, kBatch);
     this->dev.line(n, [=](int b, int i) {
         const std::ptrdiff_t base = std::ptrdiff_t(b) * n;
-        device::map(device::Grid1D<true>{i}, device::vec(o1 + base, n), [](T t) { return device::Arith<T>::neg(t); }, device::flip(device::gesvd_glue::item_n(vv, b, n)));
+        device::map(device::Grid1D<true>{i}, device::vec(o1 + base, n), [](T t) { return device::Arith<T>::neg(t); }, device::flip(device::item(vv, b, n)));
         device::map(device::Grid1D<true>{i}, device::vec(o2 + base, n), [](T t) { return t; },
-                device::mapped(device::gesvd_glue::item_n(pv, b, n), [x = device::gesvd_glue::item_n(vv, b, n)](int k) { return x(k); }));
+                device::mapped(device::item(pv, b, n), [x = device::item(vv, b, n)](int k) { return x(k); }));
     });
     this->dev.line(N, [=](int b, int tgt) {
         const int src = (N - 1) - tgt;
-        const auto qc = device::gesvd_glue::col_of(device::item(qk, b, N, N), src);
-        if (tgt % 3 == 2) device::laset(device::Thread{}, device::Zero{}, device::Zero{}, device::gesvd_glue::sub_of(device::item(uk, b, N, N), 0, tgt, N, 1));
-        else device::copy(device::Thread{}, qc, device::gesvd_glue::col_of(device::item(uk, b, N, N), tgt));
-        device::map(device::Thread{}, device::gesvd_glue::row_of(device::item(wk, b, N, N), tgt), [](T x) { return device::Arith<T>::conj(x); }, qc);
+        const auto qc = device::col(device::item(qk, b, N, N), src);
+        if (tgt % 3 == 2) device::laset(device::Thread{}, device::Zero{}, device::Zero{}, device::window(device::item(uk, b, N, N), 0, tgt, N, 1));
+        else device::copy(device::Thread{}, qc, device::col(device::item(uk, b, N, N), tgt));
+        device::map(device::Thread{}, device::row(device::item(wk, b, N, N), tgt), [](T x) { return device::Arith<T>::conj(x); }, qc);
     });
     const auto g1 = this->dev.down(o1, std::size_t(kBatch) * n), g2 = this->dev.down(o2, std::size_t(kBatch) * n);
     const auto gu = this->dev.down(u, std::size_t(kBatch) * s), gw = this->dev.down(w, std::size_t(kBatch) * s);
@@ -279,12 +280,12 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, AdaptorsAddressTheirElement) {
             for (int r = N; r < ld; ++r) pad += !is_nan(gu[at(b, s, r, tgt, ld)]) + !is_nan(gw[at(b, s, r, tgt, ld)]);
         }
     }
-    EXPECT_EQ(bad, 0) << "map over reversed / gathered item_n";
-    EXPECT_EQ(bad_m, 0) << "col_of / row_of / sub_of";
+    EXPECT_EQ(bad, 0) << "map over reversed / gathered item(v, b, n)";
+    EXPECT_EQ(bad_m, 0) << "col / row / window";
     EXPECT_EQ(pad, 0) << "ld padding was written";
 }
 
-// dgmm Left with a real d (inc 2, item_n) on ElemAt<true> over item(), Right with a T d on a WG = 1024
+// dgmm Left with a real d (inc 2, item(v, b, n)) on ElemAt<true> over item(), Right with a T d on a WG = 1024
 // launch (the ceiling); copy of shifted(x, 1) on Grid1D<true> with x shorter than y and x's view
 // longer than nx.
 TYPED_TEST(DeviceLapackGesvdOrmbrTest, DgmmAndDownshift) {
@@ -307,14 +308,14 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, DgmmAndDownshift) {
     const VectorView<T> yv1(y1, nx + 1, kBatch), yv2(y2, nx + 4, kBatch);
     const KernelMatrixView<T, MatrixFormat::Dense> ak(a, m, n, ld, s, kBatch);
     this->dev.grid(m, n, [=](int b, int i, int j) {
-        device::dgmm<Side::Left>(device::ElemAt<true>{i, j}, device::gesvd_glue::item_n(dv, b, m), device::item(ak, b, m, n));
+        device::dgmm<Side::Left>(device::ElemAt<true>{i, j}, device::item(dv, b, m), device::item(ak, b, m, n));
     });
     this->dev.template run<1024>([=](sycl::nd_item<1> it, int b) {
         device::dgmm<Side::Right>(device::WorkGroup<1024>{it}, device::vec(e + off(b, n), n), device::mat(a2 + off(b, s), m, n, ld));
     });
     this->dev.line(nx + 4, [=](int b, int i) {
-        if (i < nx + 1) device::copy(device::Grid1D<true>{i}, device::shifted(device::gesvd_glue::item_n(xv, b, nx), 1, nx + 1), device::gesvd_glue::item_n(yv1, b, nx + 1));
-        device::copy(device::Grid1D<true>{i}, device::shifted(device::gesvd_glue::item_n(xv, b, nx), 1, nx + 4), device::gesvd_glue::item_n(yv2, b, nx + 4));
+        if (i < nx + 1) device::copy(device::Grid1D<true>{i}, device::shifted(device::item(xv, b, nx), 1, nx + 1), device::item(yv1, b, nx + 1));
+        device::copy(device::Grid1D<true>{i}, device::shifted(device::item(xv, b, nx), 1, nx + 4), device::item(yv2, b, nx + 4));
     });
     const auto ga = this->dev.down(a, ha.size()), ga2 = this->dev.down(a2, ha.size());
     const auto g1 = this->dev.down(y1, std::size_t(kBatch) * (nx + 1)), g2 = this->dev.down(y2, std::size_t(kBatch) * (nx + 4));
@@ -341,7 +342,7 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, DgmmAndDownshift) {
 }
 
 // Real bidiagonal ops: bdgram Right / Left (zero padding) on Grid1D<true> and WorkGroup<64>, bdmv_div on
-// Thread through col_of (live and dead sigma: every 4th item straddles tol).
+// Thread through col (live and dead sigma: every 4th item straddles tol).
 TYPED_TEST(DeviceLapackGesvdOrmbrTest, BidiagonalOps) {
     using T = TypeParam;
     if constexpr (is_cplx<T>) {
@@ -361,17 +362,17 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, BidiagonalOps) {
         const KernelMatrixView<T, MatrixFormat::Dense> vk(v, k, k, ldv, sv, kBatch);
         this->dev.line(order, [=](int b, int i) {
             if (i < k)
-                device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdrv, b, k),
-                                          device::gesvd_glue::item_n(terv, b, k - 1));
-            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(dv, b, k), device::gesvd_glue::item_n(ev, b, k - 1), device::gesvd_glue::item_n(tdlv, b, order),
-                                     device::gesvd_glue::item_n(telv, b, order - 1));
+                device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::item(dv, b, k), device::item(ev, b, k - 1), device::item(tdrv, b, k),
+                                          device::item(terv, b, k - 1));
+            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::item(dv, b, k), device::item(ev, b, k - 1), device::item(tdlv, b, order),
+                                     device::item(telv, b, order - 1));
         });
         this->dev.template run<64>([=](sycl::nd_item<1> it, int b) {
             const device::WorkGroup<64> ex{it};
             device::detail::bdgram<Side::Left>(ex, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::vec(tdw + b * order, order),
                                      device::vec(tew + b * (order - 1), order - 1));
             if (ex.leader())
-                device::detail::bdmv_div(device::Thread{}, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::gesvd_glue::col_of(device::item(vk, b, k, k), 5),
+                device::detail::bdmv_div(device::Thread{}, device::vec(d + b * k, k), device::vec(e + b * (k - 1), k - 1), device::col(device::item(vk, b, k, k), 5),
                                sig[b], T(1e-3), device::vec(u + b * order, order));
         });
         const auto gtdr = this->dev.down(tdr, std::size_t(kBatch) * k), gter = this->dev.down(ter, std::size_t(kBatch) * (k - 1));
@@ -412,7 +413,7 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, BidiagonalOps) {
     }
 }
 
-// The sign scan with -0.0 / 0 / negatives; s's view is two longer than n (item_n bounds the scan).
+// The sign scan with -0.0 / 0 / negatives; s's view is two longer than n (item(v, b, n) bounds the scan).
 TYPED_TEST(DeviceLapackGesvdOrmbrTest, SignScan) {
     using T = TypeParam;
     if constexpr (is_cplx<T>) {
@@ -428,7 +429,7 @@ TYPED_TEST(DeviceLapackGesvdOrmbrTest, SignScan) {
         T* e = this->dev.up(he);
         T* sg = this->dev.up(poisoned<T>(std::size_t(kBatch) * (n + 2)));
         const VectorView<T> evw(e, n - 1, kBatch), sgv(sg, n + 2, kBatch);
-        this->dev.line(1, [=](int b, int) { device::detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(evw, b, n - 1), device::gesvd_glue::item_n(sgv, b, n)); });
+        this->dev.line(1, [=](int b, int) { device::detail::tridiag_abs_offdiag(device::Thread{}, device::item(evw, b, n - 1), device::item(sgv, b, n)); });
         const auto ge = this->dev.down(e, he.size()), gs = this->dev.down(sg, std::size_t(kBatch) * (n + 2));
         int bad = 0;
         for (int b = 0; b < kBatch; ++b) {

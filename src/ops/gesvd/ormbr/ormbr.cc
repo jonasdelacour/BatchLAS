@@ -10,7 +10,8 @@
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/larft_wy.hh>
-#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -111,8 +112,8 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const auto aq = device::item(AQ, b, nn, nn);
             device::laset(ex, device::Zero{}, device::Zero{}, aq);
             device::lacpy<device::Part::StrictLower, Transpose::ConjTrans>(
-                ex.sub(1, 1), device::gesvd_glue::sub_of(device::item(A, b, nn, nn), 0, 1, nn - 1, nn - 1),
-                device::gesvd_glue::sub_of(aq, 1, 1, nn - 1, nn - 1));
+                ex.sub(1, 1), device::window(device::item(A, b, nn, nn), 0, 1, nn - 1, nn - 1),
+                device::window(aq, 1, 1, nn - 1, nn - 1));
         });
     });
 
@@ -128,8 +129,8 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            const auto tauq = device::gesvd_glue::item_n(TAUQ, b, nn);
-            device::copy(device::Grid1D<true>{j}, device::shifted(device::gesvd_glue::item_n(TAU, b, nn - 1), 1, nn), tauq);
+            const auto tauq = device::item(TAUQ, b, nn);
+            device::copy(device::Grid1D<true>{j}, device::shifted(device::item(TAU, b, nn - 1), 1, nn), tauq);
         });
     });
 

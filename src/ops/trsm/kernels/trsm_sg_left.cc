@@ -6,7 +6,6 @@
 
 #include <src/ops/trsm/trsm_native.hh>
 #include <src/ops/trsm/trsm_canonical.hh>
-#include <src/ops/trsm/trsm_v2.hh>
 #include <batchlas/error.hh>
 
 #include <src/queue.hh>
@@ -106,31 +105,31 @@ Event trsm_native_sg_left(Queue& ctx,
                 bool okb = b < bs;
                 if constexpr (Masked) okb = okb && mask[b] != 0;
                 const bool okr = okb && r < n;
-                const dla::CanonTri<const D, true, int64_t> L{a_ptr + (okb ? b : 0) * stride_a, lda, n,
+                const device::CanonTri<const D, true, int64_t> L{a_ptr + (okb ? b : 0) * stride_a, lda, n,
                                                               fwd, do_trans, do_conj};
-                const dla::FlipRows<D, int64_t> Bc{b_ptr + (okb ? b : 0) * stride_b, ldb, n, q, fwd};
+                const device::FlipRows<D, int64_t> Bc{b_ptr + (okb ? b : 0) * stride_b, ldb, n, q, fwd};
 
                 // Lane r: the AXPY multipliers -Lc(r, 0:r); pad rows are identity rows.
                 // Built in place (load_row's Frag& out-param): a returned Frag stays live whole
                 // until its copy-out in the rolled kernels (REG 44->90, cfloat N=32).
                 const auto neg = [](const D& v) BATCHLAS_DEVICE_BODY { return device::Arith<D>::neg(v); };
                 device::Frag<D, N> nL;
-                device::load_row(nL, dla::MapCols{L, 0, neg}, r, okr ? r : 0);
+                device::load_row(nL, device::MapCols{L, 0, neg}, r, okr ? r : 0);
                 D dd = Ar::one();
                 if (okr && !unit) dd = L.diag(r);   // not L(r, r): see CanonTri::diag
                 // V1's fallback, per matrix: any non-finite reciprocal in this
                 // matrix's N lanes switches all of them to division.
-                const auto dg = dla::guarded_recip<Ar>(ex, dd);
+                const auto dg = device::guarded_recip<Ar>(ex, dd);
 
                 const int c0 = chunk * QC;
                 const int live_c = okr ? q - c0 : 0;   // columns c0.. of B this lane loads and stores
                 const auto scale = [=](const D& v) BATCHLAS_DEVICE_BODY { return Ar::mul(alpha_d, v); };
                 device::Frag<D, QC> x;
-                device::load_row(x, dla::MapCols{Bc, c0, scale}, r, live_c);
+                device::load_row(x, device::MapCols{Bc, c0, scale}, r, live_c);
                 // The division path sits behind a sub-group-uniform branch: as a
                 // per-lane select it kept QC divisions live at every step (2x at q=64).
-                dla::trsm_lower_rowfrag<kUnrollS, Ar>(ex, nL, dg, n, unit, x);
-                device::store_row(x, dla::ColsFrom{Bc, c0}, r, live_c);
+                device::trsm_lower_rowfrag<kUnrollS, Ar>(ex, nL, dg, n, unit, x);
+                device::store_row(x, device::ColsFrom{Bc, c0}, r, live_c);
             });
     });
     return ctx.get_event();

@@ -194,10 +194,11 @@ BATCHLAS_UNROLL_FULL
             // map is load-bearing, an unmapped NaN leaves lanes disagreeing.
             const R mag = device::abs1<D>(rA[j]);
             const bool cand = (rowid >= j) && (rowid < n);
-            device::detail::MaxLoc<R> best{(cand && (mag == mag)) ? mag : R(-1), device::detail::pivot_key(cand ? rowid : (rowid + N), lane)};
-            device::detail::maxloc_bfly_up(px, best);
-            const int p = device::detail::pivot_key_order(best.i);
-            const uint32_t pl = device::detail::pivot_key_lane(best.i);
+            const device::ArgMax<R> best = device::argmax_allreduce(
+                px, device::ArgMax<R>{device::detail::pivot_key(cand ? rowid : (rowid + N), lane), (cand && (mag == mag)) ? mag : R(-1)},
+                device::alg::TieLowest{}, device::None{}, 0, R(-1));
+            const int p = device::detail::pivot_key_order(best.index);
+            const uint32_t pl = device::detail::pivot_key_lane(best.index);
 
             // THE INVERSE PERMUTATION, FOR FREE. The winner sets rowid = j below
             // and no later step touches a rowid < j, so lane `pl` holds row j for

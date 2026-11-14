@@ -108,8 +108,9 @@ struct Unfused {};              // sumsq: the running sum adds abs2(x), its own 
 struct Flat {};                 // (e - (e/m)*m, e/m) per step, e in Idx (64-bit: the legacy index math)
 struct DivMod {};               // (e % m, e / m) per step, the literal hand spelling
 struct Stepped {};              // one division per item, then r += size with a carry loop
-struct Walk {};
-struct Default {};             // a tier's own default algorithm (tier::Cta / Blocked)                 // one division per item, (dr, dc) = (size % m, size / m) per step
+struct Walk {};                 // one division per item, (dr, dc) = (size % m, size / m) per step
+struct Default {};              // a tier's own default algorithm (tier::Cta / Blocked)
+struct LeftLooking {};          // potrf tier::Blocked: each panel updated from the columns to its left
 }  // namespace alg
 
 // Butterfly order: xor masks P/2 .. 1 (BflyDown) or 1 .. P/2 (BflyAsc), two summation orders.
@@ -118,6 +119,9 @@ struct BflyDown {};
 struct BflyAsc {};
 struct TieLowest {};   // among equal keys: the lower index (root)
 struct TieHighest {};  // the higher index (root)
+struct TieRt {         // either, a launch value (sytrf: Upper takes the higher logical index)
+    bool low;
+};
 }  // namespace alg
 
 // Op tags for scratch_elements.
@@ -187,8 +191,7 @@ template <int W> struct ColDot {        // gemv T/C: W consecutive lanes per out
     static constexpr int width = W;
 };
 struct LanePerRow {};                   // trsv: lane i holds x(i); column j reaches the lanes by bcast
-// Triangular-solve diagonal: UnitDiag (not read), Div, Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
-struct UnitDiag {};
+// trsv, Diag::NonUnit: Div (x / a_ii), Recip (x * (1 / a_ii)), RealDiv (x / re(a_ii)).
 struct Div {};
 struct Recip {};
 struct RealDiv {};

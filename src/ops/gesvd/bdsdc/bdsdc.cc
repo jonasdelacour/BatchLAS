@@ -11,10 +11,10 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/device.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <batchlas/device/lapack/bdsdc.hh>
 
 #include <src/math-helpers.hh>
-#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -112,8 +112,8 @@ void bdsdc_build_gk(Queue& ctx,
             sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            device::detail::build_gk(device::gesvd_glue::item_n(D, b, nn), device::gesvd_glue::item_n(E, b, nn - 1), device::gesvd_glue::item_n(GD, b, N),
-                                       device::gesvd_glue::item_n(GE, b, N - 1), device::gesvd_glue::item_n(GS, b, N));
+            device::detail::build_gk(device::item(D, b, nn), device::item(E, b, nn - 1), device::item(GD, b, N),
+                                       device::item(GE, b, N - 1), device::item(GS, b, N));
         });
     });
 }
@@ -185,9 +185,9 @@ void bdsdc_extract_vectors(Queue& ctx,
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
             // Eigenvector src of the Golub-Kahan matrix; Vh is V^T, so row i holds v_i.
-            device::detail::extract_column(wg, device::gesvd_glue::col_of(device::item(Zk, b, 2 * nn, 2 * nn), src), device::item(S, b), nn,
+            device::detail::extract_column(wg, device::col(device::item(Zk, b, 2 * nn, 2 * nn), src), device::item(S, b), nn,
                                              device::item(L, b), src, device::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn), i,
-                                             device::gesvd_glue::row_of(device::item(Vh, b, nn, nn), i), device::gesvd_glue::col_of(device::item(U, b, nn, nn), i), wu, wv);
+                                             device::row(device::item(Vh, b, nn, nn), i), device::col(device::item(U, b, nn, nn), i), wu, wv);
         });
     });
 }

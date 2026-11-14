@@ -11,7 +11,8 @@
 #include <src/kernels/common/info_target.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
-#include <src/ops/gesvd/gesvd-ormbr_v2.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/ops/syev/stedc/stedc_internal.hh>
 #include <src/select/grid_chunk.hh>
@@ -217,7 +218,7 @@ Event solve_tridiagonal(Queue& ctx,
             const int32_t batch = static_cast<int32_t>(diag.batch_size());
             h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
-                device::detail::tridiag_abs_offdiag(device::Thread{}, device::gesvd_glue::item_n(E, b, n - 1), device::gesvd_glue::item_n(S, b, n));
+                device::detail::tridiag_abs_offdiag(device::Thread{}, device::item(E, b, n - 1), device::item(S, b, n));
             });
         });
     }
@@ -255,7 +256,7 @@ Event solve_tridiagonal(Queue& ctx,
                 const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
                 const int32_t row = static_cast<int32_t>(rem % n);
                 const int32_t col = static_cast<int32_t>(rem / n);
-                device::dgmm<Side::Left>(device::ElemAt<true>{row, col}, device::gesvd_glue::item_n(S, b, n), device::item(Z, b, n, n));
+                device::dgmm<Side::Left>(device::ElemAt<true>{row, col}, device::item(S, b, n), device::item(Z, b, n, n));
             });
         });
     }
@@ -282,8 +283,8 @@ void form_right_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
-            device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, n), device::gesvd_glue::item_n(E, b, n - 1),
-                                      device::gesvd_glue::item_n(TD, b, n), device::gesvd_glue::item_n(TE, b, n - 1));
+            device::detail::bdgram<Side::Right>(device::Grid1D<true>{i}, device::item(D, b, n), device::item(E, b, n - 1),
+                                      device::item(TD, b, n), device::item(TE, b, n - 1));
         });
     });
 }
@@ -308,8 +309,8 @@ void form_left_tridiagonal(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / left_order;
             const int32_t i = linear - b * left_order;
-            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
-                                     device::gesvd_glue::item_n(TD, b, left_order), device::gesvd_glue::item_n(TE, b, left_order - 1));
+            device::detail::bdgram<Side::Left>(device::Grid1D<true>{i}, device::item(D, b, k), device::item(E, b, k - 1),
+                                     device::item(TD, b, left_order), device::item(TE, b, left_order - 1));
         });
     });
 }
@@ -333,7 +334,7 @@ void finalize_values_only(Queue& ctx,
             if (mask != nullptr && mask[b] == 0) return;  // I3: s of an inactive item is untouched
             device::map(device::Grid1D<true>{tgt}, device::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
                     [](T lambda) { return sycl::sqrt(sycl::fmax(lambda, T(0))); },
-                    device::flip(device::gesvd_glue::item_n(Evals, b, n)));
+                    device::flip(device::item(Evals, b, n)));
         });
     });
 }
@@ -406,7 +407,7 @@ void finalize_hermitian_values(Queue& ctx,
             if (mask != nullptr && mask[b] == 0) return;  // I3
             device::map(device::Grid1D<true>{i}, device::vec(s_out + static_cast<size_t>(b) * static_cast<size_t>(n), n),
                     [](Real lambda) { return sycl::fabs(lambda); },
-                    device::mapped(device::gesvd_glue::item_n(Perm, b, n), [ev = device::gesvd_glue::item_n(Evals, b, n)](int src) { return ev(src); }));
+                    device::mapped(device::item(Perm, b, n), [ev = device::item(Evals, b, n)](int src) { return ev(src); }));
         });
     });
 }
@@ -442,10 +443,10 @@ void build_hermitian_vectors(Queue& ctx,
             const int32_t src = Perm(tgt, b);
             const Real lambda = Evals(src, b);
             const T sign = (lambda < Real(0)) ? T(-1) : T(1);
-            const auto q = device::gesvd_glue::col_of(device::item(Q, b, n, n), src);
-            if (want_u) device::copy(device::Thread{}, q, device::gesvd_glue::col_of(device::item(U, b, n, n), tgt));
+            const auto q = device::col(device::item(Q, b, n, n), src);
+            if (want_u) device::copy(device::Thread{}, q, device::col(device::item(U, b, n, n), tgt));
             if (want_vh) {
-                device::map(device::Thread{}, device::gesvd_glue::row_of(device::item(Vh, b, n, n), tgt),
+                device::map(device::Thread{}, device::row(device::item(Vh, b, n, n), tgt),
                         [=](T x) { return sign * device::Arith<T>::conj(x); }, q);
             }
         });
@@ -582,8 +583,8 @@ void build_bidiag_vectors(Queue& ctx,
                 const int32_t tgt = linear - b * k;
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int32_t src = (k - 1) - tgt;
-                device::copy(device::Thread{}, device::gesvd_glue::col_of(device::item(V, b, k, k), src),
-                         device::gesvd_glue::row_of(device::item(Vh, b, k, k), tgt));
+                device::copy(device::Thread{}, device::col(device::item(V, b, k, k), src),
+                         device::row(device::item(Vh, b, k, k), tgt));
             });
         });
     }
@@ -608,14 +609,14 @@ void build_bidiag_vectors(Queue& ctx,
                 const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
                 const auto ub = device::item(U, b, m, u_cols);
                 if (tgt >= k) {
-                    device::laset(device::Thread{}, device::Zero{}, device::Zero{}, device::gesvd_glue::sub_of(ub, 0, tgt, m, 1));
+                    device::laset(device::Thread{}, device::Zero{}, device::Zero{}, device::window(ub, 0, tgt, m, 1));
                     return;
                 }
                 // u_tgt = B v_src / sigma (zero rows past k), or 0 for a sigma at or below tol_zero.
                 const int32_t src = (k - 1) - tgt;
                 const T sigma = sycl::sqrt(sycl::fmax(Evals(src, b), T(0)));
-                device::detail::bdmv_div(device::Thread{}, device::gesvd_glue::item_n(D, b, k), device::gesvd_glue::item_n(E, b, k - 1),
-                               device::gesvd_glue::col_of(device::item(V, b, k, k), src), sigma, tol_zero, device::gesvd_glue::col_of(ub, tgt));
+                device::detail::bdmv_div(device::Thread{}, device::item(D, b, k), device::item(E, b, k - 1),
+                               device::col(device::item(V, b, k, k), src), sigma, tol_zero, device::col(ub, tgt));
             });
         });
     }
@@ -676,8 +677,8 @@ void patch_zero_left_vectors(Queue& ctx,
             if (tgt < sigma_count && sb[tgt] > tol_zero) {
                 return;
             }
-            device::copy(device::Thread{}, device::gesvd_glue::col_of(device::item(UZero, b, m, m), src),
-                     device::gesvd_glue::col_of(device::item(U, b, m, m), tgt));
+            device::copy(device::Thread{}, device::col(device::item(UZero, b, m, m), src),
+                     device::col(device::item(U, b, m, m), tgt));
         });
     });
 }

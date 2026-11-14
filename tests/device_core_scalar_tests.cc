@@ -225,6 +225,9 @@ TYPED_TEST(DeviceCoreScalarTest, LartgPromoteWorksComplexFloatInDouble) {
     using R = real_of<T>;
     using batchlas::verify::Check;
     auto& d = this->dev;
+    if constexpr (is_cplx<T> && std::is_same_v<R, float>) {
+        if (!d.q().get_device().has(sycl::aspect::fp64)) GTEST_SKIP() << "lartg<double> needs device fp64";
+    }
     constexpr int n = 64;
     auto f_h = vals<T>(n, 31), g_h = vals<T>(n, 32);
     g_h[1] = T(0);

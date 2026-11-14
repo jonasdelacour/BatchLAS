@@ -376,7 +376,7 @@ one helper, so a check re-derived from the hook cannot fail.
 
 ## The LPanel tier {#the-lpanel-tier}
 
-`src/ops/potrf/kernels/potrf_lpanel.cc`, `potrf_lpanel_device.hh`: a left-looking, thread-per-row panel kernel. One
+`src/ops/potrf/kernels/potrf_lpanel.cc` launching `device::detail::potrf_blocked_run<alg::LeftLooking>`: a left-looking, thread-per-row panel kernel. One
 work-group holds an \f$n \times \mathrm{NB}\f$ panel in local memory, factors it in place, and re-reads factored columns from global
 memory. `NB = 8` for every type, `NB = 16` float only. Upper is refused by `can_run`.
 
@@ -397,7 +397,7 @@ loop, and an order above the work-group size is a silent race.
 ### Why LPanel may pack on work-group barriers {#why-lpanel-may-pack-on-work-group-barriers}
 
 `potrf_cta.cc` packs `G > 1` only at `L == 32`, where its barriers are sub-group barriers. LPanel packs on work-group
-barriers deliberately: every barrier in `potrf_lpanel_body` is a top-level `group_barrier(it.get_group())`, and a failed
+barriers deliberately: every barrier in `alg::LeftLooking` (`BlockedLeft`) is a top-level `group_barrier(it.get_group())`, and a failed
 item is a predicated skip. Hence:
 
 * **No early return and no shortened `n`.** A dead slot runs the whole body with stores suppressed (`store`); `n = 0`

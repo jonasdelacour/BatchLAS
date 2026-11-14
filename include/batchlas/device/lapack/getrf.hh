@@ -31,86 +31,6 @@ namespace batchlas::device {
 
 namespace detail {
 
-// ---- pivot search ---------------------------------------------------------------------------
-template <class R> struct MaxLoc {
-    R v;
-    int i;
-};
-// Take (ov, oi) when larger, or equal with a lower index; a NaN never wins.
-template <class R> BATCHLAS_DEVICE_INLINE void maxloc_merge(MaxLoc<R>& a, R ov, int oi) {
-    if (ov > a.v || (ov == a.v && oi < a.i)) {
-        a.v = ov;
-        a.i = oi;
-    }
-}
-
-// xor butterfly over `lanes` (a launch value) lanes of sg, masks lanes/2 .. 1.
-template <class R> BATCHLAS_DEVICE_INLINE void maxloc_bfly(const sycl::sub_group& sg, MaxLoc<R>& a, int lanes) {
-    for (std::uint32_t off = static_cast<std::uint32_t>(lanes) / 2u; off > 0u; off >>= 1) {
-        const R ov = batchlas::portable::permute_group_by_xor(sg, a.v, off);
-        const int oi = batchlas::portable::permute_group_by_xor(sg, a.i, off);
-        maxloc_merge(a, ov, oi);
-    }
-}
-
-// xor butterfly over a P-lane Partition, masks 1 .. P/2 (the tiny tiers' order). THE CALLER
-// OWES A NaN-FREE SEED: a NaN loses every comparison and the lanes disagree on the winner.
-template <class Px, class R> BATCHLAS_DEVICE_INLINE void maxloc_bfly_up(const Px& px, MaxLoc<R>& a) {
-    constexpr int P = Px::team_size;
-BATCHLAS_UNROLL_FULL
-    for (std::uint32_t mk = 1u; mk < static_cast<std::uint32_t>(P); mk <<= 1) {
-        const R ov = detail::xor_shuffle(px.part, a.v, mk);
-        const int oi = detail::xor_shuffle(px.part, a.i, mk);
-        maxloc_merge(a, ov, oi);
-    }
-}
-
-// Lane 0 of team t writes slots[t], ONE barrier (B1), every item scans the slots in team order;
-// no trailing barrier (the caller's B2 precedes the next write). Scope::Sub returns `a`.
-template <class Ex, class R, class VS, class IS>
-BATCHLAS_DEVICE_INLINE MaxLoc<R> maxloc_group(const Ex& ex, MaxLoc<R> a, const VS& vs, const IS& is, int none) {
-    if constexpr (Ex::natural_scope == Scope::Sub) {
-        return a;
-    } else {
-        if (ex.lane() == 0) {
-            vs[static_cast<std::size_t>(ex.team())] = a.v;
-            is[static_cast<std::size_t>(ex.team())] = a.i;
-        }
-        ex.barrier(Mem::Local);  // B1
-        R fv = R(-1);
-        int p = none;
-        const int nt = detail::nteams_of(ex);
-        for (int t = 0; t < nt; ++t) {  // the legacy statements: ptxas unrolls this scan by them
-            const R v = vs[static_cast<std::size_t>(t)];
-            const int ii = is[static_cast<std::size_t>(t)];
-            if (v > fv || (v == fv && ii < p)) {
-                fv = v;
-                p = ii;
-            }
-        }
-        return {fv, p};
-    }
-}
-
-// ?IAMAX (cabs1) of A(r0:m-1, c): the absolute row of the first maximum, NaN rows skipped; m
-// when none qualifies. vs/is: nteams slots of local memory (unread at Scope::Sub).
-template <class Ex, class MA, class VS, class IS>
-BATCHLAS_DEVICE_INLINE int iamax_col(const Ex& ex, const MA& a, int r0, int c, int lanes, const VS& vs, const IS& is) {
-    using D = typename MA::value_type;
-    using R = real_t<D>;
-    const int m = a.rows();
-    MaxLoc<R> best{R(-1), m};  // m: "no candidate", never wins a tie
-    for_each_owned(ex, Range{r0, m}, [&](int i) BATCHLAS_DEVICE_BODY {
-        const R v = abs1<D>(a(i, c));
-        if (v > best.v) {
-            best.v = v;
-            best.i = i;
-        }
-    });
-    maxloc_bfly(ex.sub(), best, lanes);
-    return maxloc_group(ex, best, vs, is, m).i;
-}
-
 // The pivot key of the tiny tiers: ORDERING field high (lowest wins), winner's LANE low. Every
 // ordering field must stay distinct in a partition. evidence: docs/perf/lu.md#the-pivot-key-encoding
 inline constexpr int kPivotKeyLaneBits = 8;
@@ -121,17 +41,17 @@ inline constexpr std::uint32_t pivot_key_lane(int key) {
 }
 
 // ---- level 1/2 steps of ?GETF2 ------------------------------------------------------------------
-// A(r0:m-1, c) /= d with ?GETF2's arms: one reciprocal and a multiply when 1/d is finite and
-// nonzero, else a division per element (the sfmin arm), the arm chosen OUTSIDE the loop (core
-// rscl selects per element). d != 0 is the caller's test.
+// A(r0:m-1, c) /= d with ?GETF2's arms (SafeRecip: one reciprocal and a multiply when 1/d is
+// finite and nonzero, else a division per element, the sfmin arm), the arm chosen OUTSIDE the
+// loop (core rscl selects per element). d != 0 is the caller's test.
 template <class Ex, class MA>
 BATCHLAS_DEVICE_INLINE void rscl_col(const Ex& ex, typename MA::value_type d, const MA& a, int r0, int c) {
-    using Ar = arith_t<arith::Fma, typename MA::value_type>;
-    const auto r = Ar::recip(d);
-    const bool use_mul = Ar::isfinite(r) && !Ar::is_zero(r);
+    using T = typename MA::value_type;
+    using Ar = arith_t<arith::Fma, T>;
+    const auto s = SafeRecip<T>::make(d);
     const Range rows{r0, a.rows()};
-    if (use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::mul(a(i, c), r); });
-    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::div(a(i, c), d); });
+    if (s.use_mul) for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::mul(a(i, c), s.r); });
+    else for_each_owned(ex, rows, [&](int i) BATCHLAS_DEVICE_BODY { a(i, c) = Ar::div(a(i, c), s.d); });
 }
 
 // A(k+1:, k+1:) -= A(k+1:, k) A(k, k+1:), flattened (docs/perf/lu.md#lu-negative-results), two
@@ -160,7 +80,7 @@ struct PivotWinner {
 
 // Piv over a Scope::Group executor: candidates are rows >= j (a pad item carries rowid -1), a NaN
 // magnitude maps to -1 or the lanes disagree on the winner, a non-candidate carries `m`; then
-// maxloc_group (B1). The leader writes ipiv and keeps info (global, 1-based, sticky).
+// argmax_allreduce (B1). The leader writes ipiv and keeps info (global, 1-based, sticky).
 // evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
 template <class Ex, class VS, class IS> struct PivotRowsGroup {
     const Ex& ex;
@@ -172,10 +92,9 @@ template <class Ex, class VS, class IS> struct PivotRowsGroup {
     std::int32_t& info;
     template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j);
-        MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), cand ? rowid : m};
-        maxloc_bfly(ex.sub(), a, lanes);
-        a = maxloc_group(ex, a, vs, is, m);
-        return {a.i >= m ? j : a.i, 0};  // >= m: unreachable, logical row j exists
+        const ArgMax<R> a = argmax_allreduce(ex, ArgMax<R>{cand ? rowid : m, (cand && (mag == mag)) ? mag : R(-1)}, alg::TieLowest{},
+                                             argmax_slots(vs, is), m, R(-1), lanes);
+        return {a.index >= m ? j : a.index, 0};  // >= m: unreachable, logical row j exists
     }
     BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
         if (ex.leader()) ipiv.set(j, w.row);
@@ -203,9 +122,9 @@ template <int N, class Px> struct PivotPartition {
     std::int32_t& linfo;
     template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
         const bool cand = (rowid >= j) && (rowid < n);
-        MaxLoc<R> a{(cand && (mag == mag)) ? mag : R(-1), pivot_key(cand ? rowid : (rowid + N), lane)};
-        maxloc_bfly_up(px, a);
-        return {pivot_key_order(a.i), static_cast<int>(pivot_key_lane(a.i))};
+        const ArgMax<R> a = argmax_allreduce(px, ArgMax<R>{pivot_key(cand ? rowid : (rowid + N), lane), (cand && (mag == mag)) ? mag : R(-1)},
+                                             alg::TieLowest{}, None{}, 0, R(-1));
+        return {pivot_key_order(a.index), static_cast<int>(pivot_key_lane(a.index))};
     }
     BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
         if (lane == j) my_piv = w.row;
@@ -278,7 +197,9 @@ BATCHLAS_DEVICE_INLINE std::int32_t getf2(const Ex& ex, const MA& a, int kmax, I
     const int m = a.rows();
     const int lanes = detail::team_size_of(ex);  // read once, as the hand kernel did
     for (int k = 0; k < kmax; ++k) {
-        int p = detail::iamax_col(ex, a, k, k, lanes, vs, is);
+        int p = iamax<alg::NanSkip>(ex, [&](int i) -> D { return a(i, k); }, Range{k, m}, alg::TieLowest{}, argmax_slots(vs, is), None{}, m,
+                                    lanes)
+                    .index;
         if (p >= m) p = k;  // unreachable: k < m, so column k always has a row
         if (ex.leader()) ipiv.set(k, p);
         if (p != k) swap(ex, a.row(k), a.row(p));
@@ -329,15 +250,12 @@ BATCHLAS_UNROLL_FULL
         if (rowid == w.row) rowid = j;  // ?SWAP as two labels
         else if (rowid == j) rowid = w.row;
         bc.publish(j, rA, rowid, w);
-        const T d = bc.pivot(j, rA, w);
-        const bool zero = Ar::is_zero(d);  // EXACT zero, no epsilon
-        piv.on_zero(zero, j);
-        const T rc = Ar::recip(d);
-        const bool use_mul = !zero && Ar::isfinite(rc) && !Ar::is_zero(rc);
+        const auto sr = SafeRecip<T>::make(bc.pivot(j, rA, w));  // zero: EXACT, no epsilon
+        piv.on_zero(sr.zero, j);
         const bool act = (rowid > j);
-        if (act) {
-            if (use_mul) rA[j] = Ar::mul(rA[j], rc);
-            else if (!zero) rA[j] = Ar::div(rA[j], d);  // ?GETF2's sfmin arm
+        if (act) {  // the arms written out: apply()'s value form adds a spill (cfloat n = 24)
+            if (sr.use_mul) rA[j] = Ar::mul(rA[j], sr.r);
+            else if (!sr.zero) rA[j] = Ar::div(rA[j], sr.d);  // ?GETF2's sfmin arm
         }
         // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled; unguarded by `zero`: a
         // zero pivot WAS the argmax, so every multiplier is 0 (?GER as a no-op).
