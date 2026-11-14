@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Family-private device LA ops of the syev CTA trio against host references:
-//   include/batchlas/device/lapack/syev.hh   (herm_load, dgmm, similarities, repack, the host
-//                                             drivers' flat 2-D glue, column-owner larf / org2l /
-//                                             orm2l)
-//   include/batchlas/device/lapack/sytrd.hh  (sytd2; detail Fit ops, lacpy_herm) and core
-//                                             larfg (the row-fragment form sytd2 calls)
+//   include/batchlas/device/lapack/syev.hh   (dgmm, similarities, repack, the host drivers' flat
+//                                             2-D glue, column-owner larf / org2l / orm2l) and
+//                                             core herm_view<alg::ThreeLoads> (its stage 0)
+//   include/batchlas/device/lapack/sytrd.hh  (sytd2; detail Fit ops) and core larfg (the
+//                                             row-fragment form sytd2 calls), lacpy<alg::RowMirror>
 //   include/batchlas/device/lapack/steqr.hh  (detail tridiag_split, reverse,
 //                                             tridiag_rot) and core scal / lanst / find_first
 //                                             (the LaneVec forms the CTA solver calls)
@@ -162,7 +162,7 @@ struct TrioElemAt {
     BATCHLAS_DEVICE_INLINE int col() const { return c; }
 };
 
-// herm_load from both stored triangles; TrioElemAt driving core mirror (uplo_mirror's guarded Upper,
+// herm_view<alg::ThreeLoads> (syev stage 0) from both stored triangles; TrioElemAt driving core mirror (uplo_mirror's guarded Upper,
 // syev_cta's Lower with Im(diag) dropped) and core laset (the fused kernel's Q identity on the
 // leading nn block). Pure data movement: every entry bit for bit, the ld padding included.
 TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
@@ -170,7 +170,7 @@ TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
     using R = real_of<T>;
     constexpr int WG = 128, n = 13, ld = n + 4, ldo = n + 2, nn = 9;
     const int per = n * ld, pero = n * ldo;
-    auto ha = batched<T>(per, 1, [&](T* h, int) {  // the diagonal keeps an imaginary part: herm_load drops it
+    auto ha = batched<T>(per, 1, [&](T* h, int) {  // the diagonal keeps an imaginary part: the view drops it
         for (int j = 0; j < n; ++j)
             for (int i = n; i < ld; ++i) h[i + j * ld] = nan_v<T>();
     });
@@ -192,8 +192,8 @@ TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
         for (int t = static_cast<int>(it.get_local_linear_id()); t < n * n; t += WG) {
             const int i = t % n, j = t / n;
             T hu, hl;
-            device::detail::herm_load(hu, A, true, i, j);
-            device::detail::herm_load<device::arith::Explicit>(hl, A, false, i, j);
+            hu = device::herm_view<device::alg::ThreeLoads, device::arith::Native>(A, Uplo::Upper)(i, j);
+            hl = device::herm_view<device::alg::ThreeLoads>(A, Uplo::Lower)(i, j);
             Hu(i, j) = hu;
             Hl(i, j) = hl;
             if (i > j) device::mirror<Uplo::Upper, true>(TrioElemAt{i, j}, M1);  // uplo_mirror: strictly upper sources only
@@ -228,7 +228,7 @@ TYPED_TEST(SyevCtaTrioKernelsTest, HermLoadAndElemAt) {
             }
         }
     }
-    EXPECT_EQ(bad_h, 0) << "herm_load";
+    EXPECT_EQ(bad_h, 0) << "herm_view<alg::ThreeLoads>";
     EXPECT_EQ(bad_m, 0) << "ElemAt + core mirror";
     EXPECT_EQ(bad_q, 0) << "ElemAt + core laset";
 }
@@ -721,9 +721,10 @@ double sytd2_residual(const std::vector<LD<T>>& a, const T* o, int ldo, const T*
 }
 
 // sytd2 on a tile in a typed local accessor at a non-zero offset, as sytrd_cta / the fused syev
-// kernel hold it: lacpy_herm from the stored triangle, sytd2, LAPACK's packing back out.
+// kernel hold it: lacpy<alg::RowMirror> from the stored triangle, sytd2, LAPACK's packing back out.
 template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int n) {
     using Local = sycl::local_accessor<T, 1>;
+    constexpr device::Part kPart = UL == Uplo::Upper ? device::Part::Upper : device::Part::Lower;
     constexpr int WG = 64, LDA = P + 3, per_wg = WG / P, slot = LDA * P + 2 * P;
     const int lda = n + 2, ldo = n + 1, per_a = lda * n;
     auto ha = batched<T>(per_a, 7 + 31 * int(UL) + P, [&](T* h, int) { poison_herm(h, n, lda, UL); });
@@ -742,7 +743,8 @@ template <class T, Uplo UL, int P, bool Lockstep> void sytd2_case(Dev& dev, int 
             const auto v = device::vec(lm, n, base + LDA * P), w = device::vec(lm, n, base + LDA * P + P);
             T* eb = e + std::ptrdiff_t(b) * n;
             T* tb = tu + std::ptrdiff_t(b) * n;
-            device::detail::lacpy_herm<UL, device::arith::Native>(device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile, true);
+            device::lacpy<kPart, Transpose::NoTrans, device::alg::RowMirror, device::alg::EdgeZeroPad, device::DiagFill::Real>(
+                device::Fit{ex}, device::mat(a + std::ptrdiff_t(b) * per_a, n, n, lda), tile);
             device::sync<device::Scope::Own>(ex);
             const T tl = device::sytd2<UL>(ex, tile, v, w, n, [&](int i, const T& beta, const T& t) {
                 if constexpr (UL == Uplo::Lower) {
@@ -856,11 +858,12 @@ TYPED_TEST(SyevCtaTrioKernelsTest, LarfgRowFrag) {
 }
 
 // Fit ops on the block B = tile(o:N, o:N) (m = N - o; item r owns row r of B, i.e. tile row o + r)
-// of a 32 x 32 tile (ld 35) loaded by lacpy_herm on Fit<SgpPartition<32>>:
+// of a 32 x 32 tile (ld 35) loaded by lacpy<alg::RowMirror> on Fit<SgpPartition<32>>:
 //   y := (B x) alpha (y NaN-poisoned first);  s := x^H y and y += -s x (core dotc, axpy on Fit);
 //   B -= x y^H + y x^H (her2_full_sub). Every entry outside the block must keep its bits.
 template <class T, Uplo UL> void fit_case(Dev& dev) {
     using L = LD<T>;
+    constexpr device::Part kPart = UL == Uplo::Upper ? device::Part::Upper : device::Part::Lower;
     using Local = sycl::local_accessor<T, 1>;
     constexpr int WG = 32, NT = 32, LDT = NT + 3, N = 24, o = 5, m = N - o, lda = N + 5;
     const T alpha = val<T>(901);
@@ -879,7 +882,8 @@ template <class T, Uplo UL> void fit_case(Dev& dev) {
         const device::Mat<T, device::Ext<NT>, device::Ext<NT>, device::Ext<LDT>, device::Mem::Local, device::Cyclic, Local> t1{lm, {}, {}, {}, base};
         const auto xl = device::vec(lm, m, base + LDT * NT), yl = device::vec(lm, m, base + LDT * NT + m);
         T* ob = out + std::ptrdiff_t(b) * per_out;
-        device::detail::lacpy_herm<UL, device::arith::Native>(fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1, true);
+        device::lacpy<kPart, Transpose::NoTrans, device::alg::RowMirror, device::alg::EdgeZeroPad, device::DiagFill::Real>(
+            fx, device::mat(a + std::ptrdiff_t(b) * lda * N, N, N, lda), t1);
         device::copy(fx, device::vec(x + std::ptrdiff_t(b) * m, m), xl);
         device::map(fx, yl, [](T) { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }, yl);
         device::sync<device::Scope::Own>(ex);

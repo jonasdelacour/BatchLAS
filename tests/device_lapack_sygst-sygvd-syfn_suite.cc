@@ -143,7 +143,7 @@ template <class NE> NE make_ne(int n) {
     else return NE{n};
 }
 
-// ---- trsv_packed / trmv_packed ---------------------------------------------------------------
+// ---- trsv / trmv alg::SplitDot<4> ---------------------------------------------------------------
 
 // One work-item per item: x := op(A)^-1 x or op(A) x, stored with inc 2. The Frag tail past n is
 // NaN after the load; A is n x n with ld padded to whole packs plus one, its unread triangle and
@@ -177,8 +177,8 @@ void check_tri(Dev& dev, int n, const char* what) {
 #pragma unroll
         for (int i = 0; i < N; ++i)
             if (i >= n) x[i] = device::Arith<T>::make(std::numeric_limits<real_of<T>>::quiet_NaN(), real_of<T>(0));
-        if constexpr (Solve) device::detail::trsv_packed<UP, TR>(th, a, x);
-        else device::detail::trmv_packed<UP, TR>(th, a, x);
+        if constexpr (Solve) device::trsv<UP, TR, Diag::NonUnit, device::alg::RealDiv, device::alg::SplitDot<4>, device::arith::Fma>(th, a, x, a.cols());
+        else device::trmv<UP, TR, Diag::NonUnit, device::arith::Fma, device::alg::SplitDot<4>>(th, a, x, a.cols());
         device::store(x, device::vec(Y + std::ptrdiff_t(b) * 2 * n, n, 2), n);
     });
     const auto got = dev.down(Y, hy.size());

@@ -38,12 +38,6 @@ template <class T> constexpr std::size_t sygs2_block_elems(int kb) {
 
 namespace detail {
 
-// One aligned 16-byte load of consecutive elements (one element when T is 16 bytes).
-template <class T> struct alignas(16) Pack16 {
-    T e[16 / sizeof(T) > 0 ? 16 / sizeof(T) : 1];
-};
-template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(Pack16<T>::e) / sizeof(T));
-
 BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
 
 // A group of `size` items over `tiles` m x m tiles, column by column: item lid owns row lid % m
@@ -55,79 +49,6 @@ template <class F> BATCHLAS_DEVICE_INLINE void for_each_tile_col(int lid, int si
         const int g = idx / m, c = idx - g * m;
         f(g, row, c);
     }
-}
-
-// x_i combines column i of A with the other entries of x (Below: p < i, else p > i); term p
-// goes to accumulator p mod W, summed as a tree. Solve: x_i = (x_i - sum) / a_ii, else
-// x_i = a_ii x_i + sum. In place, so i is visited before every entry whose sum still needs it.
-template <bool Below, bool Solve, bool Conj, int W, class T, int N, class L, class MA>
-BATCHLAS_DEVICE_INLINE void coldot_tri(const MA& a, Frag<T, N, L>& x) {
-    static_assert(W > 0 && (W & (W - 1)) == 0, "sygst trsv_packed/trmv_packed: W is a power of two");
-    using A = Arith<T>;
-    using Ar = arith_t<arith::Fma, T>;
-    constexpr int V = pack16_elems<T>;
-    constexpr int K = static_extent_v<std::remove_cv_t<decltype(a.n)>>;  // -1: a run-time extent
-    constexpr int Trip = K > 0 ? K : N;
-    static_assert(Trip <= N, "sygst trsv_packed/trmv_packed: the extent exceeds the fragment");
-    constexpr bool ascending = Below == Solve;
-    const int n = a.cols();
-    auto step = [&](T& acc, const T& aij, const T& xj) BATCHLAS_DEVICE_BODY {
-        if constexpr (Solve) Ar::msub(acc, Conj ? A::conj(aij) : aij, xj);  // acc - op(a) x
-        else if constexpr (Conj) Ar::mac_conj(acc, aij, xj);
-        else Ar::mac(acc, aij, xj);
-    };
-    BATCHLAS_UNROLL_FULL
-    for (int s = 0; s < Trip; ++s) {
-        const int i = ascending ? s : Trip - 1 - s;
-        if (i < n) {
-            T acc[W];
-            BATCHLAS_UNROLL_FULL
-            for (int k = 0; k < W; ++k) acc[k] = A::zero();
-            const T* const line = &a(0, i);  // column i of A
-            if constexpr (Below) {
-                BATCHLAS_UNROLL_FULL
-                for (int p0 = 0; p0 < i; p0 += V) {
-                    const Pack16<T> pk = *reinterpret_cast<const Pack16<T>*>(line + p0);
-                    BATCHLAS_UNROLL_FULL
-                    for (int u = 0; u < V; ++u)
-                        if (p0 + u < i) step(acc[(p0 + u) % W], pk.e[u], x[p0 + u]);
-                }
-            } else {
-                BATCHLAS_UNROLL_FULL
-                for (int p0 = (i + 1) / V * V; p0 < Trip; p0 += V) {
-                    if (p0 >= n) continue;
-                    const Pack16<T> pk = *reinterpret_cast<const Pack16<T>*>(line + p0);
-                    BATCHLAS_UNROLL_FULL
-                    for (int u = 0; u < V; ++u)
-                        if (p0 + u > i && p0 + u < n) step(acc[(p0 + u) % W], pk.e[u], x[p0 + u]);
-                }
-            }
-            BATCHLAS_UNROLL_FULL
-            for (int w = W / 2; w >= 1; w /= 2) {
-                BATCHLAS_UNROLL_FULL
-                for (int k = 0; k < w; ++k) acc[k] = A::add(acc[2 * k], acc[2 * k + 1]);
-            }
-            const auto d = A::re(line[i]);
-            if constexpr (Solve) x[i] = div_real(A::add(x[i], acc[0]), d);
-            else x[i] = A::add(scale_real(d, x[i]), acc[0]);
-        }
-    }
-}
-
-// x := op(A)^-1 x in place, op = Trans or ConjTrans, A n x n triangular (UL stored) with a real
-// diagonal; n is A's extent (compile-time for Ext<K>). Every column start of A is 16-byte
-// aligned. x is the caller's Frag: a by-value copy hoists every load of A (REG 37 -> 70).
-template <Uplo UL, Transpose TR, int W = 4, class T, int N, class L, class MA>
-BATCHLAS_DEVICE_INLINE void trsv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
-    static_assert(TR != Transpose::NoTrans, "sygst trsv_packed: the column form is op(A) = A^T or A^H");
-    coldot_tri<UL == Uplo::Upper, true, TR == Transpose::ConjTrans, W>(a, x);
-}
-
-// x := op(A) x in place, op = Trans or ConjTrans, A as for trsv_packed.
-template <Uplo UL, Transpose TR, int W = 4, class T, int N, class L, class MA>
-BATCHLAS_DEVICE_INLINE void trmv_packed(const Thread&, const MA& a, Frag<T, N, L>& x) {
-    static_assert(TR != Transpose::NoTrans, "sygst trmv_packed: the column form is op(A) = A^T or A^H");
-    coldot_tri<UL == Uplo::Upper, false, TR == Transpose::ConjTrans, W>(a, x);
 }
 
 // Every element of the 16-byte-aligned local packs is aligned to min(16, sizeof(D)): said through
@@ -153,8 +74,8 @@ template <bool Inverse, int KB, int NF, class D>
 static inline Frag<D, NF> apply(Frag<D, NF> c, const D* f, int ldf, int kb) {
     const KbExt<KB> kn = kb_ext<KB>(kb);
     const Mat<const D, KbExt<KB>, KbExt<KB>, Dyn, Mem::Local> fs{f, kn, kn, Dyn{ldf}};
-    if constexpr (Inverse) trsv_packed<Uplo::Upper, Transpose::Trans>(Thread{}, fs, c);
-    else trmv_packed<Uplo::Lower, Transpose::ConjTrans>(Thread{}, fs, c);
+    if constexpr (Inverse) trsv<Uplo::Upper, Transpose::Trans, Diag::NonUnit, alg::RealDiv, alg::SplitDot<4>, arith::Fma>(Thread{}, fs, c, fs.cols());
+    else trmv<Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, arith::Fma, alg::SplitDot<4>>(Thread{}, fs, c, fs.cols());
     return c;
 }
 

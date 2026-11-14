@@ -32,19 +32,6 @@ template <class Ex> BATCHLAS_DEVICE_INLINE void chunk_barrier(const Ex& ex) {
     else group_barrier(ex.part);  // ADL: SubGroupPartition
 }
 
-// v := element (i, j) of the Hermitian matrix whose `upper` (else lower) triangle A stores,
-// Im(diag) dropped; assigned per branch so a caller's guard folds into one CFG.
-template <class Ops = arith::Native, class T, class M> BATCHLAS_DEVICE_INLINE void herm_load(T& v, const M& A, bool upper, int i, int j) {
-    using AR = arith_t<Ops, T>;
-    if (i == j) {
-        v = AR::make(AR::re(A(i, j)), real_t<T>(0));
-    } else if (upper) {
-        v = (i < j) ? A(i, j) : AR::conj(A(j, i));
-    } else {
-        v = (i > j) ? A(i, j) : AR::conj(A(j, i));
-    }
-}
-
 // Hermitian tridiagonal (d, e) -> real symmetric (dr, er = |e|) by T' = S^H T S:
 // S(0) = 1, S(i+1) = S(i) * f(e_i) / |e_i| (S(i) when e_i == 0), f = identity when e is the
 // subdiagonal (Uplo::Lower) and conj when it is the superdiagonal. want_s == false writes
@@ -215,9 +202,10 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
     };
 
     // ---- Stage 0: load the Hermitian completion of the stored triangle. ----
+    const auto Ah = herm_view<alg::ThreeLoads, Ops>(A_in, is_upper ? Uplo::Upper : Uplo::Lower);
     for (std::int32_t c = 0; c < kP; ++c) {
         T v = T(0);
-        if (live && lane < nn && c < nn) herm_load<Ops>(v, A_in, is_upper, lane, c);
+        if (live && lane < nn && c < nn) v = Ah(lane, c);
         A_local[base_a + lane + c * LDA] = v;
     }
     group_barrier(part);

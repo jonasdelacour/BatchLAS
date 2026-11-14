@@ -245,6 +245,8 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
         ex.barrier(device::Mem::Global);
         const device::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
         if (lane == 0) fl[item] = sDiv[0];
+        const auto Lp = device::packed<Uplo::Lower, device::PackOrder::ByRows>(static_cast<const D*>(sLc), N);
+        using device::alg::DiagApply, device::alg::DotThenSub, device::alg::SerialRows, device::arith::Fma;
         device::Frag<D, N> x;
         if constexpr (Staged) {
             const device::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
@@ -254,7 +256,8 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
                 ex.barrier(device::Mem::Global);
                 device::lacpy_tile_in<TR, TR + 1>(ex, Bc, k * TR, 0, sTile);
                 ex.barrier(device::Mem::Global);
-                device::trsv_lower_rows<N, TR, Ar>(x, k * TR, sLc, dg, [&](int s) {
+                device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<TR>, Fma, DotThenSub>(
+                    device::Thread{}, Lp, dg, x, N, k * TR, [&](int s) {
                     D r = Ar::zero();
                     if (live && s < n) r = Ar::mul(alpha, my[s - k * TR]);
                     return r;
@@ -269,7 +272,8 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
             }
         } else {
             const auto bu = device::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(lane);
-            device::trsv_lower_rows<N, N, Ar>(x, 0, sLc, dg, [&](int s) {
+            device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<N>, Fma, DotThenSub>(
+                device::Thread{}, Lp, dg, x, N, 0, [&](int s) {
                 D r = Ar::zero();
                 if (live && s < n) r = Ar::mul(alpha, bu(s));
                 return r;
@@ -321,14 +325,16 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
         device::load_row(nL, device::MapCols{L, 0, neg}, r, okr ? r : 0);
         D dd = Ar::one();
         if (okr && !unit) dd = L.diag(r);
-        const auto dg = device::guarded_recip<Ar>(ex, dd);
+        const auto dg = device::guarded_recip<Ar>(ex, dd, unit);
         if (r == 0 && chunk == 0) fl[item] = dg.divide ? 1 : 0;
         const int c0 = chunk * QC;
         const int live_c = okr ? q - c0 : 0;
         const auto scale = [=](const D& v) { return Ar::mul(alpha, v); };
         device::Frag<D, QC> x;
         device::load_row(x, device::MapCols{Bc, c0, scale}, r, live_c);
-        device::trsm_lower_rowfrag<Unroll, Ar>(ex, nL, dg, n, unit, x);
+        using StepAlg = std::conditional_t<Unroll == 1, device::alg::LanePerRowRolled, device::alg::LanePerRow>;
+        device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, device::alg::DiagApply, StepAlg, device::arith::Fma, device::alg::Axpy>(
+            ex, nL, dg, x, n);
         device::store_row(x, device::ColsFrom{Bc, c0}, r, live_c);
     });
     if (flags) *flags = dev.down(fl, kBatch);

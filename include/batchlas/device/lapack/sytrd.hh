@@ -6,7 +6,7 @@
 // global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
 // replaced kernels' expression shapes. detail holds the CTA body (sytrd_cta_run, the host
 // sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
-// and the forms core does not reproduce bit for bit yet: Fit gemv / her2, lacpy_herm.
+// and the forms core does not reproduce bit for bit yet: Fit gemv / her2.
 
 #include <algorithm>
 #include <cstddef>
@@ -58,33 +58,6 @@ BATCHLAS_DEVICE_INLINE void her2_full_sub(const Fit<Ex>& ex, const Published<X>&
             const T xc = x(c), yc = y(c);
             a(r, c) = Ar::sub(static_cast<T>(a(r, c)), her2_term<Ops>(xr, yc, yr, xc));
         }
-    }
-}
-
-// tile := the Hermitian matrix whose UL triangle is a (n x n, n = a.rows()), Im(diag) dropped,
-// zero past n up to the tile's extent. Item r reads row r of the triangle (coalesced) and writes
-// it and its conjugate mirror, so a barrier must precede reads of other rows. active == false
-// (a masked-off batch item) zero-fills the tile's row and reads nothing.
-template <Uplo UL, class Ops, class Ex, class MA, class MT>
-BATCHLAS_DEVICE_INLINE void lacpy_herm(const Fit<Ex>& ex, const MA& a, const MT& tile, bool active) {
-    using T = typename MT::value_type;
-    using Ar = arith_t<Ops, T>;
-    const int n = a.rows(), r = ex.lid();
-    if (r < 0 || r >= tile.rows()) return;
-    if (active && r < n) {
-        for (int c = 0; c < n; ++c) {
-            if (UL == Uplo::Upper ? r > c : r < c) continue;
-            T v = a(r, c);
-            if (r == c) {
-                if constexpr (Ar::is_complex) v = Ar::make(Ar::re(v), real_t<T>(0));
-            } else {
-                tile(c, r) = Ar::conj(v);
-            }
-            tile(r, c) = v;
-        }
-        for (int c = n; c < tile.cols(); ++c) tile(r, c) = Ar::zero();
-    } else {
-        for (int c = 0; c < tile.cols(); ++c) tile(r, c) = Ar::zero();
     }
 }
 
@@ -214,7 +187,7 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
     const Tile tile{A_local, {}, {}, {}, base_a};
 
     // Item r loads row r of the named triangle (coalesced); Im(diag) dropped; zero past n.
-    lacpy_herm<UL, arith::Native>(Fit{ex}, A, tile, live);
+    lacpy<UL == Uplo::Upper ? Part::Upper : Part::Lower, Transpose::NoTrans, alg::RowMirror, alg::EdgeZeroPad, DiagFill::Real>(Fit{ex}, A, tile, live);
     group_barrier(part);
 
     if constexpr (UL == Uplo::Upper) {
