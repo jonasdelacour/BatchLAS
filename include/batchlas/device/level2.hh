@@ -614,19 +614,23 @@ BATCHLAS_DEVICE_INLINE void trsv_run(const Ex& ex, const MA& a, const DV& d, X& 
     constexpr bool lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);  // forward substitution
     constexpr bool step_obj = std::is_same_v<Div, alg::DiagApply>;
     static_assert(!step_obj || (DG == Diag::NonUnit && !is_none_v<DV>), "trsv: alg::DiagApply takes the step object d (Diag::NonUnit)");
-    auto diag = [&](auto i) -> T {
+    // The step lambdas are always_inline, as the expression text they replace: plain lambdas cost
+    // the transposed fused getrs registers. evidence: docs/perf/lu.md#the-fused-narrow-rhs-getrs
+    auto diag = [&](auto i) BATCHLAS_DEVICE_BODY -> T {
         if constexpr (DG == Diag::Unit) return Ar::one();
         else if constexpr (!is_none_v<DV>) return static_cast<T>(d(i));
         else return detail::op_at<TR, T>(a, i, i);
     };
     // x_i after its updates: the diagonal step.
-    auto finish = [&](T xi, auto i) -> T {
+    auto finish = [&](T xi, auto i) BATCHLAS_DEVICE_BODY -> T {
         if constexpr (step_obj) return trsv_step<Ar>(d, i, xi);
         else if constexpr (DG == Diag::NonUnit && !is_none_v<DV> && std::is_same_v<Div, alg::RealDiv>)
             return detail::trsv_diag_apply<DG, Div, Ar>(xi, d(i));
         else return detail::trsv_diag_apply<DG, Div, Ar>(xi, diag(i));
     };
-    auto upd = [&](T& xi, int i, auto j, const T& xj) { detail::trsv_update<Upd, Ar>(xi, detail::op_at<TR, T>(a, i, j), xj); };
+    auto upd = [&](T& xi, int i, auto j, const T& xj) BATCHLAS_DEVICE_BODY {
+        detail::trsv_update<Upd, Ar>(xi, detail::op_at<TR, T>(a, i, j), xj);
+    };
     if constexpr (is_split_dot_v<Alg>) {
         static_assert(is_thread_v<Ex> && TR != Transpose::NoTrans && DG == Diag::NonUnit && std::is_same_v<Div, alg::RealDiv> &&
                           is_none_v<DV>,

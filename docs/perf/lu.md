@@ -138,6 +138,8 @@ The row interchange is the family's largest lever: a timing-only break priced it
 
 `getrs_fused.cc`: one work-group per matrix, one launch for permutation and both triangular solves. Against the composition 8.26x at \f$\mathit{nrhs} = 1\f$ down to 2.67x at 8, worst 1.419 over 107 cells. Shipped choices: resident diagonal block (0.65 vs 1.01 ms streaming), `nb = 16` below \f$n = 1024\f$ and 32 above (\f$n = 2048\f$: 1.55 / 1.38 / **1.28** ms at nb 8 / 16 / 32), work-group \f$\sim n/2\f$ clamped to \f$[64, 1024]\f$ and capped per (type, body, width) by `resident::sm89_max_work_group`.
 
+The block solve is core `trsv<alg::LanePerRow>`, whose step lambdas (`diag`, `finish`, `upd` in `trsv_run`) are `BATCHLAS_DEVICE_BODY`. As plain lambdas the transposed body compiled worse: `GetrsFusedTKernel<complex<float>, 1>` took 42 registers instead of 40, across the 40-register occupancy step. Always-inline against plain, 15 reps on the 4090 (2026-11-15), transposed \f$\mathit{nrhs} = 1\f$: `complex<float>` 0.948-0.972 at \f$n = 16 \dots 64\f$ (1.00 at 128 and 512), double 0.958 at \f$n = 64\f$, float 0.994-0.998; \f$\mathit{nrhs} = 2 \dots 8\f$ 0.996-1.001 for every type. Only the 16 `GetrsFusedTKernel` instantiations change SASS; every other kernel in the 16 libraries is byte-identical.
+
 ## LU: L2 batch chunking {#lu-l2-batch-chunking}
 
 The `blocked` driver hands the trailing matrix between its per-panel kernels through L2; once `batch x m n x sizeof(T)` exceeds L2 those hand-offs go to DRAM. `getrf_blocked_chunk` (`getrf_blocked.cc`) therefore factors the batch in parts, each a complete factorisation with pivot (`b0 * min(m, n)`) and `info` offsets.
