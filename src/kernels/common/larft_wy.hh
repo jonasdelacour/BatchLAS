@@ -83,9 +83,9 @@ sycl::event larft_forward_columnwise_batched(Queue& q,
     return pick(std::integral_constant<int, 256>{});
 }
 
+
 // ---------------------------------------------------------------------------
 // PACK_V -- materialise the unit-lower V panel from geqrf's packed output.
-//
 // V(r, c) = 1 for r == c, A(i0 + r, i0 + c) for r > c, 0 for r < c. That IS the
 // whole of what separates orgqr from ormqr-on-an-identity, and it is why the
 // trailing update below can be three plain GEMMs rather than a trmm ladder over
