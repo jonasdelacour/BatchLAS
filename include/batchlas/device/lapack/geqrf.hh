@@ -28,39 +28,6 @@ template <class T> BATCHLAS_DEVICE_INLINE T copy_by_parts(const T& a) {
     if constexpr (A::is_complex) return A::make(A::re(a), A::im(a));
     else return a;
 }
-// |a / s|^2, dividing first; s > 0.
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs2_scaled(T a, real_t<T> s) {
-    using A = Arith<T>;
-    using R = real_t<T>;
-    if constexpr (A::is_complex) {
-        const R x = A::re(a) / s;
-        const R y = A::im(a) / s;
-        return sycl::fma(x, x, y * y);
-    } else {
-        const R x = a / s;
-        return x * x;
-    }
-}
-
-// A(j:m, j+1:n) := (I - tau v v^H) A(j:m, j+1:n), v = [1; A(j+1:m, j)] in absolute rows and
-// columns. Team t owns columns j+1+t mod nteams; lane 0 seeds w with the head row, the lanes
-// stride rows j+1.. by `lanes` (the sub-group's run-time range, also the butterfly's width).
-// Sub-group shuffles only: no work-group barrier inside.
-template <class Ex, class T, class MA>
-BATCHLAS_DEVICE_INLINE void larf_left_head(const Ex& ex, int lanes, T tau, const MA& a, int j, int m, int n) {
-    using A = Arith<T>;
-    using F = FmaArith<T>;
-    const int lane = ex.lane();
-    const int nt = detail::nteams_of(ex);
-    for (int c = j + 1 + ex.team(); c < n; c += nt) {
-        T acc = (lane == 0) ? static_cast<T>(a(j, c)) : A::zero();
-        for (int r = j + 1 + lane; r < m; r += lanes) acc = A::add(acc, F::mul(A::conj(static_cast<T>(a(r, j))), static_cast<T>(a(r, c))));
-        const T w = butterfly(ex.sub(), acc, [](const T& p, const T& q) { return A::add(p, q); }, 1, lanes);
-        const T f = F::mul(tau, w);
-        if (lane == 0) a(j, c) = A::sub(static_cast<T>(a(j, c)), f);
-        for (int r = j + 1 + lane; r < m; r += lanes) a(r, c) = A::sub(static_cast<T>(a(r, c)), F::mul(f, static_cast<T>(a(r, j))));
-    }
-}
 
 // ---- slots: s[off + ...] from one base, never a moved pointer (the index form decides how
 // ptxas unrolls the run-time folds: +112 LD, +4 REG otherwise) --------------------------------
@@ -137,56 +104,46 @@ template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y
 
 }  // namespace detail
 
-// xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and butterflies: no
-// static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Scalars: larfg_scalars<
-// alg::LarfgLapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), the
-// apply uses conj(tau) (zgeqr2's); tau(j) per reflector, the first tau.size() <= min(m, n)
-// columns are reduced. COLLECTIVE.
+// xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and reductions: no
+// static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Core larfg<
+// alg::LarfgLapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), then
+// core larf<Left, arith::Fma> with conj(tau) (zgeqr2's); tau(j) per reflector, the first
+// tau.size() <= min(m, n) columns are reduced. COLLECTIVE.
 // ex, a and tau by value, and plain inline: the body is simplified before it is inlined, and
 // through references it keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
 template <class Ex, class MA, class VT>
 inline void geqr2(const Ex ex, const MA a, const VT tau) {
     using D = typename MA::value_type;
-    using R = real_t<D>;
-    using F = FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
-    constexpr bool sub = Ex::sub_whole;
-    const int lanes = ex.team_size();
+    constexpr Scope S = Ex::sub_whole ? Scope::Sub : Scope::Group;
     const int m = a.rows(), n = a.cols();
     const int kmax = tau.size();
+    // zgeqr2's A(j, j) = 1 around the apply: v is read from memory, not a per-row select of a
+    // unit_head. The leader keeps beta and stores it once every item is past the apply.
+    D beta{};
+    bool pending = false;
 
     for (int j = 0; j < kmax; ++j) {
         ex.barrier(Mem::Global);  // B1 -- the previous reflector's column writes are visible.
-        const D alpha = detail::copy_by_parts(a(j, j));
-        R smax = abs_inf(alpha);
-        for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { smax = sycl::fmax(smax, abs_inf(a(r, j))); });
-        // Scope::Sub: the run-time xor butterfly; Scope::Group: portable::reduce_over_group.
-        if constexpr (sub) smax = butterfly(ex.sub(), smax, reduce_op::FMax{}, 1, lanes);
-        else smax = ex.group_reduce(smax, sycl::maximum<R>());
-        R ssq = R(0);  // the collective sits outside the `smax > 0` test: all items reach it
-        if (smax > R(0)) {
-            for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { ssq += detail::abs2_scaled(a(r, j), smax); });
-        }
-        if constexpr (sub) ssq = butterfly(ex.sub(), ssq, sycl::plus<R>(), 1, lanes);
-        else ssq = ex.group_reduce(ssq, sycl::plus<R>());
-        const LarfgScalars<D> h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});
+        if (pending) a(j - 1, j - 1) = beta;  // leader only; column j - 1 is not read again
+        // Each item scales exactly the rows of v it read: no barrier inside larfg.
+        D alpha = detail::copy_by_parts(a(j, j));
+        const LarfgScalars<D> h = larfg<alg::LarfgLapack, S>(ex, alpha, a.col(j).tail(j + 1));
 
         ex.barrier(Mem::Global);  // B2 -- every item has read A(j,j) as `alpha`; item 0 overwrites it.
-        if (!h.identity) {
-            if (ex.leader()) a(j, j) = h.beta;
-            // No barrier needed here: each item writes exactly the rows it read.
-            if (h.use_mul) {
-                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { a(r, j) = F::mul(a(r, j), h.scale); });
-            } else {
-                for_each_owned(ex, Range{j + 1, m}, [&](int r) BATCHLAS_DEVICE_BODY { a(r, j) = F::div(a(r, j), h.scale); });
-            }
+        if (ex.leader()) {
+            if (!h.identity) a(j, j) = Arith<D>::one();
+            tau(j) = h.tau;
+            beta = alpha;
+            pending = !h.identity;
         }
-        if (ex.leader()) tau(j) = h.tau;
-        ex.barrier(Mem::Global);  // B3 -- beta and v are published to the teams about to read them.
+        ex.barrier(Mem::Global);  // B3 -- the unit head and v are published to the teams about to read them.
 
         // Uniform over the barriers' scope (two collectives there): cannot desync B1/B2/B3.
         if (h.identity) continue;
-        detail::larf_left_head(ex, lanes, Arith<D>::conj(h.tau), a, j, m, n);
+        larf<Side::Left, arith::Fma>(ex, Arith<D>::conj(h.tau), assume_published(a.col(j).tail(j)), a.sub(j, j + 1, m - j, n - j - 1));
     }
+    if (kmax > 0) ex.barrier(Mem::Global);  // every item is past the last apply
+    if (pending) a(kmax - 1, kmax - 1) = beta;
 }
 
 namespace detail {

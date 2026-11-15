@@ -357,6 +357,22 @@ BATCHLAS_DEVICE_INLINE void lasr_rows(const Ex& ex, const Rots& rots, const MA& 
 }
 
 // ---- Householder -------------------------------------------------------------------------------
+namespace detail {
+// |a / s|^2, dividing first; s > 0.
+template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs2_scaled(T a, real_t<T> s) {
+    using A = Arith<T>;
+    using R = real_t<T>;
+    if constexpr (A::is_complex) {
+        const R x = A::re(a) / s;
+        const R y = A::im(a) / s;
+        return sycl::fma(x, x, y * y);
+    } else {
+        const R x = a / s;
+        return x * x;
+    }
+}
+}  // namespace detail
+
 // xLARFG on (alpha, x) distributed Cyclic over ex: alpha := beta, x := v(1:), returns the
 // scalars (tau, identity, ...). alpha must be uniform. alg::LarfgLapack: every item seeds its max
 // with alpha, then two reductions (max, scaled sum of squares: geqrf's two-pass norm) and the
@@ -378,11 +394,7 @@ BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg(const Ex& ex, T& alpha, const X& x)
         smax = detail::scope_reduce<S>(ex, smax, sycl::maximum<R>());
         R ssq = R(0);  // the reduction stays outside the test: every item reaches it
         if (smax > R(0)) {
-            for_each_owned(ex, x.size(), [&](int i) {
-                const T v = x(i);
-                const R a = A::re(v) / smax, b = A::im(v) / smax;
-                ssq = ssq + sycl::fma(a, a, b * b);
-            });
+            for_each_owned(ex, x.size(), [&](int i) { ssq += detail::abs2_scaled(static_cast<T>(x(i)), smax); });
         }
         ssq = detail::scope_reduce<S>(ex, ssq);
         h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});

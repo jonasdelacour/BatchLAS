@@ -262,7 +262,7 @@ TYPED_TEST(DeviceLapackGeqrfTest, ButterflyOrdersAreBitExact) {
     EXPECT_EQ(period_bitdiff(got, 32 * K), 0);
 }
 
-// ---- larf_left_head ------------------------------------------------------------------------
+// ---- geqr2's apply: core larf<Left, arith::Fma> on a unit_head column -----------------------
 // A (m x nc, ld m + 5) := (I - tau v v^H) A on rows j.., columns j+1.., v = [1; A(j+1:, j)],
 // j = 2. A(0:j, j) and the head A(j, j) hold finite poison: never read as v. Columns 0..j and
 // rows above j keep their bits.
@@ -275,7 +275,8 @@ template <class T, int WG, device::Scope S> void larf_case(Dev& dev, const char*
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         T* p = d + std::ptrdiff_t(it.get_group_linear_id()) * per;
         const device::RtGroup<S> ex{it};
-        device::detail::larf_left_head(ex, ex.team_size(), p[ld * nc], device::mat_wide(p, m, nc, ld), j, m, nc);
+        const auto A = device::mat_wide(p, m, nc, ld);
+        device::larf<Side::Left, device::arith::Fma>(ex, p[ld * nc], device::unit_head(A.col(j).tail(j), 0), A.sub(j, j + 1, m - j, nc - j - 1));
     });
     const auto got = dev.down(d, h.size());
     EXPECT_EQ(period_bitdiff(got, per), 0) << what;
@@ -306,7 +307,7 @@ template <class T, int WG, device::Scope S> void larf_case(Dev& dev, const char*
     EXPECT_VERIFY(T, Check::blas, m, worst) << what;
 }
 
-TYPED_TEST(DeviceLapackGeqrfTest, LarfLeftHead) {
+TYPED_TEST(DeviceLapackGeqrfTest, LarfLeftUnitHead) {
     using T = TypeParam;
     larf_case<T, 96, device::Scope::Group>(this->dev, "RtGroup<Group>@96");
     larf_case<T, 1024, device::Scope::Group>(this->dev, "RtGroup<Group>@1024");

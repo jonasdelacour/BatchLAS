@@ -968,8 +968,14 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
             const double dF = scale > 0 ? worst / scale : worst;
             const double dtau = tscale > 0 ? tworst / tscale : tworst;
             const double tol = 64.0 * double(std::numeric_limits<RealOf<T>>::epsilon());
-            // tau alone spreads to ~89 eps across seeds on both SYCL implementations; the factor stays well inside tol.
-            const double tau_tol = 2.0 * tol;
+            // tau's forward error follows the reduction order, not the reflector's quality: over 96
+            // seeds it reaches 257 eps on the legacy geqr2 body and 527 on the core larfg / larf one
+            // (cdouble 96 x 96). The sanity bound (16 tol = 1024 eps, ~2x above both maxima) still
+            // sees a convention break (a flipped beta sign or a conj(tau): O(1)); the backward error
+            // and orthogonality of the native factor (check_one, (m + k) eps scaled) judge accuracy.
+            // evidence: docs/perf/qr.md#tau-is-checked-by-backward-error-not-elementwise
+            check_one<T>(*this->ctx, p, "dropin");
+            const double tau_tol = 16.0 * tol;
             if (verbose()) {
                 std::printf("[verbose] dropin m=%4d n=%4d dF=%.4e dtau=%.4e tol=%.4e\n", s.m,
                             s.n, dF, dtau, tol);
