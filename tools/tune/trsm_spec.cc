@@ -157,6 +157,13 @@ public:
             "include/batchlas/device/detail/kernel_attrs.hh",
             "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             "src/ops/trsm/kernels/trsm_native.cc",
             "src/ops/trsm/trsm_native.hh",
             // family: sg_left

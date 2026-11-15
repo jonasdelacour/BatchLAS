@@ -92,6 +92,13 @@ public:
             "include/batchlas/device/detail/sscp_target.hh",
             "src/sycl/device_scalar.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // cta is sytrf_kernels.cc's fused launch with sytrs cta's solve; compose's sytrf and sytrs live there too
             // common
             "src/ops/sytrf/kernels/sytrf_kernels.cc",

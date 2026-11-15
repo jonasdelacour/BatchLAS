@@ -104,6 +104,13 @@ public:
             "include/batchlas/device/detail/kernel_attrs.hh",
             "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: gram
             "src/ops/syrk/kernels/syrk_gram_tiles.hh",
             // family: triangular

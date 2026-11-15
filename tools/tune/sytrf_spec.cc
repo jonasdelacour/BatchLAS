@@ -99,6 +99,13 @@ public:
             "include/batchlas/device/detail/sscp_target.hh",
             "src/sycl/device_scalar.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: vendor
             "src/backends/cusolver_sytrf.cc",
             // every native family is one TU and one device algorithm, so all of it is common

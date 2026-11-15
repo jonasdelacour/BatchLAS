@@ -107,6 +107,13 @@ public:
             "src/ops/getri/getri_native.hh",
             "src/ops/getri/choice.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
