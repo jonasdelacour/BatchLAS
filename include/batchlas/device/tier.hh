@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA tiers (v22 design C.4): how a LAPACK-level op runs inside a kernel, chosen at COMPILE
+// Device LA tiers: how a LAPACK-level op runs inside a kernel, chosen at COMPILE
 // time so one kernel never pays the registers of two paths (a run-time `if (n <= 32)` between
 // two tiers compiles both and the kernel carries the max REG: the old design's failure).
 //   tier::Reg<N, Exact>      the matrix in registers of a Partition / SubGroup; n <= N <= 32

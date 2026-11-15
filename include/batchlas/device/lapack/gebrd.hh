@@ -171,7 +171,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
 }
 }  // namespace detail
 
-// ---- the public op (v22 design C.4-C.7): device::gebrd<Tier> ---------------------------------
+// ---- the public op: device::gebrd<Tier> ------------------------------------------------------
 namespace routine {
 struct gebrd {
     static constexpr const char* name = "gebrd";

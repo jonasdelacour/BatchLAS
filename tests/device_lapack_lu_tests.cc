@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // device_lapack_lu_tests: the Blocked tier of the public device LU family (lapack/getrf.hh, getrs.hh,
-// gesv.hh, getri.hh, inv.hh; v22 B2) called from a user-style kernel, one matrix per work-group
+// gesv.hh, getri.hh, inv.hh) called from a user-style kernel, one matrix per work-group
 // of tier_info::wg_size items, against a long-double ?GETF2 oracle and the host blocked routes
 // (pinned and reached) with the op's tolerance and info parity.
 // Guards (agent-guide section 8): orders straddling NB = 32 (31|32|33, 64|65, 96|97) and the last

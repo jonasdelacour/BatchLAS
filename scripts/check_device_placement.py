@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Placement guard for the public device LA layer (v22 design A.0).
+"""Placement guard for the public device LA layer (docs/design/device-la.md#device-la-the-rules).
 
     scripts/check_device_placement.py [--root DIR] [--allowlist FILE] [--write-allowlist] [--self-test]
                                        [--layout]
@@ -46,7 +46,7 @@ PUBLIC_DEVICE_FILES = ("include/batchlas/device.hh", "include/batchlas/blas/devi
 LAPACK_DIR = "include/batchlas/device/lapack/"
 FAMILY_HEADER = re.compile(r"^src/.*(?:_v2|/dla_v2_\w+)\.hh$")
 
-# Routines a lapack/<header>.hh carries besides its own name (v22 design C.1).
+# Routines a lapack/<header>.hh carries besides its own name.
 ROUTINES = {"potri": ("potri", "trtri", "lauum"), "jacobi": ("jacobi", "syevj", "gesvj"),
             "sytrd": ("sytrd", "latrd", "sytd2"), "gebrd": ("gebrd", "labrd", "gebd2"),
             "potrf": ("potrf", "potf2"), "getrf": ("getrf", "getf2"), "geqrf": ("geqrf", "geqr2"),
@@ -54,7 +54,7 @@ ROUTINES = {"potri": ("potri", "trtri", "lauum"), "jacobi": ("jacobi", "syevj", 
             "orgtr": ("orgtr", "org2l"), "ormtr": ("ormtr", "orm2l"), "stebz": ("stebz", "laebz"),
             "syev": ("syev", "org2l", "orm2l"),  # the Cta tier's column-owner xORG2L / xORM2L
             "stedc": ("stedc", "laed4"), "sygst": ("sygst", "sygs2")}
-# The LAPACK routines of v22 design C.1 and A.3 (core auxiliaries such as lartg, larfg, lascl are not).
+# The LAPACK routine names (core auxiliaries such as lartg, larfg, lascl are not).
 LAPACK_NAMES = frozenset({
     "potrf", "potf2", "potrs", "posv", "potri", "trtri", "lauum", "getrf", "getf2", "getrs", "gesv", "getri",
     "geqrf", "geqr2", "orgqr", "ormqr", "sytrf", "sytf2", "lasyf", "sytrs", "syconv", "sysv", "sygst", "sygs2",

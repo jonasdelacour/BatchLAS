@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 packets (v22 design B.1): the 4-wide register value of the reg: and small gemm tiles
+// Level 3 packets: the 4-wide register value of the reg: and small gemm tiles
 // (Vec4) and the aligned packet load of the stagers. Vec4 is a clang ext_vector, or under
 // BATCHLAS_DEVICE_NO_VECTOR_TYPES (Metal: its emitter has no vector types) a 16-byte struct with
 // the members the kernels use (.x-.w, [i], scalar * Vec4).

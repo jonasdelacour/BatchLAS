@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Public device ortho (v22 design C.2, C.4, C.5, C.7, B8), the column arm (TR = NoTrans):
+// Public device ortho, the column arm (TR = NoTrans):
 //   CGS2          tier::Cta<N>       k <= N; per column twice h := A(:, :i)^H a_i, a_i -= A(:, :i) h,
 //                                    then normalize (the host CGS2 route's normalize kernel calls it)
 //                 tier::Blocked<NB>  any k: block CGS2 over NB-column blocks on the in-group gemm
@@ -9,7 +9,7 @@
 //                                    A := A L^-H (trsm); the host's passes and ShiftChol3 shift
 // The Level 3 forms take an l3::cfg preset Cfg (Cfg::threads == ex.size, Cfg::value_type == T).
 // Not yet device ops: the rows arm, the Cholesky algorithms on tier::Blocked (potrf tier::Blocked,
-// v22 B1), SVQB (a device syev) and Householder (geqrf + orgqr).
+// not yet written), SVQB (a device syev) and Householder (geqrf + orgqr).
 
 #include <cmath>
 #include <cstddef>
@@ -39,7 +39,7 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> con
                   "Householder a device geqrf + orgqr)");
     static_assert(tier::is_cta_v<Tier> || tier::is_blocked_v<Tier>, "ortho: tier::Cta<N> or tier::Blocked<NB>");
     static_assert(!is_chol_v<Algo> || tier::is_cta_v<Tier>,
-                  "ortho: the Cholesky algorithms take tier::Cta<N>; tier::Blocked waits for potrf tier::Blocked (v22 B1)");
+                  "ortho: the Cholesky algorithms take tier::Cta<N>; tier::Blocked waits for potrf tier::Blocked");
     if constexpr (on_l3_v<Algo, Tier>) {
         static_assert(l3::Config<Cfg>, "ortho: this tier runs on the in-group Level 3, Cfg is an l3::cfg preset");
         if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, T>, "ortho: Cfg::value_type is A's T");

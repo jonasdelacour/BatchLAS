@@ -264,7 +264,7 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// ==== the public op: getrf<Tier>(ex, A, ipiv, ws [, live]) (v22 design C.2-C.7) =================
+// ==== the public op: getrf<Tier>(ex, A, ipiv, ws [, live]) ======================================
 namespace routine {
 struct getrf {
     static constexpr const char* name = "getrf";

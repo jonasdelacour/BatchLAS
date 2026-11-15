@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_potrf_tests: device::potrf called from a user-style kernel (v22 design C.10) for
+// device_lapack_potrf_tests: device::potrf called from a user-style kernel for
 // tier::Reg<N> on Partition<N> and tier::Cta<N> on WorkGroup<WG, 32>, against the host tiny / cta
 // routes (ops::potrf::potrf_{tiny,cta}_dispatch, the routes themselves, no selector) on the same
 // data: bit for bit, info included. Both are thin launchers over one body, so the residual against

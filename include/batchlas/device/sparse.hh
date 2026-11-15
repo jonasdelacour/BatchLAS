@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Device LA sparse operands, CSR row products (Sparse BLAS naming: us*) and the public in-kernel
-// sparse ops: spmm, iluk_factorize and iluk_apply (v22 design C, decision F-D5). Each op runs one
+// sparse ops: spmm, iluk_factorize and iluk_apply. Each op runs one
 // batch item on one executor for any extent; the host routes launch the same bodies (detail
 // units, the detail row elimination, the iluk_apply solve). Element expressions match the
 // hand kernels they replaced (int64 offsets where those used them), so the host kernels keep
@@ -551,7 +551,7 @@ inline T stabilize_pivot(const T& pivot, real_t<T> scale, const T& diagonal_shif
 // IKJ elimination by the plan's steps, the relative drop (MILU folds dropped entries into the
 // diagonal), the fill quota (largest ceil(fill_factor * row_nnz[i]) - 1 off-diagonals survive;
 // on a magnitude tie the later slot drops) and the stabilised pivot. Native arithmetic, hand
-// loops over absolute slots (sass_parity strict: a v2-owned loop from 0 moved LLVM's runtime
+// loops over absolute slots (sass_parity strict: a for_each_owned loop from 0 moved LLVM's runtime
 // unroll remainder, LDG 38->66, and arith::Native msub as a call costs complex<float> +4 REG).
 // Arguments in the order the body reads them: a launcher's capture layout follows it.
 template <class T, class W>

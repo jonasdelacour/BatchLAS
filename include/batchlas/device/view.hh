@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA lazy views (v22 design A.2 view.hh): index maps over any operand (a Vec-like x(i)
+// Device LA lazy views: index maps over any operand (a Vec-like x(i)
 // with size(), or a Mat-like a(i, j) with rows() / cols()). A view holds its base by value and
 // computes the index; nothing is copied. Views whose element is a function of the stored one
 // (conj, op with ConjTrans, herm off its stored triangle) are read-only and return values.

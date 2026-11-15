@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA Level 3, register tier (v22 design A.2 level3.hh): one work-item's whole operands in
+// Device LA Level 3, register tier: one work-item's whole operands in
 // register Tiles (every index a compile-time constant after unrolling). The in-group forms over
 // executors and the tuned gemm components join here in L3a-L3d (design B).
 //   gemm<TA, TB, Shape, Ops>   C := alpha op(A) op(B) + beta C  (epilogue store_epi<Shape, Ops>)

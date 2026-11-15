@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 register micro-kernels (v22 design B.2), moved from the tuned gemm kernels unchanged:
+// Level 3 register micro-kernels, moved from the tuned gemm kernels unchanged:
 //   outer_mac     acc += a b^T on a register tile
 //   mma_slab      one staged k slab of rank-1 updates
 //   gemv_t_frag   acc(j) += sum_l a(l) B(l, j), x and y in registers

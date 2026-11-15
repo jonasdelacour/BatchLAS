@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOSV inside a kernel (v22 design C.2, C.4-C.7): A = L L^H (Lower) or U^H U (Upper) in
+// LAPACK xPOSV inside a kernel: A = L L^H (Lower) or U^H U (Upper) in
 // place, then B := A^-1 B when the factorization succeeded. Public entry:
 //   int posv<UL, Tier>(ex, A, B, ws)           potrf's info (uniform over ex), or -i
 //   WorkspaceSize buffer_size<routine::posv<UL>, Tier, T>(n)

@@ -232,7 +232,7 @@ BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, const MA& a, const VT& tau, 
     detail::geqr2_reg_body<N, Ex::sg_size>(ex.it, &a(0, 0), static_cast<int>(a.ld), a.rows(), a.cols(), tau.size(), &tau(0), sred, sw);
 }
 
-// ---- xGEQRF: the public in-kernel op (v22 design C.7 Blocked) --------------------------------
+// ---- xGEQRF: the public in-kernel op (tier::Blocked) -----------------------------------------
 
 namespace routine {
 struct geqrf {

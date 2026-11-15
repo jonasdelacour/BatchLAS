@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// In-group Level 3 (v22 design B.3): ONE matrix per work-group, any m, n, k, operands in global
+// In-group Level 3: ONE matrix per work-group, any m, n, k, operands in global
 // memory, the stage (l3::smem_bytes<Cfg>()) at the start of ws.local. Host op names in BLAS argument order
 // (alpha before its product, beta before the output); the host's run-time modes are template
 // parameters:

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA workspace protocol (v22 design C.5). An op with a tier states its memory as a
+// Device LA workspace protocol. An op with a tier states its memory as a
 // constexpr plan: the host sizes the launch with <op>_buffer_size<..., Tier, T>(n) == plan.total,
 // and the op carves its pointers with the SAME plan, so size and use cannot drift apart.
 //   WorkspaceSize  local and global bytes of ONE matrix, and the alignment of both

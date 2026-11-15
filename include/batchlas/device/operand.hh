@@ -250,7 +250,7 @@ template <Refl Dir, DiagFill Fill = DiagFill::Zero, class V> BATCHLAS_DEVICE_INL
     return {v, head};
 }
 
-// ---- register vectors and staged operands (v22 design A.2) --------------------------------------
+// ---- register vectors and staged operands -------------------------------------------------------
 // One element per item, held in a register: element i belongs to the item with lid == i; the
 // window [lo, hi) is the live part (owns(ex)). Every op on it reads x.v on the owning item only.
 template <class T> struct LaneVec {

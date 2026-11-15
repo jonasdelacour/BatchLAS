@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sytrf on device (v22 design A.3): Bunch-Kaufman L D L^T, written once for the lower
+// LAPACK ?sytrf on device: Bunch-Kaufman L D L^T, written once for the lower
 // form. sytf2 is the unblocked factor; lasyf / lasyf_undo are one panel of the blocked factor
 // and its last loop. Uplo::Upper runs the same steps on the index-reversed matrix (logical i is
 // physical n-1-i): the reversal maps ?sytf2's upper loop onto its lower loop step for step, so
@@ -345,7 +345,7 @@ inline void lasyf_undo(const Ex& ex, const MS& S, int start, int end, PivIn&& lo
     }
 }
 
-// ---- public device API (v22 design C): sytrf<UL, Tier>(ex, A, ipiv, ws) -------------------------
+// ---- public device API: sytrf<UL, Tier>(ex, A, ipiv, ws) ----------------------------------------
 // Tiers (one per kernel; with_tier picks one on the host for a run-time n):
 //   tier::Cta<N>, N <= 32   A's logical lower triangle in local memory; sub-group 0 of ex factors
 //   tier::Blocked<1>        any n: ?sytf2 in place in global memory (LAPACK's NB = 1, unblocked);

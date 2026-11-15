@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sytrs / ?sytrs2 on device (v22 design A.3), from sytrf's Bunch-Kaufman factor in the
+// LAPACK ?sytrs / ?sytrs2 on device, from sytrf's Bunch-Kaufman factor in the
 // logical lower form (lapack/sytrf.hh's reversal). sytrs_col is ?sytrs on one right-hand side.
 // The converted form (?sytrs2) first runs ?syconv (each step's interchange applied to the earlier
 // columns of L, the \f$2 \times 2\f$ off-diagonals moved out), after which \f$A = P L D L^{T} P^{T}\f$
@@ -328,7 +328,7 @@ inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, c
 
 }  // namespace detail
 
-// ---- public device API (v22 design C): sytrs<UL, Tier>(ex, A, ipiv, B, ws) ----------------------
+// ---- public device API: sytrs<UL, Tier>(ex, A, ipiv, B, ws) -------------------------------------
 // Tiers (one per kernel; with_tier picks one on the host for a run-time n):
 //   tier::Cta<N>, N <= 128  the converted factor in local memory, one sub-group per right-hand
 //                           side, x in registers (R = ceil(N / 32) per lane); the host `cta`

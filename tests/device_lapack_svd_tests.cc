@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // device_lapack_svd_tests: the public device SVD-family ops (include/batchlas/device/lapack/) called
-// from a user-style kernel, against the host route each one backs (v22 design C.10).
+// from a user-style kernel, against the host route each one backs.
 //   gebrd<tier::Cta<P>>  gebrd_cta is a thin launcher over it: the device call (a WG of 128, four
 //                        sub-groups, the tier picked by with_tier) and the host route (a WG of 32)
 //                        must agree BIT FOR BIT on A (pads and stride gaps included), d, e, tauq,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Public device API of the util family (v22 design C.10), each op called from a user-style kernel:
+// Public device API of the util family, each op called from a user-style kernel:
 //   lange<NT>     (core lapack_aux.hh)     vs the host norm (a thin launcher): bit-identical
 //   lascl         (core lapack_aux.hh)     vs the host lascl (a thin launcher): bit-identical
 //   ritz_values   (lapack/ritz_values.hh)  the tier-free form and tier::Blocked<NB> (in-group gemm)

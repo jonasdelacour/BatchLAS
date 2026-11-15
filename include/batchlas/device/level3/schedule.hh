@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 tile bodies and schedules (v22 design B.2):
+// Level 3 tile bodies and schedules:
 //   reg_tile_mma   acc += op(A) op(B) over one output tile of a RegGeom: staging, k loop, micro
 //                  kernel; the body of GemmRegisterTiledKernel and of the in-group ops
 //   for_each_tile  Persistent: every tile of one matrix on one work-group, a barrier after each

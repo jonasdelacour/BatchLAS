@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_qr_tests: the public device geqrf / orgqr / ormqr in tier::Blocked<NB> (v22 design C.7,
-// B3: include/batchlas/device/lapack/{geqrf,orgqr,ormqr,larfb}.hh) called from a user-style
+// device_lapack_qr_tests: the public device geqrf / orgqr / ormqr in tier::Blocked<NB>
+// (include/batchlas/device/lapack/{geqrf,orgqr,ormqr,larfb}.hh) called from a user-style
 // kernel, one matrix per work-group of 256 items, against long-double LAPACK references (xGEQR2 with
 // xLARFG's convention; op(Q) applied reflector by reflector) and, on a GPU, against the host blocked
 // routes pinned and reached, within the library's calibrated bounds (never bit for bit: the host

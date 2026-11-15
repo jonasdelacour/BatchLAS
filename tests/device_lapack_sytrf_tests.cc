@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // device_lapack_sytrf_tests: the public in-kernel sytrf / sytrs / sysv (batchlas/device/lapack/
-// {sytrf,sytrs,sysv}.hh, v22 design C) called from user-style kernels, against the host route
+// {sytrf,sytrs,sysv}.hh) called from user-style kernels, against the host route
 // pinned to the same body: sytrf Cta = `cta`, Blocked<1> = `wg`; sytrs Cta<32/64/128> = `cta`,
 // Blocked<1> = `wg`; sysv Cta = `cta`, Blocked<1> = `compose` over sytrf `wg` and sytrs `wg`.
 // Guards (agent-guide section 8): every comparison is a memcmp over the whole padded storage

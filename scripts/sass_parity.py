@@ -38,7 +38,7 @@ them). --wg/--smem also take a plain integer for every kernel, and `none` disabl
 Identity (--identical): each kernel's SASS text (every instruction line with its encoding, NOPs
 included) is hashed; the verdict becomes "every pair byte-identical and, without --pair, the same
 kernel set in both builds" (exit 0, else 1), with the strict/algo report still printed. It is the
-proof behind the tuned-table SASS-identity rehash (v22 decision 18, F-D1).
+proof behind the tuned-table SASS-identity rehash (docs/design/device-la.md#device-la-the-sass-parity-gate).
 
 Snapshots: a compact per-kernel record of one library for an explicit kernel list,
 checked with the algo thresholds. Exit codes: 0 pass, 1 fail (or nothing paired), 2 "A/B"

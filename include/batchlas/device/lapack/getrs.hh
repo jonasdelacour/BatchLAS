@@ -90,7 +90,7 @@ BATCHLAS_UNROLL_FULL
 
 }  // namespace batchlas::device::detail
 
-// ==== the public op: getrs<TR, Tier>(ex, A, ipiv, B, ws [, live]) (v22 design C.2-C.7) ===========
+// ==== the public op: getrs<TR, Tier>(ex, A, ipiv, B, ws [, live]) ================================
 namespace batchlas::device {
 
 namespace routine {

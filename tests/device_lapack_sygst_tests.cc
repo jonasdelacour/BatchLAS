@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_sygst_tests: the public in-kernel sygst (include/batchlas/device/lapack/sygst.hh, v22
-// design C.4-C.10) called from a user-style kernel, one matrix per work-group, with its tier picked
+// device_lapack_sygst_tests: the public in-kernel sygst (include/batchlas/device/lapack/sygst.hh)
+// called from a user-style kernel, one matrix per work-group, with its tier picked
 // by with_tier, against the host route pinned to blocked:nb=32, which runs the same ?sygs2 body
 // (sygs2_group, ipw blocks per group) for n <= 32: BIT-IDENTICAL, plus a long-double reference
 // (the bit-identity alone is self-referential: a break in the shared body moves both sides).

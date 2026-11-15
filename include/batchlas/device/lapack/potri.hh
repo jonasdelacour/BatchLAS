@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRI, xTRTRI and xLAUUM inside a kernel (v22 design C.1, C.2, C.4-C.7). Public entry:
+// LAPACK xPOTRI, xTRTRI and xLAUUM inside a kernel. Public entry:
 //   int potri<UL, Tier>(ex, A, ws)        A's UL triangle: potrf's factor -> that of A^-1
 //   int trtri<UL, DG, Tier>(ex, A, ws)    the UL triangle T -> T^-1 (DG = Unit: diagonal implied)
 //   int lauum<UL, Tier>(ex, A, ws)        L -> L^H L (Lower), U -> U U^H (Upper), in its triangle

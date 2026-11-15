@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 configurations (v22 design B.2 "Cfg presets"): one compile-time choice per component,
+// Level 3 configurations: one compile-time choice per component,
 // the local memory it needs and the executor size it requires. Never derived from a run-time
 // m, n or k (a run-time choice inside a kernel pays the max REG over its paths).
 //   RegGeom<TM, TN, TK, TR, TC, UnrollK, Stages>  the register-tiled tile (GemmRegisterTiledKernel)

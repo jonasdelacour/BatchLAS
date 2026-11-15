@@ -224,7 +224,7 @@ BATCHLAS_UNROLL_FULL
                         }
                     }
                 }
-                it.barrier(sycl::access::fence_space::local_space);  // WG 144 / 196: not a v2::WorkGroup
+                it.barrier(sycl::access::fence_space::local_space);  // WG 144 / 196: not a device::WorkGroup
 
                 // acc += A(:, l) B(l, :) on the lane's 4x4 tile, four l per 16-byte read of each operand.
                 device::Tile<T, 4, 4> acc;

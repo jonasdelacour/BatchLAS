@@ -895,9 +895,9 @@ inline constexpr bool kSteqrCtaFlatPays = (P == 16) || (P == 8 && std::is_same_v
 // Returns true if any block failed to converge within budget.
 //
 // A full-sub-group (emulated) partition promises every lane of the sub-group runs
-// this. P == 32 runs the nested loops maskless; smaller chunks on NVPTX take the
-// chunk-masked partition (every maskless form measured slower there); elsewhere the
-// lockstep solver. Judge changes here by real-kernel A/B, not microbenchmarks.
+// this. P == 32 runs the nested loops maskless; smaller chunks on a masking backend take the
+// chunk-masked partition and the flat or nested form (every maskless form measured slower on
+// NVPTX); the generic backend runs the lockstep solver. Judge changes by real-kernel A/B.
 // evidence: docs/perf/steqr.md#full-warp-partition
 template <typename T, size_t P, typename Partition, typename QCache>
 inline bool steqr_cta_solve(const Partition& partition,

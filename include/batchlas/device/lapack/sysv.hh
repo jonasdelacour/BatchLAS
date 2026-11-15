@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sysv on device (v22 design C): A = P L D L^T P^T by sytrf, then B := A^-1 B by sytrs
+// LAPACK ?sysv on device: A = P L D L^T P^T by sytrf, then B := A^-1 B by sytrs
 // when the factor is nonsingular (info == 0; otherwise B is left as given, as LAPACK's).
 // Tiers (one per kernel; with_tier picks one on the host for a run-time n):
 //   tier::Cta<N>, N <= 32   fused in one local-memory tile: sytrf `cta`'s factor on sub-group 0,

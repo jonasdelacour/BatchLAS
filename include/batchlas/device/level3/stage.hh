@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 stagers (v22 design B.2): op(X) blocks into local memory, zero outside the matrix, and
+// Level 3 stagers: op(X) blocks into local memory, zero outside the matrix, and
 // the element read they share (OperandAccessor). The tuned gemm code moved behind a signature:
 // same loops, pragmas, predicate order and helpers, so a kernel built from them keeps its SASS.
 //   stage_block_read, stage_block, stage_block_packet, stage_block_packet_aligned, stage_storage

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRF / xPOTF2 inside a kernel (v22 design A.3, C.4-C.7). Public entry:
+// LAPACK xPOTRF / xPOTF2 inside a kernel. Public entry:
 //   int potrf<UL, Tier>(ex, A, ws)               A = L L^H (Lower) or U^H U (Upper) in place;
 //                                               returns LAPACK info, uniform over ex
 //   WorkspaceSize buffer_size<routine::potrf<UL>, Tier, T>(n)
@@ -427,7 +427,7 @@ BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, 
 // Every op reproduces the expression tree of the hand-written code it replaced: arith::Fma is
 // bit-equal to the src/sycl/device_scalar.hh forms, and sub(mul()) stays two roundings.
 // The BLAS / auxiliary ones (herk_tiles, trsm_rowfrag, gemv_n_slm_bcast, lacpy_*, HermLower,
-// slm_mat, TriTilePrefix, frag_*_row_herm_lower) wait here for their core forms (v22 core requests).
+// slm_mat, TriTilePrefix, frag_*_row_herm_lower) wait here for their core forms.
 namespace detail {
 
 // A Hermitian matrix read through its lower triangle (i >= c), uplo at run time: p[i + c ld], or

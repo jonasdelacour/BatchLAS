@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRS inside a kernel (v22 design C.2, C.4-C.7): A X = B with A = L L^H (Lower) or
+// LAPACK xPOTRS inside a kernel: A X = B with A = L L^H (Lower) or
 // U^H U (Upper) from potrf, X overwriting B. Public entry:
 //   int potrs<UL, Tier>(ex, A, B, ws)          0, or -i for argument i (uniform over ex)
 //   WorkspaceSize buffer_size<routine::potrs<UL>, Tier, T>(n)

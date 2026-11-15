@@ -15,7 +15,7 @@
 // Each element is the C++ expression of the kernel it was lifted from (std::complex operators,
 // one expression per FMA chain), so a strict port stays bit-identical.
 //
-// Public op (v22 design C.2/C.4, host sytrd_sb2st): sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)
+// Public op (host sytrd_sb2st): sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)
 // on one SgpPartition<P> per matrix, any n, any kd >= 0; ab (kd + 1 rows, lower band) is
 // overwritten. Tiers: Cta<N> (band and rotation scratch in local memory, n <= N) and Blocked<NB>
 // (band chased in place, scratch in the caller's global slice; NB unused: a band chase has no

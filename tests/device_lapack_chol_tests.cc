@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_chol_tests: the Cholesky family's tier::Blocked (v22 design C.7, B1) called from a
+// device_lapack_chol_tests: the Cholesky family's tier::Blocked called from a
 // user-style kernel, one matrix per WorkGroup<256, 32>: device::potrf, potrs, posv, potri and
 // trtri (lapack/{potrf,potrs,posv,potri}.hh) against the host routes PINNED to their multi-kernel
 // families (potrf blocked, potrs trsm, posv blocked over potrf blocked, potri blocked:nb=64) on the

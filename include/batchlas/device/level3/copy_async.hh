@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 global -> local copies that skip the registers (v22 design B.1): 4, 8 or 16 B each.
+// Level 3 global -> local copies that skip the registers: 4, 8 or 16 B each.
 
 #include <sycl/sycl.hpp>
 

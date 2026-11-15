@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_l3_tests: the in-group Level 3 ops (include/batchlas/device/level3/group.hh, v22
-// design B.3) called from a user-style kernel, one matrix per work-group of 256 items, against
+// device_lapack_l3_tests: the in-group Level 3 ops (include/batchlas/device/level3/group.hh)
+// called from a user-style kernel, one matrix per work-group of 256 items, against
 // long-double host references and (float gemm) the host reg route pinned to the same tile.
 // Guards (agent-guide section 8): every form of every op (TA x TB; Side x Uplo; Uplo x Trans;
 // Side x Uplo x Trans x Diag); complex data with nonzero imaginary parts and a nonzero Im(diag)

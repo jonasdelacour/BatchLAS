@@ -32,7 +32,7 @@
 using namespace batchlas;
 using batchlas::verify::Check;
 
-struct V2LarftTestTag;  // kernel-name tag for the larft instantiations made here
+struct LarftTestTag;  // kernel-name tag for the larft instantiations made here
 
 namespace {
 
@@ -329,7 +329,7 @@ template <class T> void larft_case(Dev& dev, int m, int ib) {
     const T* tau = dev.up(ht);
     T* t = dev.up(hT);
     const std::uint8_t* mask = dev.up(hm);
-    (void)wy::larft_forward_columnwise_batched<V2LarftTestTag, T>(*dev.ctx, t, ld_t, st, v, ld_v, sv, m, ib,
+    (void)wy::larft_forward_columnwise_batched<LarftTestTag, T>(*dev.ctx, t, ld_t, st, v, ld_v, sv, m, ib,
                                                                  tau, ts, toff, kBatch, mask);
     dev.ctx->wait();
     const auto got = dev.down(t, hT.size());

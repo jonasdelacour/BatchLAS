@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA reductions and lane exchanges (v22 design A.2 reduce.hh): one complex-aware xor
+// Device LA reductions and lane exchanges: one complex-aware xor
 // shuffle, ONE butterfly (any mask range, either order, any associative op), the leader-only
 // shift fold, the reduce-scatter and the ArgMax pair with its merge rule (allreduce, with or
 // without Scratch, is level1.hh's). A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).

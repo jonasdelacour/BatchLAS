@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 C epilogues (v22 design B.2), moved from the tuned gemm kernels unchanged:
+// Level 3 C epilogues, moved from the tuned gemm kernels unchanged:
 //   LinearEpilogue          C := alpha acc + beta C, beta compared with 0 at run time
 //   NoMask, TriMask         which elements of a tile the epilogue writes
 //   store_tile_staged       a register tile through local memory to C, coalesced at any ldc

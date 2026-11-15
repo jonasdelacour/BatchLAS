@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 k loops (v22 design B.2), moved from the tuned gemm kernels unchanged; the barriers are
+// Level 3 k loops, moved from the tuned gemm kernels unchanged; the barriers are
 // the pipeline's contract. Any executor with barrier().
 //   kloop             1-stage or 2-stage double-buffered local stages
 //   kloop_prefetch2   register-prefetched double buffer, one barrier per slab

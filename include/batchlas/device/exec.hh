@@ -123,7 +123,7 @@ template <class G, class T> BATCHLAS_DEVICE_INLINE T team_shift(const G& g, T v,
 
 }  // namespace detail
 
-// Lane movement on every executor (members, v22 design A.2):
+// Lane movement on every executor (members):
 //   bcast(v, src)    COLLECTIVE, src uniform: item src's v to every item of the executor
 //   uniform(v)       bcast(v, 0): a value made uniform from the leader
 //   shuffle(v, src)  COLLECTIVE, src per item: v of lane src of the item's team

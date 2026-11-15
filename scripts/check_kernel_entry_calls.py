@@ -7,8 +7,8 @@
 SemaSYCL (SemaSYCL.cpp, isSYCLKernelBodyFunction and its FIXME) takes the kernel functor's
 operator() as the kernel body and force-inlines it into the entry, unless that operator()
 itself calls an operator() directly: then the FIRST such callee becomes the "body" and is
-force-inlined instead, and the real body stays a separate function until device link. A v2
-port that removes or adds such a call changes the kernel's inlining, so SASS parity breaks
+force-inlined instead, and the real body stays a separate function until device link. A device
+LA port that removes or adds such a call changes the kernel's inlining, so SASS parity breaks
 for a reason that is not the port (potri, trsm, l3tt, gemm; wf3_synthesis.txt 3.5).
 
 Rule for device LA users: the kernel lambda (or a kernel functor's operator()(sycl::nd_item...))
@@ -19,12 +19,11 @@ invoker: a call of a local lambda declared with it, an immediately invoked lambd
 and every call in a kernel lambda / operator() that itself carries it pass (the attribute
 inlines the callee whatever SemaSYCL picks as the body).
 
-What is scanned: src/ and include/ sources that include a v2 header DIRECTLY: batchlas/blas/
-device/v2/, the public tree batchlas/device/ or batchlas/device.hh, src/kernels/common/dla_v2_*,
-or a family's private <src/...*_v2.hh> (batchlas/device/detail/ alone does not count: it holds the
-toolchain shims every kernel includes, kernel_attrs.hh and sg_partition/); and every file under include/batchlas/device/ (v22
-design A.0: the lapack/<routine>.hh bodies are public, so they are scanned like users). A file
-that only reaches v2 through another header (math-helpers.hh -> v2/scalar.hh) is not a v2 user.
+What is scanned: src/ and include/ sources that include the public tree batchlas/device/ or
+batchlas/device.hh DIRECTLY (batchlas/device/detail/ alone does not count: it holds the toolchain
+shims every kernel includes, kernel_attrs.hh and sg_partition/); and every file under
+include/batchlas/device/ (the lapack/<routine>.hh bodies are public, so they are scanned like
+users). A file that only reaches the device layer through another header is not a user.
 Tests are not scanned: their codegen is not gated.
 What is not caught (needs semantics a scan does not have): a callable passed in as a
 parameter, a captured functor member, views not declared from a device:: factory or type.
@@ -37,8 +36,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEVICE_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/blas/device/v2/|batchlas/device/(?!detail/)|batchlas/device\.hh[>\"]|"
-                        r"src/kernels/common/dla_v2_|src/[^>\"]*_v2\.hh[>\"])")
+DEVICE_INCLUDE = re.compile(r"#\s*include\s*[<\"](?:batchlas/device/(?!detail/)|batchlas/device\.hh[>\"])")
 BODY_ATTR = "BATCHLAS_DEVICE_BODY"
 PUBLIC_TREE = os.path.join("include", "batchlas", "device") + os.sep
 STRIP = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
@@ -175,11 +173,11 @@ def device_users(root):
                     p = os.path.join(d, n)
                     files[os.path.relpath(p, root)] = open(p, errors="replace").read()
     users = {f for f, t in files.items() if DEVICE_INCLUDE.search(t) or f.startswith(PUBLIC_TREE)}
-    return {f: files[f] for f in sorted(users) if "/blas/device/v2/" not in f}
+    return {f: files[f] for f in sorted(users)}
 
 
 SELF_TEST = """
-#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/device/core.hh>
 void good(sycl::handler& h) {
     auto helper = [&](int x) { return x; };
     impl::parallel_for<K1>(h, r, [=](sycl::nd_item<1> it) {
@@ -224,13 +222,11 @@ struct MarkedBody {
 };
 """
 
-# Scope: only files that include a v2 header directly (or a private *_v2.hh) are users.
+# Scope: only files that include a public device header directly are users.
 SCOPE_TEST = {
-    "src/x/helpers.hh": "#include <batchlas/blas/device/v2/scalar.hh>\n",
+    "src/x/helpers.hh": "#include <batchlas/device/scalar.hh>\n",
     "src/x/via_helpers.cc": "#include <src/x/helpers.hh>\n",
-    "src/x/fam_v2.hh": "#include <batchlas/blas/device/v2/dla.hh>\n",
-    "src/x/fam.cc": "#include <src/x/fam_v2.hh>\n",
-    "src/x/quoted.cc": "#include \"src/kernels/common/dla_v2_scalar.hh\"\n",
+    "src/x/quoted.cc": "#include \"batchlas/device/lapack/getrf.hh\"\n",
     "src/x/legacy.cc": "#include <src/x/legacy.hh>\n",
     "src/x/public_user.cc": "#include <batchlas/device/lapack/potrf.hh>\n",
     "src/x/umbrella_user.cc": "#include <batchlas/device.hh>\n",
@@ -238,7 +234,6 @@ SCOPE_TEST = {
     "src/x/attrs_only.cc": "#include <batchlas/device/detail/kernel_attrs.hh>\n",
     "include/batchlas/device/lapack/potrf.hh": "#include <batchlas/device/core.hh>\n",
     "include/batchlas/device/detail/no_include.hh": "int x;\n",
-    "include/batchlas/blas/device/v2/core.hh": "#include <batchlas/blas/device/v2/scalar.hh>\n",
 }
 
 
@@ -253,7 +248,7 @@ def self_test():
                 fh.write(text)
         scope = sorted(device_users(root))
     want_scope = ["include/batchlas/device/detail/no_include.hh", "include/batchlas/device/lapack/potrf.hh",
-                  "src/x/fam.cc", "src/x/fam_v2.hh", "src/x/helpers.hh", "src/x/public_user.cc", "src/x/quoted.cc",
+                  "src/x/helpers.hh", "src/x/public_user.cc", "src/x/quoted.cc",
                   "src/x/umbrella_user.cc"]
     ok = got == want and scope == want_scope
     print(f"check_kernel_entry_calls: self-test {'passed' if ok else 'FAILED'}: {got}; scope {scope}")

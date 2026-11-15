@@ -1581,7 +1581,7 @@ void reductions21_case(Dev& dev, MakeEx make_ex, int items_per_wg, int lanes_per
     }
 }
 
-TYPED_TEST(DeviceCoreOpsTest, ReductionsV21OnEveryExecutor) {
+TYPED_TEST(DeviceCoreOpsTest, ReductionsOnEveryExecutor) {
     using T = TypeParam;
     struct Wg { int width = 128; auto operator()(sycl::nd_item<1> it) const { return device::WorkGroup<128>{it}; } };
     struct Rt { int width = 96; auto operator()(sycl::nd_item<1> it) const { return device::RtGroup<>(it); } };

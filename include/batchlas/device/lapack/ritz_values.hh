@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Public device ritz_values (v22 design C.2, C.7, B8). The host route forms A V with gemm / spmm
+// Public device ritz_values. The host route forms A V with gemm / spmm
 // and calls ritz_values_quotient per (item, column). Device forms, any n and k:
 //   ritz_values(ex, A, V, w)               no workspace: forms A v_j on read
 //   ritz_values<Blocked<NB>, Cfg>(..., ws)  the host route's algorithm on the in-group gemm: per

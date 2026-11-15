@@ -3,7 +3,7 @@
 // sy2sb: a Hermitian (real: symmetric) matrix -> lower band of semibandwidth kd (LAPACK
 // xSYTRD_SY2SB / xHETRD_HE2HB) inside the caller's kernel, one matrix per work-group, any n and kd.
 // The host sytrd_sy2sb's algorithm on in-group ops: per panel geqr2, larft, then Q^H A Q (gemm, hemm, her2k).
-// Public op (v22 design C.2/C.4/C.5): sy2sb<UL, Tier>(ex, a, ab, tau, kd, ws); tier::Blocked<NB>
+// Public op: sy2sb<UL, Tier>(ex, a, ab, tau, kd, ws); tier::Blocked<NB>
 // (NB = 32 or 64, the Level 3 tile): a and the panel scratch in global memory, only the tile
 // staging in local memory. Sizes: buffer_size<routine::sy2sb<UL, KDMax>, Tier, T>(n, kd); with_tier:
 // routine::sy2sb<UL, KDMax>. copy_band_col is also the host route's band copy.
