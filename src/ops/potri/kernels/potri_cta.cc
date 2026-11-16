@@ -99,7 +99,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> St(sycl::range<1>(tile), h);
         sycl::local_accessor<R, 1> rdt(sycl::range<1>(static_cast<std::size_t>(mp)), h);
-        impl::parallel_for<PotriCtaKernel<T>>(h, sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<PotriCtaKernel<T>>(h, sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {
             using namespace sycl_device;
             const device::RtGroup<> ex(it);
             const device::Thread th{};

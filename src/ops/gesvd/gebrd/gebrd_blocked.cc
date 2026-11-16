@@ -86,7 +86,7 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
         auto D = d;
         auto E = e;
 
-        h.parallel_for(
+        batchlas::impl::parallel_for(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(std::max<int32_t>(1, k))),
             [=](sycl::id<2> idx) {
                 const int32_t b = static_cast<int32_t>(idx[0]);

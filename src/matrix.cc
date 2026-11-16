@@ -622,7 +622,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
         // 2. Scatter CSR data into Dense matrix
         q->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(batch_size, rows), [=](sycl::id<2> idx) {
+            batchlas::impl::parallel_for(cgh, sycl::range<2>(batch_size, rows), [=](sycl::id<2> idx) {
                 size_t b = idx[0];
                 size_t r = idx[1];
 
@@ -2340,7 +2340,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
         //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
         detail::require_device_fp64<T>(ctx, "VectorView::copy");
         auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(src.size(), src.batch_size()),
+            batchlas::impl::parallel_for(cgh, sycl::range<2>(src.size(), src.batch_size()),
                             [=](sycl::id<2> idx) {
                 size_t i = idx[0]; // index
                 size_t b = idx[1]; // batch
@@ -2570,7 +2570,7 @@ void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) cons
         throw batchlas::invalid_argument("start_ptr is null");
     }
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
             size_t b = idx[0];
             data_ptrs[b] = start_ptr + b * stride;
         });

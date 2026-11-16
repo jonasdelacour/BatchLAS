@@ -704,7 +704,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto Z = stedc_masked(MatrixView<T>(level_data(level), s, s, s, s * s, P), level_mask(level));
         ctx->submit([&](sycl::handler& h) {
             auto Zv = Z.kernel_view();
-            h.parallel_for<StedcLevelZeroOffdiag<B, T>>(sycl::range<1>(half * half * 2 * P), [=](sycl::id<1> idx) {
+            batchlas::impl::parallel_for<StedcLevelZeroOffdiag<B, T>>(h, sycl::range<1>(half * half * 2 * P), [=](sycl::id<1> idx) {
                 const int64_t g = idx[0];
                 const int64_t p = g / (half * half * 2);
                 if (!Zv.active(p)) return;  // I3
@@ -728,7 +728,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         ctx->submit([&](sycl::handler& h) {
             auto parent = Zp.kernel_view();
             auto child = Zc.kernel_view();
-            h.parallel_for<StedcLevelBlockDiag<B, T>>(sycl::range<1>(s * s * P), [=](sycl::id<1> idx) {
+            batchlas::impl::parallel_for<StedcLevelBlockDiag<B, T>>(h, sycl::range<1>(s * s * P), [=](sycl::id<1> idx) {
                 const int64_t g = idx[0];
                 const int64_t p = g / (s * s);
                 if (!parent.active(p)) return;  // I3

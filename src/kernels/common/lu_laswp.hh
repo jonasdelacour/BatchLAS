@@ -46,7 +46,7 @@ Event lu_laswp_launch(Queue& ctx,
     D* const bp = reinterpret_cast<D*>(base);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<LuLaswpKernel<Tag, T>>(
+        batchlas::impl::parallel_for<LuLaswpKernel<Tag, T>>(h,
             sycl::range<2>(static_cast<std::size_t>(batch),
                            static_cast<std::size_t>(ncols)),
             [=](sycl::item<2> it) {

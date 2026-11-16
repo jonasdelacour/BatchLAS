@@ -35,7 +35,7 @@ inline void info_clear(Queue& ctx, Span<int32_t> info, int64_t batch, Span<const
     if (mask.size() < static_cast<size_t>(batch)) throw batchlas::invalid_argument("info_clear: the batch mask is shorter than the batch");
     const std::uint8_t* m = mask.data();
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
             if (m[id[0]]) out[id[0]] = 0;
         });
     });
@@ -66,7 +66,7 @@ inline void info_from_flags(Queue& ctx,
     if (!out || !flags) return;
     const bool invert = one_means_converged;
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
             const int32_t flag = flags[id[0]];
             out[id[0]] = invert ? (flag != 0 ? 0 : 1) : (flag > 0 ? flag : 0);
         });
@@ -87,7 +87,7 @@ inline void info_from_flags(Queue& ctx,
     const bool invert = one_means_converged;
     const std::uint8_t* m = mask.data();
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
             if (!m[id[0]]) return;
             const int32_t flag = flags[id[0]];
             out[id[0]] = invert ? (flag != 0 ? 0 : 1) : (flag > 0 ? flag : 0);

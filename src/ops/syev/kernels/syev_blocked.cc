@@ -199,7 +199,7 @@ Event syev_blocked_part(Queue& ctx,
             auto S = phase_view;
             const int32_t nn = n;
             const bool want_phase = want_vectors;
-            cgh.parallel_for(sycl::range<1>(nb), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(nb), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // Lower: E is the subdiagonal. A real T runs in place (dr, er are d, e).
@@ -279,7 +279,7 @@ Event syev_blocked_part(Queue& ctx,
         auto S = phase_view;
         const int32_t nn = n;
         const int64_t total = static_cast<int64_t>(batch) * nn * nn;
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = device::detail::batched_item(idx, nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3

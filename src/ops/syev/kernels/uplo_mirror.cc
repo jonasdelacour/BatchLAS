@@ -32,7 +32,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("mirror_upper_to_lower", a));
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<UploMirrorUpperToLowerKernel<B, T>>(
+        batchlas::impl::parallel_for<UploMirrorUpperToLowerKernel<B, T>>(h,
             sycl::range<3>(static_cast<size_t>(batch),
                            static_cast<size_t>(n),
                            static_cast<size_t>(n)),

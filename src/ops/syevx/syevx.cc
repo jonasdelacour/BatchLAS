@@ -394,7 +394,7 @@ Event syevx(Queue& ctx,
         const std::uint8_t* mk = batchlas::detail::mask_ptr(mask);
         const bool masked = mk != nullptr;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFillCountsKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFillCountsKernel<B, T, MFormat>>(h,
                 sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
                     if (masked && !mk[idx[0]]) return;  // I3
                     m_ptr[idx[0]] = count;

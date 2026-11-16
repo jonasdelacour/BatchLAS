@@ -48,7 +48,7 @@ Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
     const std::size_t elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<GetriZeroKernel<T>>(
+        batchlas::impl::parallel_for<GetriZeroKernel<T>>(h,
             sycl::range<2>(static_cast<std::size_t>(batch), elems),
             [=](sycl::item<2> it) {
                 const int b = static_cast<int>(it.get_id(0));

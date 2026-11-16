@@ -501,7 +501,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             const int64_t kk = block_vectors;
             const unsigned int seed = 42; // fill_random's default
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxLobpcgInitKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxLobpcgInitKernel<B, T, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch_size * nn * kk)), [=](sycl::id<1> tid) {
                         const int64_t local = static_cast<int64_t>(tid[0]);
                         const int b = static_cast<int>(local / (nn * kk));

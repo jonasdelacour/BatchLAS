@@ -131,7 +131,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
                 ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
                 (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
+            batchlas::impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -282,7 +282,7 @@ BATCHLAS_UNROLL_FULL
             auto C_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
+            batchlas::impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto sg = it.get_sub_group();

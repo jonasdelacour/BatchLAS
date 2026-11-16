@@ -39,7 +39,7 @@ Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potri", A));
 
     ctx->submit([&](sycl::handler& h) {
-        impl::parallel_for<PotriFinishKernel<T>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<PotriFinishKernel<T>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
             for (std::size_t f = it.get_global_id(0); f < total; f += it.get_global_range(0)) {
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(f / elems);
                 if ((skip && skip[b] != 0) || (mask && mask[b] == 0)) continue;

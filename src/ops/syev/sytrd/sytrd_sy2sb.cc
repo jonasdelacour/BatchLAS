@@ -125,7 +125,7 @@ Event zero_ab(Queue& q, const MatrixView<T, MatrixFormat::Dense>& ab, const std:
     const int batch = ab.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<ZeroABKernel<T>>(
+        batchlas::impl::parallel_for<ZeroABKernel<T>>(h,
             sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(cols), static_cast<size_t>(rows)),
             [=](sycl::id<3> idx) {
                 const int b = static_cast<int>(idx[0]);
@@ -161,7 +161,7 @@ Event copy_band_lower(Queue& q,
     const int batch = a.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<CopyBandLowerKernel<T>>(
+        batchlas::impl::parallel_for<CopyBandLowerKernel<T>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(pk)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
@@ -197,7 +197,7 @@ Event copy_tau_panel_to_out(Queue& q,
     const int batch = tau_out.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<CopyTauKernel<T>>(
+        batchlas::impl::parallel_for<CopyTauKernel<T>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(pk)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);

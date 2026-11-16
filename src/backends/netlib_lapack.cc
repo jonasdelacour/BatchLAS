@@ -1188,7 +1188,7 @@ namespace batchlas{
         EventImpl conv_impl = ctx->submit([&](sycl::handler& h) {
             auto piv_in = piv.as_span<int64_t>();
             auto piv_out = piv_i32;
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> idx) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> idx) {
                 piv_out[static_cast<int>(idx[0])] = static_cast<int>(piv_in[static_cast<int>(idx[0])]);
             });
         });
@@ -1273,7 +1273,7 @@ namespace batchlas{
             auto piv_out = piv.as_span<int64_t>();
             auto piv_in = piv_i32;
             h.depends_on(static_cast<sycl::event>(*ctx.get_event()));
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(mn * batch)), [=](sycl::id<1> idx) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(mn * batch)), [=](sycl::id<1> idx) {
                 if (mask != nullptr && mask[static_cast<int>(idx[0]) / mn] == 0) return;
                 piv_out[static_cast<int>(idx[0])] = static_cast<int64_t>(piv_in[static_cast<int>(idx[0])]);
             });

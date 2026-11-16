@@ -36,7 +36,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     const std::size_t elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<SygvdIdentityFailedKernel<T>>(sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
+        batchlas::impl::parallel_for<SygvdIdentityFailedKernel<T>>(h, sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
             const std::size_t b = it.get_id(0);
             if (mask && !mask[b]) return;  // I3
             if (fail[b] == 0) return;
@@ -56,7 +56,7 @@ Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<i
     const int32_t* const fail = potrf_info.data();
     int32_t* const out = info.data();
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<SygvdMergeInfoKernel>(sycl::range<1>(info.size()), [=](sycl::item<1> it) {
+        batchlas::impl::parallel_for<SygvdMergeInfoKernel>(h, sycl::range<1>(info.size()), [=](sycl::item<1> it) {
             if (mask && !mask[it.get_id(0)]) return;  // I3
             const int32_t f = fail[it.get_id(0)];
             if (f != 0) out[it.get_id(0)] = n + f;

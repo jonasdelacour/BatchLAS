@@ -87,7 +87,7 @@ Event update_vw_lower_small_legacy(Queue& q,
     const int batch = a22.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<UpdateVWLowerSmallKernelLegacy<T>>(
+        batchlas::impl::parallel_for<UpdateVWLowerSmallKernelLegacy<T>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n2) * static_cast<size_t>(n2)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
@@ -312,7 +312,7 @@ Event restore_tridiag_lower(Queue& q,
     const int batch = a.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<RestoreTridiagKernel<T>>(
+        batchlas::impl::parallel_for<RestoreTridiagKernel<T>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);

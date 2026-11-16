@@ -40,7 +40,7 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
     const std::size_t packs = (static_cast<std::size_t>(ipw) * (fper + sper) + kVec<D> - 1) / kVec<D>;
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<Pack<D>, 1> slm(sycl::range<1>(packs), h);
-        impl::parallel_for<SygstDiagKernel<D, Inverse, KB>>(
+        batchlas::impl::parallel_for<SygstDiagKernel<D, Inverse, KB>>(
             h, sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
                 // The arguments name the captures in the hand kernel's order (its parameter order).
                 // I2: a masked item is a dead block, never loaded, computed or stored.
@@ -93,7 +93,7 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
     D* const hp = reinterpret_cast<D*>(full);
     const std::size_t per = static_cast<std::size_t>(kb) * static_cast<std::size_t>(kb);
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<SygstMirrorKernel<D>>(sycl::range<1>(per * static_cast<std::size_t>(batch)), [=](sycl::item<1> it) {
+        batchlas::impl::parallel_for<SygstMirrorKernel<D>>(h, sycl::range<1>(per * static_cast<std::size_t>(batch)), [=](sycl::item<1> it) {
             const std::size_t e = it.get_id(0);
             const auto itm = static_cast<std::ptrdiff_t>(e / per);
             if (mask && !mask[itm]) return;  // I3

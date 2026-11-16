@@ -107,7 +107,7 @@ sycl::event pack_v_panel_batched(Queue& q,
         // DIM 2 IS THE ROW, NOT THE COLUMN: dim 2 is fastest-varying and both operands
         // are column-major, so the column there is uncoalesced (32 sectors per warp, not 4).
         // evidence: docs/perf/qr.md#larft_wyhh-pack_v-indexes-the-row-fastest
-        h.parallel_for<PackVKernelName<Tag, T>>(
+        batchlas::impl::parallel_for<PackVKernelName<Tag, T>>(h,
             sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(ib),
                            static_cast<size_t>(m)),
             [=](sycl::id<3> idx) {

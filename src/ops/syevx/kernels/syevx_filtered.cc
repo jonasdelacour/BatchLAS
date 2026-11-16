@@ -319,7 +319,7 @@ Event syevx_filtered(Queue& ctx,
         auto Xk = X.kernel_view();
         const int64_t nn = n, mm = m;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterInitKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFilterInitKernel<B, T, MFormat>>(h,
                 sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int b = static_cast<int>(idx / (nn * mm));
@@ -438,7 +438,7 @@ Event syevx_filtered(Queue& ctx,
             const int auto_min = kAutoDegreeMin;
             const int auto_max = kAutoDegreeMax;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                         const int b = static_cast<int>(tid[0]);
                         // I3. The host folds these two over the batch (min, max): neutral values.
@@ -548,7 +548,7 @@ Event syevx_filtered(Queue& ctx,
             const int64_t nn = n, mm = m;
             const bool is_first = first;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxFilterStepKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxFilterStepKernel<B, T, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                         const int64_t idx = static_cast<int64_t>(tid[0]);
                         const int b = static_cast<int>(idx / (nn * mm));
@@ -573,7 +573,7 @@ Event syevx_filtered(Queue& ctx,
             auto ca = ca_span.data(); auto cb = cb_span.data();
             auto s1 = sig1_span.data(); auto ee = ee_span.data();
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+                batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                     const int b = static_cast<int>(tid[0]);
                     if (masked && !mk[b]) return;  // I3
                     ca[b] = s1[b] / ee[b];
@@ -620,7 +620,7 @@ Event syevx_filtered(Queue& ctx,
                 auto sn = signew_span.data(); auto ee = ee_span.data();
                 auto ca = ca_span.data(); auto cb = cb_span.data();
                 ctx->submit([&](sycl::handler& h) {
-                    h.parallel_for<SyevxFilterSigmaKernel<B, T, MFormat>>(
+                    batchlas::impl::parallel_for<SyevxFilterSigmaKernel<B, T, MFormat>>(h,
                         sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                             const int b = static_cast<int>(tid[0]);
                             if (masked && !mk[b]) return;  // I3

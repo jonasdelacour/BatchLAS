@@ -57,7 +57,7 @@ Event steqr_wg_impl(Queue& ctx,
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_ranges");
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+            batchlas::impl::parallel_for(cgh, sycl::range(batch_size), [=](sycl::id<1> id) {
                 auto i = id[0];
                 auto ebid = e.batch_item(i);
                 auto ix = 0;
@@ -92,7 +92,7 @@ Event steqr_wg_impl(Queue& ctx,
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_writeout");
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+            batchlas::impl::parallel_for(cgh, sycl::range(batch_size), [=](sycl::id<1> id) {
                 auto i = id[0];
                 auto num_sub_problems = scan_view[i] - (i == 0 ? 0 : scan_view[i - 1]);
                 auto offset = (i == 0 ? 0 : scan_view[i - 1]);
@@ -274,7 +274,7 @@ Event steqr_wg(Queue& ctx,
     // already cleared the span, and info_report only raises. See info_span.hh.
     if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
                 if (!e.active(id[0])) return;  // I3
                 auto e_item = e.batch_item(id[0]);
                 int32_t unconverged = 0;

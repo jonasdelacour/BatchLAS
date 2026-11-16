@@ -175,7 +175,7 @@ Event syev_cta_part(Queue& ctx,
             const int32_t nn = n;
             const int32_t nb = batch;
             const int64_t total = static_cast<int64_t>(nb) * nn * nn;
-            cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
                 const int32_t b = device::detail::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -269,7 +269,7 @@ Event syev_cta_part(Queue& ctx,
             auto S = phase_view;
             const int32_t nn = n;
             const Uplo u = uplo_eff;
-            cgh.parallel_for(sycl::range<1>(nb), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(nb), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 // The subdiagonal becomes real; S is always recorded here.
@@ -300,7 +300,7 @@ Event syev_cta_part(Queue& ctx,
                 auto S = phase_view;
                 const int32_t nn = n;
                 const int64_t total = static_cast<int64_t>(batch) * nn * nn;
-                cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+                batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = device::detail::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -329,7 +329,7 @@ Event syev_cta_part(Queue& ctx,
             auto TAUQ = tau_q_view;
             const int32_t nn = n;
             const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
-            cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
                 const int32_t b = device::detail::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -350,7 +350,7 @@ Event syev_cta_part(Queue& ctx,
                 auto TAUQ = tau_q_view;
                 const int32_t nn = n;
                 const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(nn);
-                cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+                batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3

@@ -81,7 +81,7 @@ Event kd0_extract(Queue& q,
     auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<Kd0ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
+        batchlas::impl::parallel_for<Kd0ExtractKernel<T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -118,7 +118,7 @@ Event kd1_extract_lower(Queue& q,
     auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<Kd1ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
+        batchlas::impl::parallel_for<Kd1ExtractKernel<T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -496,7 +496,7 @@ Event sytrd_sb2st(Queue& ctx,
         auto ABsrc = ab_in.kernel_view();
         KernelMatrixView<T, MatrixFormat::Dense> ABdst(ab_ptr, ldab, n, ldab, stride_out, batch);
         (void)ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
+            batchlas::impl::parallel_for<AbWorkCopyKernel<B, T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
                 device::lacpy(device::Thread{}, device::mat(ABsrc.batch_item(b)).sub(0, 0, ldab, n),

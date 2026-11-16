@@ -55,7 +55,7 @@ inline void build_phase_from_kd1_band(Queue& ctx,
     ctx->submit([&](sycl::handler& cgh) {
         auto AB = ab_kd1.kernel_view();
         auto P = phase;
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (!AB.active(b)) return;  // I3: the band's batch mask
             P(0, b) = T(1);
@@ -91,7 +91,7 @@ inline void apply_phase_rows(Queue& ctx,
     ctx->submit([&](sycl::handler& cgh) {
         auto Z = z.kernel_view();
         auto P = phase;
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * m));
             const int64_t rem = idx - static_cast<int64_t>(b) * n * m;
@@ -118,7 +118,7 @@ inline void lift_eigvecs_with_phase(Queue& ctx,
         auto Zr = z_real.kernel_view();
         auto Zo = z_out.kernel_view();
         auto P = phase;
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * n));
             const int64_t rem = idx - static_cast<int64_t>(b) * n * n;

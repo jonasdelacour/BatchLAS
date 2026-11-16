@@ -147,7 +147,7 @@ inline void band_extract_block(Queue& ctx,
     auto O = out.kernel_view();
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                        static_cast<size_t>(rows),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
@@ -224,7 +224,7 @@ inline void band_scatter_block_lower(Queue& ctx,
     auto AB = ab.kernel_view();
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                        static_cast<size_t>(rows),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
@@ -263,7 +263,7 @@ inline void band_scatter_block(Queue& ctx,
     auto AB = ab.kernel_view();
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                        static_cast<size_t>(rows),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
@@ -328,7 +328,7 @@ inline void band_zero_rows_from(Queue& ctx,
     if (r0 >= rows) return;
     auto AB = ab.kernel_view();
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                        static_cast<size_t>(rows - r0),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
@@ -356,7 +356,7 @@ inline void dense_keep_qr_R_only(Queue& ctx,
     auto A = a.kernel_view();
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                        static_cast<size_t>(rows),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
@@ -827,7 +827,7 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
     {
         auto ABW = abw_out.kernel_view();
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+            batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                            static_cast<size_t>(abw_out.rows()),
                                            static_cast<size_t>(n)),
                              [=](sycl::id<3> idx) {
@@ -841,7 +841,7 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
 
         auto ABin = ab_in.kernel_view();
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+            batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                            static_cast<size_t>(kd + 1),
                                            static_cast<size_t>(n)),
                              [=](sycl::id<3> idx) {
@@ -1018,7 +1018,7 @@ inline void bandr1_extract_tridiagonal_output(
     const int tau_stride = tau_out.stride();
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)),
+        batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)),
                          [=](sycl::id<2> idx) {
                              const int b = static_cast<int>(idx[0]);
                              const int j = static_cast<int>(idx[1]);
@@ -1029,7 +1029,7 @@ inline void bandr1_extract_tridiagonal_output(
 
     if (n > 1) {
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)),
+            batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)),
                              [=](sycl::id<2> idx) {
                                  const int b = static_cast<int>(idx[0]);
                                  const int j = static_cast<int>(idx[1]);
@@ -1122,7 +1122,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
         // (This makes tests simpler and deterministic.)
         auto ABW = abw_out.kernel_view();
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+            batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                            static_cast<size_t>(abw_out.rows()),
                                            static_cast<size_t>(n)),
                              [=](sycl::id<3> idx) {
@@ -1135,7 +1135,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
         });
         auto ABin = ab_in.kernel_view();
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<3>(static_cast<size_t>(batch),
+            batchlas::impl::parallel_for(cgh, sycl::range<3>(static_cast<size_t>(batch),
                                            static_cast<size_t>(std::min<int>(kd + 1, abw_out.rows())),
                                            static_cast<size_t>(n)),
                              [=](sycl::id<3> idx) {
@@ -1292,7 +1292,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
         const int tau_stride = tau_out.stride();
 
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
+            batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -1302,7 +1302,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
 
         if (n > 1) {
             ctx->submit([&](sycl::handler& cgh) {
-                cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
+                batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
                     const int b = static_cast<int>(idx[0]);
                     const int j = static_cast<int>(idx[1]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -1329,7 +1329,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
         const int tau_stride = tau_out.stride();
 
         ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
+            batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -1339,7 +1339,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
 
         if (n > 1) {
             ctx->submit([&](sycl::handler& cgh) {
-                cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
+                batchlas::impl::parallel_for(cgh, sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
                     const int b = static_cast<int>(idx[0]);
                     const int j = static_cast<int>(idx[1]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3

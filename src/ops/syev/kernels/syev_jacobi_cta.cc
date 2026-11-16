@@ -143,7 +143,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         // makes info_store below a no-op.
         int32_t* const info_dev = info;
 
-        impl::parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(cgh,
+        batchlas::impl::parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 constexpr int kP = static_cast<int>(P);

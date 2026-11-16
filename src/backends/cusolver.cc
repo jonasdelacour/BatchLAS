@@ -301,7 +301,7 @@ namespace batchlas {
                     auto Vh = vh_out.kernel_view();
                     const int64_t nn = n;
                     const T* src = v_src;
-                    cgh.parallel_for<GesvdVhKernel<T>>(
+                    batchlas::impl::parallel_for<GesvdVhKernel<T>>(cgh,
                         sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n * n)),
                         [=](sycl::id<2> id) {
                             const int64_t b = static_cast<int64_t>(id[0]);

@@ -216,7 +216,7 @@ Event solve_tridiagonal(Queue& ctx,
             auto S = sign_view;
             const int32_t n = static_cast<int32_t>(diag.size());
             const int32_t batch = static_cast<int32_t>(diag.batch_size());
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 device::detail::tridiag_abs_offdiag(device::Thread{}, device::item(E, b, n - 1), device::item(S, b, n));
             });
@@ -250,7 +250,7 @@ Event solve_tridiagonal(Queue& ctx,
             const int32_t n = static_cast<int32_t>(dense_out.rows());
             const int32_t batch = static_cast<int32_t>(dense_out.batch_size());
             const int64_t total = static_cast<int64_t>(batch) * n * n;
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
                 const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * n));
                 const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
@@ -279,7 +279,7 @@ void form_right_tridiagonal(Queue& ctx,
         auto TD = tri_d;
         auto TE = tri_e;
 
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(std::max<int32_t>(1, n) * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(std::max<int32_t>(1, n) * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
@@ -305,7 +305,7 @@ void form_left_tridiagonal(Queue& ctx,
         auto TD = tri_d;
         auto TE = tri_e;
 
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(std::max<int32_t>(1, left_order) * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(std::max<int32_t>(1, left_order) * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / left_order;
             const int32_t i = linear - b * left_order;
@@ -327,7 +327,7 @@ void finalize_values_only(Queue& ctx,
         auto Evals = evals;
         T* s_out = singular_values.data();
 
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
@@ -357,7 +357,7 @@ void build_hermitian_svd_permutation(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto Evals = eigenvalues;
         auto Perm = permutation;
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             for (int32_t i = 0; i < n; ++i) {
                 Perm(i, b) = i;
@@ -400,7 +400,7 @@ void finalize_hermitian_values(Queue& ctx,
         auto Evals = eigenvalues;
         auto Perm = permutation;
         Real* s_out = singular_values.data();
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
@@ -435,7 +435,7 @@ void build_hermitian_vectors(Queue& ctx,
         auto Perm = permutation;
         auto U = u_mut.kernel_view();
         auto Vh = vh_mut.kernel_view();
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
@@ -465,7 +465,7 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(m_out.batch_mask());
     ctx->submit([&](sycl::handler& h) {
         auto M = mut.kernel_view();
-        h.parallel_for(sycl::range<2>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for(h, sycl::range<2>(static_cast<size_t>(batch),
                                       static_cast<size_t>(rows) * static_cast<size_t>(cols)),
                        [=](sycl::id<2> id) {
             const int32_t b = static_cast<int32_t>(id[0]);
@@ -493,7 +493,7 @@ void expand_real_block(Queue& ctx, const MatrixView<typename base_type<T>::type,
     ctx->submit([&](sycl::handler& h) {
         auto S = src.kernel_view();
         auto D = dst_mut.kernel_view();
-        h.parallel_for(sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
+        batchlas::impl::parallel_for(h, sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
                        [=](sycl::id<2> id) {
             const int32_t b = static_cast<int32_t>(id[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -514,7 +514,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(a.batch_mask());
     ctx->submit([&](sycl::handler& h) {
         auto A = a_mut.kernel_view();
-        h.parallel_for(sycl::range<2>(static_cast<size_t>(a.batch_size()), static_cast<size_t>(n) * n),
+        batchlas::impl::parallel_for(h, sycl::range<2>(static_cast<size_t>(a.batch_size()), static_cast<size_t>(n) * n),
                        [=](sycl::id<2> id) {
             const int32_t b = static_cast<int32_t>(id[0]);
             const int32_t lin = static_cast<int32_t>(id[1]);
@@ -541,7 +541,7 @@ void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, con
         ctx->submit([&](sycl::handler& h) {
             auto S = src.kernel_view();
             auto D = dst_mut.kernel_view();
-            h.parallel_for(sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
+            batchlas::impl::parallel_for(h, sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
                            [=](sycl::id<2> id) {
                 const int32_t b = static_cast<int32_t>(id[0]);
                 const int32_t lin = static_cast<int32_t>(id[1]);
@@ -577,7 +577,7 @@ void build_bidiag_vectors(Queue& ctx,
         ctx->submit([&](sycl::handler& h) {
             auto V = right_vecs.kernel_view();
             auto Vh = vh_mut.kernel_view();
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(k * batch)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(k * batch)), [=](sycl::id<1> tid) {
                 const int32_t linear = static_cast<int32_t>(tid[0]);
                 const int32_t b = linear / k;
                 const int32_t tgt = linear - b * k;
@@ -600,7 +600,7 @@ void build_bidiag_vectors(Queue& ctx,
             auto U = u_mut.kernel_view();
             (void)singular_values;
 
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(u_cols * batch)), [=](sycl::id<1> tid) {
+            batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(u_cols * batch)), [=](sycl::id<1> tid) {
                 const int32_t linear = static_cast<int32_t>(tid[0]);
                 const int32_t b = linear / u_cols;
                 const int32_t tgt = linear - b * u_cols;
@@ -635,7 +635,7 @@ bool has_tiny_singular_values(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         const T* s_in = singular_values.data();
         int32_t* f = flags.data();
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             int32_t tiny = 0;
             if (mask == nullptr || mask[b] != 0) {
@@ -666,7 +666,7 @@ void patch_zero_left_vectors(Queue& ctx,
         auto U = u_mut.kernel_view();
         const T* s_in = singular_values.data();
 
-        h.parallel_for(sycl::range<1>(static_cast<size_t>(m * batch)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(m * batch)), [=](sycl::id<1> tid) {
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / m;
             const int32_t tgt = linear - b * m;

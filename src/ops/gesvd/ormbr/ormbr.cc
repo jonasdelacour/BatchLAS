@@ -99,7 +99,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
         const int32_t nn = n;
         const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
             const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
@@ -124,7 +124,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
         const int32_t nn = n;
         const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn);
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
@@ -174,7 +174,7 @@ sycl::event pack_p_panel_batched(Queue& q,
     const int batch = a.batch_size();
 
     return q->submit([&](sycl::handler& h) {
-        h.parallel_for<PackPPanelKernel<T>>(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for<PackPPanelKernel<T>>(h, sycl::range<3>(static_cast<size_t>(batch),
                                                            static_cast<size_t>(m),
                                                            static_cast<size_t>(ib)),
                                             [=](sycl::id<3> idx) {

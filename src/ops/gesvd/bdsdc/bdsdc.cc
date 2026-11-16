@@ -108,7 +108,7 @@ void bdsdc_build_gk(Queue& ctx,
         auto GS = ws.gk_sign;
         const int32_t nn = n;
         const int32_t N = 2 * n;
-        h.parallel_for<BdsdcBuildGk<B, T>>(
+        batchlas::impl::parallel_for<BdsdcBuildGk<B, T>>(h,
             sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -131,7 +131,7 @@ void bdsdc_extract_values(Queue& ctx,
         T* out = sigma.data();
         const int32_t nn = n;
         const bool desc = sort_desc;
-        h.parallel_for<BdsdcValuesOnly<B, T>>(
+        batchlas::impl::parallel_for<BdsdcValuesOnly<B, T>>(h,
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t lin = static_cast<int32_t>(tid[0]);
             const int32_t b = lin / nn;

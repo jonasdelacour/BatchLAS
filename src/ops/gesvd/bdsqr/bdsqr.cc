@@ -49,7 +49,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
         const int32_t urows = static_cast<int32_t>(u.rows()), ucols = static_cast<int32_t>(u.cols());
         const int32_t vrows = static_cast<int32_t>(vh.rows()), vcols = static_cast<int32_t>(vh.cols());
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             // I3. The host fold below reads every flag, so an inactive item writes the
             // neutral "converged" and nothing else.
