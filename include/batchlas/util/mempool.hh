@@ -174,7 +174,7 @@ struct BumpAllocator {
         byte_size -= bytes;
     }
 
-    private:
+private:
 
         struct measure_tag {};
 

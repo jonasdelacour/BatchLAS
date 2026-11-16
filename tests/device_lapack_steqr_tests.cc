@@ -116,14 +116,14 @@ void launch_device(Dev& dev, int n, int ld, T* d, T* e, T* q, int* info, batchla
 }
 
 template <class T> class DeviceApiSteqrTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->IsSkipped()) return;
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "steqr_cta's CTA kernel runs on GPUs only";
     }
 
-  public:
+public:
     struct Result {
         std::vector<T> w, q;
         std::vector<int> info;
@@ -344,7 +344,7 @@ template <class T> int valdiff(const std::vector<T>& x, const std::vector<T>& y)
 }
 
 template <class T> class DeviceApiSteqrBlockedTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->IsSkipped()) return;
@@ -352,7 +352,7 @@ template <class T> class DeviceApiSteqrBlockedTest : public DeviceCoreTest<T> {
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "the host steqr route under test runs on GPUs";
     }
 
-  public:
+public:
     using Result = typename DeviceApiSteqrTest<T>::Result;
 
     Result host(int n, int ld, JobType jobz, int max_sweeps, const std::vector<T>& d0, const std::vector<T>& e0, const std::vector<T>& q0) {

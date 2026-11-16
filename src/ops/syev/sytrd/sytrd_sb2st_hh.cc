@@ -505,15 +505,15 @@ Event unmqr_hb2st(Queue& ctx,
 
             // C x S combinations are instantiated explicitly; anything else
             // falls through to the tiled kernel.
-            #define BL_WAVE_CASE(CC, SS)                                              \
-                if (tile == (CC) && subs == (SS))                                     \
-                    return unmqr_hb2st_wave<B, T, (CC), (SS)>(                        \
-                        ctx, v_in, tau_in, z_io, n, starts.data(), lens.data(), wp,   \
-                        num_waves);
+#define BL_WAVE_CASE(CC, SS)                                              \
+    if (tile == (CC) && subs == (SS))                                     \
+        return unmqr_hb2st_wave<B, T, (CC), (SS)>(                        \
+            ctx, v_in, tau_in, z_io, n, starts.data(), lens.data(), wp,   \
+            num_waves);
             BL_WAVE_CASE(1, 8) BL_WAVE_CASE(2, 8) BL_WAVE_CASE(4, 8) BL_WAVE_CASE(8, 8)
             BL_WAVE_CASE(1, 4) BL_WAVE_CASE(2, 4) BL_WAVE_CASE(4, 4) BL_WAVE_CASE(8, 4)
             BL_WAVE_CASE(1, 16) BL_WAVE_CASE(2, 16) BL_WAVE_CASE(4, 16) BL_WAVE_CASE(8, 16)
-            #undef BL_WAVE_CASE
+#undef BL_WAVE_CASE
         }
     }
 

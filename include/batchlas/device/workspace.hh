@@ -40,7 +40,7 @@ template <class T> struct WsSlot {
 
 // The bump allocator both sides run: take<T>(space, count) -> a slot aligned to max(alignof(T), align).
 class Plan {
-  public:
+public:
     constexpr explicit Plan(std::size_t align = 16) : align_(align) {}
     template <class T> constexpr WsSlot<T> take(WsSpace s, std::size_t count) {
         std::size_t& top = s == WsSpace::Local ? local_ : global_;
@@ -55,7 +55,7 @@ class Plan {
         return {round(local_), round(global_), align_};
     }
 
-  private:
+private:
     std::size_t align_;
     std::size_t local_ = 0;
     std::size_t global_ = 0;

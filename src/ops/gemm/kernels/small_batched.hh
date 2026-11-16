@@ -302,16 +302,16 @@ Event small_batched(Queue& ctx,
         }
     }
     switch (small_bucket(max_dim)) {
-    case 8:
-        return launch_small_batched_leg<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    case 16:
-        return launch_small_batched_leg<T, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    case 32:
-        return launch_small_batched_leg<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    default:
-        if constexpr (kSmallMaxDimFor<T> >= 64)
-            return launch_small_batched_leg<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-        else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
+        case 8:
+            return launch_small_batched_leg<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        case 16:
+            return launch_small_batched_leg<T, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        case 32:
+            return launch_small_batched_leg<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        default:
+            if constexpr (kSmallMaxDimFor<T> >= 64)
+                return launch_small_batched_leg<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+            else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
     }
 }
 

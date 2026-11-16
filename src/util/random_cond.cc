@@ -17,220 +17,220 @@
 namespace batchlas {
 
 namespace detail {
-    template <typename T>
-    using real_t = float_t<T>;
+template <typename T>
+using real_t = float_t<T>;
 
-    template <typename T>
-    inline T real_to_T(real_t<T> v) {
-        if constexpr (is_std_complex_v<T>) {
-            return T(v, real_t<T>(0));
+template <typename T>
+inline T real_to_T(real_t<T> v) {
+    if constexpr (is_std_complex_v<T>) {
+        return T(v, real_t<T>(0));
+    } else {
+        return T(v);
+    }
+}
+
+template <typename T>
+UnifiedVector<T> build_spectrum_kappa2(int n, real_t<T> log10_kappa2) {
+    UnifiedVector<T> diag_vals(n);
+    if (n == 1) {
+        diag_vals[0] = real_to_T<T>(real_t<T>(1));
+        return diag_vals;
+    }
+
+    const long double log_kappa2 = std::log(10.0L) * static_cast<long double>(log10_kappa2);
+    const long double t = log_kappa2 / static_cast<long double>(n - 1);
+    const long double m = static_cast<long double>(n - 1) * 0.5L;
+    for (int i = 0; i < n; ++i) {
+        const long double exp_arg = (static_cast<long double>(i) - m) * t;
+        const long double s = std::exp(exp_arg);
+        diag_vals[i] = real_to_T<T>(static_cast<real_t<T>>(s));
+    }
+    return diag_vals;
+}
+
+inline long double log_kappaF_geometric(int n, long double t) {
+    const long double m = static_cast<long double>(n - 1) * 0.5L;
+    long double max1 = -std::numeric_limits<long double>::infinity();
+    long double max2 = -std::numeric_limits<long double>::infinity();
+
+    for (int i = 0; i < n; ++i) {
+        const long double x = (static_cast<long double>(i) - m) * t;
+        const long double v = 2.0L * x;
+        const long double w = -2.0L * x;
+        if (v > max1) max1 = v;
+        if (w > max2) max2 = w;
+    }
+
+    long double sum1 = 0.0L;
+    long double sum2 = 0.0L;
+    for (int i = 0; i < n; ++i) {
+        const long double x = (static_cast<long double>(i) - m) * t;
+        sum1 += std::exp(2.0L * x - max1);
+        sum2 += std::exp(-2.0L * x - max2);
+    }
+
+    const long double log_sum1 = max1 + std::log(sum1);
+    const long double log_sum2 = max2 + std::log(sum2);
+    return 0.5L * (log_sum1 + log_sum2);
+}
+
+template <typename T>
+UnifiedVector<T> build_spectrum_kappaF(int n, real_t<T> log10_kappaF) {
+    UnifiedVector<T> diag_vals(n);
+    if (n == 1) {
+        diag_vals[0] = real_to_T<T>(real_t<T>(1));
+        return diag_vals;
+    }
+
+    const long double log10_n = std::log10(static_cast<long double>(n));
+    if (static_cast<long double>(log10_kappaF) < log10_n) {
+        throw batchlas::invalid_argument("build_spectrum_kappaF: log10_kappaF must be >= log10(n)");
+    }
+
+    const long double target = std::log(10.0L) * static_cast<long double>(log10_kappaF);
+    const long double log_kappa0 = std::log(static_cast<long double>(n));
+    if (target <= log_kappa0) {
+        for (int i = 0; i < n; ++i) {
+            diag_vals[i] = real_to_T<T>(real_t<T>(1));
+        }
+        return diag_vals;
+    }
+
+    long double t_lo = 0.0L;
+    long double t_hi = 1.0L;
+    while (log_kappaF_geometric(n, t_hi) < target) {
+        t_hi *= 2.0L;
+    }
+
+    for (int iter = 0; iter < 80; ++iter) {
+        const long double t_mid = 0.5L * (t_lo + t_hi);
+        if (log_kappaF_geometric(n, t_mid) < target) {
+            t_lo = t_mid;
         } else {
-            return T(v);
+            t_hi = t_mid;
         }
     }
 
-    template <typename T>
-    UnifiedVector<T> build_spectrum_kappa2(int n, real_t<T> log10_kappa2) {
-        UnifiedVector<T> diag_vals(n);
-        if (n == 1) {
-            diag_vals[0] = real_to_T<T>(real_t<T>(1));
-            return diag_vals;
-        }
-
-        const long double log_kappa2 = std::log(10.0L) * static_cast<long double>(log10_kappa2);
-        const long double t = log_kappa2 / static_cast<long double>(n - 1);
-        const long double m = static_cast<long double>(n - 1) * 0.5L;
-        for (int i = 0; i < n; ++i) {
-            const long double exp_arg = (static_cast<long double>(i) - m) * t;
-            const long double s = std::exp(exp_arg);
-            diag_vals[i] = real_to_T<T>(static_cast<real_t<T>>(s));
-        }
-        return diag_vals;
+    const long double t = 0.5L * (t_lo + t_hi);
+    const long double m = static_cast<long double>(n - 1) * 0.5L;
+    for (int i = 0; i < n; ++i) {
+        const long double exp_arg = (static_cast<long double>(i) - m) * t;
+        const long double s = std::exp(exp_arg);
+        diag_vals[i] = real_to_T<T>(static_cast<real_t<T>>(s));
     }
+    return diag_vals;
+}
 
-    inline long double log_kappaF_geometric(int n, long double t) {
-        const long double m = static_cast<long double>(n - 1) * 0.5L;
-        long double max1 = -std::numeric_limits<long double>::infinity();
-        long double max2 = -std::numeric_limits<long double>::infinity();
-
-        for (int i = 0; i < n; ++i) {
-            const long double x = (static_cast<long double>(i) - m) * t;
-            const long double v = 2.0L * x;
-            const long double w = -2.0L * x;
-            if (v > max1) max1 = v;
-            if (w > max2) max2 = w;
-        }
-
-        long double sum1 = 0.0L;
-        long double sum2 = 0.0L;
-        for (int i = 0; i < n; ++i) {
-            const long double x = (static_cast<long double>(i) - m) * t;
-            sum1 += std::exp(2.0L * x - max1);
-            sum2 += std::exp(-2.0L * x - max2);
-        }
-
-        const long double log_sum1 = max1 + std::log(sum1);
-        const long double log_sum2 = max2 + std::log(sum2);
-        return 0.5L * (log_sum1 + log_sum2);
+template <typename T>
+UnifiedVector<T> build_spectrum_for_metric(int n,
+                                           real_t<T> log10_kappa,
+                                           NormType metric,
+                                           const char* func_name) {
+    switch (metric) {
+        case NormType::Spectral:
+            return build_spectrum_kappa2<T>(n, log10_kappa);
+        case NormType::Frobenius:
+            return build_spectrum_kappaF<T>(n, log10_kappa);
+        default:
+            throw batchlas::invalid_argument(std::string(func_name) + ": metric must be NormType::Spectral or NormType::Frobenius");
     }
+}
 
-    template <typename T>
-    UnifiedVector<T> build_spectrum_kappaF(int n, real_t<T> log10_kappaF) {
-        UnifiedVector<T> diag_vals(n);
-        if (n == 1) {
-            diag_vals[0] = real_to_T<T>(real_t<T>(1));
-            return diag_vals;
-        }
+template <Backend B, typename T>
+Matrix<T, MatrixFormat::Dense> reduce_hermitian_to_tridiagonal(Queue& ctx,
+                                                               Matrix<T, MatrixFormat::Dense>& A,
+                                                               int block_size) {
+    const int n = A.rows();
+    const int batch_size = A.batch_size();
+    Vector<T> d(n, batch_size);
+    Vector<T> e(std::max(0, n - 1), batch_size);
+    Vector<T> tau(std::max(0, n - 1), batch_size);
 
-        const long double log10_n = std::log10(static_cast<long double>(n));
-        if (static_cast<long double>(log10_kappaF) < log10_n) {
-            throw batchlas::invalid_argument("build_spectrum_kappaF: log10_kappaF must be >= log10(n)");
-        }
+    auto dv = static_cast<VectorView<T>>(d);
+    auto ev = static_cast<VectorView<T>>(e);
+    auto tauv = static_cast<VectorView<T>>(tau);
 
-        const long double target = std::log(10.0L) * static_cast<long double>(log10_kappaF);
-        const long double log_kappa0 = std::log(static_cast<long double>(n));
-        if (target <= log_kappa0) {
-            for (int i = 0; i < n; ++i) {
-                diag_vals[i] = real_to_T<T>(real_t<T>(1));
-            }
-            return diag_vals;
-        }
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, A, dv, ev, tauv, Uplo::Lower, block_size);
+    auto ws = ctx.workspace(ws_bytes);
+    sytrd_blocked<B, T>(ctx, A, dv, ev, tauv, Uplo::Lower, ws.span(), block_size).wait();
 
-        long double t_lo = 0.0L;
-        long double t_hi = 1.0L;
-        while (log_kappaF_geometric(n, t_hi) < target) {
-            t_hi *= 2.0L;
-        }
+    Matrix<T, MatrixFormat::Dense> Tmat = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch_size);
+    auto Tv = Tmat.view();
+    Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, dv).wait();
 
-        for (int iter = 0; iter < 80; ++iter) {
-            const long double t_mid = 0.5L * (t_lo + t_hi);
-            if (log_kappaF_geometric(n, t_mid) < target) {
-                t_lo = t_mid;
-            } else {
-                t_hi = t_mid;
-            }
-        }
-
-        const long double t = 0.5L * (t_lo + t_hi);
-        const long double m = static_cast<long double>(n - 1) * 0.5L;
-        for (int i = 0; i < n; ++i) {
-            const long double exp_arg = (static_cast<long double>(i) - m) * t;
-            const long double s = std::exp(exp_arg);
-            diag_vals[i] = real_to_T<T>(static_cast<real_t<T>>(s));
-        }
-        return diag_vals;
-    }
-
-    template <typename T>
-    UnifiedVector<T> build_spectrum_for_metric(int n,
-                                               real_t<T> log10_kappa,
-                                               NormType metric,
-                                               const char* func_name) {
-        switch (metric) {
-            case NormType::Spectral:
-                return build_spectrum_kappa2<T>(n, log10_kappa);
-            case NormType::Frobenius:
-                return build_spectrum_kappaF<T>(n, log10_kappa);
-            default:
-                throw batchlas::invalid_argument(std::string(func_name) + ": metric must be NormType::Spectral or NormType::Frobenius");
-        }
-    }
-
-    template <Backend B, typename T>
-    Matrix<T, MatrixFormat::Dense> reduce_hermitian_to_tridiagonal(Queue& ctx,
-                                                                   Matrix<T, MatrixFormat::Dense>& A,
-                                                                   int block_size) {
-        const int n = A.rows();
-        const int batch_size = A.batch_size();
-        Vector<T> d(n, batch_size);
-        Vector<T> e(std::max(0, n - 1), batch_size);
-        Vector<T> tau(std::max(0, n - 1), batch_size);
-
-        auto dv = static_cast<VectorView<T>>(d);
-        auto ev = static_cast<VectorView<T>>(e);
-        auto tauv = static_cast<VectorView<T>>(tau);
-
-        const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, A, dv, ev, tauv, Uplo::Lower, block_size);
-        auto ws = ctx.workspace(ws_bytes);
-        sytrd_blocked<B, T>(ctx, A, dv, ev, tauv, Uplo::Lower, ws.span(), block_size).wait();
-
-        Matrix<T, MatrixFormat::Dense> Tmat = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch_size);
-        auto Tv = Tmat.view();
-        Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, dv).wait();
-
-        if (n > 1) {
-            Vector<T> e_conj(n - 1, batch_size);
-            for (int b = 0; b < batch_size; ++b) {
-                for (int i = 0; i < n - 1; ++i) {
-                    if constexpr (is_std_complex_v<T>) {
-                        e_conj(i, b) = std::conj(e(i, b));
-                    } else {
-                        e_conj(i, b) = e(i, b);
-                    }
+    if (n > 1) {
+        Vector<T> e_conj(n - 1, batch_size);
+        for (int b = 0; b < batch_size; ++b) {
+            for (int i = 0; i < n - 1; ++i) {
+                if constexpr (is_std_complex_v<T>) {
+                    e_conj(i, b) = std::conj(e(i, b));
+                } else {
+                    e_conj(i, b) = e(i, b);
                 }
             }
-
-            auto ev_conj = static_cast<VectorView<T>>(e_conj);
-            Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, ev, -1).wait();
-            Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, ev_conj, 1).wait();
         }
 
-        return Tmat;
+        auto ev_conj = static_cast<VectorView<T>>(e_conj);
+        Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, ev, -1).wait();
+        Tv.template fill_diagonal<MatrixFormat::Dense>(ctx, ev_conj, 1).wait();
     }
 
-    template <typename T>
-    void apply_givens_rows(Matrix<T, MatrixFormat::Dense>& Q,
-                           int row1,
-                           int row2,
-                           int batch,
-                           real_t<T> c,
-                           real_t<T> s) {
-        const int n = Q.cols();
-        const T tc = real_to_T<T>(c);
-        const T ts = real_to_T<T>(s);
-        for (int col = 0; col < n; ++col) {
-            const T q1 = Q(row1, col, batch);
-            const T q2 = Q(row2, col, batch);
-            Q(row1, col, batch) = tc * q1 + ts * q2;
-            Q(row2, col, batch) = real_to_T<T>(-s) * q1 + tc * q2;
+    return Tmat;
+}
+
+template <typename T>
+void apply_givens_rows(Matrix<T, MatrixFormat::Dense>& Q,
+                       int row1,
+                       int row2,
+                       int batch,
+                       real_t<T> c,
+                       real_t<T> s) {
+    const int n = Q.cols();
+    const T tc = real_to_T<T>(c);
+    const T ts = real_to_T<T>(s);
+    for (int col = 0; col < n; ++col) {
+        const T q1 = Q(row1, col, batch);
+        const T q2 = Q(row2, col, batch);
+        Q(row1, col, batch) = tc * q1 + ts * q2;
+        Q(row2, col, batch) = real_to_T<T>(-s) * q1 + tc * q2;
+    }
+}
+
+template <typename T>
+Matrix<T, MatrixFormat::Dense> banded_orthogonal(int n,
+                                                 int bandwidth,
+                                                 int batch_size,
+                                                 unsigned seed) {
+    Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
+    if (bandwidth <= 0) return Q;
+
+    const real_t<T> two_pi = real_t<T>(2) * std::acos(real_t<T>(-1));
+    for (int b = 0; b < batch_size; ++b) {
+        std::mt19937 rng(seed + 1315423911u * static_cast<unsigned>(b));
+        std::uniform_real_distribution<real_t<T>> angle_dist(real_t<T>(0), two_pi);
+
+        const int offset = static_cast<int>(rng() % static_cast<unsigned>(bandwidth + 1));
+        for (int i = offset; i + bandwidth < n; i += (bandwidth + 1)) {
+            const real_t<T> theta = angle_dist(rng);
+            const real_t<T> c = std::cos(theta);
+            const real_t<T> s = std::sin(theta);
+            apply_givens_rows(Q, i, i + bandwidth, b, c, s);
         }
     }
+    return Q;
+}
 
-    template <typename T>
-    Matrix<T, MatrixFormat::Dense> banded_orthogonal(int n,
-                                                     int bandwidth,
-                                                     int batch_size,
-                                                     unsigned seed) {
-        Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
-        if (bandwidth <= 0) return Q;
-
-        const real_t<T> two_pi = real_t<T>(2) * std::acos(real_t<T>(-1));
-        for (int b = 0; b < batch_size; ++b) {
-            std::mt19937 rng(seed + 1315423911u * static_cast<unsigned>(b));
-            std::uniform_real_distribution<real_t<T>> angle_dist(real_t<T>(0), two_pi);
-
-            const int offset = static_cast<int>(rng() % static_cast<unsigned>(bandwidth + 1));
-            for (int i = offset; i + bandwidth < n; i += (bandwidth + 1)) {
-                const real_t<T> theta = angle_dist(rng);
-                const real_t<T> c = std::cos(theta);
-                const real_t<T> s = std::sin(theta);
-                apply_givens_rows(Q, i, i + bandwidth, b, c, s);
-            }
+template <Backend B>
+constexpr OrthoAlgorithm effective_ortho_algo(OrthoAlgorithm algo) {
+    if constexpr (B == Backend::NETLIB) {
+        if (algo == OrthoAlgorithm::Cholesky ||
+            algo == OrthoAlgorithm::Chol2 ||
+            algo == OrthoAlgorithm::ShiftChol3) {
+            return OrthoAlgorithm::Householder;
         }
-        return Q;
     }
-
-    template <Backend B>
-    constexpr OrthoAlgorithm effective_ortho_algo(OrthoAlgorithm algo) {
-        if constexpr (B == Backend::NETLIB) {
-            if (algo == OrthoAlgorithm::Cholesky ||
-                algo == OrthoAlgorithm::Chol2 ||
-                algo == OrthoAlgorithm::ShiftChol3) {
-                return OrthoAlgorithm::Householder;
-            }
-        }
-        return algo;
-    }
+    return algo;
+}
 }  // namespace detail
 
 // Create a batch of random dense matrices with a specified log10 conditioning metric.

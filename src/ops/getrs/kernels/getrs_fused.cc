@@ -614,18 +614,18 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
                         const int* piv, int pstride,
                         int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    #define BATCHLAS_GETRS_FUSED_ARM(NRV)                                            \
-        if (trans) return fused_launch_trans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,    \
-                                                     piv, pstride, n, nrhs, batch,   \
-                                                     wg, nb, conj, mask);            \
-        return fused_launch_notrans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,             \
-                                            piv, pstride, n, nrhs, batch, wg, nb,    \
-                                            mask);
+#define BATCHLAS_GETRS_FUSED_ARM(NRV)                                            \
+    if (trans) return fused_launch_trans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,    \
+                                                 piv, pstride, n, nrhs, batch,   \
+                                                 wg, nb, conj, mask);            \
+    return fused_launch_notrans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,             \
+                                        piv, pstride, n, nrhs, batch, wg, nb,    \
+                                        mask);
     if (nrhs <= 1) { BATCHLAS_GETRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_GETRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_GETRS_FUSED_ARM(4) }
     BATCHLAS_GETRS_FUSED_ARM(8)
-    #undef BATCHLAS_GETRS_FUSED_ARM
+#undef BATCHLAS_GETRS_FUSED_ARM
 }
 
 }  // namespace
@@ -772,19 +772,19 @@ Event potrs_fused_dispatch(Queue& ctx,
                                      dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("potrs_fused", A, B));
-    #define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
-        if (uplo == Uplo::Lower)                                                           \
-            return potrs_fused_launch<T, NRV, true>(ctx, A.data_ptr(), A.ld(), A.stride(), \
-                                                    B.data_ptr(), B.ld(), B.stride(),      \
-                                                    n, nrhs, batch, wg, nb, mask);         \
-        return potrs_fused_launch<T, NRV, false>(ctx, A.data_ptr(), A.ld(), A.stride(),    \
-                                                 B.data_ptr(), B.ld(), B.stride(),         \
-                                                 n, nrhs, batch, wg, nb, mask);
+#define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
+    if (uplo == Uplo::Lower)                                                           \
+        return potrs_fused_launch<T, NRV, true>(ctx, A.data_ptr(), A.ld(), A.stride(), \
+                                                B.data_ptr(), B.ld(), B.stride(),      \
+                                                n, nrhs, batch, wg, nb, mask);         \
+    return potrs_fused_launch<T, NRV, false>(ctx, A.data_ptr(), A.ld(), A.stride(),    \
+                                             B.data_ptr(), B.ld(), B.stride(),         \
+                                             n, nrhs, batch, wg, nb, mask);
     if (nrhs <= 1) { BATCHLAS_POTRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_POTRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_POTRS_FUSED_ARM(4) }
     BATCHLAS_POTRS_FUSED_ARM(8)
-    #undef BATCHLAS_POTRS_FUSED_ARM
+#undef BATCHLAS_POTRS_FUSED_ARM
 }
 
 #define BATCHLAS_GETRS_FUSED_INSTANTIATE(T)                                                \

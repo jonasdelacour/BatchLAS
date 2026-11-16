@@ -24,14 +24,14 @@ inline double bench_beta() {
 
 inline Transpose transpose_from_arg(int value) {
     switch (value) {
-    case 0:
-        return Transpose::NoTrans;
-    case 1:
-        return Transpose::Trans;
-    case 2:
-        return Transpose::ConjTrans;
-    default:
-        throw batchlas::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
+        case 0:
+            return Transpose::NoTrans;
+        case 1:
+            return Transpose::Trans;
+        case 2:
+            return Transpose::ConjTrans;
+        default:
+            throw batchlas::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
     }
 }
 

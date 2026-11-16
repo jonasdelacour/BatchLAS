@@ -231,7 +231,7 @@ template <class T, Uplo UL, int N, bool Cta> void above_case(Dev& dev) {
 }
 
 template <class T> class DeviceApiPotrfTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;

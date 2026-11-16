@@ -16,9 +16,9 @@
 // and these wrappers already return an empty Event on failure, so elsewhere
 // they are no-ops.
 #if BATCHLAS_SYCL_IMPL_DPCPP
-    #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) static_cast<EventImpl>((q)->mem_advise((ptr), (bytes), (flag)))
+#define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) static_cast<EventImpl>((q)->mem_advise((ptr), (bytes), (flag)))
 #else
-    #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) ((void)(q), (void)(ptr), (void)(bytes), Event{})
+#define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) ((void)(q), (void)(ptr), (void)(bytes), Event{})
 #endif
 
 using namespace sycl;

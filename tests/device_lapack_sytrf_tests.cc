@@ -392,7 +392,7 @@ int host_width(int n) { return std::max(32, std::min(256, (n + 31) / 32 * 32)); 
 
 template <class Config>
 class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
-  protected:
+protected:
     using T = typename Config::ScalarType;
     static constexpr Backend Bk = Config::BackendVal;
 

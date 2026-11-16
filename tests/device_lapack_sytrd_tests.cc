@@ -96,7 +96,7 @@ void launch_device(Dev& dev, T* A, int n, int ld, T* d, T* e, T* tau, int* info,
 }
 
 template <class T> class DeviceApiSytrdTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->IsSkipped()) return;
@@ -104,7 +104,7 @@ template <class T> class DeviceApiSytrdTest : public DeviceCoreTest<T> {
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "sytrd_cta runs on GPUs only";
     }
 
-  public:
+public:
     struct Result {
         std::vector<T> a, d, e, tau;
         std::vector<int> info;

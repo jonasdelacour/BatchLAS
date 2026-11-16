@@ -189,7 +189,7 @@ void device_spmm(sycl::queue& q, const Spmm<T>& d, KernelMatrixView<T, MatrixFor
 }
 
 template <class T> class DeviceApiSparse : public DeviceCoreTest<T> {
-  protected:
+protected:
     struct Run {
         std::vector<T> host, device;
         double worst_device = 0, worst_host = 0, device_vs_host = 0;

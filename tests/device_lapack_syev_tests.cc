@@ -161,7 +161,7 @@ void launch_cta(Dev& dev, T* A, int n, int ld, real_of<T>* w, int* info, int liv
 }
 
 template <class T> class DeviceApiSyevCtaTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->IsSkipped()) return;
@@ -169,7 +169,7 @@ template <class T> class DeviceApiSyevCtaTest : public DeviceCoreTest<T> {
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "syev_cta_fused runs on GPUs only";
     }
 
-  public:
+public:
     Out<T> host(int n, JobType J, Uplo ul, const std::vector<T>& a0, int ld) {
         Dev& dev = this->dev;
         T* A = dev.up(a0);

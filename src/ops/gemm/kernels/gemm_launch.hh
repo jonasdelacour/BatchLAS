@@ -64,117 +64,117 @@ inline int ceil_div(int value, int divisor) {
 
 inline const char* kernel_trace_name(KernelVariant variant) {
     switch (variant) {
-    case KernelVariant::Direct: return "gemm_sycl_direct";
-    case KernelVariant::Tiled16: return "gemm_sycl_tiled16";
-    case KernelVariant::Tiled32x32Register: return "gemm_sycl_register_32x32";
-    case KernelVariant::Tiled64x64Register: return "gemm_sycl_register_64x64";
-    case KernelVariant::Tiled64x64RegisterK16: return "gemm_sycl_register_64x64_k16";
-    case KernelVariant::Tiled64x64RegisterK16TN: return "gemm_sycl_register_64x64_k16_tn";
-    case KernelVariant::Tiled64x64RegisterK16NT: return "gemm_sycl_register_64x64_k16_nt";
-    case KernelVariant::Tiled64x64RegisterK16TT: return "gemm_sycl_register_64x64_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK16: return "gemm_sycl_register_128x32_k16";
-    case KernelVariant::Tiled128x32RegisterK16TN: return "gemm_sycl_register_128x32_k16_tn";
-    case KernelVariant::Tiled128x32RegisterK16NT: return "gemm_sycl_register_128x32_k16_nt";
-    case KernelVariant::Tiled128x32RegisterK16TT: return "gemm_sycl_register_128x32_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK32TN: return "gemm_sycl_register_128x32_k32_tn";
-    case KernelVariant::Tiled128x32RegisterK32NT: return "gemm_sycl_register_128x32_k32_nt";
-    case KernelVariant::Tiled128x32RegisterK32TT: return "gemm_sycl_register_128x32_k32_tt";
-    case KernelVariant::Tiled128x64RegisterK16TN: return "gemm_sycl_register_128x64_k16_tn";
-    case KernelVariant::Tiled128x64RegisterK16NT: return "gemm_sycl_register_128x64_k16_nt";
-    case KernelVariant::Tiled128x64RegisterK16TT: return "gemm_sycl_register_128x64_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned: return "gemm_sycl_register_128x32_k32_s2_u1_aligned";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Generic: return "gemm_sycl_register_128x32_k32_s2_u1_generic";
-    case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large";
-    case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2";
-    case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8";
-    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt";
-    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn";
-    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt";
-    case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide";
-    case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn";
-    case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc";
-    case KernelVariant::Tiled128x32RegisterK16WideNC: return "gemm_sycl_register_128x32_k16_wide_nc";
-    case KernelVariant::Tiled32x128RegisterK16WideCN: return "gemm_sycl_register_32x128_k16_wide_cn";
-    case KernelVariant::Tiled32x128RegisterK16: return "gemm_sycl_register_32x128_k16";
-    case KernelVariant::Tiled32x128RegisterK16TN: return "gemm_sycl_register_32x128_k16_tn";
-    case KernelVariant::Tiled32x128RegisterK16TT: return "gemm_sycl_register_32x128_k16_tt";
-    case KernelVariant::Tiled32x32RegisterK16Wide: return "gemm_sycl_register_32x32_k16_wide";
-    case KernelVariant::Tiled16x16RegisterK16Wide: return "gemm_sycl_register_16x16_k16_wide";
-    case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt";
-    case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn";
-    case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt";
-    case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc";
-    case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct";
-    case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc";
-    case KernelVariant::Tiled128x32RegisterK16WideNT: return "gemm_sycl_register_128x32_k16_wide_nt";
-    case KernelVariant::Tiled128x32RegisterK16WideTN: return "gemm_sycl_register_128x32_k16_wide_tn";
-    case KernelVariant::Tiled128x32RegisterK16WideCN: return "gemm_sycl_register_128x32_k16_wide_cn";
-    case KernelVariant::Tiled32x128RegisterK16WideNT: return "gemm_sycl_register_32x128_k16_wide_nt";
-    case KernelVariant::Tiled32x128RegisterK16WideTN: return "gemm_sycl_register_32x128_k16_wide_tn";
-    case KernelVariant::Tiled32x128RegisterK16WideNC: return "gemm_sycl_register_32x128_k16_wide_nc";
-    case KernelVariant::Tiled32x32RegisterK16WideNT: return "gemm_sycl_register_32x32_k16_wide_nt";
-    case KernelVariant::Tiled32x32RegisterK16WideNC: return "gemm_sycl_register_32x32_k16_wide_nc";
-    case KernelVariant::Tiled32x32RegisterK16WideTN: return "gemm_sycl_register_32x32_k16_wide_tn";
-    case KernelVariant::Tiled32x32RegisterK16WideCN: return "gemm_sycl_register_32x32_k16_wide_cn";
-    case KernelVariant::Tiled32x32RegisterK16WideCT: return "gemm_sycl_register_32x32_k16_wide_ct";
-    case KernelVariant::Tiled16x16RegisterK16WideNT: return "gemm_sycl_register_16x16_k16_wide_nt";
-    case KernelVariant::Tiled16x16RegisterK16WideNC: return "gemm_sycl_register_16x16_k16_wide_nc";
-    case KernelVariant::Tiled16x16RegisterK16WideTN: return "gemm_sycl_register_16x16_k16_wide_tn";
-    case KernelVariant::Tiled16x16RegisterK16WideCN: return "gemm_sycl_register_16x16_k16_wide_cn";
-    case KernelVariant::Tiled16x16RegisterK16WideCT: return "gemm_sycl_register_16x16_k16_wide_ct";
-    case KernelVariant::Tiled64x32RegisterK16Wide: return "gemm_sycl_register_64x32_k16_wide";
-    case KernelVariant::Tiled64x32RegisterK16WideNT: return "gemm_sycl_register_64x32_k16_wide_nt";
-    case KernelVariant::Tiled64x32RegisterK16WideNC: return "gemm_sycl_register_64x32_k16_wide_nc";
-    case KernelVariant::Tiled64x32RegisterK16WideTN: return "gemm_sycl_register_64x32_k16_wide_tn";
-    case KernelVariant::Tiled64x32RegisterK16WideCN: return "gemm_sycl_register_64x32_k16_wide_cn";
-    case KernelVariant::Tiled64x32RegisterK16WideCT: return "gemm_sycl_register_64x32_k16_wide_ct";
-    case KernelVariant::Tiled32x64RegisterK16Wide: return "gemm_sycl_register_32x64_k16_wide";
-    case KernelVariant::Tiled32x64RegisterK16WideNT: return "gemm_sycl_register_32x64_k16_wide_nt";
-    case KernelVariant::Tiled32x64RegisterK16WideNC: return "gemm_sycl_register_32x64_k16_wide_nc";
-    case KernelVariant::Tiled32x64RegisterK16WideTN: return "gemm_sycl_register_32x64_k16_wide_tn";
-    case KernelVariant::Tiled32x64RegisterK16WideCN: return "gemm_sycl_register_32x64_k16_wide_cn";
-    case KernelVariant::Tiled32x64RegisterK16WideCT: return "gemm_sycl_register_32x64_k16_wide_ct";
-    case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide";
-    case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt";
-    case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc";
-    case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn";
-    case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt";
-    case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc";
-    case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn";
-    case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct";
-    case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
-    case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4";
-    case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
-    case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
-    case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
-    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide";
-    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt";
-    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc";
-    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn";
-    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt";
-    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc";
-    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn";
-    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct";
-    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc";
-    case KernelVariant::Tiled32x32RegisterK16WideTT: return "gemm_sycl_register_32x32_k16_wide_tt";
-    case KernelVariant::Tiled32x32RegisterK16WideTC: return "gemm_sycl_register_32x32_k16_wide_tc";
-    case KernelVariant::Tiled32x32RegisterK16WideCC: return "gemm_sycl_register_32x32_k16_wide_cc";
-    case KernelVariant::Tiled16x16RegisterK16WideTT: return "gemm_sycl_register_16x16_k16_wide_tt";
-    case KernelVariant::Tiled16x16RegisterK16WideTC: return "gemm_sycl_register_16x16_k16_wide_tc";
-    case KernelVariant::Tiled16x16RegisterK16WideCC: return "gemm_sycl_register_16x16_k16_wide_cc";
-    case KernelVariant::Tiled64x32RegisterK16WideCC: return "gemm_sycl_register_64x32_k16_wide_cc";
-    case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
-    case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
-    case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
-    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4";
-    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt";
-    case KernelVariant::Tiled256x128RegisterK8S4TN: return "gemm_sycl_register_256x128_k8_s4_tn";
-    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt";
-    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4";
-    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt";
-    case KernelVariant::Tiled128x256RegisterK8S4TN: return "gemm_sycl_register_128x256_k8_s4_tn";
-    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt";
-    case KernelVariant::Count: break;
+        case KernelVariant::Direct: return "gemm_sycl_direct";
+        case KernelVariant::Tiled16: return "gemm_sycl_tiled16";
+        case KernelVariant::Tiled32x32Register: return "gemm_sycl_register_32x32";
+        case KernelVariant::Tiled64x64Register: return "gemm_sycl_register_64x64";
+        case KernelVariant::Tiled64x64RegisterK16: return "gemm_sycl_register_64x64_k16";
+        case KernelVariant::Tiled64x64RegisterK16TN: return "gemm_sycl_register_64x64_k16_tn";
+        case KernelVariant::Tiled64x64RegisterK16NT: return "gemm_sycl_register_64x64_k16_nt";
+        case KernelVariant::Tiled64x64RegisterK16TT: return "gemm_sycl_register_64x64_k16_tt";
+        case KernelVariant::Tiled128x32RegisterK16: return "gemm_sycl_register_128x32_k16";
+        case KernelVariant::Tiled128x32RegisterK16TN: return "gemm_sycl_register_128x32_k16_tn";
+        case KernelVariant::Tiled128x32RegisterK16NT: return "gemm_sycl_register_128x32_k16_nt";
+        case KernelVariant::Tiled128x32RegisterK16TT: return "gemm_sycl_register_128x32_k16_tt";
+        case KernelVariant::Tiled128x32RegisterK32TN: return "gemm_sycl_register_128x32_k32_tn";
+        case KernelVariant::Tiled128x32RegisterK32NT: return "gemm_sycl_register_128x32_k32_nt";
+        case KernelVariant::Tiled128x32RegisterK32TT: return "gemm_sycl_register_128x32_k32_tt";
+        case KernelVariant::Tiled128x64RegisterK16TN: return "gemm_sycl_register_128x64_k16_tn";
+        case KernelVariant::Tiled128x64RegisterK16NT: return "gemm_sycl_register_128x64_k16_nt";
+        case KernelVariant::Tiled128x64RegisterK16TT: return "gemm_sycl_register_128x64_k16_tt";
+        case KernelVariant::Tiled128x32RegisterK32S2U1Aligned: return "gemm_sycl_register_128x32_k32_s2_u1_aligned";
+        case KernelVariant::Tiled128x32RegisterK32S2U1Generic: return "gemm_sycl_register_128x32_k32_s2_u1_generic";
+        case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large";
+        case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2";
+        case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8";
+        case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt";
+        case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn";
+        case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt";
+        case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide";
+        case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn";
+        case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc";
+        case KernelVariant::Tiled128x32RegisterK16WideNC: return "gemm_sycl_register_128x32_k16_wide_nc";
+        case KernelVariant::Tiled32x128RegisterK16WideCN: return "gemm_sycl_register_32x128_k16_wide_cn";
+        case KernelVariant::Tiled32x128RegisterK16: return "gemm_sycl_register_32x128_k16";
+        case KernelVariant::Tiled32x128RegisterK16TN: return "gemm_sycl_register_32x128_k16_tn";
+        case KernelVariant::Tiled32x128RegisterK16TT: return "gemm_sycl_register_32x128_k16_tt";
+        case KernelVariant::Tiled32x32RegisterK16Wide: return "gemm_sycl_register_32x32_k16_wide";
+        case KernelVariant::Tiled16x16RegisterK16Wide: return "gemm_sycl_register_16x16_k16_wide";
+        case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt";
+        case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn";
+        case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt";
+        case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc";
+        case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct";
+        case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc";
+        case KernelVariant::Tiled128x32RegisterK16WideNT: return "gemm_sycl_register_128x32_k16_wide_nt";
+        case KernelVariant::Tiled128x32RegisterK16WideTN: return "gemm_sycl_register_128x32_k16_wide_tn";
+        case KernelVariant::Tiled128x32RegisterK16WideCN: return "gemm_sycl_register_128x32_k16_wide_cn";
+        case KernelVariant::Tiled32x128RegisterK16WideNT: return "gemm_sycl_register_32x128_k16_wide_nt";
+        case KernelVariant::Tiled32x128RegisterK16WideTN: return "gemm_sycl_register_32x128_k16_wide_tn";
+        case KernelVariant::Tiled32x128RegisterK16WideNC: return "gemm_sycl_register_32x128_k16_wide_nc";
+        case KernelVariant::Tiled32x32RegisterK16WideNT: return "gemm_sycl_register_32x32_k16_wide_nt";
+        case KernelVariant::Tiled32x32RegisterK16WideNC: return "gemm_sycl_register_32x32_k16_wide_nc";
+        case KernelVariant::Tiled32x32RegisterK16WideTN: return "gemm_sycl_register_32x32_k16_wide_tn";
+        case KernelVariant::Tiled32x32RegisterK16WideCN: return "gemm_sycl_register_32x32_k16_wide_cn";
+        case KernelVariant::Tiled32x32RegisterK16WideCT: return "gemm_sycl_register_32x32_k16_wide_ct";
+        case KernelVariant::Tiled16x16RegisterK16WideNT: return "gemm_sycl_register_16x16_k16_wide_nt";
+        case KernelVariant::Tiled16x16RegisterK16WideNC: return "gemm_sycl_register_16x16_k16_wide_nc";
+        case KernelVariant::Tiled16x16RegisterK16WideTN: return "gemm_sycl_register_16x16_k16_wide_tn";
+        case KernelVariant::Tiled16x16RegisterK16WideCN: return "gemm_sycl_register_16x16_k16_wide_cn";
+        case KernelVariant::Tiled16x16RegisterK16WideCT: return "gemm_sycl_register_16x16_k16_wide_ct";
+        case KernelVariant::Tiled64x32RegisterK16Wide: return "gemm_sycl_register_64x32_k16_wide";
+        case KernelVariant::Tiled64x32RegisterK16WideNT: return "gemm_sycl_register_64x32_k16_wide_nt";
+        case KernelVariant::Tiled64x32RegisterK16WideNC: return "gemm_sycl_register_64x32_k16_wide_nc";
+        case KernelVariant::Tiled64x32RegisterK16WideTN: return "gemm_sycl_register_64x32_k16_wide_tn";
+        case KernelVariant::Tiled64x32RegisterK16WideCN: return "gemm_sycl_register_64x32_k16_wide_cn";
+        case KernelVariant::Tiled64x32RegisterK16WideCT: return "gemm_sycl_register_64x32_k16_wide_ct";
+        case KernelVariant::Tiled32x64RegisterK16Wide: return "gemm_sycl_register_32x64_k16_wide";
+        case KernelVariant::Tiled32x64RegisterK16WideNT: return "gemm_sycl_register_32x64_k16_wide_nt";
+        case KernelVariant::Tiled32x64RegisterK16WideNC: return "gemm_sycl_register_32x64_k16_wide_nc";
+        case KernelVariant::Tiled32x64RegisterK16WideTN: return "gemm_sycl_register_32x64_k16_wide_tn";
+        case KernelVariant::Tiled32x64RegisterK16WideCN: return "gemm_sycl_register_32x64_k16_wide_cn";
+        case KernelVariant::Tiled32x64RegisterK16WideCT: return "gemm_sycl_register_32x64_k16_wide_ct";
+        case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide";
+        case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt";
+        case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc";
+        case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn";
+        case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt";
+        case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc";
+        case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn";
+        case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct";
+        case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
+        case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4";
+        case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
+        case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
+        case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
+        case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide";
+        case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt";
+        case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc";
+        case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn";
+        case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt";
+        case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc";
+        case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn";
+        case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct";
+        case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc";
+        case KernelVariant::Tiled32x32RegisterK16WideTT: return "gemm_sycl_register_32x32_k16_wide_tt";
+        case KernelVariant::Tiled32x32RegisterK16WideTC: return "gemm_sycl_register_32x32_k16_wide_tc";
+        case KernelVariant::Tiled32x32RegisterK16WideCC: return "gemm_sycl_register_32x32_k16_wide_cc";
+        case KernelVariant::Tiled16x16RegisterK16WideTT: return "gemm_sycl_register_16x16_k16_wide_tt";
+        case KernelVariant::Tiled16x16RegisterK16WideTC: return "gemm_sycl_register_16x16_k16_wide_tc";
+        case KernelVariant::Tiled16x16RegisterK16WideCC: return "gemm_sycl_register_16x16_k16_wide_cc";
+        case KernelVariant::Tiled64x32RegisterK16WideCC: return "gemm_sycl_register_64x32_k16_wide_cc";
+        case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
+        case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
+        case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
+        case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4";
+        case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt";
+        case KernelVariant::Tiled256x128RegisterK8S4TN: return "gemm_sycl_register_256x128_k8_s4_tn";
+        case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt";
+        case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4";
+        case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt";
+        case KernelVariant::Tiled128x256RegisterK8S4TN: return "gemm_sycl_register_128x256_k8_s4_tn";
+        case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt";
+        case KernelVariant::Count: break;
     }
     return "gemm_sycl_unknown";
 }
@@ -194,46 +194,46 @@ const char* splitk_trace_name(KernelVariant variant) {
 // at false shows in the kernel trace (the 128x32x32 NN legs have always been named apart).
 const char* aligned_trace_name(KernelVariant variant) {
     switch (variant) {
-    case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
-    case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
-    case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
-    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt_aligned";
-    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn_aligned";
-    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt_aligned";
-    case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct_aligned";
-    case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc_aligned";
-    case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
-    case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
-    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct_aligned";
-    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc_aligned";
-    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4_aligned";
-    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt_aligned";
-    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt_aligned";
-    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4_aligned";
-    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt_aligned";
-    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt_aligned";
-    default: return kernel_trace_name(variant);
+        case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
+        case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
+        case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
+        case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt_aligned";
+        case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn_aligned";
+        case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt_aligned";
+        case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct_aligned";
+        case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc_aligned";
+        case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
+        case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
+        case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct_aligned";
+        case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc_aligned";
+        case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4_aligned";
+        case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt_aligned";
+        case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt_aligned";
+        case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4_aligned";
+        case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt_aligned";
+        case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt_aligned";
+        default: return kernel_trace_name(variant);
     }
 }
 
@@ -383,30 +383,30 @@ enum Form { kNN, kNT, kTN, kTT };
 constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
     using K = KernelVariant;
     switch (i) {
-    case 0: return K::Tiled32x32Register;
-    case 1: return K::Tiled64x64Register;
-    case 2: return f == kNN ? K::Tiled64x64RegisterK16 : f == kTN ? K::Tiled64x64RegisterK16TN
-                   : f == kNT ? K::Tiled64x64RegisterK16NT : K::Tiled64x64RegisterK16TT;
-    case 3: return f == kNN ? K::Tiled128x32RegisterK16 : f == kTN ? K::Tiled128x32RegisterK16TN
-                   : f == kNT ? K::Tiled128x32RegisterK16NT : K::Tiled128x32RegisterK16TT;
-    case 4: return f == kNN ? (aligned ? K::Tiled128x32RegisterK32S2U1Aligned : K::Tiled128x32RegisterK32S2U1Generic)
-                   : f == kTN ? K::Tiled128x32RegisterK32TN : f == kNT ? K::Tiled128x32RegisterK32NT
-                              : K::Tiled128x32RegisterK32TT;
-    case 5: return f == kTN ? K::Tiled128x64RegisterK16TN : f == kNT ? K::Tiled128x64RegisterK16NT
-                            : K::Tiled128x64RegisterK16TT;
-    case 6: return f == kNN ? K::Tiled32x128RegisterK16 : f == kTN ? K::Tiled32x128RegisterK16TN
-                            : K::Tiled32x128RegisterK16TT;
-    case 7: return K::Tiled128x64RegisterK32Large;
-    case 8: return K::Tiled128x64RegisterK32LargeU2;
-    case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
-                   : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
-    case 10: return f == kNN ? K::Tiled128x128RegisterK8S4 : f == kTN ? K::Tiled128x128RegisterK8S4TN
-                    : f == kNT ? K::Tiled128x128RegisterK8S4NT : K::Tiled128x128RegisterK8S4TT;
-    case 11: return f == kNN ? K::Tiled256x128RegisterK8S4 : f == kTN ? K::Tiled256x128RegisterK8S4TN
-                    : f == kNT ? K::Tiled256x128RegisterK8S4NT : K::Tiled256x128RegisterK8S4TT;
-    case 12: return f == kNN ? K::Tiled128x256RegisterK8S4 : f == kTN ? K::Tiled128x256RegisterK8S4TN
-                    : f == kNT ? K::Tiled128x256RegisterK8S4NT : K::Tiled128x256RegisterK8S4TT;
-    default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
+        case 0: return K::Tiled32x32Register;
+        case 1: return K::Tiled64x64Register;
+        case 2: return f == kNN ? K::Tiled64x64RegisterK16 : f == kTN ? K::Tiled64x64RegisterK16TN
+                       : f == kNT ? K::Tiled64x64RegisterK16NT : K::Tiled64x64RegisterK16TT;
+        case 3: return f == kNN ? K::Tiled128x32RegisterK16 : f == kTN ? K::Tiled128x32RegisterK16TN
+                       : f == kNT ? K::Tiled128x32RegisterK16NT : K::Tiled128x32RegisterK16TT;
+        case 4: return f == kNN ? (aligned ? K::Tiled128x32RegisterK32S2U1Aligned : K::Tiled128x32RegisterK32S2U1Generic)
+                       : f == kTN ? K::Tiled128x32RegisterK32TN : f == kNT ? K::Tiled128x32RegisterK32NT
+                                  : K::Tiled128x32RegisterK32TT;
+        case 5: return f == kTN ? K::Tiled128x64RegisterK16TN : f == kNT ? K::Tiled128x64RegisterK16NT
+                                : K::Tiled128x64RegisterK16TT;
+        case 6: return f == kNN ? K::Tiled32x128RegisterK16 : f == kTN ? K::Tiled32x128RegisterK16TN
+                                : K::Tiled32x128RegisterK16TT;
+        case 7: return K::Tiled128x64RegisterK32Large;
+        case 8: return K::Tiled128x64RegisterK32LargeU2;
+        case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
+                       : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
+        case 10: return f == kNN ? K::Tiled128x128RegisterK8S4 : f == kTN ? K::Tiled128x128RegisterK8S4TN
+                        : f == kNT ? K::Tiled128x128RegisterK8S4NT : K::Tiled128x128RegisterK8S4TT;
+        case 11: return f == kNN ? K::Tiled256x128RegisterK8S4 : f == kTN ? K::Tiled256x128RegisterK8S4TN
+                        : f == kNT ? K::Tiled256x128RegisterK8S4NT : K::Tiled256x128RegisterK8S4TT;
+        case 12: return f == kNN ? K::Tiled128x256RegisterK8S4 : f == kTN ? K::Tiled128x256RegisterK8S4TN
+                        : f == kNT ? K::Tiled128x256RegisterK8S4NT : K::Tiled128x256RegisterK8S4TT;
+        default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
 

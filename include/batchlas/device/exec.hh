@@ -279,7 +279,7 @@ template <int P, bool Masked = false, class Impl = sycl::sub_group> struct Parti
     }
     template <class T> BATCHLAS_DEVICE_INLINE T shift(T v, int d) const { return detail::team_shift(part, v, d); }
 
-  private:
+private:
     template <class R> inline R bcast_real(R v, std::uint32_t src) const {
         if constexpr (std::is_same_v<Impl, sycl::sub_group>) {
             const auto base = static_cast<std::uint32_t>(part.get_local_linear_id()) & ~std::uint32_t(P - 1);

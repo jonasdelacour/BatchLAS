@@ -236,13 +236,13 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     // sub_group_size=32, SB2ST will throw when forced on; in that case, skip.
     ScopedEnvVar force_subgroup("BATCHLAS_SB2ST_SUBGROUP", "1");
 
-    #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
+#if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
     const int n = 12;
     const int kd = 3;
-    #else
+#else
     const int n = 256;
     const int kd = 6;
-    #endif
+#endif
     const int batch = 5;
     const int block_size = 16;
 
@@ -337,12 +337,12 @@ void band_reduction_matches_dense(Queue& ctx, int n) {
     using Real = typename base_type<T>::type;
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
-    #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
+#if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
     n = 12;
     const int kd = 3;
-    #else
+#else
     const int kd = 6;
-    #endif
+#endif
     const int batch = 5;
     const int block_size = 16;
 

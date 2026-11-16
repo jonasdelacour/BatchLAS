@@ -529,7 +529,7 @@ template <class T, Uplo UL, class Tier> void trtri_unit_case(Dev& d, int n) {
 }
 
 template <class T> class DeviceApiCholTest : public DeviceCoreTest<T> {
-  protected:
+protected:
     void SetUp() override {
         DeviceCoreTest<T>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;

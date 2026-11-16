@@ -124,7 +124,7 @@ template <Transpose TR, int WG, class T> void device_gemv(sycl::queue& q, const 
 }
 
 template <class T> class DeviceApiGemv : public DeviceCoreTest<T> {
-  protected:
+protected:
     struct Run {
         std::vector<T> host, device;
         double worst_host = 0, worst_device = 0;

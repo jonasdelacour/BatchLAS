@@ -520,7 +520,7 @@ struct BATCHLAS_API Queue{
     /// @return the native stream, or `nullptr`
     BATCHLAS_API void* native_handle() const;
 
-    private:
+private:
         friend struct detail::SyclInteropAccess;
         /// @brief Root Queue over a caller's SYCL context and device (queue_from_sycl). SyclQueueSource
         /// is complete only in queue-impl.cc, so no SYCL type reaches this header.

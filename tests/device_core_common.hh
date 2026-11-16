@@ -79,7 +79,7 @@ struct Dev {
 };
 
 template <class T> class DeviceCoreTest : public ::testing::Test {
-  protected:
+protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         const auto sgs = dev.q().get_device().get_info<sycl::info::device::sub_group_sizes>();

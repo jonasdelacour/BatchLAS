@@ -1386,32 +1386,32 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             return work_size;
     }
 
-    #define SYEVX_INSTANTIATE(back, fp, fmt) \
-    template Event syevx_lobpcg<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
-        Span<int32_t>);\
-    template size_t syevx_lobpcg_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);
+#define SYEVX_INSTANTIATE(back, fp, fmt) \
+template Event syevx_lobpcg<back, BATCHLAS_UNPAREN fp, fmt>(\
+    Queue&,\
+    const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+    Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+    size_t,\
+    Span<std::byte>,\
+    JobType,\
+    const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+    const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+    Span<int32_t>);\
+template size_t syevx_lobpcg_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
+    Queue&,\
+    const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
+    Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
+    size_t,\
+    JobType,\
+    const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+    const SyevxParams<BATCHLAS_UNPAREN fp>&);
 
 
-    #define SYEVX_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
-        BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(SYEVX_INSTANTIATE, back, fp)
+#define SYEVX_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
+    BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(SYEVX_INSTANTIATE, back, fp)
 
     BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYEVX_INSTANTIATE_FOR_BACKEND_TYPE)
 
-    #undef SYEVX_INSTANTIATE_FOR_BACKEND_TYPE
-    #undef SYEVX_INSTANTIATE
+#undef SYEVX_INSTANTIATE_FOR_BACKEND_TYPE
+#undef SYEVX_INSTANTIATE
 }  // namespace batchlas

@@ -97,15 +97,15 @@ void stedc_merge_dispatch(Queue& ctx,
                           int32_t* info,
                           int64_t info_nodes_per_item) {
     switch (params.merge_variant) {
-    case StedcMergeVariant::Fused:
-        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
-        break;
-    case StedcMergeVariant::FusedCta:
-        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
-        break;
-    default:
-        // Baseline path is handled by the caller in stedc.cc.
-        break;
+        case StedcMergeVariant::Fused:
+            stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
+            break;
+        case StedcMergeVariant::FusedCta:
+            stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
+            break;
+        default:
+            // Baseline path is handled by the caller in stedc.cc.
+            break;
     }
 }
 

@@ -5,17 +5,17 @@
 #include <src/linalg-impl.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-    #include <cuda_runtime.h>
-    #include <cuda_runtime_api.h>
+#include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
 #endif
 #if BATCHLAS_HAS_CUBLAS
-    #include <cublas_v2.h>
+#include <cublas_v2.h>
 #endif
 #if BATCHLAS_HAS_CUSPARSE
-    #include <cusparse.h>
+#include <cusparse.h>
 #endif
 #if BATCHLAS_HAS_CUSOLVER
-    #include <cusolverDn.h>
+#include <cusolverDn.h>
 #endif
 
 namespace batchlas {
@@ -31,27 +31,27 @@ struct BackendMatrixHandle {
 
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) { initialize(matrix); }
 
-    #if BATCHLAS_HAS_CUSPARSE
+#if BATCHLAS_HAS_CUSPARSE
         inline constexpr operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
         inline constexpr operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
-    #endif
+#endif
 
-    #if BATCHLAS_HAS_ROCSPARSE
+#if BATCHLAS_HAS_ROCSPARSE
         inline constexpr operator rocsparse_dnmat_descr() const { return rocsparse_descr_; }
         inline constexpr operator rocsparse_spmat_descr() const { return rocsparse_descr_sp_; }
-    #endif
+#endif
 
 private:
     void initialize(const MatrixView<T, MType>& matrix) {
-        #if BATCHLAS_HAS_CUSPARSE
+#if BATCHLAS_HAS_CUSPARSE
             initialize_cuda_descriptors(matrix);
-        #endif
-        #if BATCHLAS_HAS_ROCSPARSE
+#endif
+#if BATCHLAS_HAS_ROCSPARSE
             initialize_rocm_descriptors(matrix);
-        #endif
+#endif
     }
 
-    #if BATCHLAS_HAS_CUSPARSE
+#if BATCHLAS_HAS_CUSPARSE
         void initialize_cuda_descriptors(const MatrixView<T, MType>& matrix) {
             if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
                 cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
@@ -69,9 +69,9 @@ private:
 
         cusparseDnMatDescr_t cusparse_descr_ = nullptr;
         cusparseSpMatDescr_t cusparse_descr_sp_ = nullptr;
-    #endif
+#endif
 
-    #if BATCHLAS_HAS_ROCSPARSE
+#if BATCHLAS_HAS_ROCSPARSE
         static constexpr rocsparse_datatype rocsparse_value_type() {
             if constexpr (std::is_same_v<T, float>) {
                 return rocsparse_datatype_f32_r;
@@ -105,7 +105,7 @@ private:
 
         rocsparse_dnmat_descr rocsparse_descr_ = nullptr;
         rocsparse_spmat_descr rocsparse_descr_sp_ = nullptr;
-    #endif
+#endif
 };
 
 template <typename T, MatrixFormat MType>

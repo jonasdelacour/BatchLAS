@@ -285,11 +285,11 @@ bool type_runnable() {
 inline bool vote_pred(uint32_t P, uint32_t chunk, uint32_t lid) {
     const uint32_t mode = chunk % 5u, odd = P - 1u - (chunk / 5u) % P;
     switch (mode) {
-    case 0: return (mix(chunk * P + lid) & 1u) != 0u;
-    case 1: return true;
-    case 2: return false;
-    case 3: return lid == odd;
-    default: return lid != odd;
+        case 0: return (mix(chunk * P + lid) & 1u) != 0u;
+        case 1: return true;
+        case 2: return false;
+        case 3: return lid == odd;
+        default: return lid != odd;
     }
 }
 

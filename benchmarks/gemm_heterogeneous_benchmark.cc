@@ -40,32 +40,32 @@ inline HeterogeneousPattern make_shrinking_pattern(int max_m, int max_n, int k, 
 
     for (int batch_index = 0; batch_index < batch; ++batch_index) {
         switch (batch_index % 3) {
-        case 0:
-            pattern.a_rows[batch_index] = max_m;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = max_n;
-            pattern.c_rows[batch_index] = max_m;
-            pattern.c_cols[batch_index] = max_n;
-            pattern.total_flops += 2.0 * static_cast<double>(max_m) * static_cast<double>(max_n) * static_cast<double>(k);
-            break;
-        case 1:
-            pattern.a_rows[batch_index] = half_m;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = half_n;
-            pattern.c_rows[batch_index] = half_m;
-            pattern.c_cols[batch_index] = half_n;
-            pattern.total_flops += 2.0 * static_cast<double>(half_m) * static_cast<double>(half_n) * static_cast<double>(k);
-            break;
-        default:
-            pattern.a_rows[batch_index] = 0;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = 0;
-            pattern.c_rows[batch_index] = 0;
-            pattern.c_cols[batch_index] = 0;
-            break;
+            case 0:
+                pattern.a_rows[batch_index] = max_m;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = max_n;
+                pattern.c_rows[batch_index] = max_m;
+                pattern.c_cols[batch_index] = max_n;
+                pattern.total_flops += 2.0 * static_cast<double>(max_m) * static_cast<double>(max_n) * static_cast<double>(k);
+                break;
+            case 1:
+                pattern.a_rows[batch_index] = half_m;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = half_n;
+                pattern.c_rows[batch_index] = half_m;
+                pattern.c_cols[batch_index] = half_n;
+                pattern.total_flops += 2.0 * static_cast<double>(half_m) * static_cast<double>(half_n) * static_cast<double>(k);
+                break;
+            default:
+                pattern.a_rows[batch_index] = 0;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = 0;
+                pattern.c_rows[batch_index] = 0;
+                pattern.c_cols[batch_index] = 0;
+                break;
         }
     }
 
