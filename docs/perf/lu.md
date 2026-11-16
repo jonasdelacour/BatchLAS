@@ -6,12 +6,12 @@ Routing rules and the measurements behind them for native `getrf` (`tiny`, `cta`
 
 ## Selection
 
-* **Families** (`src/ops/<op>/choice.hh`, tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields.
-* **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`, the only gate; it never carries a speed term. Every family refuses a batch mask.
-* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log` (getrf's `n` is `A.rows()`); getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The sm_89 tables are `transcribed` at `424a45bc` (the old routers' order per cell, **untimed**). The sm_120 tables are deep-measured, with 45 / 94 / 790 `transcribed` rows left in getrf / getri / getrs ([tuned/README.md](../../tuned/README.md)).
-* **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm` (@ref selection_tables); an empty seam throws.
-* **Pins**: `BATCHLAS_{GETRF,GETRS,GETRI,GESV}_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or is refused by `can_run` throws. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
-* **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), `nb`, the blocked driver's batch parts, the tiny bucket and launch bound. Launchers derive them; they are not families, keys or `can_run` terms.
+- **Families** (`src/ops/<op>/choice.hh`, tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields.
+- **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`, the only gate; it never carries a speed term. Every family refuses a batch mask.
+- **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log` (getrf's `n` is `A.rows()`); getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The sm_89 tables are `transcribed` at `424a45bc` (the old routers' order per cell, **untimed**). The sm_120 tables are deep-measured, with 45 / 94 / 790 `transcribed` rows left in getrf / getri / getrs ([tuned/README.md](../../tuned/README.md)).
+- **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm` (@ref selection_tables); an empty seam throws.
+- **Pins**: `BATCHLAS_{GETRF,GETRS,GETRI,GESV}_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or is refused by `can_run` throws. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
+- **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), `nb`, the blocked driver's batch parts, the tiny bucket and launch bound. Launchers derive them; they are not families, keys or `can_run` terms.
 
 ### LU: families and their limits
 
@@ -144,8 +144,8 @@ The block solve is core `trsv<alg::LanePerRow>`, whose step lambdas (`diag`, `fi
 
 The `blocked` driver hands the trailing matrix between its per-panel kernels through L2; once `batch x m n x sizeof(T)` exceeds L2 those hand-offs go to DRAM. `getrf_blocked_chunk` (`getrf_blocked.cc`) therefore factors the batch in parts, each a complete factorisation with pivot (`b0 * min(m, n)`) and `info` offsets.
 
-* **Part size**: `tuning::blocked_chunk_items`: `BLOCKED_L2_CHUNK_PERCENT` = **75**% of `global_mem_cache_size` in items, rounded up to a multiple of `max_compute_units` (at least 1x). Below two chunks: one pass; otherwise parts of one chunk, the last taking the remainder. At \f$n \ge 256\f$ the round-up sets the chunk (sm_120 float: \f$n = 64\f$ 6204, \f$n = 128\f$ 1692, \f$n = 256\f$ 564, \f$n = 512\f$ 188 items).
-* **Never split** at `n <= nb`. **Workspace** is one part's. **Overrides**: `BATCHLAS_TUNE_L2_CHUNK_PERCENT`, `BATCHLAS_TUNE_L2_CHUNK_ITEMS`.
+- **Part size**: `tuning::blocked_chunk_items`: `BLOCKED_L2_CHUNK_PERCENT` = **75**% of `global_mem_cache_size` in items, rounded up to a multiple of `max_compute_units` (at least 1x). Below two chunks: one pass; otherwise parts of one chunk, the last taking the remainder. At \f$n \ge 256\f$ the round-up sets the chunk (sm_120 float: \f$n = 64\f$ 6204, \f$n = 128\f$ 1692, \f$n = 256\f$ 564, \f$n = 512\f$ 188 items).
+- **Never split** at `n <= nb`. **Workspace** is one part's. **Overrides**: `BATCHLAS_TUNE_L2_CHUNK_PERCENT`, `BATCHLAS_TUNE_L2_CHUNK_ITEMS`.
 
 Evidence, sm_120 (RTX PRO 6000 Max-Q, 128 MiB L2, 2026-10-21), float pinned blocked, cold and warm agree: geomean **0.932** over 31 cells (\f$n = 32 \dots 512\f$), worst 1.004; \f$n = 128\f$ b32768 459.6 -> 383.0 ns (0.833). Percent 75 vs 100: getrf 0.901 vs 0.909, potrf 0.930 vs 0.949. sm_89 (72 MB L2, 2026-10-23): float \f$n = 128\f$ b16384 0.787, \f$n = 256\f$ b2048 0.785; 150% worse in every cell. Two rules the sweep forced: equal parts below one chunk lose (\f$n = 128\f$ b2048 +17%), and a part one item past a CU multiple pays for the next (potrf \f$n = 512\f$ parts of 391: +6%, of 376: -10%).
 
@@ -172,12 +172,12 @@ Traps: a harness that shrinks the batch cannot ask the routing question; the two
 
 ## LU: correctness findings
 
-* The `info` zero-fill raced the panel on an out-of-order queue; fixed with `if (!ctx.in_order()) ctx.wait();` (`LuTest.InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue`).
-* Native kernels write packed 1-based int32 pivots; NETLIB writes int64. Every native `can_run` carries `B != Backend::NETLIB`, else NETLIB on a GPU queue returned a wrong inverse with `info == 0`.
-* cuBLAS pivots complex on the modulus, LAPACK and this library on `cabs1`; elementwise native-vs-vendor pivot comparison is wrong for complex (`PivotSelectionUsesCabs1AndNotTheModulus`).
-* `info` is structural: non-zero exactly when \f$\lvert U_{ii}\rvert\f$ is a binary zero.
-* `getrs_fused_max_rhs_elems` must not floor-divide: `getrs_hole_padded` is not monotone.
-* The fused getrs register cap fired at float \f$n = 2048\f$ \f$\mathit{nrhs} = 8\f$ Trans (wg 1024 x 68 registers); `FusedGetrsLaunchHoleAt48KiB` covers it.
+- The `info` zero-fill raced the panel on an out-of-order queue; fixed with `if (!ctx.in_order()) ctx.wait();` (`LuTest.InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue`).
+- Native kernels write packed 1-based int32 pivots; NETLIB writes int64. Every native `can_run` carries `B != Backend::NETLIB`, else NETLIB on a GPU queue returned a wrong inverse with `info == 0`.
+- cuBLAS pivots complex on the modulus, LAPACK and this library on `cabs1`; elementwise native-vs-vendor pivot comparison is wrong for complex (`PivotSelectionUsesCabs1AndNotTheModulus`).
+- `info` is structural: non-zero exactly when \f$\lvert U_{ii}\rvert\f$ is a binary zero.
+- `getrs_fused_max_rhs_elems` must not floor-divide: `getrs_hole_padded` is not monotone.
+- The fused getrs register cap fired at float \f$n = 2048\f$ \f$\mathit{nrhs} = 8\f$ Trans (wg 1024 x 68 registers); `FusedGetrsLaunchHoleAt48KiB` covers it.
 
 ### Blind guards and what made them blind
 
@@ -196,19 +196,19 @@ A `PAD=` knob: **49,024 B pass / 49,152 B fail / 49,280 B pass**, deterministic 
 
 ## Open debts
 
-* The sm_120 `blocked` rows of getrf and potrf predate L2 chunking; retune float and cfloat.
-* The sm_89 tables are untimed transcriptions; the getrf blocked window has no measured batch term below 128, and getri at batch 1-64 is unmeasured for fp64.
-* `getrs` clause C: batch floor 128 gives up wins at 32-64; unmeasured above \f$n = 1024\f$; 84 winning A/B cells go to the vendor (largest 3.944x, double \f$n = 1024\f$ \f$\mathit{nrhs} = 4\f$ b256).
-* The collapsed getrs gather is parallel over batch only; the fused getrs permutation is 8% of the call at \f$n = 2048\f$.
-* The right-hand `getrf` interchange is the per-column walk above the gate in [the right-hand gather](#the-right-hand-gather).
-* `can_run(cta)` asks the occupancy-scaled ceiling, so float 96-129, cfloat 64-96 and cdouble 48-65 cannot reach CTA although CTA beats blocked there (1.39-1.49x); undoing it needs a grid between the two ceilings. The committed `factor_baseline_getrf_*.csv` predate this.
-* Float `n = 65` takes CTA in a vendor-free build, where blocked is 1.62x faster (\f$n = 64\f$: CTA by 1.13); the grid has no cell between 64 and 96.
-* Float getrf at \f$n = 33 \dots 255\f$ is a batch question (\f$n = 40\f$: 0.68 at batch 32, 1.22 at 1024); the rows rank `vendor` first at every batch.
-* Tall non-square `getrf` that fits the CTA tile takes `cta`, 1.9-4.6x slower than blocked at batch 1024; needs a `form` key and a retune.
-* cfloat gesv at \f$n \le 4\f$ reverses past batch 65536 (\f$n = 4\f$ \f$\mathit{nrhs} = 4\f$: 0.85 at 131072); the gesv table has no batch key.
-* Register-leaf double \f$n = 32\f$ loses 0.89-0.93 to the local-memory leaf (Auto never routes there); G-packing for the register leaf is owed.
-* `nb = 32` is untuned; `getrf_panel_factorize` re-queries device properties per block step; `MatrixView::data_ptrs(ctx)` re-runs `init_data_ptr_array` on every call; `getrf_panel_reg.cc` duplicates `resident::sm89_max_work_group`'s gate.
-* `Backend::NETLIB` on a GPU queue is gated but not exercised end to end.
+- The sm_120 `blocked` rows of getrf and potrf predate L2 chunking; retune float and cfloat.
+- The sm_89 tables are untimed transcriptions; the getrf blocked window has no measured batch term below 128, and getri at batch 1-64 is unmeasured for fp64.
+- `getrs` clause C: batch floor 128 gives up wins at 32-64; unmeasured above \f$n = 1024\f$; 84 winning A/B cells go to the vendor (largest 3.944x, double \f$n = 1024\f$ \f$\mathit{nrhs} = 4\f$ b256).
+- The collapsed getrs gather is parallel over batch only; the fused getrs permutation is 8% of the call at \f$n = 2048\f$.
+- The right-hand `getrf` interchange is the per-column walk above the gate in [the right-hand gather](#the-right-hand-gather).
+- `can_run(cta)` asks the occupancy-scaled ceiling, so float 96-129, cfloat 64-96 and cdouble 48-65 cannot reach CTA although CTA beats blocked there (1.39-1.49x); undoing it needs a grid between the two ceilings. The committed `factor_baseline_getrf_*.csv` predate this.
+- Float `n = 65` takes CTA in a vendor-free build, where blocked is 1.62x faster (\f$n = 64\f$: CTA by 1.13); the grid has no cell between 64 and 96.
+- Float getrf at \f$n = 33 \dots 255\f$ is a batch question (\f$n = 40\f$: 0.68 at batch 32, 1.22 at 1024); the rows rank `vendor` first at every batch.
+- Tall non-square `getrf` that fits the CTA tile takes `cta`, 1.9-4.6x slower than blocked at batch 1024; needs a `form` key and a retune.
+- cfloat gesv at \f$n \le 4\f$ reverses past batch 65536 (\f$n = 4\f$ \f$\mathit{nrhs} = 4\f$: 0.85 at 131072); the gesv table has no batch key.
+- Register-leaf double \f$n = 32\f$ loses 0.89-0.93 to the local-memory leaf (Auto never routes there); G-packing for the register leaf is owed.
+- `nb = 32` is untuned; `getrf_panel_factorize` re-queries device properties per block step; `MatrixView::data_ptrs(ctx)` re-runs `init_data_ptr_array` on every call; `getrf_panel_reg.cc` duplicates `resident::sm89_max_work_group`'s gate.
+- `Backend::NETLIB` on a GPU queue is gated but not exercised end to end.
 
 ## Raw evidence
 
@@ -222,11 +222,11 @@ Older `experiments/` paths live at the tag `perf-evidence/vendor-independence` (
 
 ### One spelling per ceiling
 
-* `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; every decision re-reads the device ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
-* `getrf_cta_fits` is admission, occupancy-scaled; `getrf_leaf_fits` is residency, at the whole budget.
-* `getrf_tiny_max_n<T>()` is the one spelling of the tiny ceiling (compile-time, {4, 8, 16, 32} ladder).
-* `getrf_tiny_buffer_size` is not zero: a short caller `info` draws pool scratch.
-* `getrf_cta_debug_launch<T>(ctx, m, n)` packs G (matrices per work-group) low and work-group width high, 0 when not resident. `getrf_blocked_debug_params<T>(ctx, n)` packs nb low and the leading panel's leaf high (1 = local, 2 = global).
+- `getrf_cta_max_n_for_slm` takes the runtime budget; 0 means the tier is absent. `kGetrfReferenceSlmBudget = 97280` serves only convenience overloads; every decision re-reads the device ([potrf budget](potrf.md#the-slm-budget-and-the-fit-ceilings)).
+- `getrf_cta_fits` is admission, occupancy-scaled; `getrf_leaf_fits` is residency, at the whole budget.
+- `getrf_tiny_max_n<T>()` is the one spelling of the tiny ceiling (compile-time, {4, 8, 16, 32} ladder).
+- `getrf_tiny_buffer_size` is not zero: a short caller `info` draws pool scratch.
+- `getrf_cta_debug_launch<T>(ctx, m, n)` packs G (matrices per work-group) low and work-group width high, 0 when not resident. `getrf_blocked_debug_params<T>(ctx, n)` packs nb low and the leading panel's leaf high (1 = local, 2 = global).
 
 ### LU: the panel leaf is not the tier ceiling
 

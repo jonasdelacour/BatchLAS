@@ -11,27 +11,27 @@ measurements behind each shipped window and constant, correctness traps and open
 Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel:panel=16` (float only), `blocked`,
 `vendor`, chosen in `src/ops/potrf/potrf.cc`.
 
-* **Auto** takes the first runnable entry of the nearest row of `tuned/potrf.<device>.txt`. Keys: `dtype`, `uplo`
+- **Auto** takes the first runnable entry of the nearest row of `tuned/potrf.<device>.txt`. Keys: `dtype`, `uplo`
   (exact), `n` (log, weight 3), `batch` (log). A device without a table borrows the nearest one with a warning; the CPU
   never borrows. Last resort: `blocked`, then `vendor`.
-* **Tables** come from `scripts/sweep_to_table.py` over `benchmarks/results/tuning/ledger/potrf.<device>.jsonl`;
+- **Tables** come from `scripts/sweep_to_table.py` over `benchmarks/results/tuning/ledger/potrf.<device>.jsonl`;
   provenance in `tuned/README.md`. `BATCHLAS_TUNED_DIR=<dir>` replaces them without a rebuild.
-* **Pins:** `BATCHLAS_POTRF_ROUTE=auto|native|vendor|<spelling>` (`lpanel:panel=8` or `lpanel:8`). A pin that does not
+- **Pins:** `BATCHLAS_POTRF_ROUTE=auto|native|vendor|<spelling>` (`lpanel:panel=8` or `lpanel:8`). A pin that does not
   parse or cannot run the shape throws `std::invalid_argument`; `native` or `vendor` with no runnable candidate of that
   class falls back to Auto with a warning. A vendor-free build and a bare `native` pin take the row's first runnable
   non-vendor entry (`PotrfCandidates.BareNativePicksTheBestRunnableNonVendor`).
-* `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W` are blocked-driver tuning constants; selection never reads them.
+- `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W` are blocked-driver tuning constants; selection never reads them.
 
 ### `can_run()` terms
 
 `can_run()` (`potrf.cc:36-60`) is correctness only:
 
-* Every native family: no batch mask, `d.is_gpu`, `d.has_sg32`, a homogeneous batch, `n >= 1`, `batch >= 1`.
-* `tiny`: `n <= potrf_tiny_max_n<T>()` (32; 16 for cdouble) and `max_wg >= 64`.
-* `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)`.
-* `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)`.
-* `blocked`: `cta_max_n >= 1`; either triangle, no lower bound on `n`.
-* `vendor`: `d.has_vendor` and a homogeneous batch.
+- Every native family: no batch mask, `d.is_gpu`, `d.has_sg32`, a homogeneous batch, `n >= 1`, `batch >= 1`.
+- `tiny`: `n <= potrf_tiny_max_n<T>()` (32; 16 for cdouble) and `max_wg >= 64`.
+- `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)`.
+- `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)`.
+- `blocked`: `cta_max_n >= 1`; either triangle, no lower bound on `n`.
+- `vendor`: `d.has_vendor` and a homogeneous batch.
 
 Upper on `tiny` and `cta` is a load/store transform (\f$S_{ic} = \overline{A_{ci}}\f$).
 
@@ -39,11 +39,11 @@ Upper on `tiny` and `cta` is a load/store transform (\f$S_{ic} = \overline{A_{ci
 
 `tuned/potrf.sm_89.txt` (241 `converted` rows from the forced-route archive, 12 `deep`), first choice:
 
-* `tiny` at `n <= 32` for float and cfloat, `n <= 16` for fp64 (except `L` \f$n = 1\f$ and double 9-10, cdouble 9: `vendor`).
-* float `L`: `cta` at most cells of 33..65, `vendor` 72..384, `blocked` at 512. cfloat `L`: `cta` at 33, `vendor` above.
+- `tiny` at `n <= 32` for float and cfloat, `n <= 16` for fp64 (except `L` \f$n = 1\f$ and double 9-10, cdouble 9: `vendor`).
+- float `L`: `cta` at most cells of 33..65, `vendor` 72..384, `blocked` at 512. cfloat `L`: `cta` at 33, `vendor` above.
   double: `vendor` 17..256, `blocked` at 512. cdouble `L`: `cta` 20..32, `vendor` from 128.
-* Float Upper 96..512 (`deep`): `blocked` at \f$n = 384\f$ batch 512 and at \f$n = 512\f$, `vendor` elsewhere.
-* `lpanel` never ranks first on sm_89 (no current-kernel timings). On sm_120 `lpanel:panel=16` leads 21 of 189 float
+- Float Upper 96..512 (`deep`): `blocked` at \f$n = 384\f$ batch 512 and at \f$n = 512\f$, `vendor` elsewhere.
+- `lpanel` never ranks first on sm_89 (no current-kernel timings). On sm_120 `lpanel:panel=16` leads 21 of 189 float
   `L` rows.
 
 ## posv selection {#posv-selection-since-flat-kernel-selection-phase-3}
@@ -54,16 +54,16 @@ Three families (`src/ops/posv/choice.hh`, chosen in `src/ops/posv/posv.cc`), no 
 so `cta` or `blocked` can run cuSOLVER `potrf` underneath. Keys: `dtype`, `uplo`, `n` (log, weight 3), `nrhs` and
 `batch` (log). Last resort: `blocked`.
 
-* **`can_run()`:** no batch mask, sub-group 32, homogeneous batch, `n, nrhs, batch >= 1`. `tiny` adds
+- **`can_run()`:** no batch mask, sub-group 32, homogeneous batch, `n, nrhs, batch >= 1`. `tiny` adds
   `n <= posv_tiny_max_n<T>()` (16 for cdouble, 32 otherwise), `nrhs <= 4` and `max_wg >= 64`. `cta` adds
   `ops::potrs::fused_fits`: `nrhs <= kGetrsFusedMaxRhs` (8) and `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`.
   `blocked` needs only a homogeneous batch.
-* **sm_89 table** is transcribed from the deleted router's windows and untimed (`transcribed:7e71a6e0`): `tiny` at every
+- **sm_89 table** is transcribed from the deleted router's windows and untimed (`transcribed:7e71a6e0`): `tiny` at every
   `n <= 32` (16 for cdouble) and `nrhs <= 4`, except cfloat \f$n > 24\f$ at `nrhs <= 2`, which ranks `cta`; `cta` above.
   Off-grid cells at the edges can differ: cfloat \f$n = 25\f$ and \f$26\f$ at `nrhs <= 2` take the `tiny` \f$n = 24\f$ row.
-* **sm_120 table** is deep-measured; the earlier 3329-cell seed sweep is `benchmarks/results/routing/sm120_posv_sweep.jsonl`.
-* An empty problem or a heterogeneous batch throws `batchlas::invalid_argument` before `choose()`; no pin can take them.
-* **Pins:** `BATCHLAS_POSV_ROUTE=auto|native|vendor|tiny|cta|blocked`. Bare `native` is Auto's pick; `vendor` warns and
+- **sm_120 table** is deep-measured; the earlier 3329-cell seed sweep is `benchmarks/results/routing/sm120_posv_sweep.jsonl`.
+- An empty problem or a heterogeneous batch throws `batchlas::invalid_argument` before `choose()`; no pin can take them.
+- **Pins:** `BATCHLAS_POSV_ROUTE=auto|native|vendor|tiny|cta|blocked`. Bare `native` is Auto's pick; `vendor` warns and
   falls back to Auto; `native:<family>` throws.
 
 ## Families and constants {#potrf-what-ships}
@@ -83,9 +83,9 @@ No `nb` equals a fit ceiling; sizing `nb` from the fit ceiling is measurably wro
 
 ## The SLM budget and the fit ceilings {#the-slm-budget-and-the-fit-ceilings}
 
-* `local_mem_size` is **101,376 B**; the budget is `local_mem_size - 4096` = **97,280 B** (`select::Device::slm_budget`).
+- `local_mem_size` is **101,376 B**; the budget is `local_mem_size - 4096` = **97,280 B** (`select::Device::slm_budget`).
   `kPotrfReferenceSlmBudget` (`potrf_cta.cc:50`) serves only `potrf_cta_max_n<T>()`.
-* The accessor slack is 256 B (at float \f$n = 155\f$, `ncu` reports 96,408 B).
+- The accessor slack is 256 B (at float \f$n = 155\f$, `ncu` reports 96,408 B).
 
 Ceilings, the resident row launched cold and correct (`slm/maxn_fitcheck.csv`), pinned by
 `MeasuredFitCeilings`:
@@ -104,10 +104,10 @@ exceeds 49,152. A kernel with zero static shared has no hole.
 > **Warning:** the attribute is sticky per CUfunction, and potrf's kernel takes `n` at runtime. A 49,064 B launch fails
 > cold and passes after a 65,536 B launch of the same function: the outcome depends on order.
 
-* The pad (`src/ops/potrf/potrf_slm_hole.hh`, applied at `potrf_cta.cc:124`) maps `(47104, 49664]` to 49,920 B. It is
+- The pad (`src/ops/potrf/potrf_slm_hole.hh`, applied at `potrf_cta.cc:124`) maps `(47104, 49664]` to 49,920 B. It is
   inert today (no `smem` in any potrf instantiation) but stays: one `reduce_over_group` reintroduces the hole. geqr2
   uses the same band (@ref perf_qr).
-* No test can cover the hole: any earlier launch above 48 KB in the process masks it.
+- No test can cover the hole: any earlier launch above 48 KB in the process masks it.
 
 ## Register gate {#register-gate}
 
@@ -128,10 +128,10 @@ at L128). **24 is a fitted constant**: re-measure it if `NB`, `TS` or the inner 
 
 Right-looking, `j = 0, nb, 2nb, ...` (Lower shown; Upper in [the blocked Upper driver](#the-blocked-upper-driver)):
 
-* **leaf** `A(j:j+ib, j:j+ib)` by the CTA kernel on a sub-view;
-* **fixup**: one kernel that merges local `info` into global and quenches failed items;
-* **panel** \f$L_{21} = A_{21} L_{11}^{-H}\f$ through the injected public `trsm`;
-* **trailing** \f$A_{22} \leftarrow A_{22} - L_{21} L_{21}^{H}\f$ through the injected public `gemm`, in `W`-wide column panels (a \f$W \times W\f$ diagonal block
+- **leaf** `A(j:j+ib, j:j+ib)` by the CTA kernel on a sub-view;
+- **fixup**: one kernel that merges local `info` into global and quenches failed items;
+- **panel** \f$L_{21} = A_{21} L_{11}^{-H}\f$ through the injected public `trsm`;
+- **trailing** \f$A_{22} \leftarrow A_{22} - L_{21} L_{21}^{H}\f$ through the injected public `gemm`, in `W`-wide column panels (a \f$W \times W\f$ diagonal block
   into scratch with a triangular fold, then a rectangle gemm).
 
 The seams (`PotrfTrailingGemm`, `PotrfPanelSolve` in `potrf_native.hh`) are required; an empty seam throws. `potrf.cc`
@@ -143,19 +143,19 @@ triangle `potrf` must not touch.
 
 Whole driver, `batch = 128`, worst rel sd 1.3%; each `nb` bracketed:
 
-* **float `nb = 128`:** n=512 2.462 ms (2.524 at 155, 2.634 at 96); n=1024 9.180 ms (11.604 at 155, 17.699 at 96).
+- **float `nb = 128`:** n=512 2.462 ms (2.524 at 155, 2.634 at 96); n=1024 9.180 ms (11.604 at 155, 17.699 at 96).
   The trailing `k` is `nb`, and float's transposed register gemm needs `k >= 128`; above 128 only the leaf slows.
-* **double `nb = 96`:** n=512 7.019 ms (7.258 at 109); n=1024 50.980 ms (53.338 at 64).
-* **cfloat `nb = 96`:** n=1024 34.1 ms, best of six values. **cdouble `nb = 64`:** n=1024 550 ms (579 at 77).
+- **double `nb = 96`:** n=512 7.019 ms (7.258 at 109); n=1024 50.980 ms (53.338 at 64).
+- **cfloat `nb = 96`:** n=1024 34.1 ms, best of six values. **cdouble `nb = 64`:** n=1024 550 ms (579 at 77).
 
 `W`, whole potrf, `n = 1024`, worst rel sd 4.9%: float **128** 16.785 ms (17.863 at 32, 18.654 at 64, 20.495 at 96;
 n=2048 46.510 against 50.879 at 64); cfloat **32** 54.00 (54.63 at 16, 57.40 at 64); double 32 is 1.1% behind 16,
 inside noise. The curve is non-monotone (a gemm-selection cliff): do not interpolate. cdouble was not swept: `k = 64`
 reaches no register gemm at any `W`.
 
-* **Reproduction trap:** `potrf_blocked_params` rounds `nb` down to a multiple of `trsm_cta_max_n<T>()` = 32, including
+- **Reproduction trap:** `potrf_blocked_params` rounds `nb` down to a multiple of `trsm_cta_max_n<T>()` = 32, including
   a `BATCHLAS_POTRF_NB` value: 48/80/109/155 collapse onto 32/64/96/128.
-* **Trans versus ConjTrans:** real types pass `Trans` (`ConjTrans` selects a 1.8x slower kernel). Complex must pass
+- **Trans versus ConjTrans:** real types pass `Trans` (`ConjTrans` selects a 1.8x slower kernel). Complex must pass
   `ConjTrans`: `Trans` takes the residual from 4.0e-07 to 1.9e-02.
 
 ### Blocked driver measured against cuSOLVER {#blocked-driver-measured-against-cusolver}
@@ -172,11 +172,11 @@ The blocked driver factors the batch in parts (`potrf_blocked_chunk`) by the rul
 multiple, one pass below two chunks, `info` offset and workspace per part. Differences: an item is its lower triangle,
 \f$n(n+1)/2 \times\f$ `sizeof(T)`; and a single block (`n <= nb`) never splits. The chunk loop serves Upper too.
 
-* **sm_120** (RTX PRO 6000 Max-Q, 128 MiB L2, 2026-10-21), float pinned `blocked`, on/off: geomean 0.948 over 21
+- **sm_120** (RTX PRO 6000 Max-Q, 128 MiB L2, 2026-10-21), float pinned `blocked`, on/off: geomean 0.948 over 21
   cells, down to 0.853 (n=256 b32768); the one loss is n=128 just past two chunks (b6392, +3%). Forced chunk sizes bracket
   75%: the best part holds 0.75-1.5 L2 of triangles (n=256: 376 1.085, **752 0.866**, 1128 0.916).
-* **sm_89** (2026-10-23, cold): float n=128 b16384 0.969, n=256 b2048 0.912; cfloat n=128 b4096 0.876.
-* **The shared `info`.** Without a caller `info`, every part reuses the pool's `ws.info`, so it is zeroed per part
+- **sm_89** (2026-10-23, cold): float n=128 b16384 0.969, n=256 b2048 0.912; cfloat n=128 b4096 0.876.
+- **The shared `info`.** Without a caller `info`, every part reuses the pool's `ws.info`, so it is zeroed per part
   (after the previous part's last fixup on an out-of-order queue); else a late `info[b] != 0` silently quenches the next
   part's item `b`. Guard: `BlockedChunksRezeroSharedInfoPerPart`.
 
@@ -277,12 +277,12 @@ float \f$n = 96\f$ b2048 goes 0.531 → 0.775 ms, but cuSOLVER takes 0.271 ms th
 (the slice one work-group may own), `resident_max_n` (the largest `n` that fits with every smaller `n` fitting) and
 `pack_matrices_per_wg` (matrices per work-group when one sub-group serves a matrix, capped by `max_pack = 4`).
 
-* `resident_max_n` stops at the first miss: the 48 KB pad makes `bytes(n)` non-monotone, and a `continue` advertises a
+- `resident_max_n` stops at the first miss: the 48 KB pad makes `bytes(n)` non-monotone, and a `continue` advertises a
   range with a hole in it (reachable only for budgets in **[49,664, 49,920)**).
-* Products are `std::size_t` or `int64_t`: `(m|1)*n` overflows `int` at \f$m \approx 46{,}341\f$, a reachable panel height.
-* `G > 1` is correct only where every barrier is a sub-group barrier, unless the kernel is built for it
+- Products are `std::size_t` or `int64_t`: `(m|1)*n` overflows `int` at \f$m \approx 46{,}341\f$, a reachable panel height.
+- `G > 1` is correct only where every barrier is a sub-group barrier, unless the kernel is built for it
   ([LPanel](#why-lpanel-may-pack-on-work-group-barriers)).
-* Test hooks pack two 16-bit fields (`potrf_cta_debug_launch`: G, L; `potrf_blocked_debug_params`: nb, W;
+- Test hooks pack two 16-bit fields (`potrf_cta_debug_launch`: G, L; `potrf_blocked_debug_params`: nb, W;
   `potrf_tiny_debug_launch`: G, S) and return 0 when the order does not fit.
 
 ### The contiguity rule and the synthetic table {#the-contiguity-rule-and-the-synthetic-table}
@@ -316,8 +316,8 @@ driver's leaf can hold. Conflating them is the defect the pin catches.
 in a compile-time `D rA[N]`; every cross-lane value is an indexed sub-group shuffle. Zero local memory, zero barriers,
 zero static shared: the 48 KB hole is unreachable.
 
-* **Geometry:** work-group 64 (`resident::kTinyWgSize`, a tuning constant), `G = 32/N` matrices per sub-group.
-* `potrf_tiny_max_n<T>()` is a flat 32 (16 for cdouble). `potrf_tiny_buffer_size` is nonzero: an empty `info` span
+- **Geometry:** work-group 64 (`resident::kTinyWgSize`, a tuning constant), `G = 32/N` matrices per sub-group.
+- `potrf_tiny_max_n<T>()` is a flat 32 (16 for cdouble). `potrf_tiny_buffer_size` is nonzero: an empty `info` span
   draws `batch` int32s of pool scratch.
 
 ### The tiny potrf window {#the-tiny-potrf-window}
@@ -400,9 +400,9 @@ loop, and an order above the work-group size is a silent race.
 barriers deliberately: every barrier in `alg::LeftLooking` (`BlockedLeft`) is a top-level `group_barrier(it.get_group())`, and a failed
 item is a predicated skip. Hence:
 
-* **No early return and no shortened `n`.** A dead slot runs the whole body with stores suppressed (`store`); `n = 0`
+- **No early return and no shortened `n`.** A dead slot runs the whole body with stores suppressed (`store`); `n = 0`
   would skip barriers and hang the group.
-* **B6 is required:** the panel-end store writes columns the next panel's staging reads from other work-items
+- **B6 is required:** the panel-end store writes columns the next panel's staging reads from other work-items
   ([open debt 10](#potrf-open-debts)).
 
 ### LPanel register gate {#lpanel-register-gate}
@@ -433,10 +433,10 @@ with \f$\sqrt{d}\f$. A warp that runs ahead publishes the root before a slower w
 Planted, observed and restored. Red as predicted: deleting `B3` (`ResidualAcrossPanelBoundaries`, 19 cases), dropping
 `dev_conj` when staging `sB` (complex only), dropping `ok &&` from `bad = ok && !(d > R(0))` (wrong `info`). Green:
 
-* deleting `B6` (end of the panel loop): **not armed** ([open debt 10](#potrf-open-debts));
-* relaxing the prefetch guard `row >= j + i` alone (the bound is enforced three times; relaxing the prefetch, publish and
+- deleting `B6` (end of the panel loop): **not armed** ([open debt 10](#potrf-open-debts));
+- relaxing the prefetch guard `row >= j + i` alone (the bound is enforced three times; relaxing the prefetch, publish and
   store guards together turns `OtherTriangleIsNeitherReadNorWritten` red for all types);
-* giving a dead packed slot `n = 0` instead of `store = false` (whole warps exit, so nothing hangs).
+- giving a dead packed slot `n = 0` instead of `store = false` (whole warps exit, so nothing hangs).
 
 A NaN poison cannot see a write (the stored value is computed from the NaN it read): the combined guard break was caught
 only by a finite sentinel (`-999 + 777i`) and bit-equality.

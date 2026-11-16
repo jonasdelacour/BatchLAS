@@ -42,15 +42,15 @@ heterogeneous batch, a CPU queue). The sm_120 result is on the
 
 ### Tuning knobs and environment {#tuning-knobs-and-environment}
 
-* `BATCHLAS_TRSM_ROUTE` takes `auto`, `native`, `vendor`, or a spelling. `native` takes the first
+- `BATCHLAS_TRSM_ROUTE` takes `auto`, `native`, `vendor`, or a spelling. `native` takes the first
   non-vendor runnable entry. A spelling the shape cannot run (`cta`/`sg_left` above order 32,
   `sg_left` on `Side::Right`) or an unknown word throws `invalid_argument`. `native` and `vendor` fall
   back to Auto with a warning when nothing of their class can run.
-* `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width (`trsm_outer_block`, `trsm_native.cc`), a tuning
+- `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width (`trsm_outer_block`, `trsm_native.cc`), a tuning
   knob. Default 128 for `Side::Left` and `cta_max_n` (32) for `Side::Right`, rounded down to whole CTA
   blocks; 0 means unset. It is read per call from `settings().geometry.trsm_outer_nb` and never
   latched, so an A/B harness or a `ScopedEnvVar` test measures both arms.
-* `BATCHLAS_TRSM_VARIANT` is read by nothing.
+- `BATCHLAS_TRSM_VARIANT` is read by nothing.
 
 ---
 
@@ -207,14 +207,14 @@ throws (`TrsmNativeCta.OverCapacityThrowsRatherThanTruncating`). The facade caps
 
 ### Testing traps
 
-* Blocked tests must exceed `OUTER_NB = 128` or the outer level never runs (`TwoLevelPanelStructure`
+- Blocked tests must exceed `OUTER_NB = 128` or the outer level never runs (`TwoLevelPanelStructure`
   uses 129, 256, 300, 384).
-* Alpha is applied once: for blocks `i > 0` it arrives through the trailing GEMM's beta. The natural
+- Alpha is applied once: for blocks `i > 0` it arrives through the trailing GEMM's beta. The natural
   `beta = 1` is invisible to any `alpha == 1` test.
-* Complex data with nonzero imaginary parts (`tri_fill`) is needed to see ConjTrans; the complex
+- Complex data with nonzero imaginary parts (`tri_fill`) is needed to see ConjTrans; the complex
   reciprocal uses Smith's form.
-* The oracle is an independent multiply-back: netlib and cuBLAS fold the 24 cases the same way.
-* `ctest -L blas -L ortho` is an AND and runs zero tests; use `ctest -L 'blas|ortho'`.
+- The oracle is an independent multiply-back: netlib and cuBLAS fold the 24 cases the same way.
+- `ctest -L blas -L ortho` is an AND and runs zero tests; use `ctest -L 'blas|ortho'`.
 
 ---
 

@@ -8,24 +8,24 @@ and `dsysv` (gfn2). Complex is symmetric, not Hermitian (`csytrf`).
 
 ## sytrf: contract
 
-* **Storage.** Only the `uplo` triangle is read and written; it receives \f$D\f$ and the multipliers of \f$L\f$
+- **Storage.** Only the `uplo` triangle is read and written; it receives \f$D\f$ and the multipliers of \f$L\f$
   (Lower) or \f$U\f$ (Upper) as LAPACK stores them.
-* **Pivots.** LAPACK's `ipiv`, 1-based int32 packed into the first half of the int64 span, item \f$b\f$ at
+- **Pivots.** LAPACK's `ipiv`, 1-based int32 packed into the first half of the int64 span, item \f$b\f$ at
   `as_span<int>()[b n + k]` (getrf's packing). `ipiv[k] > 0`: \f$1 \times 1\f$ block, \f$k\f$ and `ipiv[k] - 1`
   interchanged. Lower `ipiv[k] = ipiv[k+1] = -p`: \f$2 \times 2\f$ block at \f$(k, k+1)\f$, rows \f$k+1\f$ and \f$p-1\f$
   interchanged. Upper `ipiv[k-1] = ipiv[k] = -p`: \f$2 \times 2\f$ block at \f$(k-1, k)\f$, rows \f$k-1\f$ and \f$p-1\f$.
-* **info.** Per item: 0, or \f$i > 0\f$ when \f$D(i,i)\f$ (1-based) is exactly zero, `?sytf2`'s rule (the first
+- **info.** Per item: 0, or \f$i > 0\f$ when \f$D(i,i)\f$ (1-based) is exactly zero, `?sytf2`'s rule (the first
   column in loop order whose `max(|a_kk|, colmax)` is zero: the zero matrix gives 1 for Lower, \f$n\f$ for
   Upper). The factorization still completes.
-* **Pivot metric.** `cabs1 = |re| + |im|`, as `csytf2`.
+- **Pivot metric.** `cabs1 = |re| + |im|`, as `csytf2`.
 
 ## sysv and sytrs: contract
 
-* `sytrs` reads \f$A\f$, `uplo` and `ipiv` as `sytrf` left them and overwrites \f$B\f$ with \f$X\f$. No singularity
+- `sytrs` reads \f$A\f$, `uplo` and `ipiv` as `sytrf` left them and overwrites \f$B\f$ with \f$X\f$. No singularity
   check (a singular item gives Inf or NaN). Workspace `sytrs_buffer_size()` bytes, nonzero for
   `blocked` only. A pivot list `sytrf` cannot have written (an entry 0 or outside \f$[-n, n]\f$, a \f$2 \times 2\f$
   entry without its partner) gives that item an all-NaN \f$X\f$; LAPACKE's `?sytrs` (NETLIB) does no check.
-* `sysv` is `sytrf` then `sytrs`. An item with `info > 0` keeps its \f$B\f$ (LAPACK `?sysv`); every route,
+- `sysv` is `sytrf` then `sytrs`. An item with `info > 0` keeps its \f$B\f$ (LAPACK `?sysv`); every route,
   the fused `cta` included, honours this through sytrs's skip list.
 
 ## Selection
@@ -43,10 +43,10 @@ and `dsysv` (gfn2). Complex is symmetric, not Hermitian (`csytrf`).
 | `sysv` | `cta` | `sysv_cta_dispatch`: `cta` factor + sytrs `cta` solve, one launch | GPU, sub-group 32, homogeneous, `1 <= n <= 32` |
 | `sysv` | `compose` | routed `sytrf`, then routed `sytrs` with the status as skip list | homogeneous |
 
-* **Native:** `B != NETLIB && d.is_gpu && d.has_sg32 && max_wg >= 32`, homogeneous and unmasked,
+- **Native:** `B != NETLIB && d.is_gpu && d.has_sg32 && max_wg >= 32`, homogeneous and unmasked,
   `n, batch >= 1` (sytrs: `nrhs >= 1`). `sytrf.cc` and `sytrs.hh` hold the predicates.
-* **Last resort** (no table): sytrf `wg`, then `vendor`; sytrs `blocked`, then `vendor`; sysv `compose`.
-* **Pins:** `BATCHLAS_SYTRF_ROUTE` (`cta`, `wg`, `blocked`, `vendor`), `BATCHLAS_SYTRS_ROUTE` (`cta`,
+- **Last resort** (no table): sytrf `wg`, then `vendor`; sytrs `blocked`, then `vendor`; sysv `compose`.
+- **Pins:** `BATCHLAS_SYTRF_ROUTE` (`cta`, `wg`, `blocked`, `vendor`), `BATCHLAS_SYTRS_ROUTE` (`cta`,
   `blocked`, `wg`, `vendor`), `BATCHLAS_SYSV_ROUTE` (`cta`, `compose`); each also takes `native`, `auto`.
 
 ### sytrf: the transcribed tables
@@ -131,16 +131,16 @@ applied to the rows of the earlier columns of \f$L\f$, \f$2 \times 2\f$ off-diag
 \f$w := D^{-1} w\f$, \f$L^T z = w\f$, scatter \f$x = P z\f$, in logical lower form
 ([reversal map](#sytrf-the-reversal-map)). The pivot list is validated once per item first.
 
-* **`cta`**: one work-group per item; the lower triangle is staged and converted in local memory
+- **`cta`**: one work-group per item; the lower triangle is staged and converted in local memory
   (`ld = n | 1`). Each sub-group owns right-hand sides \f$\mathrm{sgid}, \mathrm{sgid} + \mathrm{nsg}, \dots\f$ (\f$\mathrm{nsg} = \min(\mathrm{nrhs}, 8)\f$); lane
   \f$i\f$ holds rows \f$i, i + 32, \dots\f$ in registers (at most 4, so \f$n \le 128\f$); both sweeps are broadcast + axpy
   (no reduction, no barrier); \f$D^{-1}\f$ reads a \f$2 \times 2\f$ partner across the lane-31 / lane-0 seam. cdouble
   stops near \f$n = 76\f$ on sm_89 (local memory).
-* **`blocked`**: per chunk of items, a prep kernel writes the converted factor (`convert_gather`,
+- **`blocked`**: per chunk of items, a prep kernel writes the converted factor (`convert_gather`,
   through the composed permutation) and the gathered \f$B\f$ to workspace; then `trsm` (`Left`, `NoTrans`,
   `Unit`), a \f$D^{-1}\f$ kernel, `trsm` with `Trans` (not conjugated), and the scatter. The chunk is getrf's
   L2 rule capped by half the scratch lease and the grid (`blocked_chunk`). Any \f$n\f$, any \f$\mathrm{nrhs}\f$.
-* **sysv `cta`**: sub-group 0 factors (bit-identical to sytrf `cta`), then one sub-group per
+- **sysv `cta`**: sub-group 0 factors (bit-identical to sytrf `cta`), then one sub-group per
   right-hand side (at most 8) runs `cta`'s solve.
 
 ## sytrs: measured {#sytrs-measured}
@@ -158,13 +158,13 @@ applied to the rows of the earlier columns of \f$L\f$, \f$2 \times 2\f$ off-diag
 | cfloat | 64 | 64 | 8192 | 19.8 | **3.16** | 6.91 |
 | cfloat | 512 | 16 | 1024 | 25.0 | - | **12.7** |
 
-* `cta` wins \f$n \le 64\f$ at \f$\mathrm{nrhs} \ge 4\f$ and \f$\mathrm{nrhs} = 1\f$ up to \f$n = 32\f$; at \f$n = 128\f$ its staged factor fills an SM.
-* `blocked` wins from \f$n = 128\f$ at \f$\mathrm{nrhs} \ge 4\f$, and at every \f$n\f$ for \f$\mathrm{nrhs} \ge 16\f$, \f$\mathrm{batch} \ge 1024\f$.
+- `cta` wins \f$n \le 64\f$ at \f$\mathrm{nrhs} \ge 4\f$ and \f$\mathrm{nrhs} = 1\f$ up to \f$n = 32\f$; at \f$n = 128\f$ its staged factor fills an SM.
+- `blocked` wins from \f$n = 128\f$ at \f$\mathrm{nrhs} \ge 4\f$, and at every \f$n\f$ for \f$\mathrm{nrhs} \ge 16\f$, \f$\mathrm{batch} \ge 1024\f$.
   `convert_gather` beat one swap per pivot step 1.0-2.3x from \f$n = 64\f$.
-* `wg` stays for \f$\mathrm{nrhs} = 1\f$ from \f$n = 64\f$ and \f$\mathrm{nrhs} \le 4\f$ from \f$n = 256\f$.
-* sysv `cta` (one sub-group per rhs) vs the old serial-rhs fused kernel: 1.0-1.1x at \f$\mathrm{nrhs} = 1\f$,
+- `wg` stays for \f$\mathrm{nrhs} = 1\f$ from \f$n = 64\f$ and \f$\mathrm{nrhs} \le 4\f$ from \f$n = 256\f$.
+- sysv `cta` (one sub-group per rhs) vs the old serial-rhs fused kernel: 1.0-1.1x at \f$\mathrm{nrhs} = 1\f$,
   3.5-11.8x at \f$\mathrm{nrhs} = 64\f$.
-* Dropped: `sg`, one sub-group per (item, rhs) on the unconverted factor, best in 12 of 162 cells by
+- Dropped: `sg`, one sub-group per (item, rhs) on the unconverted factor, best in 12 of 162 cells by
   at most 1.35x over `wg`.
 
 Evidence: `/home/jonaslacour/.claude/jobs/ad7932ae/tmp/perf-sytrs/` on the 4090 box.
