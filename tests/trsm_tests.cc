@@ -27,7 +27,7 @@ namespace {
 // The native-kernel cases below pin the build's native GPU backend (CUDA, or SYCL on
 // AdaptiveCpp Metal). Cases written in double run in float where that backend has no
 // double kernels, so the native kernel still launches instead of the case skipping.
-constexpr Backend kGpu = test_utils::native_gpu_backend;
+constexpr Backend kGpu = test_utils::kNativeGpuBackend;
 using Wide = test_utils::native_gpu_scalar_t<double>;
 using WideC = test_utils::native_gpu_scalar_t<std::complex<double>>;
 }  // namespace
@@ -103,7 +103,7 @@ protected:
         return test_utils::verify_pass<ScalarType>(batchlas::verify::Check::solve, rows, res);
     }
 
-    void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
+    void perform_trsm_test(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         Matrix<ScalarType, MatrixFormat::Dense> A_matrix(rows, rows, test_batch_size);
         Matrix<ScalarType, MatrixFormat::Dense> B_matrix(rows, cols, test_batch_size);
 
@@ -187,35 +187,35 @@ protected:
 TYPED_TEST_SUITE(TrsmOperationsTest, TrsmTestTypes);
 
 TYPED_TEST(TrsmOperationsTest, LowerTriangularSolveNoTrans) {
-    this->performTrsmTest(Uplo::Lower, Transpose::NoTrans, 1);
+    this->perform_trsm_test(Uplo::Lower, Transpose::NoTrans, 1);
 }
 
 TYPED_TEST(TrsmOperationsTest, LowerTriangularSolveTrans) {
-    this->performTrsmTest(Uplo::Lower, Transpose::Trans, 1);
+    this->perform_trsm_test(Uplo::Lower, Transpose::Trans, 1);
 }
 
 TYPED_TEST(TrsmOperationsTest, UpperTriangularSolveNoTrans) {
-    this->performTrsmTest(Uplo::Upper, Transpose::NoTrans, 1);
+    this->perform_trsm_test(Uplo::Upper, Transpose::NoTrans, 1);
 }
 
 TYPED_TEST(TrsmOperationsTest, UpperTriangularSolveTrans) {
-    this->performTrsmTest(Uplo::Upper, Transpose::Trans, 1);
+    this->perform_trsm_test(Uplo::Upper, Transpose::Trans, 1);
 }
 
 TYPED_TEST(TrsmOperationsTest, BatchedLowerTriangularSolveNoTrans) {
-    this->performTrsmTest(Uplo::Lower, Transpose::NoTrans, this->batch_size);
+    this->perform_trsm_test(Uplo::Lower, Transpose::NoTrans, this->batch_size);
 }
 
 TYPED_TEST(TrsmOperationsTest, BatchedLowerTriangularSolveTrans) {
-    this->performTrsmTest(Uplo::Lower, Transpose::Trans, this->batch_size);
+    this->perform_trsm_test(Uplo::Lower, Transpose::Trans, this->batch_size);
 }
 
 TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveNoTrans) {
-    this->performTrsmTest(Uplo::Upper, Transpose::NoTrans, this->batch_size);
+    this->perform_trsm_test(Uplo::Upper, Transpose::NoTrans, this->batch_size);
 }
 
 TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
-    this->performTrsmTest(Uplo::Upper, Transpose::Trans, this->batch_size);
+    this->perform_trsm_test(Uplo::Upper, Transpose::Trans, this->batch_size);
 }
 
 // ===========================================================================
@@ -268,7 +268,7 @@ struct TrsmNativeCase {
 };
 
 template <typename T>
-void RunTrsmNative(const TrsmNativeCase<T>& tc) {
+void run_trsm_native(const TrsmNativeCase<T>& tc) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
@@ -322,7 +322,7 @@ TEST(TrsmNativeCta, CanonicalCrossProductFloat) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<float>({8, 24, 3, sd, up, tr, dg, 1.0f});
+                    run_trsm_native<float>({8, 24, 3, sd, up, tr, dg, 1.0f});
 }
 
 TEST(TrsmNativeCta, CanonicalCrossProductDouble) {
@@ -330,14 +330,14 @@ TEST(TrsmNativeCta, CanonicalCrossProductDouble) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<Wide>({8, 24, 3, sd, up, tr, dg, 1.0});
+                    run_trsm_native<Wide>({8, 24, 3, sd, up, tr, dg, 1.0});
 }
 
 // alpha scales B once, before the subtraction, not after the divide.
 TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
     for (Side sd : {Side::Left, Side::Right}) {
-        RunTrsmNative<Wide>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
-        RunTrsmNative<Wide>({16, 40, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
+        run_trsm_native<Wide>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
+        run_trsm_native<Wide>({16, 40, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
     }
 }
 
@@ -346,22 +346,22 @@ TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
 TEST(TrsmNativeCta, PartialBucketIsZeroPadded) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {5, 9, 13, 17, 30})
-            RunTrsmNative<Wide>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
+            run_trsm_native<Wide>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
 // With q not a multiple of the work-group size, the tail lanes must not store.
 TEST(TrsmNativeCta, RaggedRhsCount) {
     for (Side sd : {Side::Left, Side::Right})
         for (int q : {1, 7, 31, 33, 129, 257})
-            RunTrsmNative<Wide>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
+            run_trsm_native<Wide>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
 // n=32 is the largest order that keeps x[] in registers; n > 32 is V2's job.
 // evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
 TEST(TrsmNativeCta, LargestResidentOrder) {
     for (Side sd : {Side::Left, Side::Right}) {
-        RunTrsmNative<float>({32, 64, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0f});
-        RunTrsmNative<Wide>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
+        run_trsm_native<float>({32, 64, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0f});
+        run_trsm_native<Wide>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
     }
 }
 
@@ -398,7 +398,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
 // ===========================================================================
 namespace {
 template <typename T>
-void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
+void run_trsm_blocked(const TrsmNativeCase<T>& tc) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = tc.n, q = tc.q, bs = tc.batch;
     const int brows = (tc.side == Side::Left) ? n : q;
@@ -496,16 +496,16 @@ TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
 
     // Order 48 is one full N=32 block plus a ragged N=16 one; orders that
     // divide evenly into the CTA capacity do not reproduce the race.
-    RunTrsmBlocked<float>({48, q, bs, Side::Right, Uplo::Lower,
-                           Transpose::Trans, Diag::NonUnit, 1.0f});
-    RunTrsmBlocked<Wide>({48, q, bs, Side::Right, Uplo::Lower,
+    run_trsm_blocked<float>({48, q, bs, Side::Right, Uplo::Lower,
+                             Transpose::Trans, Diag::NonUnit, 1.0f});
+    run_trsm_blocked<Wide>({48, q, bs, Side::Right, Uplo::Lower,
                             Transpose::Trans, Diag::NonUnit, 1.0});
 }
 
 TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {33, 40, 64, 96, 100})
-            RunTrsmBlocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            run_trsm_blocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, 1.0});
 }
 
@@ -515,7 +515,7 @@ TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOncePerBlock) {
     for (Side sd : {Side::Left, Side::Right})
         for (Wide a : {Wide(-2.5), Wide(0.75), Wide(3.0)})
             for (int n : {33, 64, 96})
-                RunTrsmBlocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                run_trsm_blocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
                                         Diag::NonUnit, a});
 }
 
@@ -524,14 +524,14 @@ TEST(TrsmNativeBlocked, CanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<Wide>({70, 16, 2, sd, up, tr, dg, -1.5});
+                    run_trsm_blocked<Wide>({70, 16, 2, sd, up, tr, dg, -1.5});
 }
 
 TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
     for (Side sd : {Side::Left, Side::Right})
         for (int q : {1, 33, 129})
-            RunTrsmBlocked<float>({48, q, 2, sd, Uplo::Lower, Transpose::Trans,
-                                   Diag::NonUnit, 2.0f});
+            run_trsm_blocked<float>({48, q, 2, sd, Uplo::Lower, Transpose::Trans,
+                                     Diag::NonUnit, 2.0f});
 }
 
 
@@ -547,7 +547,7 @@ TEST(TrsmNativeCta, ComplexCanonicalCrossProductFloat) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<std::complex<float>>(
+                    run_trsm_native<std::complex<float>>(
                         {8, 24, 3, sd, up, tr, dg, std::complex<float>(1.0f, 0.0f)});
 }
 
@@ -556,7 +556,7 @@ TEST(TrsmNativeCta, ComplexCanonicalCrossProductDouble) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<WideC>(
+                    run_trsm_native<WideC>(
                         {8, 24, 3, sd, up, tr, dg, WideC(1.0, 0.0)});
 }
 
@@ -564,10 +564,10 @@ TEST(TrsmNativeCta, ComplexCanonicalCrossProductDouble) {
 TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
     for (Side sd : {Side::Left, Side::Right})
         for (Transpose tr : {Transpose::NoTrans, Transpose::ConjTrans}) {
-            RunTrsmNative<WideC>(
+            run_trsm_native<WideC>(
                 {16, 40, 2, sd, Uplo::Lower, tr, Diag::NonUnit,
                  WideC(-1.25, 0.75)});
-            RunTrsmNative<std::complex<float>>(
+            run_trsm_native<std::complex<float>>(
                 {16, 40, 2, sd, Uplo::Upper, tr, Diag::NonUnit,
                  std::complex<float>(0.5f, -2.0f)});
         }
@@ -576,11 +576,11 @@ TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
 TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
     for (Side sd : {Side::Left, Side::Right}) {
         for (int n : {5, 13, 17, 31, 32})
-            RunTrsmNative<WideC>(
+            run_trsm_native<WideC>(
                 {n, 33, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
                  WideC(1.0, 0.0)});
         for (int q : {1, 7, 33, 129})
-            RunTrsmNative<std::complex<float>>(
+            run_trsm_native<std::complex<float>>(
                 {8, q, 2, sd, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit,
                  std::complex<float>(1.0f, 0.0f)});
     }
@@ -591,17 +591,17 @@ TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
 TEST(TrsmNativeBlocked, ComplexDoubleSingleRhsTrailingGemm) {
     for (Side sd : {Side::Left, Side::Right})
         for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans})
-            RunTrsmBlocked<WideC>(
+            run_trsm_blocked<WideC>(
                 {64, 1, 3, sd, Uplo::Lower, t, Diag::NonUnit, WideC(1.0, 0.5)});
 }
 
 TEST(TrsmNativeBlocked, ComplexCrossoverAndAlpha) {
     for (Side sd : {Side::Left, Side::Right}) {
         for (int n : {33, 64, 70, 96})
-            RunTrsmBlocked<WideC>(
+            run_trsm_blocked<WideC>(
                 {n, 20, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
                  WideC(-1.5, 0.5)});
-        RunTrsmBlocked<std::complex<float>>(
+        run_trsm_blocked<std::complex<float>>(
             {48, 24, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit,
              std::complex<float>(2.0f, -0.75f)});
     }
@@ -612,7 +612,7 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<WideC>(
+                    run_trsm_blocked<WideC>(
                         {40, 16, 2, sd, up, tr, dg, WideC(1.0, -0.5)});
 }
 
@@ -625,7 +625,7 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
 TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {129, 256, 300, 384})
-            RunTrsmBlocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            run_trsm_blocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, 1.0});
 }
 
@@ -635,7 +635,7 @@ TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOnceAcrossPanels) {
     for (Side sd : {Side::Left, Side::Right})
         for (Wide a : {Wide(-2.5), Wide(0.75)})
             for (int n : {129, 256, 300})
-                RunTrsmBlocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                run_trsm_blocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
                                         Diag::NonUnit, a});
 }
 
@@ -644,14 +644,14 @@ TEST(TrsmNativeBlocked, TwoLevelCanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<Wide>({160, 16, 2, sd, up, tr, dg, -1.5});
+                    run_trsm_blocked<Wide>({160, 16, 2, sd, up, tr, dg, -1.5});
 }
 
 TEST(TrsmNativeBlocked, TwoLevelFloatAndComplex) {
     for (Side sd : {Side::Left, Side::Right}) {
-        RunTrsmBlocked<float>({192, 24, 2, sd, Uplo::Lower, Transpose::Trans,
-                               Diag::NonUnit, 2.0f});
-        RunTrsmBlocked<std::complex<float>>(
+        run_trsm_blocked<float>({192, 24, 2, sd, Uplo::Lower, Transpose::Trans,
+                                 Diag::NonUnit, 2.0f});
+        run_trsm_blocked<std::complex<float>>(
             {160, 20, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
              std::complex<float>(1.5f, -0.5f)});
     }
@@ -674,7 +674,7 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
     for (const char* v : {"64", "32", "256"}) {
         batchlas::ScopedEnvVar g("BATCHLAS_TRSM_OUTER_NB", v);
         for (Side sd : {Side::Left, Side::Right})
-            RunTrsmBlocked<Wide>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            run_trsm_blocked<Wide>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, -1.25});
     }
 }
@@ -686,8 +686,8 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
 
 TEST(TrsmFloatLeftOrders, SpanningTheBlockedRange) {
     for (int n : {33, 40, 64, 100, 127, 128, 129, 200})
-        RunTrsmBlocked<float>({n, 24, 2, Side::Left, Uplo::Lower, Transpose::NoTrans,
-                               Diag::NonUnit, 1.0f});
+        run_trsm_blocked<float>({n, 24, 2, Side::Left, Uplo::Lower, Transpose::NoTrans,
+                                 Diag::NonUnit, 1.0f});
 }
 
 TEST(TrsmFloatLeftOrders, CanonicalCrossProduct) {
@@ -695,22 +695,22 @@ TEST(TrsmFloatLeftOrders, CanonicalCrossProduct) {
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
             for (Diag dg : {Diag::NonUnit, Diag::Unit})
                 for (int n : {64, 129})
-                    RunTrsmBlocked<float>({n, 20, 2, Side::Left, up, tr, dg, -1.5f});
+                    run_trsm_blocked<float>({n, 20, 2, Side::Left, up, tr, dg, -1.5f});
 }
 
 TEST(TrsmFloatLeftOrders, AlphaAcrossOrders) {
     for (float a : {-2.5f, 0.75f, 3.0f})
         for (int n : {64, 129, 200})
-            RunTrsmBlocked<float>({n, 20, 2, Side::Left, Uplo::Upper, Transpose::NoTrans,
-                                   Diag::NonUnit, a});
+            run_trsm_blocked<float>({n, 20, 2, Side::Left, Uplo::Upper, Transpose::NoTrans,
+                                     Diag::NonUnit, a});
 }
 
 // A q that is not a multiple of the work-group's solve count exercises the
 // `live` guard on both the load and the store.
 TEST(TrsmFloatLeftOrders, RaggedSolveCount) {
     for (int q : {1, 7, 31, 33, 129, 257})
-        RunTrsmBlocked<float>({96, q, 2, Side::Left, Uplo::Lower, Transpose::Trans,
-                               Diag::NonUnit, 1.25f});
+        run_trsm_blocked<float>({96, q, 2, Side::Left, Uplo::Lower, Transpose::Trans,
+                                 Diag::NonUnit, 1.25f});
 }
 
 // The two sides take different schedules (Side::Left blocks at 128,
@@ -718,8 +718,8 @@ TEST(TrsmFloatLeftOrders, RaggedSolveCount) {
 TEST(TrsmFloatLeftOrders, RightSideAlso) {
     for (int n : {64, 129, 200})
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
-            RunTrsmBlocked<float>({n, 24, 2, Side::Right, Uplo::Lower, tr,
-                                   Diag::NonUnit, -0.75f});
+            run_trsm_blocked<float>({n, 24, 2, Side::Right, Uplo::Lower, tr,
+                                     Diag::NonUnit, -0.75f});
 }
 
 
@@ -746,7 +746,7 @@ struct SgCase {
 };
 
 template <typename T>
-std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
+std::vector<T> run_sg_left(const SgCase<T>& tc, bool check = true) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = tc.n, q = tc.q, bs = tc.batch;
     const int lda = n + tc.pad_a, ldb = n + tc.pad_b;
@@ -810,8 +810,8 @@ TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedComplex) {
     for (Uplo up : {Uplo::Lower, Uplo::Upper})
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
             for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
-                RunSgLeft<std::complex<float>>({13, 9, 5, up, tr, dg, {0.5f, -1.25f}});
-                RunSgLeft<WideC>({29, 17, 3, up, tr, dg, {-1.5, 0.75}});
+                run_sg_left<std::complex<float>>({13, 9, 5, up, tr, dg, {0.5f, -1.25f}});
+                run_sg_left<WideC>({29, 17, 3, up, tr, dg, {-1.5, 0.75}});
             }
 }
 
@@ -819,8 +819,8 @@ TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedReal) {
     for (Uplo up : {Uplo::Lower, Uplo::Upper})
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
             for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
-                RunSgLeft<float>({6, 7, 9, up, tr, dg, -2.0f});
-                RunSgLeft<Wide>({32, 33, 3, up, tr, dg, 0.75});
+                run_sg_left<float>({6, 7, 9, up, tr, dg, -2.0f});
+                run_sg_left<Wide>({32, 33, 3, up, tr, dg, 0.75});
             }
 }
 
@@ -833,11 +833,11 @@ TEST(TrsmNativeSgLeft, BucketAndChunkEdges) {
     const int qs[] = {1, 4, 5, 8, 9, 16, 17, 40};
     for (int n : ns)
         for (int q : qs) {
-            RunSgLeft<float>({n, q, 7, Uplo::Lower, Transpose::Trans, Diag::Unit, 0.5f});
-            RunSgLeft<Wide>({n, q, 11, Uplo::Upper, Transpose::Trans, Diag::NonUnit, -1.25});
-            RunSgLeft<std::complex<float>>(
+            run_sg_left<float>({n, q, 7, Uplo::Lower, Transpose::Trans, Diag::Unit, 0.5f});
+            run_sg_left<Wide>({n, q, 11, Uplo::Upper, Transpose::Trans, Diag::NonUnit, -1.25});
+            run_sg_left<std::complex<float>>(
                 {n, q, 13, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, {1.0f, 0.5f}});
-            RunSgLeft<WideC>(
+            run_sg_left<WideC>(
                 {n, q, 11, Uplo::Upper, Transpose::ConjTrans, Diag::Unit, {-0.5, 1.5}});
         }
 }
@@ -862,7 +862,7 @@ TEST(TrsmNativeSgLeft, SaturatingBatchIsBitIdentical) {
     auto run = [](auto tag, int n, int q) {
         using T = decltype(tag);
         SgCase<T> tc{n, q, 2048, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, T(1)};
-        const auto x = RunSgLeft<T>(tc, true);
+        const auto x = run_sg_left<T>(tc, true);
         const size_t item = static_cast<size_t>(n) * q;
         for (int b = 60; b < tc.batch; ++b)
             ASSERT_EQ(0, std::memcmp(x.data() + (b % 60) * item, x.data() + b * item,
@@ -926,12 +926,12 @@ TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
     ASSERT_EQ(trsm_expected_wg(*probe, 40, 4096), 64);
     ASSERT_EQ(trsm_expected_wg(*probe, 8, 4096), 32);
     for (int q : {8, 40}) {
-        RunTrsmNative<float>({32, q, 4096, Side::Right, Uplo::Lower, Transpose::Trans,
-                              Diag::NonUnit, 1.5f});
-        RunTrsmNative<std::complex<float>>({29, q, 4096, Side::Right, Uplo::Upper,
-                                            Transpose::ConjTrans, Diag::NonUnit, {1.0f, -0.5f}});
+        run_trsm_native<float>({32, q, 4096, Side::Right, Uplo::Lower, Transpose::Trans,
+                                Diag::NonUnit, 1.5f});
+        run_trsm_native<std::complex<float>>({29, q, 4096, Side::Right, Uplo::Upper,
+                                              Transpose::ConjTrans, Diag::NonUnit, {1.0f, -0.5f}});
     }
-    RunTrsmNative<Wide>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
+    run_trsm_native<Wide>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
                            Diag::NonUnit, -1.0});
 }
 
@@ -997,7 +997,7 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
 // BLAS trsm at alpha == 0 sets B := 0 and reads neither A nor B, so NaN in either must not
 // reach the result. Unzeroed workspace B is the real case: 0 * NaN = NaN.
 template <typename T>
-void NetlibTrsmAlphaZeroIgnoresNanB() {
+void netlib_trsm_alpha_zero_ignores_nan_b() {
     Queue q(Device("cpu"), Backend::NETLIB);
     const int n = 5, k = 3, bs = 3, lda = n + 2, ldbl = n + 3, ldbr = k + 4;
     const T nan = T(std::numeric_limits<typename base_type<T>::type>::quiet_NaN());
@@ -1028,10 +1028,10 @@ void NetlibTrsmAlphaZeroIgnoresNanB() {
                 }
 }
 
-TEST(TrsmNetlib, AlphaZeroIgnoresNanBFloat) { NetlibTrsmAlphaZeroIgnoresNanB<float>(); }
-TEST(TrsmNetlib, AlphaZeroIgnoresNanBDouble) { NetlibTrsmAlphaZeroIgnoresNanB<double>(); }
-TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexFloat) { NetlibTrsmAlphaZeroIgnoresNanB<std::complex<float>>(); }
-TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexDouble) { NetlibTrsmAlphaZeroIgnoresNanB<std::complex<double>>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBFloat) { netlib_trsm_alpha_zero_ignores_nan_b<float>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBDouble) { netlib_trsm_alpha_zero_ignores_nan_b<double>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexFloat) { netlib_trsm_alpha_zero_ignores_nan_b<std::complex<float>>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexDouble) { netlib_trsm_alpha_zero_ignores_nan_b<std::complex<double>>(); }
 #endif
 
 // The public trsm at alpha == 0 under every route the build can run here: B := 0 with A and B

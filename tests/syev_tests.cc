@@ -130,20 +130,20 @@ namespace {
 // a const overload returning `const T&`, so a const-reference parameter would
 // make every assignment below a compile error. A MatrixView is a non-owning
 // descriptor, so copying it costs nothing.
-template <typename Scalar>
-void fill_mixed_convergence_matrices(MatrixView<Scalar, MatrixFormat::Dense> A) {
+template <typename T>
+void fill_mixed_convergence_matrices(MatrixView<T, MatrixFormat::Dense> A) {
     const int n = A.rows();
     const int batch = A.batch_size();
     for (int b = 0; b < batch; ++b) {
         const bool easy = (b % 2) == 0;
         for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) A(i, j, b) = Scalar(0);
+            for (int i = 0; i < n; ++i) A(i, j, b) = T(0);
         }
-        for (int i = 0; i < n; ++i) A(i, i, b) = easy ? Scalar(i + 1) : Scalar(1);
+        for (int i = 0; i < n; ++i) A(i, i, b) = easy ? T(i + 1) : T(1);
         if (!easy) {
             for (int i = 0; i + 1 < n; ++i) {
-                A(i + 1, i, b) = Scalar(0.5);
-                A(i, i + 1, b) = Scalar(0.5);
+                A(i + 1, i, b) = T(0.5);
+                A(i, i + 1, b) = T(0.5);
             }
         }
     }

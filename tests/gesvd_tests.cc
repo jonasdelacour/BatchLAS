@@ -201,12 +201,12 @@ inline batchlas::verify::Slack gesvd_cta_slack() {
             "gesvd cta provider always takes the normal-equations bidiagonal path (squares the condition number); measured c 52 float / 113 double, accepted bounds 64 / 128 n eps"};
 }
 
-template <typename Scalar, Backend B>
+template <typename T, Backend B>
 std::string run_gesvd_with_provider(Queue& ctx,
-                                    Matrix<Scalar, MatrixFormat::Dense>& A,
-                                    UnifiedVector<typename base_type<Scalar>::type>& s,
-                                    Matrix<Scalar, MatrixFormat::Dense>& U,
-                                    Matrix<Scalar, MatrixFormat::Dense>& Vh,
+                                    Matrix<T, MatrixFormat::Dense>& A,
+                                    UnifiedVector<typename base_type<T>::type>& s,
+                                    Matrix<T, MatrixFormat::Dense>& U,
+                                    Matrix<T, MatrixFormat::Dense>& Vh,
                                     SvdVectors jobu,
                                     SvdVectors jobvh,
                                     const char* provider,
@@ -313,16 +313,16 @@ void expect_orthonormal_columns(Queue& ctx, const Matrix<Scalar, MatrixFormat::D
 }
 
 // Rows are orthonormal when the columns of M^H are.
-template <typename Scalar>
-void expect_orthonormal_rows(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dense>& M,
+template <typename T>
+void expect_orthonormal_rows(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& M,
                              batchlas::verify::Slack slack = {1.0, "-"}) {
-    Matrix<Scalar, MatrixFormat::Dense> Mh(M.cols(), M.rows(), M.batch_size());
+    Matrix<T, MatrixFormat::Dense> Mh(M.cols(), M.rows(), M.batch_size());
     for (int b = 0; b < M.batch_size(); ++b) {
         auto Mb = M.batch_item(b);
         auto Hb = Mh.batch_item(b);
         for (int j = 0; j < M.cols(); ++j) {
             for (int i = 0; i < M.rows(); ++i) {
-                Hb(j, i, 0) = MatrixView<Scalar, MatrixFormat::Dense>::conj(Mb(i, j, 0));
+                Hb(j, i, 0) = MatrixView<T, MatrixFormat::Dense>::conj(Mb(i, j, 0));
             }
         }
     }
@@ -459,10 +459,10 @@ TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
     }
 }
 
-template <typename Scalar>
-Matrix<Scalar, MatrixFormat::Dense> make_repeated_tiny_spectrum_matrix(int n, int batch) {
-    using Real = typename base_type<Scalar>::type;
-    Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
+template <typename T>
+Matrix<T, MatrixFormat::Dense> make_repeated_tiny_spectrum_matrix(int n, int batch) {
+    using Real = typename base_type<T>::type;
+    Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
 
     std::vector<Real> diag(static_cast<size_t>(n), Real(0));
     if (n > 0) diag[0] = Real(10);
@@ -478,7 +478,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_repeated_tiny_spectrum_matrix(int n, in
         const int shift = (3 * b) % std::max(1, n);
         for (int i = 0; i < n; ++i) {
             const int src = (i + shift) % std::max(1, n);
-            Ab(i, i, 0) = static_cast<Scalar>(diag[static_cast<size_t>(src)]);
+            Ab(i, i, 0) = static_cast<T>(diag[static_cast<size_t>(src)]);
         }
     }
 
@@ -857,11 +857,11 @@ namespace {
 // converges in zero sweeps and A^T A is diagonal, so the normal-equation path
 // is exact too and the two are indistinguishable however ill-conditioned the
 // spectrum is.
-template <typename Scalar>
-Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
-                                                            int batch,
-                                                            double log10cond) {
-    using Real = typename base_type<Scalar>::type;
+template <typename T>
+Matrix<T, MatrixFormat::Dense> make_graded_dense_matrix(int n,
+                                                        int batch,
+                                                        double log10cond) {
+    using Real = typename base_type<T>::type;
 
     std::vector<double> sigma(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
@@ -869,7 +869,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
         sigma[static_cast<size_t>(i)] = std::pow(10.0, -log10cond * t);
     }
 
-    Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
+    Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
 
     for (int b = 0; b < batch; ++b) {
         // Deterministic per-batch-item reflectors; a fixed LCG keeps this
@@ -903,7 +903,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
                     const double h2 = (k == j ? 1.0 : 0.0) - 2.0 * v[static_cast<size_t>(k)] * v[static_cast<size_t>(j)];
                     acc += h1 * sigma[static_cast<size_t>(k)] * h2;
                 }
-                Ab(i, j, 0) = static_cast<Scalar>(static_cast<Real>(acc));
+                Ab(i, j, 0) = static_cast<T>(static_cast<Real>(acc));
             }
         }
     }
@@ -1352,25 +1352,25 @@ namespace {
 using cd = std::complex<double>;
 constexpr double kGesvdPoison = 7.5e3;  // finite and in range: only a kernel that derives ld reads it
 
-template <typename Scalar>
-Scalar gesvd_scalar(cd v) {
-    if constexpr (test_utils::is_complex<Scalar>::value) return Scalar(v.real(), v.imag());
-    else return Scalar(v.real());
+template <typename T>
+T gesvd_scalar(cd v) {
+    if constexpr (test_utils::is_complex<T>::value) return T(v.real(), v.imag());
+    else return T(v.real());
 }
 
 // ld = rows + 3, items ld * cols + 5 apart; everything outside the matrix is poison.
-template <typename Scalar>
+template <typename T>
 struct PaddedBatch {
     int rows, cols, batch, ld;
     int64_t stride;
-    UnifiedVector<Scalar> buf;
+    UnifiedVector<T> buf;
     PaddedBatch(int r, int c, int b)
         : rows(r), cols(c), batch(b), ld(r + 3), stride(int64_t(r + 3) * c + 5),
-          buf(static_cast<size_t>(int64_t(r + 3) * c + 5) * b, gesvd_scalar<Scalar>(cd(kGesvdPoison, -kGesvdPoison))) {}
-    MatrixView<Scalar, MatrixFormat::Dense> view() { return {buf.data(), rows, cols, ld, static_cast<int>(stride), batch}; }
-    Scalar& at(int i, int j, int b) { return buf[static_cast<size_t>(b * stride + int64_t(j) * ld + i)]; }
-    Matrix<Scalar, MatrixFormat::Dense> dense() {
-        Matrix<Scalar, MatrixFormat::Dense> M(rows, cols, batch);
+          buf(static_cast<size_t>(int64_t(r + 3) * c + 5) * b, gesvd_scalar<T>(cd(kGesvdPoison, -kGesvdPoison))) {}
+    MatrixView<T, MatrixFormat::Dense> view() { return {buf.data(), rows, cols, ld, static_cast<int>(stride), batch}; }
+    T& at(int i, int j, int b) { return buf[static_cast<size_t>(b * stride + int64_t(j) * ld + i)]; }
+    Matrix<T, MatrixFormat::Dense> dense() {
+        Matrix<T, MatrixFormat::Dense> M(rows, cols, batch);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < rows; ++i) M.batch_item(b)(i, j, 0) = at(i, j, b);
@@ -1378,15 +1378,15 @@ struct PaddedBatch {
     }
 };
 
-// Q = H(u1) H(u2), H(u) = I - 2 u u^H, column-major; complex u for complex Scalar.
-template <typename Scalar>
+// Q = H(u1) H(u2), H(u) = I - 2 u u^H, column-major; complex u for complex T.
+template <typename T>
 std::vector<cd> two_reflectors(std::mt19937& gen, int n) {
     std::uniform_real_distribution<double> d(-1.0, 1.0);
     auto unit = [&] {
         std::vector<cd> u(static_cast<size_t>(n));
         double nrm = 0.0;
         for (auto& x : u) {
-            x = cd(d(gen), test_utils::is_complex<Scalar>::value ? d(gen) : 0.0);
+            x = cd(d(gen), test_utils::is_complex<T>::value ? d(gen) : 0.0);
             nrm += std::norm(x);
         }
         for (auto& x : u) x /= std::sqrt(nrm);
@@ -1407,8 +1407,8 @@ std::vector<cd> two_reflectors(std::mt19937& gen, int n) {
 // Every item: A = Qm diag(sigma) Qn^H with sigma graded 1 .. 10^-log10cond (general), or
 // A = Q diag(lambda) Q^H with lambda graded and of alternating sign (Hermitian, stored in the
 // upper triangle; the strictly lower one is poison). Returns the singular values, descending.
-template <typename Scalar>
-std::vector<double> fill_graded(PaddedBatch<Scalar>& A, double log10cond, bool hermitian_upper, unsigned seed,
+template <typename T>
+std::vector<double> fill_graded(PaddedBatch<T>& A, double log10cond, bool hermitian_upper, unsigned seed,
                                 int distinct_items) {
     const int m = A.rows, n = A.cols, k = std::min(m, n);
     std::vector<double> sigma(static_cast<size_t>(k));
@@ -1420,8 +1420,8 @@ std::vector<double> fill_graded(PaddedBatch<Scalar>& A, double log10cond, bool h
                 for (int i = 0; i < m; ++i) A.at(i, j, b) = A.at(i, j, b % distinct_items);
             continue;
         }
-        const auto qm = two_reflectors<Scalar>(gen, m);
-        const auto qn = hermitian_upper ? qm : two_reflectors<Scalar>(gen, n);
+        const auto qm = two_reflectors<T>(gen, m);
+        const auto qn = hermitian_upper ? qm : two_reflectors<T>(gen, n);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) {
                 cd acc = 0.0;
@@ -1430,27 +1430,27 @@ std::vector<double> fill_graded(PaddedBatch<Scalar>& A, double log10cond, bool h
                     acc += qm[static_cast<size_t>(l) * m + i] * s * std::conj(qn[static_cast<size_t>(l) * n + j]);
                 }
                 const bool poison = hermitian_upper && i > j;
-                A.at(i, j, b) = gesvd_scalar<Scalar>(poison ? cd(-kGesvdPoison, kGesvdPoison) : acc);
+                A.at(i, j, b) = gesvd_scalar<T>(poison ? cd(-kGesvdPoison, kGesvdPoison) : acc);
             }
     }
     return sigma;
 }
 
 // The full matrices the poisoned Hermitian batch stands for.
-template <typename Scalar>
-Matrix<Scalar, MatrixFormat::Dense> hermitian_from_upper(PaddedBatch<Scalar>& A) {
+template <typename T>
+Matrix<T, MatrixFormat::Dense> hermitian_from_upper(PaddedBatch<T>& A) {
     auto M = A.dense();
     for (int b = 0; b < A.batch; ++b)
         for (int j = 0; j < A.cols; ++j)
             for (int i = j + 1; i < A.rows; ++i)
-                M.batch_item(b)(i, j, 0) = MatrixView<Scalar, MatrixFormat::Dense>::conj(A.at(j, i, b));
+                M.batch_item(b)(i, j, 0) = MatrixView<T, MatrixFormat::Dense>::conj(A.at(j, i, b));
     return M;
 }
 
 // gesvd on padded views under @p pin (nullptr: Auto); "" or the exception text.
-template <typename Scalar>
-std::string run_gesvd_views(Queue& ctx, PaddedBatch<Scalar>& A, UnifiedVector<typename base_type<Scalar>::type>& s,
-                            PaddedBatch<Scalar>& U, PaddedBatch<Scalar>& Vh, SvdVectors ju, SvdVectors jv,
+template <typename T>
+std::string run_gesvd_views(Queue& ctx, PaddedBatch<T>& A, UnifiedVector<typename base_type<T>::type>& s,
+                            PaddedBatch<T>& U, PaddedBatch<T>& Vh, SvdVectors ju, SvdVectors jv,
                             const char* pin_word, std::optional<Uplo> herm = std::nullopt) {
     std::optional<select::ScopedPin<ops::gesvd::GesvdChoice>> pin;
     if (pin_word) pin.emplace("gesvd", std::string_view(pin_word));
@@ -1468,10 +1468,10 @@ std::string run_gesvd_views(Queue& ctx, PaddedBatch<Scalar>& A, UnifiedVector<ty
     return {};
 }
 
-template <typename Scalar>
-void expect_graded_values(const UnifiedVector<typename base_type<Scalar>::type>& s, const std::vector<double>& sigma,
+template <typename T>
+void expect_graded_values(const UnifiedVector<typename base_type<T>::type>& s, const std::vector<double>& sigma,
                           int batch) {
-    using Real = typename base_type<Scalar>::type;
+    using Real = typename base_type<T>::type;
     const int k = static_cast<int>(sigma.size());
     expect_singular_values_near(s, std::vector<std::vector<double>>(static_cast<size_t>(batch), sigma), k, batch,
                                 VectorView<Real>(const_cast<Real*>(s.data()), k, batch).all_items());
@@ -1479,21 +1479,21 @@ void expect_graded_values(const UnifiedVector<typename base_type<Scalar>::type>&
 
 // Square, tall and wide through every job pair. Graded input (log10cond >= 3) checks the values
 // only: bdsdc's vectors lose orthogonality ~ eps * kappa on it, for real input too (gesvd.md).
-template <typename Scalar, Backend B>
+template <typename T, Backend B>
 void check_blocked_general_padded(Queue& ctx, int m, int n, SvdVectors ju, SvdVectors jv, const char* pin,
                                   double log10cond) {
-    using Real = typename base_type<Scalar>::type;
+    using Real = typename base_type<T>::type;
     const int k = std::min(m, n), batch = 3;
     const int ucols = ju == SvdVectors::All ? m : (ju == SvdVectors::Thin ? k : 1);
     const int vrows = jv == SvdVectors::All ? n : (jv == SvdVectors::Thin ? k : 1);
-    PaddedBatch<Scalar> A(m, n, batch), U(ju == SvdVectors::None ? 1 : m, ucols, batch),
+    PaddedBatch<T> A(m, n, batch), U(ju == SvdVectors::None ? 1 : m, ucols, batch),
         Vh(vrows, jv == SvdVectors::None ? 1 : n, batch);
     const auto sigma = fill_graded(A, log10cond, false, 9000u + m * 31u + n, batch);
     auto A_ref = A.dense();
     UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
     const std::string err = run_gesvd_views(ctx, A, s, U, Vh, ju, jv, pin);
     ASSERT_TRUE(err.empty()) << err;
-    expect_graded_values<Scalar>(s, sigma, batch);
+    expect_graded_values<T>(s, sigma, batch);
     if constexpr (std::is_same_v<Real, double>) {
         // Relative accuracy: the quantity a normal-equations shortcut destroys. eps * kappa = 1e-10.
         for (int b = 0; b < batch; ++b)
@@ -1509,7 +1509,7 @@ void check_blocked_general_padded(Queue& ctx, int m, int n, SvdVectors ju, SvdVe
             expect_reconstruction(ctx, A_ref, s, U.dense(), Vh.dense());
         } else {
             // A full factor's trailing columns multiply zeros; reconstruct from the leading k.
-            Matrix<Scalar, MatrixFormat::Dense> Uk(m, k, batch), Vk(k, n, batch);
+            Matrix<T, MatrixFormat::Dense> Uk(m, k, batch), Vk(k, n, batch);
             auto Ud = U.dense();
             auto Vd = Vh.dense();
             for (int b = 0; b < batch; ++b) {
@@ -1523,17 +1523,17 @@ void check_blocked_general_padded(Queue& ctx, int m, int n, SvdVectors ju, SvdVe
     }
 }
 
-template <typename Scalar, Backend B>
+template <typename T, Backend B>
 void check_hermitian_upper(Queue& ctx, int n, const char* pin) {
-    using Real = typename base_type<Scalar>::type;
+    using Real = typename base_type<T>::type;
     const int batch = 2;
-    PaddedBatch<Scalar> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
+    PaddedBatch<T> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
     const auto sigma = fill_graded(A, 3.0, true, 7100u + n, batch);
     auto H = hermitian_from_upper(A);
     UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
     const std::string err = run_gesvd_views(ctx, A, s, U, Vh, SvdVectors::All, SvdVectors::All, pin, Uplo::Upper);
     ASSERT_TRUE(err.empty()) << err;
-    expect_graded_values<Scalar>(s, sigma, batch);
+    expect_graded_values<T>(s, sigma, batch);
     expect_orthonormal_columns(ctx, U.dense());
     expect_orthonormal_rows(ctx, Vh.dense());
     expect_reconstruction(ctx, H, s, U.dense(), Vh.dense());
@@ -1649,15 +1649,15 @@ namespace {
 // Both fills take the view BY VALUE: MatrixView::operator() has a const overload
 // returning `const T&`, so a const-reference parameter would make every
 // assignment below a compile error. The view is a non-owning descriptor.
-template <typename Scalar>
-void fill_diagonal_svd_matrix(MatrixView<Scalar, MatrixFormat::Dense> A) {
+template <typename T>
+void fill_diagonal_svd_matrix(MatrixView<T, MatrixFormat::Dense> A) {
     const int n = A.rows();
     const int batch = A.batch_size();
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) A(i, j, b) = Scalar(0);
+            for (int i = 0; i < n; ++i) A(i, j, b) = T(0);
         }
-        for (int i = 0; i < n; ++i) A(i, i, b) = Scalar(n - i);
+        for (int i = 0; i < n; ++i) A(i, i, b) = T(n - i);
     }
 }
 
@@ -1665,8 +1665,8 @@ void fill_diagonal_svd_matrix(MatrixView<Scalar, MatrixFormat::Dense> A) {
 // converge at the smallest budget that can prove convergence at all); odd items
 // dense and generic (they do not). The mix is what lets the forced case below
 // assert both directions from one run.
-template <typename Scalar>
-void fill_mixed_svd_matrices(MatrixView<Scalar, MatrixFormat::Dense> A, unsigned seed) {
+template <typename T>
+void fill_mixed_svd_matrices(MatrixView<T, MatrixFormat::Dense> A, unsigned seed) {
     const int n = A.rows();
     const int batch = A.batch_size();
     unsigned state = seed;
@@ -1678,11 +1678,11 @@ void fill_mixed_svd_matrices(MatrixView<Scalar, MatrixFormat::Dense> A, unsigned
         const bool easy = (b % 2) == 0;
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                A(i, j, b) = easy ? Scalar(0) : Scalar(next() * 2.0 - 1.0);
+                A(i, j, b) = easy ? T(0) : T(next() * 2.0 - 1.0);
             }
         }
         if (easy) {
-            for (int i = 0; i < n; ++i) A(i, i, b) = Scalar(n - i);
+            for (int i = 0; i < n; ++i) A(i, i, b) = T(n - i);
         }
     }
 }
@@ -1964,18 +1964,18 @@ namespace {
 
 // A padded batch: ld = rows + 3, stride = ld * cols + 5 (odd), every element first set to kPad,
 // an in-range finite value the driver must neither read into a result nor overwrite.
-template <typename Scalar>
+template <typename T>
 struct ChunkPaddedBatch {
     static constexpr double kPad = 1.0e3;
     int rows, cols, batch, ld, stride;
-    UnifiedVector<Scalar> buf;
+    UnifiedVector<T> buf;
     ChunkPaddedBatch(int r, int c, int b)
         : rows(r), cols(c), batch(b), ld(r + 3), stride((r + 3) * c + 5),
-          buf(static_cast<size_t>((r + 3) * c + 5) * b, Scalar(kPad)) {}
-    MatrixView<Scalar, MatrixFormat::Dense> view() { return {buf.data(), rows, cols, ld, stride, batch}; }
-    Matrix<Scalar, MatrixFormat::Dense> packed(Queue& ctx) {
-        Matrix<Scalar, MatrixFormat::Dense> out(rows, cols, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, out, view()).wait();
+          buf(static_cast<size_t>((r + 3) * c + 5) * b, T(kPad)) {}
+    MatrixView<T, MatrixFormat::Dense> view() { return {buf.data(), rows, cols, ld, stride, batch}; }
+    Matrix<T, MatrixFormat::Dense> packed(Queue& ctx) {
+        Matrix<T, MatrixFormat::Dense> out(rows, cols, batch);
+        MatrixView<T, MatrixFormat::Dense>::copy(ctx, out, view()).wait();
         return out;
     }
     int padding_overwritten() const {
@@ -1983,7 +1983,7 @@ struct ChunkPaddedBatch {
         for (int b = 0; b < batch; ++b)
             for (int p = 0; p < stride; ++p) {
                 const bool inside = p < ld * cols && p % ld < rows;
-                if (!inside && buf[static_cast<size_t>(b) * stride + p] != Scalar(kPad)) ++bad;
+                if (!inside && buf[static_cast<size_t>(b) * stride + p] != T(kPad)) ++bad;
             }
         return bad;
     }
@@ -2007,25 +2007,25 @@ constexpr std::array<ChunkJob, 9> kChunkJobs{{
 // untouched padding. An unwanted factor is a 1 x 1 x 1 view: a driver slicing it throws.
 // @p diag_items become diagonal (item-scaled, so items differ); those also in @p zero_items get
 // one zero entry (exactly rank-deficient).
-template <typename Scalar, Backend B>
+template <typename T, Backend B>
 void check_blocked_chunked(Queue& ctx, Queue& run_q, int m, int n, int batch, const ChunkJob& job, unsigned seed,
                            const std::vector<int>& diag_items = {}, const std::vector<int>& zero_items = {}) {
-    using Real = typename base_type<Scalar>::type;
-    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const int k = std::min(m, n);
     const SvdVectors ju = canonical_jobu(job.jobu, m, k), jv = canonical_jobvh(job.jobvh, n, k);
     const bool want_u = ju != SvdVectors::None, want_vh = jv != SvdVectors::None;
     const int ucols = want_u ? int(svd_u_cols(ju, m, k)) : 1, vrows = want_vh ? int(svd_vh_rows(jv, n, k)) : 1;
 
-    auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, seed);
+    auto A0 = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, batch, seed);
     for (int b : diag_items) {
         auto Ab = A0.batch_item(b);
         const bool zero = std::find(zero_items.begin(), zero_items.end(), b) != zero_items.end();
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
-                Ab(i, j, 0) = i == j && !(zero && i == k / 2) ? Scalar(Real(k - i) * Real(1 + b % 5)) : Scalar(0);
+                Ab(i, j, 0) = i == j && !(zero && i == k / 2) ? T(Real(k - i) * Real(1 + b % 5)) : T(0);
     }
-    ChunkPaddedBatch<Scalar> A(m, n, batch), U(want_u ? m : 1, ucols, want_u ? batch : 1),
+    ChunkPaddedBatch<T> A(m, n, batch), U(want_u ? m : 1, ucols, want_u ? batch : 1),
         Vh(want_vh ? vrows : 1, n, want_vh ? batch : 1);
     MV::copy(ctx, A.view(), A0).wait();
     UnifiedVector<Real> s(static_cast<size_t>(k) * batch, Real(0.5));
@@ -2034,10 +2034,10 @@ void check_blocked_chunked(Queue& ctx, Queue& run_q, int m, int n, int batch, co
     {
         select::ScopedPin<ops::gesvd::GesvdChoice> pin("gesvd", "blocked");
         const size_t bytes =
-            gesvd_buffer_size<B, Scalar>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh);
+            gesvd_buffer_size<B, T>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh);
         UnifiedVector<std::byte> ws(bytes);   // exactly the query: a part-size mismatch overruns it
-        (void)gesvd<B, Scalar>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh, ws.to_span(),
-                               info.to_span());
+        (void)gesvd<B, T>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh, ws.to_span(),
+                          info.to_span());
         run_q.wait();
     }
 

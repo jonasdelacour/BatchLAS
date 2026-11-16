@@ -120,7 +120,7 @@ double ideal_bytes_per_item(std::size_t elem_size, int m, int nnz, int nrhs,
 
 enum class Arm { Warm, Cold };
 
-template <typename T, Backend Bk, Arm A>
+template <typename T, Backend B, Arm A>
 void run_spmm(minibench::State& state) {
     const int m = state.range(0);
     const int nnz_per_row = state.range(1);
@@ -136,7 +136,7 @@ void run_spmm(minibench::State& state) {
                                               : Transpose::ConjTrans;
     const T alpha = T(1);
 
-    auto q = std::make_shared<Queue>(Device(Bk == Backend::NETLIB ? "cpu" : "gpu"), Bk);
+    auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto Amat = std::make_shared<Matrix<T, MatrixFormat::CSR>>(
         make_csr<T>(m, nnz_per_row, batch, pattern));
@@ -151,18 +151,18 @@ void run_spmm(minibench::State& state) {
     auto Bv = std::make_shared<MatrixView<T>>(Bmat->view());
     auto Cv = std::make_shared<MatrixView<T>>(Cmat->view());
 
-    const std::size_t ws_size = spmm_buffer_size<Bk, T, MatrixFormat::CSR>(
+    const std::size_t ws_size = spmm_buffer_size<B, T, MatrixFormat::CSR>(
         *q, *Av, *Bv, *Cv, alpha, beta, transA, transB);
     auto ws = std::make_shared<UnifiedVector<std::byte>>(ws_size);
 
     auto kernel_once = [q, Av, Bv, Cv, Amat, Bmat, Cmat, ws, alpha, beta, transA, transB] {
         if constexpr (A == Arm::Warm) {
-            (void)spmm<Bk, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
+            (void)spmm<B, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
                                            transA, transB, ws->to_span());
         } else {
             // The Matrix overload builds a fresh MatrixView -- and so a fresh descriptor
             // triple that is never destroyed -- per call. Never compare a native kernel to it.
-            (void)spmm<Bk, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
+            (void)spmm<B, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
                                            transA, transB, ws->to_span());
         }
     };
@@ -226,20 +226,20 @@ void run_spmm(minibench::State& state) {
 
 // --------------------------------------------------------------- registered families
 
-template <typename T, Backend Bk>
-void BM_SPMM_Cells(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+template <typename T, Backend B>
+void BM_SPMM_Cells(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
 
-template <typename T, Backend Bk>
-void BM_SPMM_Grid(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+template <typename T, Backend B>
+void BM_SPMM_Grid(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
 
-template <typename T, Backend Bk>
-void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+template <typename T, Backend B>
+void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
 
-template <typename T, Backend Bk>
-void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
+template <typename T, Backend B>
+void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<T, B, Arm::Cold>(state); }
 
-template <typename T, Backend Bk>
-void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
+template <typename T, Backend B>
+void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<T, B, Arm::Cold>(state); }
 
 // ------------------------------------------------------------------------- sizers
 

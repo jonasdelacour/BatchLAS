@@ -36,11 +36,11 @@ void expect_eigenpairs(batchlas::Queue& ctx, const batchlas::MatrixView<Scalar, 
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::eigen_residual, n, resid);
 }
 
-template <typename Scalar>
-void expect_eigenpairs(batchlas::Queue& ctx, const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A0,
-                       const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& V,
-                       batchlas::UnifiedVector<typename batchlas::base_type<Scalar>::type>& W, int n, int item) {
-    expect_eigenpairs<Scalar>(ctx, A0, V, W, n, std::span<const int>(&item, 1));
+template <typename T>
+void expect_eigenpairs(batchlas::Queue& ctx, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& A0,
+                       const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& V,
+                       batchlas::UnifiedVector<typename batchlas::base_type<T>::type>& W, int n, int item) {
+    expect_eigenpairs<T>(ctx, A0, V, W, n, std::span<const int>(&item, 1));
 }
 
 /// W (n values per item, packed) against LAPACKE ?syevd / ?heevd of A0 (both triangles valid) in

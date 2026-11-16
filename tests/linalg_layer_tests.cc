@@ -934,7 +934,7 @@ template <typename T>
 class LinalgTyped : public ::testing::Test {
 protected:
     // Metal has no device fp64: the double cases run on the CPU device there instead.
-    Queue q = test_utils::native_gpu_lacks_fp64 && std::is_same_v<T, double> ? Queue(Device("cpu")) : Queue();
+    Queue q = test_utils::kNativeGpuLacksFp64 && std::is_same_v<T, double> ? Queue(Device("cpu")) : Queue();
 };
 
 using LinalgTypes = ::testing::Types<float, double, std::complex<float>>;

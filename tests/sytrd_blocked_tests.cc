@@ -31,10 +31,10 @@ namespace {
 // The tridiagonalization's backward error seen through its spectrum: max |eig(T) - eig(A0)| / ||A0||_2
 // over `items` (default: first, middle, last), both from LAPACKE in double. T's spectrum comes from
 // (Re d, |e|): a unitary diagonal similarity makes a Hermitian tridiagonal's spectrum the real one's.
-template <typename Scalar>
-double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
+template <typename T>
+double spectrum_error(const MatrixView<T, MatrixFormat::Dense>& A0, Vector<T>& d, Vector<T>& e,
                       std::span<const int> items = {}) {
-    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const int n = A0.rows();
     const int batch = A0.batch_size();
     const std::vector<int> picked = items.empty() ? A0.default_items() : std::vector<int>(items.begin(), items.end());
@@ -75,11 +75,11 @@ void expect_values_err(int n, double err, std::optional<verify::Slack> slack) {
 }
 
 // spectrum_error at Check::values (n = the order); skips without LAPACKE.
-template <typename Scalar>
-void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
+template <typename T>
+void expect_spectrum(const MatrixView<T, MatrixFormat::Dense>& A0, Vector<T>& d, Vector<T>& e,
                      std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
-    expect_values_err<Scalar>(A0.rows(), spectrum_error(A0, d, e, items), slack);
+    expect_values_err<T>(A0.rows(), spectrum_error(A0, d, e, items), slack);
 }
 
 template <typename T, Backend B>
@@ -274,31 +274,31 @@ TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReferenc
 // MAX_COMPUTE_UNITS / batch >= 2, i.e. in the small-batch regime that no other
 // test in this file covers. It also runs the same shapes through the legacy
 // path so a divergence is attributable.
-template <typename Scalar>
+template <typename T>
 void run_latrd_grid_case(int n, int batch, int nb, const char* impl) {
-    using Real = typename base_type<Scalar>::type;
+    using Real = typename base_type<T>::type;
     constexpr Backend B = Backend::CUDA;
 
     auto ctx = std::make_shared<Queue>(Device("gpu"), true);
 
-    Matrix<Scalar, MatrixFormat::Dense> A0 =
-        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242 + n + batch);
-    Matrix<Scalar, MatrixFormat::Dense> A = A0;
-    Vector<Scalar> d(n, batch);
-    Vector<Scalar> e(n - 1, batch);
-    Vector<Scalar> tau(n - 1, batch);
+    Matrix<T, MatrixFormat::Dense> A0 =
+        Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242 + n + batch);
+    Matrix<T, MatrixFormat::Dense> A = A0;
+    Vector<T> d(n, batch);
+    Vector<T> e(n - 1, batch);
+    Vector<T> tau(n - 1, batch);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, nb);
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, T>(*ctx, A, d, e, tau, Uplo::Lower, nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
     {
         ScopedEnvVar latrd_impl("BATCHLAS_LATRD_IMPL", impl);
-        sytrd_blocked<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        sytrd_blocked<B, T>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
     }
     ctx->wait();
 
     SCOPED_TRACE(::testing::Message() << "impl=" << impl << " n=" << n << " batch=" << batch << " nb=" << nb);
-    expect_spectrum<Scalar>(A0, d, e, float_slack<Real>(kSlackLatrd), A0.all_items());
+    expect_spectrum<T>(A0, d, e, float_slack<Real>(kSlackLatrd), A0.all_items());
 }
 
 TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {

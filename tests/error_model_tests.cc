@@ -175,7 +175,7 @@ struct CatchResult {
 };
 
 template <typename Specific, typename Thrower>
-CatchResult ProbeCatches(Thrower&& thrower) {
+CatchResult probe_catches(Thrower&& thrower) {
     CatchResult r;
     try { thrower(); } catch (const Specific&) { r.specific = true; } catch (...) {}
     try {
@@ -198,8 +198,8 @@ CatchResult ProbeCatches(Thrower&& thrower) {
 // same string, and a hierarchy that broke one while keeping the other would look
 // healthy from whichever side a test happened to check.
 template <typename Specific, typename Thrower>
-void ExpectThreeWayCatch(Thrower&& thrower, const char* needle) {
-    const CatchResult r = ProbeCatches<Specific>(std::forward<Thrower>(thrower));
+void expect_three_way_catch(Thrower&& thrower, const char* needle) {
+    const CatchResult r = probe_catches<Specific>(std::forward<Thrower>(thrower));
     EXPECT_TRUE(r.specific) << "the specific batchlas type did not catch it";
     EXPECT_TRUE(r.std_exception) << "catch(const std::exception&) stopped matching; "
                                     "43 existing catch sites depend on it";
@@ -229,7 +229,7 @@ void ExpectThreeWayCatch(Thrower&& thrower, const char* needle) {
 // ---------------------------------------------------------------------------
 
 TEST(ErrorModelHierarchy, InvalidArgumentIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::invalid_argument>(
+    expect_three_way_catch<batchlas::invalid_argument>(
         [] { throw batchlas::invalid_argument("potrf: A must be square, got 100x50"); },
         "must be square");
 }
@@ -239,47 +239,47 @@ TEST(ErrorModelHierarchy, OutOfRangeIsCaughtThreeWays) {
     // default translator sends std::out_of_range to IndexError and
     // std::invalid_argument to ValueError, and element access raising ValueError
     // would be a Python-visible regression.
-    ExpectThreeWayCatch<batchlas::out_of_range>(
+    expect_three_way_catch<batchlas::out_of_range>(
         [] { throw batchlas::out_of_range("Matrix indices out of range"); }, "out of range");
 }
 
 TEST(ErrorModelHierarchy, ErrorIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::error>(
+    expect_three_way_catch<batchlas::error>(
         [] { throw batchlas::error("iluk: symbolic phase produced a row without diagonal"); },
         "symbolic phase");
 }
 
 TEST(ErrorModelHierarchy, UnsupportedIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::unsupported>(
+    expect_three_way_catch<batchlas::unsupported>(
         [] { throw batchlas::unsupported("BatchLAS: no route for gesvd<c64> on this backend"); },
         "no route");
 }
 
 TEST(ErrorModelHierarchy, DeviceErrorIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::device_error>(
+    expect_three_way_catch<batchlas::device_error>(
         [] { throw batchlas::device_error("No GPU device available"); }, "GPU device");
 }
 
 TEST(ErrorModelHierarchy, WorkspaceErrorIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::workspace_error>(
+    expect_three_way_catch<batchlas::workspace_error>(
         [] { throw batchlas::workspace_error("syev: insufficient workspace for chosen provider"); },
         "insufficient workspace");
 }
 
 TEST(ErrorModelHierarchy, ConvergenceErrorIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::convergence_error>(
+    expect_three_way_catch<batchlas::convergence_error>(
         [] { throw batchlas::convergence_error("bdsqr: item did not converge"); },
         "did not converge");
 }
 
 TEST(ErrorModelHierarchy, InternalErrorIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::internal_error>(
+    expect_three_way_catch<batchlas::internal_error>(
         [] { throw batchlas::internal_error("syev: resolver returned a route with no dispatch arm"); },
         "no dispatch arm");
 }
 
 TEST(ErrorModelHierarchy, ApiMisuseIsCaughtThreeWays) {
-    ExpectThreeWayCatch<batchlas::api_misuse>(
+    expect_three_way_catch<batchlas::api_misuse>(
         [] { throw batchlas::api_misuse("Queue used from a thread other than its owner"); },
         "thread");
 }
@@ -314,7 +314,7 @@ TEST(NoRoute, IsUnsupported) {
     const auto direct = [] {
         throw batchlas::NoRouteError(Op::hemm, Backend::CUDA, ScalarKind::C32, "built without cuBLAS");
     };
-    ExpectThreeWayCatch<batchlas::unsupported>(direct, "no route for hemm");
+    expect_three_way_catch<batchlas::unsupported>(direct, "no route for hemm");
     EXPECT_THROW(direct(), std::runtime_error);
     EXPECT_THROW(direct(), batchlas::error);
 
@@ -325,7 +325,7 @@ TEST(NoRoute, IsUnsupported) {
     using C = std::complex<double>;
     Matrix<C, MatrixFormat::Dense> A(4, 4, 2), B(4, 4, 2), Cm(4, 4, 2);
     const auto call = [&] { (void)syr2k(q, A, B, Cm, Syr2kOptions<C>{}); };
-    ExpectThreeWayCatch<batchlas::unsupported>(call, "no route for syr2k");
+    expect_three_way_catch<batchlas::unsupported>(call, "no route for syr2k");
     EXPECT_THROW(call(), std::runtime_error);
 #endif
 }
@@ -341,7 +341,7 @@ TEST(NoRoute, IsUnsupported) {
 //
 // Take MatrixViewRejectsShortLeadingDimension below and revert its site
 // (src/matrix.cc:1881) to `std::invalid_argument`, the pre-migration spelling.
-// Reading the assertions in ExpectThreeWayCatch against that:
+// Reading the assertions in expect_three_way_catch against that:
 //
 //   * r.specific -- the handler is `catch (const batchlas::invalid_argument&)`
 //     and the object thrown is a std::invalid_argument, which is that type's
@@ -369,7 +369,7 @@ TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
     // Pure host validation inside the MatrixView constructor: the buffer is
     // described, never read.
     std::vector<float> buffer(64, 0.0f);
-    ExpectThreeWayCatch<batchlas::invalid_argument>(
+    expect_three_way_catch<batchlas::invalid_argument>(
         [&] {
             MatrixView<float, MatrixFormat::Dense> bad(buffer.data(), /*rows=*/8, /*cols=*/8,
                                                        /*ld=*/2, /*stride=*/64, /*batch_size=*/1);
@@ -385,11 +385,11 @@ TEST(ErrorModelSites, MatrixViewElementAccessOutOfRange) {
     std::vector<float> buffer(64, 0.0f);
     const MatrixView<float, MatrixFormat::Dense> view(buffer.data(), 8, 8, 8, 64, 1);
 
-    ExpectThreeWayCatch<batchlas::out_of_range>(
+    expect_three_way_catch<batchlas::out_of_range>(
         [&] { (void)view(/*row=*/9, /*col=*/0, /*batch=*/0); }, "out of range");
     // The batch index is checked first and by a separate statement; both arms of
     // the same site have to carry the type, not just whichever a test picked.
-    ExpectThreeWayCatch<batchlas::out_of_range>(
+    expect_three_way_catch<batchlas::out_of_range>(
         [&] { (void)view(/*row=*/0, /*col=*/0, /*batch=*/7); }, "out of range");
 }
 
@@ -407,7 +407,7 @@ TEST(ErrorModelSites, BumpAllocatorOverflowIsAWorkspaceError) {
     // The pool is given `align` bytes; the request below needs 4 * align.
     BumpAllocator pool(storage.data(), align);
 
-    ExpectThreeWayCatch<batchlas::workspace_error>(
+    expect_three_way_catch<batchlas::workspace_error>(
         [&] {
             auto span = pool.allocate<int32_t>(device, align);
             (void)span;
@@ -425,7 +425,7 @@ TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
     // on this one would loop forever: no buffer size makes a sizing-mode query
     // legal.
     BumpAllocator measuring = BumpAllocator::measuring();
-    ExpectThreeWayCatch<batchlas::api_misuse>([&] { (void)measuring.remaining(); }, "sizing mode");
+    expect_three_way_catch<batchlas::api_misuse>([&] { (void)measuring.remaining(); }, "sizing mode");
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +481,7 @@ namespace {
 // or an empty string. `_exit(` and `quick_exit(` are excluded only so a future
 // deliberate spelling can be argued about separately rather than silently
 // matched here.
-std::string FirstProcessExitCall(const std::string& path) {
+std::string first_process_exit_call(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "r");
     if (!f) return {};
     char line[8192];
@@ -510,7 +510,7 @@ std::string FirstProcessExitCall(const std::string& path) {
 TEST(ErrorModelHeaders, InstalledHeadersDoNotCallExit) {
     const std::string root = BATCHLAS_INCLUDE_DIR_PATH;
     for (const char* header : {"util/miniacc.hh"}) {
-        const std::string offending = FirstProcessExitCall(root + "/" + header);
+        const std::string offending = first_process_exit_call(root + "/" + header);
         EXPECT_TRUE(offending.empty())
             << header << " calls exit() in an installed public header; a library must not "
             << "terminate its caller: " << offending;

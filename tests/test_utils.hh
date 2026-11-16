@@ -259,16 +259,16 @@ constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
 // directly): CUDA, else SYCL (AdaptiveCpp Metal). A build with neither keeps CUDA, whose
 // Queue constructor throws, which is how these tests behaved before SYCL existed.
 #if BATCHLAS_HAS_CUDA_BACKEND
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::SYCL;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::SYCL;
 #else
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::CUDA;
 #endif
 
 // True when the native GPU backend has no double kernels (Metal: no device fp64).
-inline constexpr bool native_gpu_lacks_fp64 =
-    native_gpu_backend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
+inline constexpr bool kNativeGpuLacksFp64 =
+    kNativeGpuBackend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
 
 // True when T is double or std::complex<double> and the device has no aspect::fp64 (Metal):
 // device LA fixtures skip such a type instead of failing the kernel build or launch.
@@ -281,7 +281,7 @@ template <typename T> bool lacks_fp64(const sycl::device& d) {
 // GPU backend has it, else the float type of the same kind, so the kernel still launches.
 template <typename T>
 using native_gpu_scalar_t = std::conditional_t<
-    native_gpu_lacks_fp64,
+    kNativeGpuLacksFp64,
     std::conditional_t<std::is_same_v<T, double>, float,
                        std::conditional_t<std::is_same_v<T, std::complex<double>>, std::complex<float>, T>>,
     T>;

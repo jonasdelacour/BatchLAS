@@ -25,19 +25,19 @@ protected:
         ctx = std::make_shared<Queue>(Device::default_device());
 
         // Initialize test matrices
-        // Zeroed: setupCSRMatrices writes only the non-zeros of the dense LAPACKE reference.
+        // Zeroed: setup_csr_matrices writes only the non-zeros of the dense LAPACKE reference.
         A_data = UnifiedVector<float>(rows * rows * batch_size, 0.0f);
         W_data = UnifiedVector<float>(rows * batch_size);
 
         // Set up CSR format data for symmetric matrices with known eigenvalues
-        setupCSRMatrices();
+        setup_csr_matrices();
     }
 
     void TearDown() override {
     }
 
     // Set up CSR matrices with known eigenvalues
-    void setupCSRMatrices() {
+    void setup_csr_matrices() {
         // For each batch, create a sparse symmetric matrix with known eigenvalues
         // We'll use a simple tridiagonal matrix with known eigenvalues
 
@@ -111,7 +111,7 @@ protected:
     // Known eigenvalues for verification
     std::vector<float> known_eigenvalues;
 
-    void printMatrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
+    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
         for (int i = 0; i < cols; ++i) {
             for (int j = 0; j < rows; ++j) {
                 std::cout << matrix_data[i * ld + j] << " ";

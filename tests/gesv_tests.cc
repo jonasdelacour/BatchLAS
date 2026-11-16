@@ -414,7 +414,7 @@ TYPED_TEST(GesvTest, PublicGesvRejectsNonConformingViews) {
 // A heterogeneous batch and an empty n or nrhs are caller errors: invalid_argument, the message
 // opening with the op name, on every backend. GesvTest skips off-GPU, hence the NETLIB TEST below.
 template <Backend B, typename T>
-void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
+void expect_unservable_shapes_are_invalid_argument(Queue& q) {
     const int n = 6, nrhs = 2, batch = 3;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     UnifiedVector<int> act(batch), cols(batch);
@@ -446,13 +446,13 @@ void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
 }
 
 TYPED_TEST(GesvTest, UnservableShapesAreInvalidArgument) {
-    ExpectUnservableShapesAreInvalidArgument<TestFixture::BackendType, typename TestFixture::T>(*this->ctx);
+    expect_unservable_shapes_are_invalid_argument<TestFixture::BackendType, typename TestFixture::T>(*this->ctx);
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
 TEST(GesvNetlib, UnservableShapesAreInvalidArgument) {
     Queue q(Device("cpu"), Backend::NETLIB);
-    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, double>(q);
-    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, std::complex<double>>(q);
+    expect_unservable_shapes_are_invalid_argument<Backend::NETLIB, double>(q);
+    expect_unservable_shapes_are_invalid_argument<Backend::NETLIB, std::complex<double>>(q);
 }
 #endif

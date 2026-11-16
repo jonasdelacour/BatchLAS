@@ -118,7 +118,7 @@ void trsm_announce_route_env() {
 }
 
 // The two ortho cells, as one body. SD picks which extent of B carries q.
-template <typename T, Backend Bk, Side SD>
+template <typename T, Backend B, Side SD>
 void BM_TRSM_OrthoBody(minibench::State& state) {
     trsm_announce_route_env();
 
@@ -136,7 +136,7 @@ void BM_TRSM_OrthoBody(minibench::State& state) {
     auto Bm = (SD == Side::Right) ? Matrix<T>::Random(q, n, false, batch)
                                   : Matrix<T>::Random(n, q, false, batch);
 
-    auto qh = std::make_shared<Queue>(Device(Bk == Backend::NETLIB ? "cpu" : "gpu"), Bk);
+    auto qh = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(qh,
                     std::move(A),
                     bench::pristine(Bm),
@@ -156,16 +156,16 @@ void BM_TRSM_OrthoBody(minibench::State& state) {
     state.SetMetric("Time (us) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend Bk>
-void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
-template <typename T, Backend Bk>
-void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, Bk, Side::Left>(s); }
+template <typename T, Backend B>
+void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<T, B, Side::Right>(s); }
+template <typename T, Backend B>
+void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, B, Side::Left>(s); }
 // NOT named *OrthoRightStarved: --name matches by SUBSTRING, so that spelling would
 // fold these profile-only rows into every ranking run.
-template <typename T, Backend Bk>
-void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
-template <typename T, Backend Bk>
-void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, Bk, Side::Left>(s); }
+template <typename T, Backend B>
+void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<T, B, Side::Right>(s); }
+template <typename T, Backend B>
+void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, B, Side::Left>(s); }
 
 }  // namespace
 

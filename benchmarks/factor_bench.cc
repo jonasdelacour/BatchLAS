@@ -76,13 +76,13 @@ namespace {
 // CUDA, rocSOLVER/rocBLAS on ROCm. Backend::SYCL (AdaptiveCpp Metal) has no vendor arm,
 // and no double kernels without device fp64.
 #if BATCHLAS_HAS_CUDA_BACKEND
-constexpr Backend BE = Backend::CUDA;
+constexpr Backend kBackend = Backend::CUDA;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_ROCM_BACKEND
-constexpr Backend BE = Backend::ROCM;
+constexpr Backend kBackend = Backend::ROCM;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_SYCL_BACKEND
-constexpr Backend BE = Backend::SYCL;
+constexpr Backend kBackend = Backend::SYCL;
 #define FACTOR_BENCH_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
@@ -347,7 +347,7 @@ int run(const Cfg& c) {
     (void)c;
     throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
 #else
-    auto q = std::make_shared<Queue>(Device("gpu"), BE);
+    auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
     using MV = MatrixView<T, MatrixFormat::Dense>;
 
     const int m = c.m, n = c.n, nrhs = c.nrhs, batch = c.batch;
@@ -425,15 +425,15 @@ int run(const Cfg& c) {
     if (needs_factor) {
         reset_A();
         if (c.op == OpKind::getrs) {
-            const size_t fw = getrf_buffer_size<BE, T>(*q, Av);
+            const size_t fw = getrf_buffer_size<kBackend, T>(*q, Av);
             const size_t fwsz = fw ? fw : size_t(1);
             UnifiedVector<std::byte> fws(fwsz);
-            (void)getrf<BE, T>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
+            (void)getrf<kBackend, T>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
         } else {
-            const size_t gw = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span());
+            const size_t gw = geqrf_buffer_size<kBackend, T>(*q, Av, tau.to_span());
             const size_t gwsz = gw ? gw : size_t(1);
             UnifiedVector<std::byte> gws(gwsz);
-            (void)geqrf<BE, T>(*q, Av, tau.to_span(), gws.to_span());
+            (void)geqrf<kBackend, T>(*q, Av, tau.to_span(), gws.to_span());
         }
         q->wait();
         std::memcpy(F.data(), A.data(), sa * nbatch * sizeof(T));
@@ -487,13 +487,13 @@ int run(const Cfg& c) {
         size_t need = 0;
         try {
             switch (c.op) {
-                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Acall, up_of(c)); break;
-                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Acall); break;
-                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Acall, Xcall, c.trans); break;
-                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Acall, tau.to_span()); break;
-                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Acall, tau.to_span()); break;
-                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Acall, Xcall); break;
-                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Acall, Xcall, up_of(c)); break;
+                case OpKind::potrf: need = potrf_buffer_size<kBackend, T>(*q, Acall, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<kBackend, T>(*q, Acall); break;
+                case OpKind::getrs: need = getrs_buffer_size<kBackend, T>(*q, Acall, Xcall, c.trans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<kBackend, T>(*q, Acall, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<kBackend, T>(*q, Acall, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<kBackend, T>(*q, Acall, Xcall); break;
+                case OpKind::posv: need = posv_buffer_size<kBackend, T>(*q, Acall, Xcall, up_of(c)); break;
             }
         } catch (const std::invalid_argument& e) {
             refuse(arms[i], e);
@@ -505,16 +505,16 @@ int run(const Cfg& c) {
 
     auto call = [&] {
         switch (c.op) {
-            case OpKind::potrf: (void)potrf<BE, T>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
-            case OpKind::getrf: (void)getrf<BE, T>(*q, Acall, piv.to_span(), ws.to_span(), info.to_span()); break;
-            case OpKind::getrs: (void)getrs<BE, T>(*q, Acall, Xcall, c.trans, piv.to_span(), ws.to_span()); break;
-            case OpKind::geqrf: (void)geqrf<BE, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
-            case OpKind::orgqr: (void)orgqr<BE, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::potrf: (void)potrf<kBackend, T>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
+            case OpKind::getrf: (void)getrf<kBackend, T>(*q, Acall, piv.to_span(), ws.to_span(), info.to_span()); break;
+            case OpKind::getrs: (void)getrs<kBackend, T>(*q, Acall, Xcall, c.trans, piv.to_span(), ws.to_span()); break;
+            case OpKind::geqrf: (void)geqrf<kBackend, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::orgqr: (void)orgqr<kBackend, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
             case OpKind::gesv:
-                (void)gesv<BE, T>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
+                (void)gesv<kBackend, T>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
                 break;
             case OpKind::posv:
-                (void)posv<BE, T>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
+                (void)posv<kBackend, T>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
                 break;
         }
         q->wait();

@@ -122,7 +122,7 @@ void check_portable_group_reductions_on(Queue& ctx, const char* where) {
 TEST(GroupCollectivesTest, PortableGroupReductionsAreExact) {
     Queue gpu(Device::default_device());
     check_portable_group_reductions_on<float>(gpu, "default device");
-    if (!test_utils::native_gpu_lacks_fp64) check_portable_group_reductions_on<double>(gpu, "default device");
+    if (!test_utils::kNativeGpuLacksFp64) check_portable_group_reductions_on<double>(gpu, "default device");
 #if BATCHLAS_HAS_CPU_TARGET
     std::unique_ptr<Queue> cpu;
     try {
@@ -167,7 +167,7 @@ int significant_bits(std::int64_t v) {
 // guard, since dropping the trailing barrier stays green on both flows.
 // evidence: docs/design/sycl-implementations.md#sycl-impl-cuda-aot
 TEST(GroupCollectivesTest, PortableWorkGroupDoubleSumIsExact) {
-    if (test_utils::native_gpu_lacks_fp64) GTEST_SKIP() << "no device fp64";
+    if (test_utils::kNativeGpuLacksFp64) GTEST_SKIP() << "no device fp64";
     Queue ctx(Device::default_device());
     constexpr size_t kBatch = 1024;
     const size_t max_wg = std::min<size_t>(1024, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));

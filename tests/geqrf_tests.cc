@@ -1818,8 +1818,8 @@ std::string FirstLineContaining(const std::string& path, const char* token) {
 // The kernel body's text between the parallel_for and its closing brace. Returned as a
 // vector of (line number, code) with comments stripped, so a scan can ask structural
 // questions about the region a source check actually cares about.
-std::vector<std::pair<int, std::string>> KernelBodyLines(const std::string& path,
-                                                         const char* open_token) {
+std::vector<std::pair<int, std::string>> kernel_body_lines(const std::string& path,
+                                                           const char* open_token) {
     std::vector<std::pair<int, std::string>> out;
     std::FILE* f = std::fopen(path.c_str(), "r");
     if (!f) return out;
@@ -1849,7 +1849,7 @@ std::vector<std::pair<int, std::string>> KernelBodyLines(const std::string& path
 // evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
 TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
     const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
-    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
+    const auto body = kernel_body_lines(path, "parallel_for<GeqrfTinyKernel");
     ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
                                << "; this check would pass vacuously";
     for (const auto& [no, code] : body) {
@@ -1872,7 +1872,7 @@ TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
 // evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
 TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
     const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
-    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
+    const auto body = kernel_body_lines(path, "parallel_for<GeqrfTinyKernel");
     ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
                                << "; this check would pass vacuously";
     int sg_barriers = 0;
@@ -1899,7 +1899,7 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
 // that names a barrier and is not the one sanctioned spelling, sycl::group_barrier(sg).
 // Matching `get_group()` alone leaves `it.barrier()` -- nd_item::barrier, a WORK-GROUP
 // barrier that names no group at all -- through the scan.
-std::string FirstUnsanctionedBarrierLine(const std::string& path) {
+std::string first_unsanctioned_barrier_line(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "r");
     if (!f) return std::string("<could not open ") + path + ">";
     char line[8192];
@@ -1929,7 +1929,7 @@ TEST(GeqrfTinySource, SynchronisesAtSubGroupScopeOnly) {
     ASSERT_FALSE(FirstLineContaining(path, "parallel_for").empty())
         << "the source scan found no parallel_for in " << path;
 
-    const std::string wg_barrier = FirstUnsanctionedBarrierLine(path);
+    const std::string wg_barrier = first_unsanctioned_barrier_line(path);
     EXPECT_TRUE(wg_barrier.empty())
         << "geqrf_tiny.cc carries a barrier that is not sycl::group_barrier(sg) -- a "
            "work-group barrier (including the argument-free it.barrier()) makes the "

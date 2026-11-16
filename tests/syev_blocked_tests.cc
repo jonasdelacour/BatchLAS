@@ -321,22 +321,22 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 // answer.
 // A0 with its strictly-lower triangle replaced by the conjugate mirror of the upper one: the
 // Hermitian matrix an Uplo::Upper solve of A0 must see, as LAPACKE's reference reads it.
-template <typename Scalar>
-Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFormat::Dense>& A0) {
-    Matrix<Scalar, MatrixFormat::Dense> M = A0;
+template <typename T>
+Matrix<T, MatrixFormat::Dense> upper_mirrored(const Matrix<T, MatrixFormat::Dense>& A0) {
+    Matrix<T, MatrixFormat::Dense> M = A0;
     const int n = M.rows();
     const int ld = static_cast<int>(M.ld());
     for (int b = 0; b < M.batch_size(); ++b) {
-        Scalar* Mb = M.data().data() + static_cast<std::size_t>(b) * M.stride();
+        T* Mb = M.data().data() + static_cast<std::size_t>(b) * M.stride();
         for (int c = 0; c < n; ++c)
-            for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = MatrixView<Scalar, MatrixFormat::Dense>::conj(Mb[c + r * ld]);
+            for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = MatrixView<T, MatrixFormat::Dense>::conj(Mb[c + r * ld]);
     }
     return M;
 }
 
 // max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE.
-template <typename Scalar>
-double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B) {
+template <typename T>
+double lapacke_spectrum_gap(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B) {
     double gap = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
         std::vector<double> wa, wc;

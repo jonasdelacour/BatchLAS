@@ -107,58 +107,58 @@ inline std::string gesvd_failure_reason(double u_ortho,
     return {};
 }
 
-template <typename Scalar, Backend B>
+template <typename T, Backend B>
 void run_gesvd_cta_acc(miniacc::State& state) {
-    using Real = typename base_type<Scalar>::type;
+    using Real = typename base_type<T>::type;
     const int n = std::max(2, state.arg_int(0));
     const int chunk_batch = miniacc_acc::chunk_batch_from_samples(state.samples());
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetTag("impl", "gesvd_cta");
     state.SetTag("backend", miniacc_acc::backend_name<B>());
-    state.SetTag("dtype", miniacc_acc::dtype_name<Scalar>());
-    state.SetTag("mode", is_complex<Scalar>::value ? "hermitian" : "general");
+    state.SetTag("dtype", miniacc_acc::dtype_name<T>());
+    state.SetTag("mode", is_complex<T>::value ? "hermitian" : "general");
 
     size_t produced = 0;
     while (produced < state.samples()) {
         const int cur_batch = static_cast<int>(std::min<size_t>(static_cast<size_t>(chunk_batch), state.samples() - produced));
         const unsigned seed = state.seed() + static_cast<unsigned>(produced);
 
-        auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/is_complex<Scalar>::value, cur_batch, seed);
-        Matrix<Scalar> A_ref(n, n, cur_batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_ref, A).wait();
+        auto A = Matrix<T>::Random(n, n, /*hermitian=*/is_complex<T>::value, cur_batch, seed);
+        Matrix<T> A_ref(n, n, cur_batch);
+        MatrixView<T, MatrixFormat::Dense>::copy(*q, A_ref, A).wait();
 
-        Matrix<Scalar> A_work(n, n, cur_batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_work, A).wait();
+        Matrix<T> A_work(n, n, cur_batch);
+        MatrixView<T, MatrixFormat::Dense>::copy(*q, A_work, A).wait();
 
-        Matrix<Scalar> U(n, n, cur_batch);
-        Matrix<Scalar> Vh(n, n, cur_batch);
+        Matrix<T> U(n, n, cur_batch);
+        Matrix<T> Vh(n, n, cur_batch);
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
 
         try {
             const size_t ws_bytes = [&] {
-                if constexpr (is_complex<Scalar>::value) {
-                    return gesvd_cta_buffer_size<B, Scalar>(*q,
-                                                            A_work,
-                                                            s.to_span(),
-                                                            U,
-                                                            Vh,
-                                                            SvdVectors::All,
-                                                            SvdVectors::All,
-                                                            Uplo::Lower);
+                if constexpr (is_complex<T>::value) {
+                    return gesvd_cta_buffer_size<B, T>(*q,
+                                                       A_work,
+                                                       s.to_span(),
+                                                       U,
+                                                       Vh,
+                                                       SvdVectors::All,
+                                                       SvdVectors::All,
+                                                       Uplo::Lower);
                 } else {
-                    return gesvd_cta_buffer_size<B, Scalar>(*q,
-                                                            A_work,
-                                                            s.to_span(),
-                                                            U,
-                                                            Vh,
-                                                            SvdVectors::All,
-                                                            SvdVectors::All);
+                    return gesvd_cta_buffer_size<B, T>(*q,
+                                                       A_work,
+                                                       s.to_span(),
+                                                       U,
+                                                       Vh,
+                                                       SvdVectors::All,
+                                                       SvdVectors::All);
                 }
             }();
             UnifiedVector<std::byte> ws(ws_bytes);
-            if constexpr (is_complex<Scalar>::value) {
-                (void)gesvd_cta<B, Scalar>(*q,
+            if constexpr (is_complex<T>::value) {
+                (void)gesvd_cta<B, T>(*q,
                                      A_work,
                                      s.to_span(),
                                      U,
@@ -168,7 +168,7 @@ void run_gesvd_cta_acc(miniacc::State& state) {
                                      Uplo::Lower,
                                      ws.to_span());
             } else {
-                (void)gesvd_cta<B, Scalar>(*q,
+                (void)gesvd_cta<B, T>(*q,
                                      A_work,
                                      s.to_span(),
                                      U,
@@ -204,15 +204,15 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             double vh_ortho_num = 0.0;
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j < n; ++j) {
-                    Scalar dot_u = Scalar(0);
-                    Scalar dot_vh = Scalar(0);
+                    T dot_u = T(0);
+                    T dot_vh = T(0);
                     for (int k = 0; k < n; ++k) {
                         dot_u += conj_value(Ub(k, i, 0)) * Ub(k, j, 0);
                         dot_vh += Vhb(i, k, 0) * conj_value(Vhb(j, k, 0));
                     }
-                    const Scalar target = (i == j) ? Scalar(1) : Scalar(0);
-                    const Scalar du = dot_u - target;
-                    const Scalar dv = dot_vh - target;
+                    const T target = (i == j) ? T(1) : T(0);
+                    const T du = dot_u - target;
+                    const T dv = dot_vh - target;
                     u_ortho_num += static_cast<double>(abs_squared_value(du));
                     vh_ortho_num += static_cast<double>(abs_squared_value(dv));
                 }
@@ -223,12 +223,12 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             const Real* sb = s.data() + static_cast<size_t>(b) * static_cast<size_t>(n);
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j < n; ++j) {
-                    Scalar recon = Scalar(0);
+                    T recon = T(0);
                     for (int k = 0; k < n; ++k) {
-                        recon += Ub(i, k, 0) * static_cast<Scalar>(sb[k]) * Vhb(k, j, 0);
+                        recon += Ub(i, k, 0) * static_cast<T>(sb[k]) * Vhb(k, j, 0);
                     }
-                    const Scalar ref = Ab_ref(i, j, 0);
-                    const Scalar diff = recon - ref;
+                    const T ref = Ab_ref(i, j, 0);
+                    const T diff = recon - ref;
                     err2 += static_cast<double>(abs_squared_value(diff));
                     ref2 += static_cast<double>(abs_squared_value(ref));
                 }
