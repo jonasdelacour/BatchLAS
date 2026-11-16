@@ -34,7 +34,6 @@ namespace batchlas {
 
 namespace {
 
-
 enum class GesvdNativeMode {
     Blocked,
     CTA,

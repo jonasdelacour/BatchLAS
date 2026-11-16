@@ -34,7 +34,6 @@ using trsm_vendor = Event(Queue&,
                           T);
 }  // namespace sig
 
-
 /// @brief Host-side argument check that trsm runs on every backend before kernel selection.
 ///
 /// With \f$m\f$ = `B.rows()` and \f$n\f$ = `B.cols()`, requires \f$m, n \ge 0\f$; valid enum values
@@ -171,7 +170,6 @@ Event trsm(Queue&,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // Declaration only: each vendor wrapper TU defines and instantiates it for its
@@ -209,7 +207,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(trsm)
 

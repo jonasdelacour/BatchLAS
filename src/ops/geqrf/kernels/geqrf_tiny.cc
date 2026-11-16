@@ -31,7 +31,6 @@ namespace ops::geqrf {
 
 namespace {
 
-
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
 // copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
 template <typename T> using TinyDev = typename sycl_device::DevMap<T>::type;

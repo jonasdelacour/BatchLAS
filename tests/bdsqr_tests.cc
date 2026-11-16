@@ -225,6 +225,5 @@ TYPED_TEST(BdsqrTest, GradedNearOverflow) {
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh, Vh.all_items()));
 }
 
-
 } // namespace
 #endif  // BATCHLAS_HAS_CUDA_BACKEND

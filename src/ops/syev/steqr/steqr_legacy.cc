@@ -20,7 +20,6 @@ namespace batchlas {
 
 namespace {
 
-
 // Distinct from steqr_wg.cc's tags: both TUs link into one device image.
 template <typename T> struct SteqrLegacyFrancisKernel {};
 template <typename T> struct SteqrLegacyRotationKernel {};
@@ -65,7 +64,6 @@ Event steqr_impl(Queue& ctx,
     auto scratch = steqr_impl_layout<T>(ctx, allocator, n, batch_size);
     auto scan_view = scratch.scan;
     auto temp_deflation_indices = scratch.temp_deflation_indices;
-
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
@@ -395,8 +393,6 @@ size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<T>& d, const Vector
         return steqr_legacy_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects_shape);
     });
 }
-
-
 
 #define STEQR_LEGACY_INSTANTIATE(back, fp) \
 template Event steqr_legacy<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);

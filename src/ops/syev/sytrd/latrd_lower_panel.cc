@@ -32,7 +32,6 @@ namespace batchlas {
 
 namespace {
 
-
 enum class LatrdImpl { Legacy, Grid };
 
 // BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "grid" -> Grid.

@@ -14,7 +14,6 @@
 #include <cstdint>
 #include <vector>
 
-
 namespace batchlas {
 
 template <typename T>
@@ -1073,7 +1072,6 @@ struct SteqrParams {
     SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;  ///< CTA STEQR only: shift strategy.
 };
 
-
 // `info` on steqr/stedc/syev/syevx/gesvd and their tiers: per-item convergence status,
 // an ACCUMULATOR zeroed once by the entry point the caller invoked and only raised
 // below (contract and helpers: src/kernels/common/info_span.hh).
@@ -1164,7 +1162,6 @@ BATCHLAS_API size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const 
 template <typename T>
 BATCHLAS_API size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                                           const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
-
 
 /// @}
 
@@ -2078,7 +2075,6 @@ BATCHLAS_API size_t bdsdc_buffer_size(Queue& ctx,
                                       Span<T> singular_values_out,
                                       bool want_vectors);
 
-
 /// @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors. Supports
 ///        `vect='Q'` (tauq, CTA/blocked ORMQR path) and `vect='P'` (taup, blocked
 ///        compact-WY path over the right reflectors).
@@ -2583,8 +2579,6 @@ inline auto ritz_values(Queue& ctx,
     return ritz_vals;
 }
 
-
-
 /// @brief Required workspace size, in bytes, for ritz_values().
 /// @param[in] ctx       queue the call will run on
 /// @param[in] A         matrices the call will use (shape and format only)
@@ -2657,7 +2651,6 @@ namespace batchlas {
 
 // Backend-deducing overloads (BATCHLAS_DISPATCH_ON_QUEUE); see blas/queue-dispatch.hh.
 // evidence: docs/cpp-api.md#which-type-each-parameter-takes
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(ortho)
 BATCHLAS_DISPATCH_ON_QUEUE(ortho_buffer_size)

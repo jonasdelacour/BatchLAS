@@ -32,7 +32,6 @@ Event& Event::operator=(EventImpl&& impl) {
 
 Event::Event(Event&& other) = default;
 
-
 Event::~Event() = default;
 
 void Event::wait() const {impl_->wait();}
@@ -49,7 +48,6 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> Event::profiling_command_
 
 EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
-
 
 namespace {
 // An Apple GPU through acpp Metal: no fp64, and no double kernels can be JIT-compiled for it.
@@ -297,7 +295,6 @@ void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     seq_ = 0;
 }
 
-
 QueueImpl* Queue::operator->() const {
     return impl_.get();
 }
@@ -389,7 +386,6 @@ std::vector<Device> Device::get_devices(DeviceType type){
         [i = size_t{0}, type]() mutable { return Device(i++, type); });
     return devices;
 }
-
 
 std::string Device::get_name() const  {
     return QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).get_info<sycl::info::device::name>();

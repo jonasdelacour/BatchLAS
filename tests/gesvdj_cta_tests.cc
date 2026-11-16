@@ -452,7 +452,6 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
     }
 }
 
-
 // Routing. Two things are checked here, both behavioural:
 //  1. Auto at n = 12 reaches gesvdj_cta (jacobi leads that table row). "It ran"
 //     is not evidence that the right thing ran -- the accuracy is.

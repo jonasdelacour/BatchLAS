@@ -20,7 +20,6 @@ namespace batchlas {
 
 namespace {
 
-
 template <typename Real>
 bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                const VectorView<Real>& d,

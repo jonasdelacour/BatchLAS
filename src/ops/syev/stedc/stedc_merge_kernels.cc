@@ -13,7 +13,6 @@
 
 namespace batchlas {
 
-
 template <Backend B, typename T> class StedcFusedMerge;
 
 // Fused merge kernel that preserves baseline math exactly while collapsing

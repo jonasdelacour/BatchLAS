@@ -50,8 +50,7 @@ inline T host_rand(std::mt19937& gen) {
     if constexpr (test_utils::is_complex<T>::value) {
         const auto re = d(gen), im = d(gen);
         return T(re, im);
-    }
-    else return d(gen);
+    } else return d(gen);
 }
 
 // Column-major Hermitian PD matrix A = (M M^H)/n + shift*I. The shift pins the
@@ -225,7 +224,6 @@ protected:
             }
         }
     }
-
 
     std::vector<int32_t> run_cta(Matrix<T, MatrixFormat::Dense>& A, Uplo uplo,
                                  bool pass_info_span = true) {
@@ -825,7 +823,6 @@ protected:
         }
         return nb;
     }
-
 
     // Run the blocked driver DIRECTLY. The -12345 info seed is load-bearing: the driver
     // READS info to decide whether an earlier panel failed. info_len < 0 means a full
@@ -1554,7 +1551,6 @@ TYPED_TEST(PotrfBlockedTest, FacadeBlockedUpper) {
         EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(*this->ctx, ref[b], A, b, Uplo::Upper)));
     }
 }
-
 
 // The TINY tier's cases, in their own file only for length; they are inside this
 // anonymous namespace so make_spd, make_planted_ldl and potrf_error

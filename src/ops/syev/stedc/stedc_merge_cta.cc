@@ -29,7 +29,6 @@
 
 namespace batchlas {
 
-
 template <Backend B, typename T, int32_t P>
 class StedcFusedCtaMerge;
 

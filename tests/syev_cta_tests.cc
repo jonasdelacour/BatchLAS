@@ -25,7 +25,6 @@ using namespace batchlas;
 
 namespace {
 
-
 template <typename T, Backend B>
 struct SyevCtaConfig {
     using ScalarType = T;
@@ -185,7 +184,6 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
     if (dbg) std::cerr << "[cta-test] A built" << std::endl;
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
-
 
     if (dbg) std::cerr << "[cta-test] running CTA" << std::endl;
     {

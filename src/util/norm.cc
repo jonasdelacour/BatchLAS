@@ -11,8 +11,7 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/sscp_target.hh>
 
-namespace batchlas
-{
+namespace batchlas {
 template <typename T, MatrixFormat MF, NormType NT, int WG> struct NormKernel;
 template <Backend B, typename T> struct NormSpectralKernel;
 
@@ -151,8 +150,7 @@ template <typename T, MatrixFormat MF>
 Event norm(Queue &ctx,
           const MatrixView<T, MF> &A,
           const NormType norm_type,
-          const Span<float_t<T>> norms)
-{
+          const Span<float_t<T>> norms) {
     (void)detail::call_mask("norm", A);
     detail::require_device_fp64<T>(ctx, "norm");
     if (norm_type == NormType::Spectral) {
@@ -168,8 +166,7 @@ Event norm(Queue &ctx,
 template <typename T, MatrixFormat MF>
 UnifiedVector<float_t<T>> norm(Queue &ctx,
                       const MatrixView<T, MF> &A,
-                      const NormType norm_type)
-{
+                      const NormType norm_type) {
     (void)detail::call_mask("norm", A);
     detail::require_device_fp64<T>(ctx, "norm");
     // Allocate memory for the results

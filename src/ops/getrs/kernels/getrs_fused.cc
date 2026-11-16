@@ -630,7 +630,6 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
 
 }  // namespace
 
-
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
 // HARD launch ceiling -- a can_run question and not a table one. The budget is
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this

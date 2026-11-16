@@ -17,7 +17,6 @@
 
 namespace batchlas::getrf_native {
 
-
 // `kmax` must be KERNEL-UNIFORM (skipped steps skip barriers). `always_inline` is NOT a hint:
 // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
 template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>

@@ -53,7 +53,6 @@ namespace {
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-
 template <typename T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
 template <typename R> inline std::complex<R> scale(std::complex<R> v, double f) {
     return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
@@ -1062,7 +1061,6 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
         if (this->HasFailure()) return;
     }
 }
-
 
 // ===========================================================================
 // P4. THE REGISTER-RESIDENT PANEL LEAF (getrf_panel_reg.cc).
@@ -3074,7 +3072,6 @@ Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
     poison(p);
     return p;
 }
-
 
 // LAPACK's ?GETF2 on the host in promoted arithmetic, recording at each step the
 // MARGIN by which the winner beat the runner-up: margin[k] = cabs1(runner-up) /

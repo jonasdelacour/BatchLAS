@@ -567,7 +567,6 @@ Event hemm_vendor(Queue& ctx,
 
 } // namespace backend
 
-
 namespace backend {
 
 template <Backend B, ComplexScalar T>
@@ -1520,7 +1519,6 @@ size_t potrf_vendor_buffer_size(Queue& ctx,
 }
 
 } // namespace backend
-
 
 // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
 // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols

@@ -32,7 +32,6 @@ using symm_vendor = Event(Queue&,
                           Uplo);
 }  // namespace sig
 
-
 /// @brief Batched symmetric matrix-matrix multiply.
 ///
 /// For every batch item computes
@@ -90,7 +89,6 @@ BATCHLAS_API Event symm(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
@@ -129,7 +127,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(symm)
 

@@ -33,7 +33,6 @@ using trmm_vendor = Event(Queue&,
                           Diag);
 }  // namespace sig
 
-
 /// @brief Batched triangular matrix-matrix multiply, out of place.
 ///
 /// For every batch item computes
@@ -93,7 +92,6 @@ BATCHLAS_API Event trmm(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
@@ -132,7 +130,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(trmm)
 

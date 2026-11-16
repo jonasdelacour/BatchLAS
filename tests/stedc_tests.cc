@@ -524,7 +524,6 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat, eigvecs_cta, eigvals_cta, n, all_items);
 }
 
-
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).
 //

@@ -32,7 +32,6 @@ struct SteinIterateKernel;
 template <Backend B, typename T>
 struct SteinOrthoKernel;
 
-
 template <Backend B, typename T>
 Event stein(Queue& ctx,
             const VectorView<T>& d,

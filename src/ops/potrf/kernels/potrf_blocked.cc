@@ -413,7 +413,6 @@ Event potrf_blocked_dispatch(Queue& ctx,
     return ctx.get_event();
 }
 
-
 #define BATCHLAS_POTRF_BLOCKED_INSTANTIATE(T)                                                 \
     template unsigned potrf_blocked_debug_params<T>(Queue&, int);                              \
     template std::size_t potrf_blocked_buffer_size<T>(                                        \

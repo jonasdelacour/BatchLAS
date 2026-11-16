@@ -32,7 +32,6 @@ using syr2k_vendor = Event(Queue&,
                           Transpose);
 }  // namespace sig
 
-
 /// @brief Batched symmetric rank-2k update.
 ///
 /// For every batch item computes, with `A` and `B` \f$n \times k\f$ (`NoTrans`) or \f$k \times n\f$
@@ -88,7 +87,6 @@ BATCHLAS_API Event syr2k(Queue& ctx,
 
 } // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
@@ -127,7 +125,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(syr2k)
 

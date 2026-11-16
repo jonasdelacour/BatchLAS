@@ -30,7 +30,6 @@ namespace batchlas {
 
 namespace {
 
-
 template <typename T>
 inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
                                      const VectorView<typename base_type<T>::type>& d,

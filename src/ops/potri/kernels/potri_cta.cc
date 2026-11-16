@@ -34,7 +34,6 @@ namespace batchlas::ops::potri {
 
 namespace {
 
-
 template <typename T> class PotriCtaKernel;
 
 }  // namespace

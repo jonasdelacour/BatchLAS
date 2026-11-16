@@ -40,7 +40,6 @@ class SyevJacobiCTAKernel;
 
 namespace {
 
-
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,
                                  MatrixView<T, MatrixFormat::Dense>& a,

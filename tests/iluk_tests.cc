@@ -121,7 +121,6 @@ T csr_entry(const MatrixView<T, MatrixFormat::CSR>& A, int row, int col, int bat
     return T(0);
 }
 
-
 // Canonical 5-point 2D Laplacian on an m x m grid: the standard problem class
 // ILU preconditioning targets, and one where LOBPCG actually reaches tolerance
 // (the random sparse Hermitian matrices used elsewhere here do not).
@@ -708,7 +707,6 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
         return (count > 0) ? (sum / static_cast<float>(count)) : std::nanf("");
     };
 
-
     struct LevelAggregate {
         float ratio_sum = 0.0f;
         int ratio_count = 0;
@@ -1054,7 +1052,6 @@ Matrix<float, MatrixFormat::Dense> make_laplacian_2d_dense(int m, int batch) {
     return A;
 }
 
-
 // Where does computing k eigenpairs iteratively beat a full dense
 // eigendecomposition? syev returns the whole spectrum, syevx only the k smallest,
 // so this is the practical question of when to reach for which.
@@ -1336,7 +1333,6 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
                   << "  " << inner_s << "  " << inner_iters << "  " << inner_speedup << "\n";
     }
 }
-
 
 TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
     struct Shape { int n; int batch; float density; };

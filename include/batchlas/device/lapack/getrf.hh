@@ -308,7 +308,6 @@ template <class T> constexpr GetrfCtaPlan<T> getrf_cta_plan(int m, int n) {
     return {tile, vs, is, ld, p.size()};
 }
 
-
 // An operand's scalar: its value_type, or what its (i, j) names (l3::Global has no value_type).
 template <class M> struct lu_value {
     using type = std::remove_cvref_t<decltype(std::declval<const M&>()(0, 0))>;

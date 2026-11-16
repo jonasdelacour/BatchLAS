@@ -262,7 +262,6 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
                 V, jobz, order, workspace);
 }
 
-
 template <typename T>
 size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz) {
     // Workspace used by `sort(...)` in this header:

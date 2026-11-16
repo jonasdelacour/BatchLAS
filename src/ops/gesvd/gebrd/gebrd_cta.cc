@@ -16,11 +16,9 @@
 #include <numeric>
 #include <stdexcept>
 
-
 namespace batchlas {
 
 namespace {
-
 
 template <typename T, size_t P>
 class GebrdCTAKernel;

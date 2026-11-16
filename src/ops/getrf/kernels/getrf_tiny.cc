@@ -41,7 +41,6 @@ template <typename T, int N, int NC, int MinBlocks> class GetrfTinyKernel;
 
 namespace {
 
-
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
 

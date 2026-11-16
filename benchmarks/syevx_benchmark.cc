@@ -54,7 +54,6 @@ void BM_SYEVX(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-
 // Crossover sweep: the same problem solved by each implemented algorithm, at a
 // fixed accuracy target rather than a fixed iteration budget. Comparing at equal
 // tolerance is the point — a fixed small iteration count makes LOBPCG look fast

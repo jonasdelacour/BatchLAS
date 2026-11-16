@@ -43,8 +43,6 @@ namespace ops::posv {
 
 namespace {
 
-
-
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
 // 255 (cdouble N=16 NR=4), the ISA ceiling, and that cell SPILLS.
 // evidence: docs/perf/potrf.md#the-posv-tiny-tier-is-not-register-resident-for-cdouble

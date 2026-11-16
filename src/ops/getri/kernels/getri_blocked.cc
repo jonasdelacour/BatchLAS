@@ -31,7 +31,6 @@ namespace ops::getri {
 
 namespace {
 
-
 template <typename T> class GetriZeroKernel;
 template <typename T> class GetriPermKernel;
 
@@ -118,7 +117,6 @@ Event getri_perm_launch(Queue& ctx,
 }
 
 }  // namespace
-
 
 // No workspace. Called from a layout function under mempool's measuring(), so it
 // must not dereference A.data_ptr().

@@ -44,7 +44,6 @@ class GesvdjCTAKernel;
 
 namespace {
 
-
 template <typename T, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& a_in,

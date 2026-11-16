@@ -24,7 +24,6 @@ namespace batchlas {
 
 namespace {
 
-
 inline char upper_ascii(char c) {
     return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 }

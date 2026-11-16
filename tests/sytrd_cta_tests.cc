@@ -231,7 +231,6 @@ struct SytrdCtaConfig {
 
 } // namespace
 
-
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::CUDA>, SytrdCtaConfig<double, Backend::CUDA>>;
 #elif BATCHLAS_HAS_ROCM_BACKEND
@@ -361,4 +360,3 @@ TYPED_TEST(SytrdCtaTest, EmptyBatchIsANoOp) {
     for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
 }
 #endif
-

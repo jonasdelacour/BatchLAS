@@ -32,7 +32,6 @@ namespace ops::geqrf {
 
 namespace {
 
-
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
 // bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
 template <typename T>

@@ -33,8 +33,6 @@ void BM_TRANSPOSE(minibench::State& state) {
 
 }  // namespace
 
-
-
 // Register size/batch combinations at static‑init time using macro
 
 BATCHLAS_REGISTER_BENCHMARK(BM_TRANSPOSE, SquareBatchSizes);

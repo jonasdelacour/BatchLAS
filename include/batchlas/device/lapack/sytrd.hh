@@ -370,7 +370,6 @@ template <class T> struct ColView {
 // The trailing update's tile: the in-group L3 preset the device_lapack_l3 tests cover (256 items).
 template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 
-
 // The Blocked tier's workspace: W (n x NB, ld n), v and wcol (n each) in global memory; vip, wip
 // (NB each) and the L3 stage in local memory. O(NB) local bytes, so any n fits.
 template <int NB, class T> struct sytrd_blocked_plan {

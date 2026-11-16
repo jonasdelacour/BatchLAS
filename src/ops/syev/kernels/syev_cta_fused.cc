@@ -28,9 +28,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-
 namespace batchlas {
-
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.

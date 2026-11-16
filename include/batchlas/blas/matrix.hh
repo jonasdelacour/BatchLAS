@@ -410,7 +410,6 @@ inline void apply_dense_slice_pointer_arithmetic(T*& base, int ld, int64_t row_s
     base += col_start * ld + row_start; // column-major offset
 }
 
-
 template <typename T>
 T convert_to_fill_value(int64_t value) {
     if constexpr (std::is_floating_point_v<T>) {
@@ -710,7 +709,6 @@ public:
     /// @}
     /// @brief Base pointer of item 0.
     T* data_ptr() const { return data_.data(); }
-
 
     int batch_size() const { return batch_size_; }  ///< Number of batch items.
     /// @brief Rows per item (the capacity on a heterogeneous batch).
@@ -1772,7 +1770,6 @@ public:
     Event fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned seed = 42) const;
     /// @}
 
-
     /// @brief A batch-size-1 view of item @p batch_index.
     ///
     /// Dense: its active extents, the parent's ld, no pointer array. CSR: the parent's strides.
@@ -1993,7 +1990,6 @@ class BATCHLAS_API Matrix : public MatrixView<T, MType> {
 public:
     using Base::rows_, Base::cols_, Base::batch_size_;
 
-
     /// @brief Allocates an uninitialised dense batch.
     /// @param[in] rows        rows per item
     /// @param[in] cols        columns per item
@@ -2101,7 +2097,6 @@ public:
     Matrix(const T* values, const int* row_offsets, const int* col_indices,
            int nnz, int rows, int cols, int matrix_stride = 0,
            int offset_stride = 0, int batch_size = 1) = delete;
-
 
     /// @name Factories
     /// Each returns a packed dense batch (\f$\mathrm{ld} = \mathrm{rows}\f$,

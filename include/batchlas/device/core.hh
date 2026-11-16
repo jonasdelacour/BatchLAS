@@ -69,7 +69,6 @@ struct ColPerLane {};  // lane l owns column l
 struct SgPerCol {};    // team t owns columns c = t mod nteams; its lanes stride the rows
 struct Uniform {};     // replicated value (every reduction result)
 
-
 struct One {};
 struct Zero {};
 struct NegOne {};

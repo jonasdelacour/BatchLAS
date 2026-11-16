@@ -23,7 +23,6 @@
 
 namespace batchlas {
 
-
 namespace {
 
 // `is_gpu`, not `B != Backend::NETLIB`: the CPU device takes the Baseline merge whatever the
@@ -126,8 +125,7 @@ void stedc_merge_step(Queue& ctx,
                       int32_t* info,
                       int64_t info_nodes_per_item,
                       const MatrixView<T, MatrixFormat::Dense>& out_even = MatrixView<T, MatrixFormat::Dense>(),
-                      const MatrixView<T, MatrixFormat::Dense>& out_odd = MatrixView<T, MatrixFormat::Dense>())
-{
+                      const MatrixView<T, MatrixFormat::Dense>& out_odd = MatrixView<T, MatrixFormat::Dense>()) {
     // When a split destination is supplied, node p's merged block is written to
     // out_{p&1} at batch index p/2 instead of back into `eigvects`.
     const bool split_output = out_even.data_ptr() != nullptr;
@@ -260,8 +258,7 @@ void stedc_merge_step(Queue& ctx,
                     // Löwner-rescale z_tilde via the ~dd-term ratio product, in native T
                     // (double accumulation is unnecessary with the absolute tolerance).
                     // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
-                    for (int eid = 0; eid < dd; ++eid)
-                    {
+                    for (int eid = 0; eid < dd; ++eid) {
                         const T Di = eigenvalues(eid, bid);
                         T partial = T(1);
                         device::for_each_owned(ex, dd, [&](int j) {
@@ -276,8 +273,7 @@ void stedc_merge_step(Queue& ctx,
                             partial *= ratio;
                         });
                         const T valf = device::allreduce(ex, partial, sycl::multiplies<T>());
-                        if(ex.leader())
-                        {
+                        if(ex.leader()) {
                             T mag  = std::sqrt(std::fabs(valf));
                             T sign = v(eid, bid) >= T(0) ? T(1) : T(-1);
                             v(eid, bid) = sign * mag;
@@ -297,8 +293,7 @@ void stedc_merge_step(Queue& ctx,
                     const int dd = n_reduced[bid];
                     const auto Q = device::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
                     const auto z = device::vec(v.batch_item(bid));
-                    for(int eig = 0; eig < dd; ++eig)
-                    {
+                    for(int eig = 0; eig < dd; ++eig) {
                         const auto q = Q.col(eig);
                         device::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
                         const T nrm = device::nrm2<device::alg::Blue>(ex, q);
@@ -390,8 +385,7 @@ size_t stedc_merge_step_workspace(Queue& ctx, size_t s, size_t P) {
 template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q,
-            Span<int32_t> info)
-{
+            Span<int32_t> info) {
     auto n = d.size();
     auto batch_size = d.batch_size();
     auto effective_params = resolve_stedc_tuning<B, T>(n, params, ctx.device().type == DeviceType::GPU);
@@ -548,8 +542,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
                         JobType jobz, StedcParams<T> params,
                         const MatrixView<T, MatrixFormat::Dense>& eigvects,
                         const StedcLevelPlan& plan,
-                        Span<int32_t> info)
-{
+                        Span<int32_t> info) {
     const int64_t n = d.size();
     const int64_t bs = d.batch_size();
     const int64_t N = plan.padded_n;
@@ -842,8 +835,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
 template <Backend B, typename T>
 Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
-            Span<int32_t> info)
-{
+            Span<int32_t> info) {
     const auto mask = batchlas::detail::call_mask("stedc", d, e, eigenvalues, eigvects);
     if (d.size() != e.size() + 1) {
         throw batchlas::invalid_argument("The size of e must be one less than the size of d.");
@@ -872,8 +864,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
 template <Backend B, typename T>
 Event stedc_dispatch(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues_in, const Span<std::byte>& ws,
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects_in,
-            Span<int32_t> info)
-{
+            Span<int32_t> info) {
     // Every operand takes the call's mask, so each driver below reads it off any view.
     const auto mask = batchlas::detail::call_mask("stedc", d_in, e_in, eigenvalues_in, eigvects_in);
     const auto d = stedc_masked(d_in, mask);
@@ -967,7 +958,6 @@ size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, 
     return std::max(level_bytes, recursive_bytes);
 }
 
-
 template <Backend B, typename T>
 size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params) {
     if (n <= 0 || batch_size <= 0) {
@@ -1010,8 +1000,6 @@ template size_t stedc_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t 
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_INSTANTIATE)
 
-
 #undef STEDC_INSTANTIATE
-
 
 }  // namespace batchlas

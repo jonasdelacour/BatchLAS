@@ -118,7 +118,6 @@ namespace batchlas {
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
 
-
 BATCHLAS_DISPATCH_ON_QUEUE(gemm)
 
 }  // namespace batchlas

@@ -157,7 +157,6 @@ TYPED_TEST(DeviceCoreViewTest, PacketMovesOneAlignedUnit) {
     for (int k = 0; k < 64; ++k) EXPECT_TRUE(same_bits(got[k], src_h[k])) << k;
 }
 
-
 // herm_view<UL, Storage::Band> of LAPACK band storage and herm_view<UL, Storage::Full,
 // alg::TwoLoads>, against a host Hermitian built from the full matrix; shifted; refs. The band
 // array's unused corner and the matrix's unstored triangle are NaN-poisoned.

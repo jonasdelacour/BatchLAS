@@ -15,7 +15,6 @@
 #include <string>
 #include <tuple>
 
-
 using namespace batchlas;
 // Test fixture for SYEVX operations
 class LanczosTestBase : public ::testing::Test {
@@ -54,7 +53,6 @@ protected:
         csr_col_indices.resize(total_nnz * batch_size);
         csr_row_offsets.resize((rows + 1) * batch_size);
 
-
         // Known largest eigenvalues for our test matrix
         known_eigenvalues = {1087.76, 1087.76, 1087.76};
 
@@ -76,7 +74,6 @@ protected:
 
             // Fill the tridiagonal matrix
             for (int i = 0; i < rows; ++i) {
-
 
                 csr_row_offsets[base_row_ptr + i + 1] = 30*(i+1);  // Cumulative count for this matrix
             }
@@ -136,13 +133,11 @@ TEST_F(LanczosTestBase, LanczosTest) {
         rows+1,
         batch_size);
 
-
     LanczosParams<float> params;
     params.sort_enabled = true;
     params.sort_order = SortOrder::Descending;
     params.reorthogonalization_iterations = 2;
     params.ortho_algorithm = OrthoAlgorithm::SVQB2;
-
 
     UnifiedVector<float> eigenvector_memory(rows * rows * batch_size);
 
@@ -154,7 +149,6 @@ TEST_F(LanczosTestBase, LanczosTest) {
         rows*rows,
         batch_size);
 
-
     size_t buffer_size = lanczos_buffer_size(*ctx, sparse_matrix, W_data, JobType::EigenVectors,
         eigenvectors, params);
     UnifiedVector<std::byte> workspace(buffer_size);
@@ -165,7 +159,6 @@ TEST_F(LanczosTestBase, LanczosTest) {
     ctx->wait();
 
     UnifiedVector<float> residuals_memory(rows * rows * batch_size, 0.0f);
-
 
     MatrixView residuals(
         residuals_memory.data(),

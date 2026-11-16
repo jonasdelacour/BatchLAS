@@ -95,7 +95,6 @@ void BM_SYEV(minibench::State& state) {
 
 }  // namespace
 
-
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SyevBenchSizes);
 
 MINI_BENCHMARK_MAIN();

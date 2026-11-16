@@ -576,7 +576,6 @@ BATCHLAS_DEVICE_INLINE void givens_on(const Ex& ex, int n, int kd, T* abg, int l
 template <class Ex> inline constexpr bool is_sgp_v = false;
 template <int P, bool M> inline constexpr bool is_sgp_v<Partition<P, M, SubGroupPartition<static_cast<std::size_t>(P), M>>> = true;
 
-
 // The workspace of one matrix (kd >= 2), carved by the op and summed by sb2st_buffer_size: the
 // rotation scratch c (real) and work, n + kd + 2 each, then (Cta) the packed band (kd + 1) x n,
 // all local; Blocked: c and work in the caller's global slice, nothing local.

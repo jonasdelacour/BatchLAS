@@ -22,7 +22,6 @@
 #include <batchlas/device.hh>
 #include <batchlas/device/lapack/ortho.hh>
 
-
 // High-level orthogonalization functions built on top of primitive BLAS operations
 // Implementation using the new MatrixView structure
 namespace batchlas {

@@ -429,7 +429,6 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         }
         size_t staged_samples = 0;
 
-
         // Double buffering pointer swap approach as opposed to copying data unnecessarily
         auto swap_subspace = [&]{
             std::swap(X, X_new);
@@ -1045,7 +1044,6 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 trace_wait("syevx: soft-lock zero done");
             }
 
-
             if (restart){
                 trace("syevx: restart shift P<-R (device copy)");
                 ctx -> submit([&](sycl::handler& h){
@@ -1153,7 +1151,6 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 C_p_active({block_vectors, Nvecs}, {0, block_vectors}),
                 Z_search);
             trace_wait("syevx: build search-direction coefficients done");
-
 
             // X = [X, P, R] * C_x, and AX = [AX, AP, AR] * C_x implicitly.
             trace("syevx: update X/AX submit");
@@ -1405,7 +1402,6 @@ template size_t syevx_lobpcg_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
     JobType,\
     const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
     const SyevxParams<BATCHLAS_UNPAREN fp>&);
-
 
 #define SYEVX_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
     BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(SYEVX_INSTANTIATE, back, fp)

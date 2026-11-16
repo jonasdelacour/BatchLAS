@@ -267,4 +267,3 @@ std::string get_against_m_test_name(Transpose transA, Transpose transM, OrthoAlg
     }
     return "A" + transA_str + "_M" + transM_str + "_" + algo_str;
 }
-

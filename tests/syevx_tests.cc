@@ -158,8 +158,6 @@ protected:
         csr_col_indices.resize(total_nnz * batch_size);
         csr_row_offsets.resize((rows + 1) * batch_size);
 
-
-
         for (int b = 0; b < batch_size; ++b) {
             int base_idx = b * nnz_per_matrix;
             int base_row_ptr = b * (rows + 1);
@@ -178,7 +176,6 @@ protected:
 
             // Fill the tridiagonal matrix
             for (int i = 0; i < rows; ++i) {
-
 
                 csr_row_offsets[base_row_ptr + i + 1] = 30*(i+1);  // Cumulative count for this matrix
             }
@@ -209,7 +206,6 @@ protected:
     UnifiedVector<float> csr_values;
     UnifiedVector<int> csr_col_indices;
     UnifiedVector<int> csr_row_offsets;
-
 
     void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
         for (int i = 0; i < cols; ++i) {
@@ -309,7 +305,6 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     params.extra_directions = 5;
     params.find_largest = true;
     params.iterations = 30;
-
 
     size_t buf_size = syevx_buffer_size(*ctx, A_view, W, neig, JobType::EigenVectors, V, params);
     UnifiedVector<std::byte> workspace(buf_size);
@@ -443,7 +438,6 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     std::cout << "Reference Computed eigenvalues (shifted): " << ref_vals.subspan(0, n) << std::endl;
     std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */
 }
-
 
 namespace {
 // BATCHLAS_SYEVX_ALGORITHM takes precedence over SyevxParams::method (matching the
@@ -3345,7 +3339,6 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).

@@ -44,7 +44,6 @@ void check_same_shape(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-
 // One batched 2-D launch over a rows x cols shape (no flat index, no % or /); f(ex, b) runs
 // for every active item b. Views are indexed per item, so submatrices (ld > rows) work, and
 // operands may alias: each item touches one element of each. Not device::batched2d: that takes a

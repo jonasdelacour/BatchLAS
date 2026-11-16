@@ -55,7 +55,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-
 // herm: 'N' general, 'L'/'U' the referenced triangle of a Hermitian A.
 struct Spec {
     int m = 8, n = 8, batch = 2;

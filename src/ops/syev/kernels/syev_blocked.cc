@@ -32,7 +32,6 @@
 
 namespace batchlas {
 
-
 namespace {
 
 template <typename T>
@@ -99,7 +98,6 @@ inline MatrixView<T, MatrixFormat::Dense> sytrd_lower_qsub_reflector_view(
     const int32_t p = std::max<int32_t>(0, n - 1);
     return a_sytrd({1, SliceEnd()}, {0, p});
 }
-
 
 template <Backend B, typename T>
 Event syev_blocked_part(Queue& ctx,

@@ -9,8 +9,7 @@
 #include <limits>
 #include <type_traits>
 #include <src/queue.hh>
-namespace batchlas
-{
+namespace batchlas {
 template <Backend B, typename T>
 struct CondSpectralKernel;
 
@@ -122,8 +121,7 @@ Event cond(Queue &ctx,
             const MatrixView<T, MF> &A,
             const NormType norm_type,
             const Span<T> conds,
-            const Span<std::byte> workspace)
-{
+            const Span<std::byte> workspace) {
     (void)detail::call_mask("cond", A);
     return cond_impl<B>(ctx, A, norm_type, conds, workspace);
 }
@@ -132,8 +130,7 @@ template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
 size_t cond_buffer_size(Queue &ctx,
                         const MatrixView<T, MF> &A,
-                        const NormType norm_type)
-{
+                        const NormType norm_type) {
     (void)detail::call_mask("cond", A);
     if (norm_type == NormType::Spectral) {
         if constexpr (MF != MatrixFormat::Dense) {
@@ -161,8 +158,7 @@ template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
 UnifiedVector<T> cond(Queue &ctx,
                       const MatrixView<T, MF> &A,
-                      const NormType norm_type)
-{
+                      const NormType norm_type) {
     (void)detail::call_mask("cond", A);
     UnifiedVector<T> conds(A.batch_size());
     auto workspace = ctx.workspace(cond_buffer_size<B>(ctx, A, norm_type));
@@ -191,6 +187,4 @@ template size_t cond_buffer_size<back, fp, fmt>(\
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(COND_INSTANTIATE_FOR_TYPE)
 
-
 } // namespace batchlas
-

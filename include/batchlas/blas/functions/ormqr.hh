@@ -55,7 +55,6 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
                                         Side, Transpose, Span<T>);
 }  // namespace sig
 
-
 /// @brief Batched multiplication by the orthogonal/unitary Q from geqrf().
 ///
 /// As LAPACK `?ormqr` / `?unmqr`. A (\f$m \times n\f$) holds, below its diagonal, the
@@ -175,7 +174,6 @@ BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
                                              Span<T> tau);
 
 } // namespace batchlas::backend
-
 
 namespace batchlas {
 

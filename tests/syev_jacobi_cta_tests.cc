@@ -206,7 +206,6 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 
         auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-
         syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
         test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
@@ -256,7 +255,6 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 
             auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-
             syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
             test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
@@ -283,7 +281,6 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
         Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
         auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-
 
         syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 

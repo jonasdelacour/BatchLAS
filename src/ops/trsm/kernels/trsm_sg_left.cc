@@ -25,7 +25,6 @@
 
 namespace batchlas::ops::trsm {
 
-
 namespace {
 
 template <typename T, int N, int QC, bool Masked>

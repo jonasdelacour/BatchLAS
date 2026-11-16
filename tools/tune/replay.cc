@@ -224,8 +224,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
             shrink.push_back({v.substr(0, eq), {v.substr(eq + 1), a == "--axis-keep"}});
-        }
-        else if (a == "--refine") refine = std::stod(next());
+        } else if (a == "--refine") refine = std::stod(next());
         else if (a == "--verify-s") ro.verify_s = std::stod(next());
         else if (a == "--cell-overhead-s") ro.cell_overhead_s = std::stod(next());
         else if (a == "--no-holdout") ro.holdout = false;

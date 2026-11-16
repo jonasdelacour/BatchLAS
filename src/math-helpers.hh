@@ -13,7 +13,6 @@
 #include <src/queue.hh>
 #include <batchlas/device/detail/sscp_target.hh>
 
-
 namespace batchlas::detail {
 template <typename T>
 using base_float_t = typename base_type<T>::type;
@@ -93,7 +92,6 @@ Event scan_inclusive_inplace(Queue& ctx, const Span<T>& data, Op op = Op()) {
     });
     return ctx.get_event();
 }
-
 
 using ::batchlas::device::safmin;
 using ::batchlas::device::safmax;

@@ -23,7 +23,6 @@
 
 namespace batchlas::lu_native {
 
-
 template <typename Tag, typename T> class LuLaswpKernel;
 
 // Apply pivots k0 .. k1-1 (0-based positions in the list) to the column block at

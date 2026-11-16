@@ -12,7 +12,6 @@
 
 using namespace batchlas;
 
-
 template <typename T, Backend B>
 struct TestConfig {
     using ScalarType = T;
@@ -60,7 +59,6 @@ TYPED_TEST(RitzValuesTest, DiagonalMatrix) {
 
     // Create trial vectors V (identity matrix - the actual eigenvectors)
     auto V = Matrix<ScalarType, MatrixFormat::Dense>::Identity(n, batch);
-
 
     // Expected Ritz values are the diagonal entries
     std::vector<RealType> expected(k);
@@ -146,7 +144,6 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     const VectorView<RealType> w(ritz_vals);
     EXPECT_VERIFY(ScalarType, verify::Check::values, n, MV::values_error(w, ref, norm2, w.all_items()));
 }
-
 
 // CSR A in a workspace of exactly ritz_values_buffer_size bytes, poisoned with 0x7f, against the
 // analytic Ritz values of the Toeplitz eigenvectors. A contract test: on CUDA the cuSPARSE buffer

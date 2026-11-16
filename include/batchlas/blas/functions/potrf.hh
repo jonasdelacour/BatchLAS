@@ -76,7 +76,6 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-
 /// @brief Workspace, in bytes, that potrf() needs for this shape on this queue.
 ///
 /// The size does not depend on whether a caller passes an `info` span, so the
@@ -157,7 +156,6 @@ inline Event potrf(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of potrf(); called by the public potrf(), not by users.
@@ -178,7 +176,6 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
                                 Uplo uplo,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out);
-
 
 /// @brief Workspace query of the vendor arm of potrf().
 /// @param[in] ctx   queue the vendor call will run on

@@ -63,7 +63,6 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     }
 }
 
-
 /// @brief Batched formation of the first \f$n\f$ columns of \f$Q\f$ from geqrf() output.
 ///
 /// As LAPACK `?orgqr` / `?ungqr` with \f$ k = n \f$: A holds, below its
@@ -111,7 +110,6 @@ BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of orgqr(); called by the public orgqr(), not by users.
@@ -131,7 +129,6 @@ BATCHLAS_API Event orgqr_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
                                 Span<T> tau,
                                 Span<std::byte> workspace);
-
 
 /// @brief Workspace query of the vendor arm of orgqr().
 /// @tparam B  backend whose vendor library runs the call

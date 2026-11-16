@@ -58,7 +58,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;

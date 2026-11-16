@@ -33,16 +33,14 @@ namespace batchlas {
 
 /// @brief Synchronous or asynchronous execution policy.
 /// @ingroup api_core
-enum class Policy
-{
+enum class Policy {
     SYNC,   ///< Wait for completion.
     ASYNC   ///< Return after enqueueing.
 };
 
 /// @brief The kind of SYCL device.
 /// @ingroup api_core
-enum class DeviceType
-{
+enum class DeviceType {
     CPU,            ///< A CPU device.
     GPU,            ///< A GPU device.
     ACCELERATOR,    ///< An accelerator device.
@@ -52,8 +50,7 @@ enum class DeviceType
 
 /// @brief Device vendor, parsed from the SYCL vendor string by str_to_vendor().
 /// @ingroup api_core
-enum class Vendor
-{
+enum class Vendor {
     AMD,     ///< AMD.
     ARM,     ///< Arm.
     INTEL,   ///< Intel.
@@ -162,8 +159,7 @@ inline Vendor str_to_vendor(std::string&& v) {
 /// @brief A device property queryable with Device::get_property(); each maps to the SYCL
 /// `sycl::info::device` descriptor of the same name.
 /// @ingroup api_core
-enum class DeviceProperty
-{
+enum class DeviceProperty {
     MAX_WORK_GROUP_SIZE,         ///< Maximum work-group size.
     MAX_CLOCK_FREQUENCY,         ///< Maximum clock frequency (MHz).
     MAX_COMPUTE_UNITS,           ///< Number of compute units.
@@ -293,8 +289,6 @@ struct BATCHLAS_API Device{
     /// @return whether the device has `sycl::aspect::fp64`
     bool supports_fp64() const;
 
-
-
     size_t     idx  = 0;                 ///< Index among devices of `type`.
     DeviceType type = DeviceType::HOST;  ///< The device's type.
 };
@@ -406,7 +400,6 @@ struct BATCHLAS_API Queue{
     /// @param[in] other  the Queue that cannot be copied
     /// @return nothing: the function is deleted
     Queue& operator=(const Queue& other) = delete;
-
 
     /// @brief Access the implementation.
     /// @return `impl_.get()`

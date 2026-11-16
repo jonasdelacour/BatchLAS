@@ -79,8 +79,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
                                                                           level3::batch_range(C, f, n), alpha,
                                                                           beta, uplo, t);
                 });
-            }
-            else
+            } else
                 throw batchlas::internal_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
         },
         [&](Vendor) -> Event {

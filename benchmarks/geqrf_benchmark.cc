@@ -43,8 +43,6 @@ void BM_GEQRF(minibench::State& state) {
 
 }  // namespace
 
-
-
 BATCHLAS_REGISTER_BENCHMARK(BM_GEQRF, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

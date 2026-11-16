@@ -65,7 +65,6 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     }
 }
 
-
 /// @brief Batched Householder QR factorization \f$ A = Q R \f$.
 ///
 /// For every \f$m \times n\f$ batch item, as LAPACK `?geqrf`: on return the upper
@@ -113,7 +112,6 @@ BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of geqrf(); called by geqrf() when it selects the `vendor`
@@ -135,7 +133,6 @@ BATCHLAS_API Event geqrf_vendor(Queue& ctx,
                                 const MatrixView<T,MatrixFormat::Dense>& A,
                                 Span<T> tau,
                                 Span<std::byte> workspace);
-
 
 /// @brief Workspace query of the vendor arm of geqrf().
 /// @tparam B  backend whose vendor library runs the call

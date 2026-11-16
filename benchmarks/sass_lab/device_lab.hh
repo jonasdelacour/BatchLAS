@@ -15,7 +15,6 @@ constexpr int kDeviceScaled = 10; // nrm2 only: alg::Scaled (two-pass lassq)
 constexpr int kDeviceBlue = 11;   // nrm2 only: alg::Blue (three accumulators, one exchange)
 constexpr int kDeviceScratch = 12; // dotN2 only: dotN<2> with Scratch (one packed exchange)
 
-
 template <class T, int N, int V, int WG> class KWAxpy;
 template <class T, int N, int V, int WG> class KWDot;
 template <class T, int N, int V, int WG> class KWNrm2;

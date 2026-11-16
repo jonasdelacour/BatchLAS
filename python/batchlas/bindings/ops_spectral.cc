@@ -2,7 +2,6 @@
 #include <python/batchlas/bindings/init.hh>
 #include <python/batchlas/bindings/support.hh>
 
-
 namespace batchlas::python {
 
 namespace {

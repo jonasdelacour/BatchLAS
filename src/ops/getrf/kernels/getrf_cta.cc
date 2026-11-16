@@ -36,7 +36,6 @@ namespace ops::getrf {
 
 namespace {
 
-
 // Convenience overloads only; every real decision re-reads the device, never
 // device_limits.hh. evidence: docs/perf/lu.md#one-spelling-per-ceiling
 constexpr std::size_t kGetrfReferenceSlmBudget = 97280;

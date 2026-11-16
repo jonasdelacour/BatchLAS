@@ -83,4 +83,3 @@ TRANSPOSE_INSTANTIATE(double, MatrixFormat::Dense)
 // TRANSPOSE_INSTANTIATE(std::complex<double>, MatrixFormat::Dense)
 
 } // namespace batchlas
-

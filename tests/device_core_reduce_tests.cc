@@ -155,7 +155,6 @@ TYPED_TEST(DeviceCoreReduceTest, WorkGroupIamaxThroughSlotsIsUniformAndBitIdenti
     for (int b = 2; b < items; b += period) EXPECT_EQ(S[b], best) << b;
 }
 
-
 // AtomicMinSlot on a WG = 1024 work-group: every item offers a value, the minimum (held by
 // one item of the last sub-group) wins; no offer leaves INT_MAX (or_zero: 0).
 TYPED_TEST(DeviceCoreReduceTest, AtomicMinSlotKeepsTheMinimumOffer) {

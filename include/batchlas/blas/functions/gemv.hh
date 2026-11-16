@@ -31,7 +31,6 @@ using gemv_vendor = Event(Queue&,
                           Transpose);
 }  // namespace sig
 
-
 /// @brief Batched general matrix-vector multiply.
 ///
 /// For every batch item \f$b\f$ computes
@@ -73,7 +72,6 @@ BATCHLAS_API Event gemv(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
@@ -111,7 +109,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(gemv)
 

@@ -77,7 +77,6 @@ void refuse_over_budget(Queue& ctx, const char* who, std::int64_t bytes, int wg)
 
 } // namespace
 
-
 template <typename T>
 Event gemm_direct(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
                   const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {

@@ -331,7 +331,6 @@ TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
     EXPECT_EQ(ws_bytes, 0u);
 }
 
-
 // A NaN entry in item 0: the rank sort must still be a bijection (NaN last, ties on index), so no
 // slot of W keeps the 12345 it was poisoned with and A's columns are a permutation; items 1.. are
 // unaffected.

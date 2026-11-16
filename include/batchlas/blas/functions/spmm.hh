@@ -34,7 +34,6 @@ template <typename T, MatrixFormat F>
 using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 }  // namespace sig
 
-
 /// @brief Batched sparse-times-dense matrix multiply.
 ///
 /// For every batch item computes
@@ -119,7 +118,6 @@ BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // Declaration only (see gemm_vendor). spmm carries a MatrixFormat parameter, so
@@ -179,7 +177,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(spmm)
 BATCHLAS_DISPATCH_ON_QUEUE(spmm_buffer_size)

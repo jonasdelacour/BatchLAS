@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -25,7 +24,6 @@
 #include <array>
 #include <type_traits>
 
-
 namespace batchlas {
 
 // Small-matrix CTA ORMQR/ORMQL/UNMQR/UNMQL: apply the implicit Q of a GEQRF/GEQLF
@@ -49,7 +47,6 @@ using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, 
 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
-
 
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).

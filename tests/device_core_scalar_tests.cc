@@ -165,7 +165,6 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     EXPECT_LE(err(got[3], wide(yy[3]) / wide(dd[3])), tol<T>() * static_cast<double>(1 / batchlas::device::safmin<R>()));
 }
 
-
 // lartg<alg::LartgFast> (float: rsqrt + Newton inside the unscaled range) against the
 // exact rotation within 4 ulp (both use sqrt.approx; Fast's 1/r is rsqrt + Newton), g == 0
 // giving exactly (1, 0, f), and arguments outside the range (|f| ~ 2^120, 2^-140) taking the

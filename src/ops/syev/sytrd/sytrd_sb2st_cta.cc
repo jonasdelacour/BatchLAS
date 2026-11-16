@@ -8,7 +8,6 @@
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_cta_instantiations.hh>
 
-
 #include <batchlas/util/group-invoke.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <batchlas/device/sg_partition.hh>
@@ -32,7 +31,6 @@
 namespace batchlas::detail {
 
 namespace {
-
 
 template <typename T, int32_t P>
 class BtrdLowerSubgroupKernel;

@@ -540,7 +540,6 @@ inline constexpr std::string_view to_string(OrthoAlgorithm v) {
     return "OrthoAlgorithm(?)";
 }
 
-
 /// @brief Internal compute precision of a GEMM (the cuBLAS `cublasComputeType_t`).
 ///
 /// A request for the scalar's own precision (`Default`, or `F32` for float and complex<float>,

@@ -500,7 +500,6 @@ BATCHLAS_DEVICE_INLINE void larf(const Ex& ex, T tau, const V& vp, const MC& c) 
     }
 }
 
-
 // Register column form (xORG2L / larft's column step): c := (I - tau v v^H) c for c held in a
 // Frag (element r of the column in c[r], r < N), v read at every r < N (zero outside its support:
 // no predicate); v is read across owners (Published, or a unit_head of one).

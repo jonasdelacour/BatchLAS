@@ -373,7 +373,6 @@ Event launch_tiled(Queue& ctx,
         ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
-
 // ---- register-tiled (float) ------------------------------------------------------------
 
 enum Form { kNN, kNT, kTN, kTT };

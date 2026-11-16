@@ -20,7 +20,6 @@
 #include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/device/launch.hh>
 
-
 namespace batchlas {
 
 template <typename T, size_t P, bool Upper, bool Masked>
@@ -220,4 +219,3 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_CTA_INSTANTIATE)
 #undef SYTRD_CTA_INSTANTIATE
 
 }  // namespace batchlas
-

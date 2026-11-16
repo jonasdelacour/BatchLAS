@@ -154,7 +154,6 @@ inline Event posv(Queue& ctx,
     return posv<Back, T>(ctx, A, B, uplo, workspace, Span<int32_t>{});
 }
 
-
 BATCHLAS_DISPATCH_ON_QUEUE(posv)
 BATCHLAS_DISPATCH_ON_QUEUE(posv_buffer_size)
 

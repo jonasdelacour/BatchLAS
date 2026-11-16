@@ -103,7 +103,6 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
-
 // The labrd panel's work-group: a type, so every Cyclic loop strides by a constant.
 constexpr int32_t kPanelWG = 128;
 using PanelEx = device::WorkGroup<kPanelWG>;

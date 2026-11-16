@@ -20,8 +20,7 @@ namespace batchlas {
 /// @tparam T  element type (trivially copyable: growth uses memcpy)
 /// @ingroup api_matrix
 template <typename T>
-struct BATCHLAS_API UnifiedVector
-{
+struct BATCHLAS_API UnifiedVector {
     using value_type = T;        ///< Element type.
     using pointer = T*;          ///< Pointer to an element.
     using size_t = std::size_t;  ///< Size and index type.
@@ -122,7 +121,6 @@ struct BATCHLAS_API UnifiedVector
     inline constexpr size_t size() const { return size_; }           ///< Number of elements.
     inline constexpr size_t capacity() const { return capacity_; }   ///< Allocated elements.
 
-
     /// @brief Sets the size to 0 and keeps the allocation.
     inline constexpr void clear() { size_ = 0; }
 
@@ -172,7 +170,6 @@ struct BATCHLAS_API UnifiedVector
         }
         data_[size_++] = std::move(value);
     }
-
 
     /// @brief Removes and returns the last element; keeps the capacity. @pre `size() > 0`
     /// @return the removed element

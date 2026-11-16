@@ -137,7 +137,6 @@ TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
 TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
 TYPED_TEST_SUITE(GesvdGeneralComplexTest, GesvdHermitianComplexTestTypes);
 
-
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
@@ -1623,7 +1622,6 @@ TYPED_TEST(GesvdTest, BlockedUpperIgnoresTheLowerTriangle) {
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).

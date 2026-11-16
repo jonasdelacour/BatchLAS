@@ -79,7 +79,6 @@ Event lanczos(Queue& ctx,
     auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
     auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
 
-
     auto wg_init = std::min(size_t(n), get_kernel_max_wg_size<InitKernel<B, T, MF>>(ctx));
     auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, MF>>(ctx));
 
@@ -272,6 +271,5 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(LANCZOS_INSTANTIATE_FOR_TYPE)
 
 #undef LANCZOS_INSTANTIATE
 #undef LANCZOS_INSTANTIATE_FOR_TYPE
-
 
 }  // namespace batchlas

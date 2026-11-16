@@ -28,7 +28,6 @@ namespace batchlas {
 
 namespace {
 
-
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;
 template <Backend B, typename T> class BdsdcExtract;

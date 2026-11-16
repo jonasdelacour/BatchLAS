@@ -1288,7 +1288,6 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg)
     }
 }
 
-
 // The wide-scalar kernel's predicated leg on a SUB-VIEW: ragged extents AND a
 // leading dimension inherited from a 512-wide parent, with a row offset of 3 so
 // neither the base pointer nor the ld is 16-byte aligned for any scalar. This

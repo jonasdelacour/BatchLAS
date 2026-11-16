@@ -440,7 +440,6 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                     const size_t local_id = it.get_local_id(2);
                     const size_t group_size = it.get_local_range(2);
 
-
                     // Process consecutive rows within the same column for better coalescing
                     for (size_t r = local_id; r < rows; r += group_size) {
                         // In column-major format, row elements in the same column are contiguous
@@ -657,7 +656,6 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
     }
 }
 
-
 // Create a view of a subset of the matrix
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
@@ -672,7 +670,6 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
         throw batchlas::unsupported("Matrix::view: Submatrix views of CSR matrices not yet implemented");
     }
 }
-
 
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
@@ -2101,7 +2098,6 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
     }
 }
 
-
 // ----------------------------------------------------------------------
 // MatrixView class implementation - CSR format
 // ----------------------------------------------------------------------
@@ -2155,8 +2151,6 @@ MatrixView<T, MType>::MatrixView(
     }
     batch_mask_ = matrix.batch_mask_;
 }
-
-
 
 // Element access (for dense matrices)
 template <typename T, MatrixFormat MType>
@@ -2269,7 +2263,6 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
                 auto dest_view = dest.kernel_view();
                 auto src_view  = src.kernel_view();
-
 
                 batchlas::impl::parallel_for<CopyKernel3D<T, MType>>(h, sycl::nd_range<1>(global_size, local_size),
                                 [=](sycl::nd_item<1> it) {
@@ -2428,7 +2421,6 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
         // An inactive item compares true without being read.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("all_close", A, B));
 
-
         ctx -> submit([&](sycl::handler& h) {
             auto results = batch_results.data();
             auto Aview = A.kernel_view();
@@ -2554,7 +2546,6 @@ Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
         });
     }));
 }
-
 
 template <typename T, MatrixFormat MType>
 void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) const {
@@ -2731,7 +2722,6 @@ template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<d
 
 // ----------------------------------------------------------------------
 
-
 // fill instantiations
 template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
@@ -2839,7 +2829,6 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
     const VectorView<std::complex<double>>&, VectorOrientation);
 
-
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
     const MatrixView<float, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(
@@ -2879,6 +2868,5 @@ template const std::complex<double>& MatrixView<std::complex<double>, MatrixForm
 
 template const std::array<float, 2>& MatrixView<std::array<float, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const std::array<double, 2>& MatrixView<std::array<double, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
-
 
 } // namespace batchlas

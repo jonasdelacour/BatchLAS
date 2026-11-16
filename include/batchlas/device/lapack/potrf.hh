@@ -749,7 +749,6 @@ template <class MA> BATCHLAS_DEVICE_INLINE int ld_of(const MA& a) { return stati
 // The register tier's order ceiling per type (complex<double>: a 32-row RowFrag spills).
 template <class T> inline constexpr int reg_max_n = (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32;
 
-
 template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a, bool live) {
     using T = typename MA::value_type;
     static_assert(Ex::size == N, "potrf: tier::Reg<N> runs on a Partition<N> (one lane per row)");
@@ -790,7 +789,6 @@ BATCHLAS_DEVICE_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a
 template <class T> using PotrfBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
 inline constexpr int kBlockedWg = 256;
 static_assert(PotrfBlockedCfg<float>::threads == kBlockedWg);
-
 
 // One plan for size and carve. The L3 stage slot is first in every Cholesky-family plan, so
 // posv's potrs carves the same bytes potrf did (potrs.hh static_asserts it).

@@ -31,7 +31,6 @@ template <typename T, int NB> class GetrfPanelRegKernel;
 
 namespace {
 
-
 // A launch ABORT, not a slowdown, so every cap below is compile-time. The per-BLOCK file
 // is not what binds on sm_89: registers are owned per sub-partition, and the whole-block
 // spelling accepts launches the driver refuses.

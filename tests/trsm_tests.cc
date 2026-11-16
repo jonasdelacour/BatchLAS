@@ -365,7 +365,6 @@ TEST(TrsmNativeCta, LargestResidentOrder) {
     }
 }
 
-
 // V1's contract, n <= trsm_cta_max_n<T>(), is enforced rather than assumed: an
 // over-capacity order once truncated to the leading 32x32 solve in silence.
 // evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
@@ -391,7 +390,6 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
         << "n=33 exceeds the CTA capacity; silently solving 32 of 33 rows is the "
            "failure mode this guards";
 }
-
 
 // ===========================================================================
 // V2, the blocked driver: the same multiply-back oracle, with n past CTA capacity.
@@ -533,7 +531,6 @@ TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
             run_trsm_blocked<float>({48, q, 2, sd, Uplo::Lower, Transpose::Trans,
                                      Diag::NonUnit, 2.0f});
 }
-
 
 // ===========================================================================
 // Complex. Two paths reach nothing above, each a silent wrong answer: ConjTrans,
@@ -721,7 +718,6 @@ TEST(TrsmFloatLeftOrders, RightSideAlso) {
             run_trsm_blocked<float>({n, 24, 2, Side::Right, Uplo::Lower, tr,
                                      Diag::NonUnit, -0.75f});
 }
-
 
 // ===========================================================================
 // The Side::Left sub-group kernel: lane = (matrix, canonical row), 32/N matrices

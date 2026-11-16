@@ -43,7 +43,6 @@ using getrf_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
-
 /// @brief Validates the arguments of the positional getrf() entry point.
 ///
 /// Checks only non-negative extents. Squareness and the pivot span's length are
@@ -66,7 +65,6 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }
-
 
 /// @brief Batched LU factorization with partial pivoting.
 ///
@@ -146,7 +144,6 @@ BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of getrf(); called by getrf() when it selects the `vendor`
@@ -167,7 +164,6 @@ BATCHLAS_API Event getrf_vendor(Queue& ctx,
                                 Span<int64_t> pivots,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out);
-
 
 /// @brief Workspace query of the vendor arm of getrf().
 /// @param[in] ctx  queue the call will run on

@@ -342,7 +342,6 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
         << "omitting the workspace should lease one from the queue's arena";
 }
 
-
 // The positional potrf overload validated nothing: a non-square view reached the
 // backend, which factorised A.rows() x A.rows() out of it and read past the columns
 // it was given. Both entry points validate now, and they must agree --

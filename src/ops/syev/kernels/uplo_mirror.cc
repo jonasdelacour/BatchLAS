@@ -17,7 +17,6 @@
 
 namespace batchlas {
 
-
 namespace {
 template <Backend B, typename T> class UploMirrorUpperToLowerKernel;
 } // namespace

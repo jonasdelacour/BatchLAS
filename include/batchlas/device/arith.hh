@@ -417,7 +417,6 @@ template <class T, class S> BATCHLAS_DEVICE_INLINE T tag_mul(S s, T x) {
     else return Arith<T>::mul(static_cast<T>(s.v), x);
 }
 
-
 // ---- scalar helpers (design A.2 arith.hh) --------------------------------------------------
 // arith::FmaSplit: Arith<T> with msub(c, a, b) = sub(c, mul(a, b)): two roundings, never one
 // fma (the getrf / potri / getrs / jacobi hand form).

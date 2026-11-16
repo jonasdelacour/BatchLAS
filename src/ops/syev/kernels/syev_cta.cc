@@ -28,7 +28,6 @@
 
 namespace batchlas {
 
-
 namespace {
 
 // Diagnostics, not a safety override: it prints the stage name and drains the
@@ -95,7 +94,6 @@ Span<std::byte> ws_remaining(Span<std::byte> ws, std::size_t offset_bytes) {
     }
     return Span<std::byte>(ws.data() + offset_bytes, ws.size() - offset_bytes);
 }
-
 
 // The steqr parameters syev_cta solves its real tridiagonal with: back_transform off (the
 // SYTRD back-transform is explicit), the work-group multiplier wg_mult, and, when the caller

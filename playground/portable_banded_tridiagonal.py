@@ -740,4 +740,3 @@ def test_tridiagonalization():
 
 if __name__ == "__main__":
     test_tridiagonalization()
-

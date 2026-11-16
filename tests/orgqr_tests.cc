@@ -71,7 +71,6 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A, A.all_items()));
 }
 
-
 // ===========================================================================
 // WP5 -- ORGQR AGAINST A HOST REFERENCE.
 //
@@ -198,4 +197,3 @@ TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
     EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, Qv, Qv.all_items()));
     EXPECT_VERIFY(T, verify::Check::factorization, m, MV::qr_reconstruction(*this->ctx, A0v, Qv, Fv, Qv.all_items()));
 }
-

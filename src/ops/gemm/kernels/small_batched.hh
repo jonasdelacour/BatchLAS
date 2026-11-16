@@ -32,7 +32,6 @@
 
 namespace batchlas::ops::gemm {
 
-
 template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
 

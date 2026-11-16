@@ -40,7 +40,6 @@ template <typename T> using syev_vendor = syev<T>;
 template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 }  // namespace sig
 
-
 /// @brief Eigenvalues, and optionally eigenvectors, of a batch of symmetric/Hermitian
 ///        matrices (LAPACK `?syev` / `?heev`).
 ///
@@ -213,7 +212,6 @@ namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend(). See
 // BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)

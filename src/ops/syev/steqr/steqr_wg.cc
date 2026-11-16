@@ -22,7 +22,6 @@ namespace batchlas {
 
 namespace {
 
-
 template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
 

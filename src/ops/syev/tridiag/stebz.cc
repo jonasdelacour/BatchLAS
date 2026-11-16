@@ -31,7 +31,6 @@ namespace batchlas {
 template <Backend B, typename T>
 struct StebzKernel;
 
-
 template <Backend B, typename T>
 Event stebz(Queue& ctx,
             const VectorView<T>& d,

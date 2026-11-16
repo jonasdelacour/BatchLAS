@@ -38,8 +38,6 @@ void BM_GEMV(minibench::State& state) {
 
 }  // namespace
 
-
-
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMV, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

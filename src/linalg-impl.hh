@@ -45,14 +45,12 @@
 #include <rocsolver/rocsolver.h>
 #endif
 
-
 namespace batchlas{
 template <typename T, BackendLibrary B>
 struct BackendScalar;
 
 template <Backend B>
 struct LinalgHandle;
-
 
 // Helper type traits to identify our enum types
 template<typename T>
@@ -320,8 +318,7 @@ constexpr auto enum_convert(ComputePrecision precision) {
                 default:
                     throw batchlas::unsupported("enum_convert: Unsupported precision for single precision type");
             }
-        }
-        else if constexpr (std::is_same_v<BaseType, double>) {
+        } else if constexpr (std::is_same_v<BaseType, double>) {
             if (precision == ComputePrecision::F64) {
                 return CUBLAS_COMPUTE_64F;
             }
@@ -389,9 +386,6 @@ constexpr auto ptr_convert(T** ptr) {
         static_assert(always_false<B>::value, "Unsupported backend or type combination");
     }
 }
-
-
-
 
 template<BackendLibrary B, typename T>
 constexpr auto ptr_convert(T* ptr) {
@@ -666,7 +660,6 @@ namespace detail {
 
 }  // namespace detail
 
-
 // Variadic template for converting multiple enums
 /*     template <Backend B, typename... Args>
 auto enum_convert(Args&&... args) {
@@ -675,10 +668,6 @@ auto enum_convert(Args&&... args) {
     return std::make_tuple(enum_convert<B>(std::forward<Args>(args))...);
 }
 */
-
-
-
-
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     template <>
@@ -695,7 +684,6 @@ auto enum_convert(Args&&... args) {
     struct BackendScalar<float, BackendLibrary::CUSOLVER> {
         static constexpr cudaDataType_t type = CUDA_R_32F;
     };
-
 
     template <>
     struct BackendScalar<double, BackendLibrary::CUBLAS> {
@@ -843,7 +831,6 @@ auto enum_convert(Args&&... args) {
         LinalgHandle(LinalgHandle&& other) = delete;
         LinalgHandle& operator=(LinalgHandle&& other) = delete;
 
-
         ~LinalgHandle() {
             cudaDeviceSynchronize();
             auto blas_status = cublasDestroy(blas_handle_);
@@ -948,7 +935,6 @@ struct LinalgHandle<Backend::NETLIB>{
     void setStream(const Queue& ctx) {}
 };
 #endif
-
 
 template <typename KernelName>
 size_t get_kernel_max_wg_size(const Queue& ctx){

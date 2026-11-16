@@ -46,8 +46,6 @@ void BM_ORMQR(minibench::State& state) {
 
 }  // namespace
 
-
-
 BATCHLAS_REGISTER_BENCHMARK(BM_ORMQR, SquareBatchSizes);
 
 MINI_BENCHMARK_MAIN();

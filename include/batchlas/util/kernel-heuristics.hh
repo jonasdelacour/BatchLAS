@@ -185,8 +185,6 @@ inline BatchedNdRangeSizes compute_batched_nd_range_sizes(size_t total_work,
 
     auto L2_cache_size = device.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE); // L2 cache size
 
-
-
     size_t local_size;
     if (preferred_wg_size > 0) {
         local_size = preferred_wg_size;
@@ -258,8 +256,7 @@ inline BatchedMatrixDecomposition compute_batched_matrix_decomposition(
     size_t elements_per_matrix,
     const Device& device,
     KernelType kernel_type,
-    size_t preferred_wg_size = 0)
-{
+    size_t preferred_wg_size = 0) {
     const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
 
     size_t local_size = preferred_wg_size > 0

@@ -45,7 +45,6 @@ using getri_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
-
 /// @brief Validates A for getri_buffer_size(): non-negative extents only.
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] A  batch of LU factors getri_buffer_size() will get; only the extents are read
@@ -85,7 +84,6 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
         throw batchlas::invalid_argument("getri: C aliases A; getri is out of place");
     }
 }
-
 
 /// @brief Batched inverse \f$ C = A^{-1} \f$ from the LU factors produced by getrf().
 ///
@@ -153,7 +151,6 @@ BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of getri(); called by getri() when it selects the `vendor`
@@ -176,7 +173,6 @@ BATCHLAS_API Event getri_vendor(Queue& ctx,
                                 Span<int64_t> pivots,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out);
-
 
 /// @brief Workspace query of the vendor arm of getri().
 /// @param[in] ctx  queue the call will run on

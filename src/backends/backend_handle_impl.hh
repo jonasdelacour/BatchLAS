@@ -113,5 +113,4 @@ std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixV
     return std::make_shared<BackendMatrixHandle<T, MType>>(view);
 }
 
-
 } // namespace batchlas

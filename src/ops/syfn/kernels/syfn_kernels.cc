@@ -18,7 +18,6 @@
 
 namespace batchlas::ops::syfn {
 
-
 template <Backend B, typename T>
 struct WeightsKernel {};
 template <Backend B, typename T>

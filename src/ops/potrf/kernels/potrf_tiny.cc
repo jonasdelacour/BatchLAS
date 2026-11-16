@@ -42,7 +42,6 @@ namespace ops::potrf {
 
 namespace {
 
-
 using tiny_native::kTinySubGroupSize;
 using resident::kTinyWgSize;
 

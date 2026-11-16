@@ -227,8 +227,6 @@ bool Span<T>::operator==(const Span<T> other) const {
     return true;
 }
 
-
-
 template struct UnifiedVector<int8_t>;
 template struct UnifiedVector<int16_t>;
 template struct UnifiedVector<int32_t>;
@@ -320,7 +318,6 @@ template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::arr
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t,6>>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t,6>>& vec);
 
-
 template std::ostream& operator<<(std::ostream& os, const Span<float>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<double>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<std::complex<float>>& vec);
@@ -341,6 +338,5 @@ template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16
 template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t,3>>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t,6>>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t,6>>& vec);
-
 
 }  // namespace batchlas

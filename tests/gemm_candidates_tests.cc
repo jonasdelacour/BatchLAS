@@ -1110,8 +1110,7 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
                 if (const auto* w = std::get_if<og::Wide>(&c);
-                    w && wide_v2<T>(*wide_row(*w)) && oracle_native<T>(c, ta, tb, 160, 136, 48))
-                {
+                    w && wide_v2<T>(*wide_row(*w)) && oracle_native<T>(c, ta, tb, 160, 136, 48)) {
                     for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
                         Spec s{ta, tb, 160, 136, 48, 2, la};
                         if (lb != la) s.layout_b = lb;
@@ -2052,7 +2051,6 @@ TYPED_TEST(GemmCandidates, SplitKGridCeilingIsServedByBatchChunking) {
     }
 }
 
-
 // WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
 // on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
 // 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
@@ -2140,7 +2138,6 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
     EXPECT_GT(leg_ran, 0);
     EXPECT_EQ(nan_checked, forms);
 }
-
 
 // WP-D, wide v2 (64x64x16: float, complex<float>, since WP-J complex<double>) in all 9 forms at
 // batch 1024, 7 distinct problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1

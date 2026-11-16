@@ -405,7 +405,6 @@ TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
     EXPECT_EQ(tie_rule_problems(edge), std::vector<std::string>{"line 5: tied entries out of candidate order"});
 }
 
-
 // One dtype's table of the embedded tuned/<op>.<device>.txt.
 const sel::Table& embedded(const std::string& op, const std::string& dtype, const std::string& device) {
     static std::map<std::string, sel::Table> cache;
@@ -705,7 +704,6 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
         EXPECT_EQ(a.rows.size(), want.size()) << dt;
         }
 }
-
 
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription on sm_89 holds exactly that grid, both sides, N/T/C.

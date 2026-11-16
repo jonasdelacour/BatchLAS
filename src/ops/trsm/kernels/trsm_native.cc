@@ -29,7 +29,6 @@
 
 namespace batchlas::ops::trsm {
 
-
 namespace {
 
 // Smallest compile-time bucket >= n, or 0 for none: a narrower bucket would
@@ -424,6 +423,5 @@ template Event trsm_native_blocked<std::complex<double>>(
     Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
     Side, Uplo, Transpose, Diag, TrsmTrailingGemm<std::complex<double>>);
-
 
 }  // namespace batchlas::ops::trsm

@@ -217,7 +217,6 @@ template <class T> class DeviceApiSy2sbTest : public DeviceCoreTest<T> {};
 // device; there sy2sb's workspace sizing and sb2st's sub-group kernel are missing).
 bool host_reference_runs(Dev& dev) { return dev.q().get_device().is_gpu(); }
 
-
 TYPED_TEST_SUITE(DeviceApiSy2sbTest, AllTypes);
 
 struct Case {

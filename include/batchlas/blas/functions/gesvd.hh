@@ -321,12 +321,10 @@ BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
 
 } // namespace batchlas::backend
 
-
 namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend(). See
 // BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_buffer_size)

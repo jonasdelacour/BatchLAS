@@ -40,7 +40,6 @@ namespace detail {
 
 namespace {
 
-
 template <Backend B, typename T>
 class Sb2stHhChaseKernel;
 

@@ -40,7 +40,6 @@ int LAPACKE_clarfg(int, std::complex<float>*, std::complex<float>*, int, std::co
 int LAPACKE_zlarfg(int, std::complex<double>*, std::complex<double>*, int, std::complex<double>*);
 }
 
-
 using batchlas::verify::Check;
 
 namespace {

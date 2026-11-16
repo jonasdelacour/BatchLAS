@@ -48,7 +48,6 @@ using getrs_vendor_buffer_size = size_t(Queue&,
                                         Transpose);
 }  // namespace sig
 
-
 /// @brief Validates the arguments of the positional getrs() entry point.
 ///
 /// Checks only non-negative extents. Squareness of A, `A.rows() == B.rows()`,
@@ -73,7 +72,6 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
             ", cols=" + std::to_string(B.cols()) + ")");
     }
 }
-
 
 /// @brief Batched solve of \f$ \mathrm{op}(A) X = B \f$ using the LU factors from getrf().
 ///
@@ -126,7 +124,6 @@ BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 /// @brief Vendor arm of getrs(); called by getrs() when it selects the `vendor`
@@ -150,7 +147,6 @@ BATCHLAS_API Event getrs_vendor(Queue& ctx,
                                 Transpose transA,
                                 Span<int64_t> pivots,
                                 Span<std::byte> workspace);
-
 
 /// @brief Workspace query of the vendor arm of getrs().
 /// @tparam Back  backend

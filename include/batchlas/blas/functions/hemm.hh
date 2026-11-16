@@ -32,7 +32,6 @@ using hemm_vendor = Event(Queue&,
                           Uplo);
 }  // namespace sig
 
-
 /// @brief Batched Hermitian matrix-matrix multiply.
 ///
 /// For every batch item computes
@@ -87,7 +86,6 @@ BATCHLAS_API Event hemm(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
@@ -126,7 +124,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(hemm)
 

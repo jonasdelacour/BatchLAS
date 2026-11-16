@@ -177,7 +177,6 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
 
-
     // CTA backend: choose an optimal compile-time partition size P in {4,8,16,32}.
     // Requires warp-sized sub-groups (32) on NVIDIA.
     if (n < 1 || n > 32) {

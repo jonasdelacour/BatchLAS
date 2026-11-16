@@ -22,7 +22,6 @@ namespace batchlas::ops::sygst {
 
 namespace {
 
-
 template <typename D, bool Inverse, int KB> class SygstDiagKernel;
 template <typename D> class SygstMirrorKernel;
 

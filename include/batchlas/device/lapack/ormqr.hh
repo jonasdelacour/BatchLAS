@@ -41,7 +41,6 @@ template <Side SD, int NB, class Cfg, class T> constexpr WorkspaceSize ormqr_siz
     return p.size();
 }
 
-
 // The blocks in application order: forward for Q^H C and C Q, backward for Q C and C Q^H.
 template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class T>
 BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a, const l3::Global<T>& c, int k, const T* tau,

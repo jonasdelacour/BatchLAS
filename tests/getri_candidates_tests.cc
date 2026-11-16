@@ -55,7 +55,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;

@@ -146,7 +146,6 @@ inline Event gesv(Queue& ctx,
     return gesv<Back, T>(ctx, A, B, pivots, workspace, Span<int32_t>{});
 }
 
-
 BATCHLAS_DISPATCH_ON_QUEUE(gesv)
 BATCHLAS_DISPATCH_ON_QUEUE(gesv_buffer_size)
 

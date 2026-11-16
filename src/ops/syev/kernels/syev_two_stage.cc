@@ -426,7 +426,6 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
                                   1,
                                   tau_sy2sb_n);
 
-
     bytes += sytrd_sy2sb_buffer_size<B, T>(ctx, a, ab_dummy, tau_sy2sb_dummy, uplo, kd);
     bytes += stedc_buffer_size<B, Real>(ctx,
                                            static_cast<std::size_t>(n),

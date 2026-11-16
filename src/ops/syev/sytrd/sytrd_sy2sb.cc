@@ -33,7 +33,6 @@ namespace batchlas {
 
 namespace {
 
-
 // ---------------------------------------------------------------------------
 // WY block width for the panel back-transform. ormqr keys its block width on the
 // panel HEIGHT, but the dimension that matters is k = kd; nb = kd wins only where
@@ -412,7 +411,6 @@ Event sytrd_sy2sb(Queue& ctx,
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, ormqr_l_ws_bytes);
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
     const auto update_ws = Sy2sbUpdateScratch<T>::allocate(ctx, pool, pn0, pk0, batch);
-
 
     // Main loop: i advances in blocks of kd.
     for (int i = 0; i <= n - kd_i - 1; i += kd_i) {

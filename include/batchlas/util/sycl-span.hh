@@ -36,8 +36,7 @@ struct is_std_array<std::array<T, N>> : std::true_type {};
 // The out-of-line members (USM advice calls, operator==) are explicitly instantiated in
 // src/util/sycl-util-impl.cc, so Span crosses the shared-library boundary like Matrix.
 template <typename T>
-struct BATCHLAS_API Span
-{
+struct BATCHLAS_API Span {
     using value_type = T;        ///< Element type.
     using pointer = T*;          ///< Pointer to an element.
     using size_t = std::size_t;  ///< Size and index type.
@@ -191,4 +190,3 @@ Span(T&) -> Span<T>;
 using batchlas::Span;
 using batchlas::is_std_array;
 #endif
-

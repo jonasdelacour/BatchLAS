@@ -963,7 +963,6 @@ struct WgBlock {
     std::int32_t lo, hi, qr, run, rot;
 };
 
-
 // The Blocked tier's workspace, all global: one sweep's rotations (n - 1, with vectors) and the
 // block table (at most n / 2 + 1 blocks of length >= 2).
 template <bool Vecs, class T> struct wg_plan {

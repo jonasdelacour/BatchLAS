@@ -45,7 +45,6 @@
 
 namespace batchlas {
 
-
 } // namespace batchlas
 
 // Last: the option overloads name every positional declaration above.

@@ -71,7 +71,6 @@ TEST (MatrixDenseTest, StridedConstruction) {
     }
 }
 
-
 TEST (MatrixDenseTest, StridedIdentity) {
     constexpr int n = 4;
     constexpr int batch = 2;

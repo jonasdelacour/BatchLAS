@@ -11,8 +11,7 @@
 /// @brief Matrix norms, condition numbers, conditioned test-matrix generators and transpose.
 /// @ingroup api_extra
 
-namespace batchlas
-{
+namespace batchlas {
 
 /// @addtogroup api_extra
 /// @{

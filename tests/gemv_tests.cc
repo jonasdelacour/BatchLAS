@@ -145,7 +145,6 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
     EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::Trans), 0.0);
 }
 
-
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
@@ -218,8 +217,6 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
                         this->gemv_error(A_view, x_vec, y0_vec, y_vec, alpha, beta, Transpose::NoTrans),
                         vendor_comparison_slack<ScalarType>(this->cols));
 }
-
-
 
 // Coverage fixture: non-square, ld-padded, inc-strided, ConjTrans and genuinely complex
 // data, none of which GemvMatrixViewTest above (fixed 10x10, inc == 1) reaches.
@@ -766,7 +763,6 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
     this->run_case(c);
 }
 
-
 // Body 5, the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate is on
 // red_len (= m under Trans/ConjTrans), not out_len as body 4's is, and it is per scalar
 // type: float <= 32, cfloat <= 16, double <= 48, cdouble <= 64. Bodies 3 and 5 both
@@ -947,7 +943,6 @@ TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStrideWideBand) {
     c.stride_pad = 23;
     this->run_case(c);
 }
-
 
 // Gate 3, the parallelism condition, on both sides.
 // evidence: docs/perf/gemv.md#the-body-5-gates

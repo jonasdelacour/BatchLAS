@@ -132,5 +132,4 @@ inline void lift_eigvecs_with_phase(Queue& ctx,
     });
 }
 
-
 } // namespace batchlas::two_stage_detail

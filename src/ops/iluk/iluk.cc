@@ -25,7 +25,6 @@
 namespace batchlas {
 namespace {
 
-
 template <typename T>
 using RealT = typename base_type<T>::type;
 

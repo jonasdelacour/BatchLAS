@@ -192,7 +192,6 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(c));
 }
 
-
 TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
@@ -206,7 +205,6 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     Vector<float_type> eigenvalues = Vector<float_type>::zeros(n, batch);
     auto dense_A = Matrix<float_type>::Zeros(n, n, batch);
     dense_A.fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
-
 
     auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
     SteqrParams<float_type> params= {};
@@ -679,7 +677,6 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
         throw;
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).
