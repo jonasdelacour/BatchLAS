@@ -34,7 +34,7 @@ sytrd_cta_tests
 util_device_queue_tests
 
 # --- tuned table content, not this box ------------------------------------------------------------
-# gemm.sm_120.txt has 0 timed double rows (tests/tuned_tables_tests.cc:481). Host-independent:
+# gemm.sm_120.txt has 0 timed double rows (tests/tuned_tables_tests.cc:480). Host-independent:
 # move to tests/known-failures.txt or retune, but CI runs no ctest, so it was first seen here.
 tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger
 

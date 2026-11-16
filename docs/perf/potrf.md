@@ -197,7 +197,7 @@ double 1.13-1.19x, cfloat 1.91x, cdouble 2.69x (\f$n = 512\f$).
 ## potrf: correctness findings {#potrf-correctness-findings}
 
 1. **The panel trsm raced on multi-sub-group work-groups.** The trsm CTA kernel staged its triangle lane-strided and read
-   the diagonal back with no barrier (`src/ops/trsm/kernels/trsm_native.cc:186` now has it). Every earlier test ran at
+   the diagonal back with no barrier (`src/ops/trsm/kernels/trsm_native.cc:185` now has it). Every earlier test ran at
    `wg = 32`, where the race cannot show. Guard: `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`.
 2. **`beta = 0` must not read C.** The \f$W \times W\f$ diagonal gemm writes uninitialised `ws.product` with `beta = 0`; a native
    epilogue that reads `prior` turns `0 * NaN` into NaN. Fixed in the gemm epilogues
@@ -342,7 +342,7 @@ Lower.
 Gate: frame 0, spill 0, `regs x 64 <= 65536`. `BATCHLAS_BUILD_DIR=<tree> scripts/register_probe.sh out.log ''
 batchlas_extensions_cta` (sm_89; the link takes about 340 s). Every cell has frame 0 and spill 0; registers at \f$N = 8 / 16 / 32\f$:
 float 54 / 64 / 78, double 70 / 82 / 104, cfloat 64 / 112 / **166**, cdouble 84 / 128 / not instantiated.
-`kTinyWorstProbedRegs = 176` with `static_assert(resident::sm89_fits(...))` (`potrf_tiny.cc:54-55`) makes widening the
+`kTinyWorstProbedRegs = 176` with `static_assert(resident::sm89_fits(...))` (`potrf_tiny.cc:53-54`) makes widening the
 work-group a compile error. cfloat \f$N = 32\f$ (6 blocks/SM, 12 resident matrices) is the first cell to check in any grid.
 
 ### The shared tiny-tier invariants {#the-shared-tiny-tier-invariants}

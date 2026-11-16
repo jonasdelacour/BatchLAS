@@ -112,7 +112,7 @@ static_assert(std::is_base_of_v<std::runtime_error, batchlas::workspace_error>);
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::convergence_error>);
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::internal_error>);
 // api_misuse and internal_error stay under std::runtime_error deliberately.
-// tests/mempool_tests.cc:1116 and :1131 catch std::runtime_error around
+// tests/mempool_tests.cc:1120 and :1131 catch std::runtime_error around
 // src/queue.hh:54 (a Queue used from a foreign thread, an api_misuse site), and
 // the second does so inside a std::thread lambda -- if that throw stops matching
 // there it does not fail an assertion, it terminates the test binary.
@@ -340,7 +340,7 @@ TEST(NoRoute, IsUnsupported) {
 // THE REGRESSION THESE CATCH -- the proof.
 //
 // Take MatrixViewRejectsShortLeadingDimension below and revert its site
-// (src/matrix.cc:1881) to `std::invalid_argument`, the pre-migration spelling.
+// (src/matrix.cc:1878) to `std::invalid_argument`, the pre-migration spelling.
 // Reading the assertions in expect_three_way_catch against that:
 //
 //   * r.specific -- the handler is `catch (const batchlas::invalid_argument&)`
@@ -365,7 +365,7 @@ TEST(NoRoute, IsUnsupported) {
 // ---------------------------------------------------------------------------
 
 TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
-    // src/matrix.cc:1881 -- "leading dimension N is smaller than the row count M".
+    // src/matrix.cc:1878 -- "leading dimension N is smaller than the row count M".
     // Pure host validation inside the MatrixView constructor: the buffer is
     // described, never read.
     std::vector<float> buffer(64, 0.0f);
@@ -379,7 +379,7 @@ TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
 }
 
 TEST(ErrorModelSites, MatrixViewElementAccessOutOfRange) {
-    // src/matrix.cc:1985 / :2006 -- MatrixView::at(row, col, batch), reached
+    // src/matrix.cc:1982 / :2006 -- MatrixView::at(row, col, batch), reached
     // through operator(). Two of the 5 sites that stay on std::out_of_range's
     // side of the hierarchy so Python element access keeps raising IndexError.
     std::vector<float> buffer(64, 0.0f);
@@ -432,7 +432,7 @@ TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
 // Message text other tests match on.
 //
 // Two live catch sites assert on the TEXT of a message, not only its type
-// (tests/matrix_tests.cc:1077, tests/options_api_tests.cc:593; the syr2k and trmm
+// (tests/matrix_tests.cc:1075, tests/options_api_tests.cc:592; the syr2k and trmm
 // cuBLASDx sites went with cuBLASDx). A type migration must not reword them. Only
 // the one needing no queue and no device is re-checked here; the other is guarded
 // where it lives.

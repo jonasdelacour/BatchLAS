@@ -798,7 +798,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
 // failure on the SAME input and asserts the opposite direction.
 //
 // The knob is SteqrParams::max_sweeps, and 1 rather than a "reduced" value such
-// as 50, for a reason: syev_cta.cc:178-181 and syev_cta_fused.cc:555-558 silently
+// as 50, for a reason: syev_cta.cc:176-179 and syev_cta_fused.cc:555-558 silently
 // REWRITE max_sweeps to 400 whenever a caller leaves it at the default 50, so a
 // test that lowered the cap to that default would be answered by 400 and pass
 // vacuously. Calling steqr directly avoids the rewrite; 1 escapes it regardless.

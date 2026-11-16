@@ -597,7 +597,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         << "this test's local-memory formula is not the library's; every byte "
            "count below names some other size and the ladder proves nothing";
 
-    // The hole band's endpoints, from getrf_cta.cc:137-139.
+    // The hole band's endpoints, from getrf_cta.cc:136-138.
     constexpr std::size_t kLo = 47104, kHi = 49664, kPadTo = 49920;
 
     struct Row { std::size_t bytes; int m, n; };
@@ -2413,7 +2413,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
             << "getri must refuse C aliasing A: C is zeroed before A's triangles are read";
         // A DISTINCT C, so the alias gate above cannot fire first. Passing A as
         // both operands made this assertion vacuous: it threw on the aliasing
-        // check at getri_blocked.cc:194 and never reached the empty-seam refusal
+        // check at getri_blocked.cc:192 and never reached the empty-seam refusal
         // at :204, so deleting that refusal entirely left the test green -- and a
         // direct caller that forgot the injection would then call an empty
         // std::function rather than getting a diagnostic.

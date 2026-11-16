@@ -1278,7 +1278,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     EXPECT_LT(s1, s2)
         << "the n <= nb single-block case draws the same workspace as the multi-block "
            "case, so the W x W x batch trailing scratch is being allocated for callers "
-           "that never reach the trailing update (ortho.cc:79 is one)";
+           "that never reach the trailing update (ortho.cc:78 is one)";
 
     for (int n : {nb, cap}) {
         if (n < 1) continue;

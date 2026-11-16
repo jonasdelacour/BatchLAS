@@ -18,7 +18,7 @@ T = \operatorname{diag}(\hat T_1, \hat T_2) + |\beta|\, u u^T, \qquad
 \hat T_2 = T_{m+1:n,m+1:n} - |\beta|\,\mathbf{e}_1 \mathbf{e}_1^T
 \f]
 
-([`src/ops/syev/stedc/stedc.cc:560-584`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L560-L584)). With \f$\hat T_i = Q_i \Lambda_i Q_i^T\f$ and
+([`src/ops/syev/stedc/stedc.cc:553-577`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L560-L584)). With \f$\hat T_i = Q_i \Lambda_i Q_i^T\f$ and
 \f$Q = \operatorname{diag}(Q_1, Q_2)\f$,
 
 \f[
@@ -28,26 +28,26 @@ z = \tfrac{1}{\sqrt 2}\begin{bmatrix} Q_1^T \mathbf{e}_m \\ \operatorname{sgn}(\
 \sigma = 2|\beta|,
 \f]
 
-and \f$\|z\|_2 = 1\f$ ([`src/ops/syev/stedc/stedc.cc:180-187`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L180-L187)). The poles \f$d_i\f$ are sorted
-ascending, permuting \f$z\f$ and a column map alike ([`src/ops/syev/stedc/stedc.cc:192-194`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L192-L194)).
+and \f$\|z\|_2 = 1\f$ ([`src/ops/syev/stedc/stedc.cc:178-185`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L180-L187)). The poles \f$d_i\f$ are sorted
+ascending, permuting \f$z\f$ and a column map alike ([`src/ops/syev/stedc/stedc.cc:190-192`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L192-L194)).
 
 ## stedc: two deflation tests
 
 Both use \f$\theta = 8\varepsilon \max(\max_i |d_i|, \max_i |z_i|)\f$
-([`src/ops/syev/stedc/stedc.cc:229-239`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L229-L239)), the tolerance of `dlaed2` [5].
+([`src/ops/syev/stedc/stedc.cc:227-237`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L229-L239)), the tolerance of `dlaed2` [5].
 
 - **Close poles.** For \f$j = 1, \dots, n-1\f$ in order, if \f$|d_{j+1} - d_j| \le \theta\f$, the
   Givens pair from `lartg`\f$(z_{j+1}, z_j)\f$ sets \f$z_j \leftarrow 0\f$,
   \f$z_{j+1} \leftarrow (z_j^2 + z_{j+1}^2)^{1/2}\f$ and rotates columns
   \f$(Q_{:,j}, Q_{:,j+1}) \leftarrow (c Q_{:,j} - s Q_{:,j+1},\; s Q_{:,j} + c Q_{:,j+1})\f$
-  ([`src/ops/syev/stedc/stedc.cc:241-264`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L241-L264)). \f$d\f$ is not rotated (an \f$O(\theta)\f$
+  ([`src/ops/syev/stedc/stedc.cc:239-261`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L241-L264)). \f$d\f$ is not rotated (an \f$O(\theta)\f$
   perturbation); `dlaed2` rotates it [5].
 - **Small weight.** Pole \f$i\f$ is kept iff \f$|\beta|\,|z_i| > \theta\f$
-  ([`src/ops/syev/stedc/stedc.cc:283-289`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L283-L289)), i.e. \f$\sigma|z_i| > 2\theta\f$: twice `dlaed2`'s
+  ([`src/ops/syev/stedc/stedc.cc:279-285`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L283-L289)), i.e. \f$\sigma|z_i| > 2\theta\f$: twice `dlaed2`'s
   threshold [5].
 
 A deflated \f$(d_i, Q_{:,i})\f$ is an eigenpair to \f$O(\theta)\f$. The \f$k\f$ kept poles go first,
-in order ([`src/ops/syev/stedc/stedc.cc:294-317`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L294-L317)). \f$\theta\f$ mixes \f$d\f$ (units of \f$T\f$) with
+in order ([`src/ops/syev/stedc/stedc.cc:290-312`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L294-L317)). \f$\theta\f$ mixes \f$d\f$ (units of \f$T\f$) with
 unitless \f$z\f$, so it presumes \f$\|T\|_{\max} \approx 1\f$; `dstedc` scales \f$T\f$ first [5],
 BatchLAS does not, and over-deflates when \f$\|T\| \ll 1\f$.
 
@@ -63,7 +63,7 @@ d_1 < \lambda_1 < d_2 < \dots < d_k < \lambda_k \le d_k + \sigma,
 with eigenvectors \f$q_j \propto (D - \lambda_j I)^{-1} z\f$. With \f$\lambda_j = o + \tau_j\f$ about a
 pole \f$o\f$, \f$\delta_{ij} = d_i - \lambda_j\f$ is formed as \f$(d_i - o) - \tau_j\f$, so
 \f$\delta_{oj} = -\tau_j\f$ exactly
-([`src/ops/syev/stedc/stedc_merge_cta.cc:184-201`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L184-L201), [`623-629`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L623-L629)).
+([`src/ops/syev/stedc/stedc_merge_cta.cc:183-200`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L184-L201), [`623-629`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L623-L629)).
 
 ## stedc: the rational root iteration
 
@@ -81,7 +81,7 @@ The GPU solver is rocSOLVER's `seq_solve`/`seq_solve_ext` [6]: `dlaed4` [5] with
 3. **Step.** \f$\eta\f$ solves \f$C\eta^2 - A\eta + B = 0\f$ with
    \f$A = (\delta_j + \delta_{j+1}) g - \delta_j \delta_{j+1} g'\f$,
    \f$B = \delta_j \delta_{j+1} g\f$ and \f$C\f$ from Li's fixed-weight or middle-way scheme [4]
-   ([`src/ops/syev/stedc/stedc_merge_cta.cc:235-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L235-L273)):
+   ([`src/ops/syev/stedc/stedc_merge_cta.cc:234-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L235-L273)):
 
    \f[
    C_{\text{fw}} = g - \delta_{j+1} g' - (d_j - d_{j+1}) \frac{z_j^2}{\delta_j^2} \;\; (o = d_j), \qquad
@@ -116,7 +116,7 @@ eigenvalues of \f$D + \sigma \tilde z \tilde z^T\f$, where by Löwner's identity
 
 The kernels form \f$|\tilde z_i| \propto |\delta_{ii} \prod_{j \ne i} \delta_{ij}/(d_i - d_j)|^{1/2}\f$,
 paired as in `dlaed3` [5], dropping \f$\sigma^{-1/2}\f$, which normalization absorbs
-([`src/ops/syev/stedc/stedc.cc:398-421`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L398-L421); fused kernels:
+([`src/ops/syev/stedc/stedc.cc:392-415`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L398-L421); fused kernels:
 [`src/ops/syev/stedc/stedc_merge_kernels.hh:63-125`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_kernels.hh#L63-L125), skipped if `enable_rescale` is off). Then
 
 \f[
@@ -124,7 +124,7 @@ paired as in `dlaed3` [5], dropping \f$\sigma^{-1/2}\f$, which normalization abs
 \qquad (\tilde q_j)_i \propto \tilde z_i / \delta_{ij}
 \f]
 
-([`src/ops/syev/stedc/stedc.cc:438-450`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L438-L450); [`src/ops/syev/stedc/stedc_merge_cta.cc:719-753`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L719-L753), scaled
+([`src/ops/syev/stedc/stedc.cc:432-444`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L438-L450); [`src/ops/syev/stedc/stedc_merge_cta.cc:719-753`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L719-L753), scaled
 norm [`636-713`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L636-L713)). As exact eigenvectors of a nearby matrix, the \f$\tilde q_j\f$ are orthogonal to
 working accuracy however close the roots; with deflation the method is backward stable [3] (for
 \f$\|T\|_{\max} \approx 1\f$).
@@ -133,7 +133,7 @@ working accuracy however close the roots; with deflation the method is backward 
 
 With \f$W = [\tilde q_1, \dots, \tilde q_k]\f$, \f$G\f$ the deflation rotations, \f$\Pi\f$ the sort
 and deflation permutations and \f$\Pi_\lambda\f$ the final eigenvalue sort
-([`src/ops/syev/stedc/stedc.cc:467-468`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L467-L468)),
+([`src/ops/syev/stedc/stedc.cc:461-462`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L467-L468)),
 
 \f[
 V = (Q G \Pi)\,(W \oplus I_{n-k})\, \Pi_\lambda .
@@ -141,20 +141,20 @@ V = (Q G \Pi)\,(W \oplus I_{n-k})\, \Pi_\lambda .
 
 As \f$A(W \oplus I) = [A_{:,1:k} W \mid A_{:,k+1:n}]\f$, for \f$n \ge 512\f$ and
 \f$k_{\max} = \max_{\text{batch}} k \le 0.75n\f$ the GEMM narrows to \f$k_{\max}\f$ columns
-([`src/ops/syev/stedc/stedc.cc:492-515`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L492-L515)). Level-driver merges below the root write through
-even/odd views with two GEMMs and never narrow ([`src/ops/syev/stedc/stedc.cc:476-490`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L476-L490)).
+([`src/ops/syev/stedc/stedc.cc:486-509`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L492-L515)). Level-driver merges below the root write through
+even/odd views with two GEMMs and never narrow ([`src/ops/syev/stedc/stedc.cc:470-484`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L476-L490)).
 
 ## stedc: recursive and level drivers
 
-- **Recursive** ([`src/ops/syev/stedc/stedc.cc:551-603`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L551-L603)): `steqr` (sorted) if \f$n \le n_0\f$, else
+- **Recursive** ([`src/ops/syev/stedc/stedc.cc:545-596`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L551-L603)): `steqr` (sorted) if \f$n \le n_0\f$, else
   tear, recurse on both halves, merge; one launch chain per node.
 - **Level-synchronous**: `plan_stedc_levels` picks \f$L\f$ and leaf \f$\ell = \lceil n/2^L \rceil\f$
   with \f$\max(2, n_0/2) \le \ell \le n_0\f$, least padding of \f$N = \ell\, 2^L\f$, ties toward
   \f$\ell = n_0\f$ ([`src/ops/syev/stedc/stedc_levels_plan.hh:29-46`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_levels_plan.hh#L29-L46)). Pad rows \f$i \in [n, N)\f$
   (0-based) get \f$b_i = 0\f$, \f$a_i = 2\gamma + 1 + (i - n)\f$ (\f$\gamma\f$ the Gershgorin
   bound): they sort last, \f$V_{1:n,1:n}\f$ is the answer, and they enlarge \f$\theta\f$ in the merges
-  holding them ([`src/ops/syev/stedc/stedc.cc:779-797`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L779-L797)). All tearings are applied in one pass
-  ([`src/ops/syev/stedc/stedc.cc:805-818`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L805-L818)), one `steqr` call solves all \f$2^L\f$ leaves ([`924`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L924)), and
+  holding them ([`src/ops/syev/stedc/stedc.cc:772-790`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L779-L797)). All tearings are applied in one pass
+  ([`src/ops/syev/stedc/stedc.cc:798-811`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L805-L818)), one `steqr` call solves all \f$2^L\f$ leaves ([`924`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L924)), and
   level \f$l\f$ merges its \f$2^l\f$ nodes per item in one launch ([`941-971`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L941-L971)).
 
 ## stedc: routes and merge kernels
@@ -172,12 +172,12 @@ even/odd views with two GEMMs and never narrow ([`src/ops/syev/stedc/stedc.cc:47
 On GPU, \f$n_0\f$, `merge_variant` (default `FusedCta`) and lanes per root \f$p\f$ come from
 [`tuning_params.hh:107-128`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/include/batchlas/tuning_params.hh#L107-L128). Elsewhere the merge is `Baseline` and \f$n_0 = 1\f$ unless
 `recursion_threshold` is set, so \f$L = 0\f$ and recursion runs to \f$1 \times 1\f$ leaves
-([`src/ops/syev/stedc/stedc.cc:49-58`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L49-L58)).
+([`src/ops/syev/stedc/stedc.cc:48-57`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L49-L58)).
 
 | Merge | Code | Per node |
 | --- | --- | --- |
-| `Baseline` | [`src/ops/syev/stedc/stedc.cc:345-452`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L345-L452) | thread per root |
-| `Fused`; `FusedCta` without sub-group 32 | [`src/ops/syev/stedc/stedc_merge_kernels.cc:21-108`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_kernels.cc#L21-L108) | thread per root |
+| `Baseline` | [`src/ops/syev/stedc/stedc.cc:340-446`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc.cc#L345-L452) | thread per root |
+| `Fused`; `FusedCta` without sub-group 32 | [`src/ops/syev/stedc/stedc_merge_kernels.cc:20-107`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_kernels.cc#L21-L108) | thread per root |
 | `FusedCta`, \f$p \le 32\f$ | [`src/ops/syev/stedc/stedc_merge_cta.cc:782-861`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L782-L861) | \f$p\f$ lanes per root, \f$d, z\f$ in local memory |
 | `FusedCta`, \f$p > 32\f$ | [`src/ops/syev/stedc/stedc_merge_cta.cc:865-952`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/stedc/stedc_merge_cta.cc#L865-L952) | work-group, roots serial |
 ## stedc: references

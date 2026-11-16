@@ -258,7 +258,7 @@ TYPED_TEST(SyevTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 // and uplo. So the honest forcing point is syev_cta, which IS what `syev` routes
 // n <= 32 to, called with its own SteqrParams.
 //
-// max_sweeps = 1, not a "reduced" 50: syev_cta.cc:178-181 silently REWRITES
+// max_sweeps = 1, not a "reduced" 50: syev_cta.cc:176-179 silently REWRITES
 // max_sweeps to 400 whenever a caller leaves it at the default 50 with the
 // default shift strategy, so a test that lowered the cap to 50 would be answered
 // by 400 and would pass while testing nothing.

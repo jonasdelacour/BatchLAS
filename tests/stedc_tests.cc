@@ -536,7 +536,7 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 //
 //   * `leaf_steqr_params.max_sweeps` caps the leaf steqr, and the
 //     level-synchronous driver -- the default -- folds each leaf's status back
-//     into the caller's span (src/ops/syev/stedc/stedc.cc:922-937; the fold is
+//     into the caller's span (src/ops/syev/stedc/stedc.cc:913-928; the fold is
 //     needed because that one steqr call solves leaves*batch problems, so its
 //     batch axis is LONGER than `info`). This is what the forced case below
 //     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
@@ -594,7 +594,7 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
 // implementation from one that memsets the span to zero, so this forces the
 // failure on the SAME input the case above solves cleanly. `max_sweeps = 1`
 // rather than a "reduced" 50 because 50 is the default, and the CTA tiers rewrite
-// the default to 400 (syev_cta.cc:178-181) -- a habit worth not relying on the
+// the default to 400 (syev_cta.cc:176-179) -- a habit worth not relying on the
 // absence of.
 //
 // It also exercises the part of the plumbing that is unique to stedc: the leaf
