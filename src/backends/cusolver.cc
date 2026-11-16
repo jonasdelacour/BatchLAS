@@ -29,7 +29,7 @@ namespace backend {
 
 template <Backend B, typename T>
 size_t potrf_vendor_buffer_size(Queue& ctx,
-                        const MatrixView<T,MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
                         Uplo uplo) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
@@ -223,7 +223,7 @@ Event syev_vendor(Queue& ctx,
 
 template <Backend B, typename T>
 size_t syev_vendor_buffer_size(Queue& ctx,
-                               const MatrixView<T,MatrixFormat::Dense>& descrA,
+                               const MatrixView<T, MatrixFormat::Dense>& descrA,
                                Span<typename base_type<T>::type> eigenvalues,
                                JobType jobtype,
                                Uplo uplo) {

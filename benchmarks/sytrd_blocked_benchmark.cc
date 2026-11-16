@@ -16,7 +16,7 @@ template <typename Benchmark>
 inline void SytrdBlockedBenchSizes(Benchmark* b) {
     auto ns = std::array{64, 128, 256, 512};
     auto bs = std::array{8192, 4096, 2048, 1024};
-    auto nb = std::array{8,12,16,24,32};
+    auto nb = std::array{8, 12, 16, 24, 32};
     for (size_t i = 0; i < ns.size(); ++i) {
         for (int j = 0; j < nb.size(); ++j) {
             b->Args({ns[i], bs[i], nb[j], 0}); // lower
@@ -57,7 +57,7 @@ void BM_SYTRD_BLOCKED(minibench::State& state) {
     state.SetKernel(
         q,
         bench::pristine(A0), // sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
-        d,e,tau,uplo,ws,nb,
+        d, e, tau, uplo, ws, nb,
         [](Queue& q, auto&&... xs) {
             (void)sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);
         });

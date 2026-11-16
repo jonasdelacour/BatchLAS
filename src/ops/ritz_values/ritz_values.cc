@@ -64,7 +64,7 @@ Event ritz_values(Queue& ctx,
     auto [global_size, local_size, use_grid_stride] = compute_batched_nd_range_sizes(
         batch_size * k * n, ctx.device(), KernelType::ELEMENTWISE, batch_size, n);
 
-    last_event = ctx -> submit([&](sycl::handler& h) {
+    last_event = ctx->submit([&](sycl::handler& h) {
         h.depends_on(*last_event);
         auto AV_view = AV.kernel_view();
         auto V_view = V.kernel_view();

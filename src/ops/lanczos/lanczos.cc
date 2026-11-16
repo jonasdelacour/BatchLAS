@@ -70,7 +70,7 @@ Event lanczos(Queue& ctx,
     auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size).with_batch_mask(mask);
 
     Span<std::byte> spmm_buffer;
-    if constexpr (!(MF == MatrixFormat::Dense)){
+    if constexpr (!(MF == MatrixFormat::Dense)) {
         spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
     }
     auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 1, n, (n+1)*n, batch_size).with_batch_mask(mask),
@@ -84,7 +84,7 @@ Event lanczos(Queue& ctx,
 
     // Initial guess
     auto init = [&]{
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> it) {
                 auto bid = it.get_group_linear_id();
                 if (masked && !mk[bid]) return;  // I1, before the group reduction
@@ -98,7 +98,7 @@ Event lanczos(Queue& ctx,
         });
     };
 
-    auto lanczos_iteration = [&](const int iterations){
+    auto lanczos_iteration = [&](const int iterations) {
         for (int it = 0; it < iterations; it++) {
             // Only v_it, against v_0..v_{it-1}: the earlier vectors' alphas and betas are recorded, and
             // ortho returns a basis of the span (SVQB rotates a pair, Householder flips signs), not
@@ -107,7 +107,7 @@ Event lanczos(Queue& ctx,
             if (it > 0) {
                 auto basis_view = MatrixView(Vmem.data(), n, it, n, (n+1)*n, batch_size, basis_ptr_mem.data()).with_batch_mask(mask);
                 auto vector_view = MatrixView(Vmem.data() + it*n, n, 1, n, (n+1)*n, batch_size, vector_view_ptr_mem.data()).with_batch_mask(mask);
-                if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
+                if ((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
                     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                     // is already ordered after this one and the Event carries nothing the caller needs.
                     (void)ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
@@ -121,8 +121,8 @@ Event lanczos(Queue& ctx,
             } else {
                 (void)gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{});
             }
-            ctx -> submit([&](sycl::handler& h) {
-                auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
+            ctx->submit([&](sycl::handler& h) {
+                auto v_prev_ptr = Vmem.data() + (std::max(it-1, 0))*n;
                 auto v_current_ptr = Vmem.data() + it*n;
                 auto v_next_ptr = padded_output.data_ptr();
                 batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
@@ -189,7 +189,7 @@ Event lanczos(Queue& ctx,
                 GemmOptions<T>{});
     }
     // Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
-    if (params.sort_enabled){
+    if (params.sort_enabled) {
         auto sort_workspace = pool.allocate<std::byte>(ctx, sort_buffer_size(ctx, W, V, jobz));
         // The call's mask, whichever operand brought it: V may be unmasked or, without vectors, a dummy.
         const bool vecs = jobz == JobType::EigenVectors && !mask.empty();
@@ -223,7 +223,7 @@ size_t lanczos_buffer_size(
                       BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // betas
                       BumpAllocator::allocation_size<T*>(ctx, batch_size) * 3 +
                       BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, single_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
-    if constexpr (!(MF == MatrixFormat::Dense)){
+    if constexpr (!(MF == MatrixFormat::Dense)) {
         basic_size += BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
     }
     // Additional memory required for the tridiagonal solver

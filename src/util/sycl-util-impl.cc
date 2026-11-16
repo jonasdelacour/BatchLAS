@@ -29,11 +29,11 @@ using namespace sycl;
 namespace batchlas {
 
 template <typename U, size_t N>
-constexpr std::ostream& operator<<(std::ostream& os, const std::array<U,N>& arr) {
+constexpr std::ostream& operator<<(std::ostream& os, const std::array<U, N>& arr) {
     os << "[";
     for (size_t i = 0; i < N; i++) {
         os << arr[i];
-        if(i < N - 1) os << ", ";
+        if (i < N - 1) os << ", ";
     }
     os << "]";
     return os;
@@ -54,12 +54,12 @@ UnifiedVector<T>::UnifiedVector(size_t size) : size_(size), capacity_(size), dat
 
 template <typename T>
 UnifiedVector<T>::UnifiedVector(size_t size, T value) : UnifiedVector<T>(size) {
-    for(size_t i = 0; i < size; i++) data_[i] = value;
+    for (size_t i = 0; i < size; i++) data_[i] = value;
 }
 
 template <typename T>
 UnifiedVector<T>::UnifiedVector(const UnifiedVector<T>& other) : UnifiedVector<T>(other.size_) {
-    for(size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
+    for (size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
 }
 
 template <typename T>
@@ -76,11 +76,11 @@ UnifiedVector<T>::~UnifiedVector() {
 
 template <typename T>
 void UnifiedVector<T>::resize(size_t new_size) {
-    if(new_size > capacity_){
+    if (new_size > capacity_) {
         T* new_data = alloc_shared(new_size);
         const auto& ctx = QueueImpl::shared_context(Device::default_device());
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_, ctx);
+        if (data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_size;
     }
@@ -88,7 +88,7 @@ void UnifiedVector<T>::resize(size_t new_size) {
 }
 
 template <typename T>
-Event Span<T>::set_preferred_location(const Queue &ctx) const {
+Event Span<T>::set_preferred_location(const Queue& ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
         return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION);
@@ -100,7 +100,7 @@ Event Span<T>::set_preferred_location(const Queue &ctx) const {
 }
 
 template <typename T>
-Event Span<T>::set_access_device(const Queue &ctx) const {
+Event Span<T>::set_access_device(const Queue& ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
         return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE);
@@ -112,10 +112,10 @@ Event Span<T>::set_access_device(const Queue &ctx) const {
 }
 
 template <typename T>
-Event Span<T>::prefetch(const Queue &ctx) const {
+Event Span<T>::prefetch(const Queue& ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> prefetch(data_, this->size_bytes()));
+        return static_cast<EventImpl>(ctx->prefetch(data_, this->size_bytes()));
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -124,12 +124,12 @@ Event Span<T>::prefetch(const Queue &ctx) const {
 }
 
 template <typename T>
-void UnifiedVector<T>::resize(size_t new_size, T val){
-    if(new_size > capacity_){
+void UnifiedVector<T>::resize(size_t new_size, T val) {
+    if (new_size > capacity_) {
         T* new_data = alloc_shared(new_size);
         const auto& ctx = QueueImpl::shared_context(Device::default_device());
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_, ctx);
+        if (data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_size;
         std::generate(data_ + size_ , data_ + new_size, [val]{return val;});
@@ -138,20 +138,20 @@ void UnifiedVector<T>::resize(size_t new_size, T val){
 }
 
 template <typename T>
-void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t seg_size){
-    if(new_size > capacity_){
+void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t seg_size) {
+    if (new_size > capacity_) {
         T* new_data = alloc_shared(new_size);
         const auto& ctx = QueueImpl::shared_context(Device::default_device());
         std::fill_n(new_data, new_size, T{});
-        if (capacity_ > 0){
+        if (capacity_ > 0) {
             auto n_first_segment = back < front ? capacity_ - front : (back - front + seg_size);
             assert(n_first_segment <= new_size);
             assert((n_first_segment + front) <= new_size);
-            if(back < front) assert(back + seg_size <= front);
+            if (back < front) assert(back + seg_size <= front);
             memcpy(new_data, data_ + front, n_first_segment*sizeof(T));
-            if( back < front) memcpy(new_data + n_first_segment, data_, (back + seg_size)*sizeof(T));
+            if ( back < front) memcpy(new_data + n_first_segment, data_, (back + seg_size)*sizeof(T));
         }
-        if(data_) sycl::free(data_, ctx);
+        if (data_) sycl::free(data_, ctx);
         data_ = new_data;
         size_ = new_size;
         capacity_ = new_size;
@@ -160,11 +160,11 @@ void UnifiedVector<T>::resize(size_t new_size, size_t front, size_t back, size_t
 
 template <typename T>
 void UnifiedVector<T>::reserve(size_t new_capacity) {
-    if(new_capacity > capacity_){
+    if (new_capacity > capacity_) {
         T* new_data = alloc_shared(new_capacity);
         const auto& ctx = QueueImpl::shared_context(Device::default_device());
         memcpy(new_data, data_, size_*sizeof(T));
-        if(data_) sycl::free(data_, ctx);
+        if (data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_capacity;
     }
@@ -177,20 +177,20 @@ UnifiedVector<T>& UnifiedVector<T>::operator=(const UnifiedVector<T>& other) {
     if (capacity_ < other.capacity_) {
         T* new_data = alloc_shared(other.capacity_);
         const auto& ctx = QueueImpl::shared_context(Device::default_device());
-        if(data_) sycl::free(data_, ctx);
+        if (data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = other.capacity_;
     }
     size_ = other.size_;
     // If the type is trivially copyable, use the sycl memcpy function
-    if constexpr(std::is_trivially_copyable_v<T>){
+    if constexpr (std::is_trivially_copyable_v<T>) {
         Device dev = Device::default_device();
         const auto& ctx = QueueImpl::shared_context(dev);
         const sycl::device sycl_dev = QueueImpl::device_arrays.at(static_cast<int>(dev.type)).at(dev.idx);
         sycl::queue q{ctx, sycl_dev};
         q.memcpy(data_, other.data_, size_*sizeof(T)).wait();
     } else {
-        for(size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
+        for (size_t i = 0; i < size_; i++) data_[i] = other.data_[i];
     }
     return *this;
 }
@@ -206,7 +206,7 @@ std::ostream& operator<<(std::ostream& os, const Span<U>& vec) {
     os << "[" ;
      for (size_t i = 0; i < vec.size(); i++) {
         os << vec[i];
-        if(i < vec.size() - 1) os << ", ";
+        if (i < vec.size() - 1) os << ", ";
     }
     os << "]";
     return os;
@@ -214,14 +214,14 @@ std::ostream& operator<<(std::ostream& os, const Span<U>& vec) {
 
 template <typename T>
 bool Span<T>::operator==(const Span<T> other) const {
-    if(size_ != other.size_) return false;
-    if(data() == other.data()) return true;
-    if constexpr (std::is_floating_point_v<std::decay_t<T>>){
-        return std::equal(begin(), end(), other.begin(), [](auto& a,auto& b){
+    if (size_ != other.size_) return false;
+    if (data() == other.data()) return true;
+    if constexpr (std::is_floating_point_v<std::decay_t<T>>) {
+        return std::equal(begin(), end(), other.begin(), [](auto& a, auto& b) {
             T eps = std::numeric_limits<T>::epsilon() * 20;
             T max_v = std::max(std::abs(a), std::abs(b));
             return std::abs(a - b) / (max_v > eps ? max_v : 1) < eps;});
-    } else{
+    } else {
         return std::equal(begin(), end(), other.begin());
     }
     return true;
@@ -244,16 +244,16 @@ template struct UnifiedVector<std::complex<double>>;
 // evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 template struct BATCHLAS_API UnifiedVector<std::byte>;
 template struct UnifiedVector<bool>;
-template struct UnifiedVector<std::array<double,2>>;
-template struct UnifiedVector<std::array<double,3>>;
-template struct UnifiedVector<std::array<float,2>>;
-template struct UnifiedVector<std::array<float,3>>;
-template struct UnifiedVector<std::array<int32_t,2>>;
-template struct UnifiedVector<std::array<int32_t,3>>;
-template struct UnifiedVector<std::array<uint16_t,3>>;
-template struct UnifiedVector<std::array<uint32_t,3>>;
-template struct UnifiedVector<std::array<uint16_t,6>>;
-template struct UnifiedVector<std::array<uint32_t,6>>;
+template struct UnifiedVector<std::array<double, 2>>;
+template struct UnifiedVector<std::array<double, 3>>;
+template struct UnifiedVector<std::array<float, 2>>;
+template struct UnifiedVector<std::array<float, 3>>;
+template struct UnifiedVector<std::array<int32_t, 2>>;
+template struct UnifiedVector<std::array<int32_t, 3>>;
+template struct UnifiedVector<std::array<uint16_t, 3>>;
+template struct UnifiedVector<std::array<uint32_t, 3>>;
+template struct UnifiedVector<std::array<uint16_t, 6>>;
+template struct UnifiedVector<std::array<uint32_t, 6>>;
 template struct UnifiedVector<std::bitset<21>>;
 template struct UnifiedVector<std::bitset<3>>;
 
@@ -263,10 +263,10 @@ template struct UnifiedVector<std::complex<float>*>;
 template struct UnifiedVector<std::complex<double>*>;
 template struct UnifiedVector<int*>;
 template struct UnifiedVector<size_t*>;
-template struct UnifiedVector<std::array<double,2>*>;
-template struct UnifiedVector<std::array<double,3>*>;
-template struct UnifiedVector<std::array<float,2>*>;
-template struct UnifiedVector<std::array<float,3>*>;
+template struct UnifiedVector<std::array<double, 2>*>;
+template struct UnifiedVector<std::array<double, 3>*>;
+template struct UnifiedVector<std::array<float, 2>*>;
+template struct UnifiedVector<std::array<float, 3>*>;
 
 template struct Span<int8_t>;
 template struct Span<int16_t>;
@@ -282,16 +282,16 @@ template struct Span<std::complex<float>>;
 template struct Span<std::complex<double>>;
 template struct Span<std::byte>;
 template struct Span<bool>;
-template struct Span<std::array<double,2>>;
-template struct Span<std::array<double,3>>;
-template struct Span<std::array<float,2>>;
-template struct Span<std::array<float,3>>;
-template struct Span<std::array<int32_t,2>>;
-template struct Span<std::array<int32_t,3>>;
-template struct Span<std::array<uint16_t,3>>;
-template struct Span<std::array<uint32_t,3>>;
-template struct Span<std::array<uint16_t,6>>;
-template struct Span<std::array<uint32_t,6>>;
+template struct Span<std::array<double, 2>>;
+template struct Span<std::array<double, 3>>;
+template struct Span<std::array<float, 2>>;
+template struct Span<std::array<float, 3>>;
+template struct Span<std::array<int32_t, 2>>;
+template struct Span<std::array<int32_t, 3>>;
+template struct Span<std::array<uint16_t, 3>>;
+template struct Span<std::array<uint32_t, 3>>;
+template struct Span<std::array<uint16_t, 6>>;
+template struct Span<std::array<uint32_t, 6>>;
 template struct Span<std::bitset<21>>;
 template struct Span<std::bitset<3>>;
 
@@ -307,16 +307,16 @@ template std::ostream& operator<<(std::ostream& os, const UnifiedVector<uint32_t
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<int>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<size_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const UnifiedVector<bool>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<int32_t,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<int32_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t,6>>& vec);
-template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t,6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<double, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<float, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<int32_t, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<int32_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint16_t, 6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const UnifiedVector<std::array<uint32_t, 6>>& vec);
 
 template std::ostream& operator<<(std::ostream& os, const Span<float>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<double>& vec);
@@ -328,15 +328,15 @@ template std::ostream& operator<<(std::ostream& os, const Span<uint32_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<int>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<size_t>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<bool>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<double,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<double,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<float,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<float,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<int32_t,2>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<int32_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t,3>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t,6>>& vec);
-template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t,6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<double, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<double, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<float, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<float, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<int32_t, 2>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<int32_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t, 3>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t, 6>>& vec);
+template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t, 6>>& vec);
 
 }  // namespace batchlas

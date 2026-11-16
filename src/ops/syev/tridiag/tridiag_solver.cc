@@ -239,7 +239,7 @@ Event tridiagonal_solver(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType /*jobz*/){
+size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType /*jobz*/) {
     auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
     bool smem_possible = tridiag_smem_fits(ctx, smem_required);
     size_t size = 0;

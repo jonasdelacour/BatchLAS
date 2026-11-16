@@ -10,16 +10,16 @@
 namespace batchlas {
 
 template <typename T, typename K>
-Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
+Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices) {
     auto n = data.size();
     auto batch_size = data.batch_size();
     // Unit increments were required by an earlier oneAPI gather-based version; the
     // SLM permute below no longer calls it, but the contract is kept unchanged.
-    if(data.inc() != 1 || indices.inc() != 1){
+    if (data.inc() != 1 || indices.inc() != 1) {
         throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
@@ -39,7 +39,7 @@ struct PermutedCopyParams {
 };
 
 template <typename T, typename K>
-Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const Matrix<T, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}){
+Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const Matrix<T, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}) {
     return permuted_copy(ctx, src, dst, VectorView<K>(indices), params);
 }
 
@@ -47,13 +47,13 @@ template <typename T, typename K>
 struct PermutedCopyKernel {};
 
 template <typename T, typename K>
-Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
+Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
     auto n = src.rows();
     auto batch_size = src.batch_size();
-    if(src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1){
+    if (src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1) {
         throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
-    if(src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()){
+    if (src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()) {
         throw batchlas::invalid_argument("permute: src, dst and indices must have the same dimensions");
     }
     auto total_work_items = src.rows() * src.cols() * batch_size;
@@ -64,7 +64,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
             ctx.device(), KernelType::MEMORY_BOUND) :
         std::pair<size_t, size_t>(params.work_group_size_range.first, params.work_group_size_range.second);
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
@@ -85,20 +85,20 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
 
 // Out of place permutation
 template <typename T, typename K>
-Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
+Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
     (void)MatrixView<T>::copy(ctx, temp_storage, data);
     return permuted_copy(ctx, temp_storage, data, indices, params);
 }
 
 template <typename T, typename K>
-Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const VectorView<K>& indices){
+Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const VectorView<K>& indices) {
     auto n = data.rows();
     auto batch_size = data.batch_size();
-    if(data.inc() != 1 || indices.inc() != 1){
+    if (data.inc() != 1 || indices.inc() != 1) {
         throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto temp_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto temp_vec = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         auto data_view = data.kernel_view();
@@ -153,14 +153,14 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
 }
 
 template <typename T, typename K>
-Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder order, bool fill_indices){
+Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder order, bool fill_indices) {
     auto n = data.size();
     auto batch_size = data.batch_size();
-    if(data.inc() != 1 || indices.inc() != 1){
+    if (data.inc() != 1 || indices.inc() != 1) {
         throw batchlas::invalid_argument("argsort: data and indices must have unit increment (inc=1)");
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
 
@@ -233,7 +233,7 @@ void require_sortable(const VectorView<T>& eigs) {
 }
 
 template <typename T>
-Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
+Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace) {
     require_sortable(eigs);  // before anything is enqueued
     auto pool = BumpAllocator(workspace);
     const VectorView<T>& eigs_unit = eigs;
@@ -242,7 +242,7 @@ Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixForm
     // is already ordered after this one and the Event carries nothing the caller needs.
     (void)argsort(ctx, eigs_unit, permutation, order, true);
     (void)permute(ctx, eigs, permutation);
-    if (jobz == JobType::EigenVectors){
+    if (jobz == JobType::EigenVectors) {
         auto temp_eigvects = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, eigvects.rows() * eigvects.cols() * eigvects.batch_size()).data(), eigvects.rows(), eigvects.cols(), eigvects.rows(), eigvects.rows() * eigvects.cols(), eigvects.batch_size());
         (void)permute(ctx, eigvects, temp_eigvects, permutation);
     }

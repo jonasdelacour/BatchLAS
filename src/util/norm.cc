@@ -16,8 +16,8 @@ template <typename T, MatrixFormat MF, NormType NT, int WG> struct NormKernel;
 template <Backend B, typename T> struct NormSpectralKernel;
 
 template <Backend B, typename T>
-Event norm_spectral_vendor_impl(Queue &ctx,
-                               const MatrixView<T, MatrixFormat::Dense> &A,
+Event norm_spectral_vendor_impl(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
                                const Span<float_t<T>> norms) {
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("norm: Spectral norm requires square symmetric/Hermitian matrices");
@@ -69,8 +69,8 @@ Event norm_spectral_vendor_impl(Queue &ctx,
 }
 
 template <typename T>
-Event norm_spectral_impl(Queue &ctx,
-                         const MatrixView<T, MatrixFormat::Dense> &A,
+Event norm_spectral_impl(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
                          const Span<float_t<T>> norms) {
     const auto dev = ctx.device();
     const bool is_gpu = dev.type == DeviceType::GPU;
@@ -108,9 +108,9 @@ Event norm_spectral_impl(Queue &ctx,
 // One work-group per item over the device lange (a thin launcher); NT and WG are types,
 // so each norm is its own lange body.
 template <NormType NT, int WG, typename T, MatrixFormat MF>
-void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
+void norm_launch(Queue& ctx, const MatrixView<T, MF>& A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto [data, batch_size, rows, cols, ld, stride] =
             std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
         batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(h, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> it) {
@@ -124,17 +124,17 @@ void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> 
 }
 
 template <NormType NT, typename T, MatrixFormat MF>
-void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
+void norm_launch(Queue& ctx, const MatrixView<T, MF>& A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
     const auto max_wg = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
     if (static_cast<int64_t>(A.rows()) * A.cols() <= 1024 || max_wg < 256) norm_launch<NT, 32>(ctx, A, norms, mk);
     else norm_launch<NT, 256>(ctx, A, norms, mk);
 }
 
 template <typename T, MatrixFormat MF>
-Event norm_impl(Queue &ctx,
-               const MatrixView<T, MF> &A,
+Event norm_impl(Queue& ctx,
+               const MatrixView<T, MF>& A,
                const NormType norm_type,
-               const Span<float_t<T>> norms){
+               const Span<float_t<T>> norms) {
     const std::uint8_t* mk = detail::mask_ptr(detail::call_mask("norm", A));
     switch (norm_type) {
         case NormType::Frobenius: norm_launch<NormType::Frobenius>(ctx, A, norms, mk); break;
@@ -147,8 +147,8 @@ Event norm_impl(Queue &ctx,
 }
 
 template <typename T, MatrixFormat MF>
-Event norm(Queue &ctx,
-          const MatrixView<T, MF> &A,
+Event norm(Queue& ctx,
+          const MatrixView<T, MF>& A,
           const NormType norm_type,
           const Span<float_t<T>> norms) {
     (void)detail::call_mask("norm", A);
@@ -164,8 +164,8 @@ Event norm(Queue &ctx,
 }
 
 template <typename T, MatrixFormat MF>
-UnifiedVector<float_t<T>> norm(Queue &ctx,
-                      const MatrixView<T, MF> &A,
+UnifiedVector<float_t<T>> norm(Queue& ctx,
+                      const MatrixView<T, MF>& A,
                       const NormType norm_type) {
     (void)detail::call_mask("norm", A);
     detail::require_device_fp64<T>(ctx, "norm");
@@ -185,13 +185,13 @@ UnifiedVector<float_t<T>> norm(Queue &ctx,
 
 #define NORM_INSTANTIATE(fp, fmt) \
 template Event norm<fp, fmt>(\
-    Queue&,\
-    const MatrixView<fp, fmt>&,\
-    const NormType,\
+    Queue&, \
+    const MatrixView<fp, fmt>&, \
+    const NormType, \
     const Span<float_t<fp>>);\
 template UnifiedVector<float_t<fp>> norm<fp, fmt>(\
-    Queue&,\
-    const MatrixView<fp, fmt>&,\
+    Queue&, \
+    const MatrixView<fp, fmt>&, \
     const NormType);
 
 NORM_INSTANTIATE(float, MatrixFormat::Dense)

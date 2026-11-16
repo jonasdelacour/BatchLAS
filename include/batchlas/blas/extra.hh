@@ -40,8 +40,8 @@ namespace batchlas {
 ///         Backend::SYCL calls the native `syev` instead)
 /// @throws batchlas::unsupported for double or complex<double> on a GPU without fp64
 template <typename T, MatrixFormat MF>
-BATCHLAS_API Event norm(Queue &ctx,
-                       const MatrixView<T, MF> &A,
+BATCHLAS_API Event norm(Queue& ctx,
+                       const MatrixView<T, MF>& A,
                        const NormType norm_type,
                        const Span<float_t<T>> norms);
 
@@ -54,8 +54,8 @@ BATCHLAS_API Event norm(Queue &ctx,
 /// @param[in] norm_type which norm (default Frobenius)
 /// @return one real norm \f$\lVert A_i \rVert\f$ per batch item
 template <typename T, MatrixFormat MF>
-BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue &ctx,
-                                   const MatrixView<T, MF> &A,
+BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue& ctx,
+                                   const MatrixView<T, MF>& A,
                                    const NormType norm_type = NormType::Frobenius);
 
 /// @brief Per-item condition number, written into a caller-owned span.
@@ -86,8 +86,8 @@ BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue &ctx,
 ///       Backend::SYCL calls the native `syev` instead.
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-BATCHLAS_API Event cond(Queue &ctx,
-                       const MatrixView<T, MF> &A,
+BATCHLAS_API Event cond(Queue& ctx,
+                       const MatrixView<T, MF>& A,
                        const NormType norm_type,
                        const Span<T> conds,
                        const Span<std::byte> workspace);
@@ -103,8 +103,8 @@ BATCHLAS_API Event cond(Queue &ctx,
 /// @ingroup api_extra_lowlevel
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-BATCHLAS_API size_t cond_buffer_size(Queue &ctx,
-                                     const MatrixView<T, MF> &A,
+BATCHLAS_API size_t cond_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MF>& A,
                                      const NormType norm_type);
 
 /// @brief Per-item condition number, returned in a new vector. Blocks until done.
@@ -116,8 +116,8 @@ BATCHLAS_API size_t cond_buffer_size(Queue &ctx,
 /// @return one condition number per batch item
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-BATCHLAS_API UnifiedVector<T> cond(Queue &ctx,
-                                   const MatrixView<T, MF> &A,
+BATCHLAS_API UnifiedVector<T> cond(Queue& ctx,
+                                   const MatrixView<T, MF>& A,
                                    const NormType norm_type);
 
 /// @brief Random dense matrices with a prescribed \f$\log_{10}\f$ condition number.
@@ -145,7 +145,7 @@ BATCHLAS_API UnifiedVector<T> cond(Queue &ctx,
 ///         NormType::Frobenius, \f$\log_{10}\kappa < \log_{10} n\f$
 // evidence: docs/design/api-conventions.md#api-conventions-cond-generators-default-to-cgs2
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue& ctx,
                                                                            int n,
                                                                            float_t<T> log10_kappa,
                                                                            NormType metric,
@@ -166,7 +166,7 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue 
 /// @param[in] algo         orthogonalisation used to build \f$Q\f$; keep the CGS2 default
 /// @return a new batch of `batch_size` symmetric/Hermitian \f$n \times n\f$ matrices
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue& ctx,
                                                                                     int n,
                                                                                     float_t<T> log10_kappa,
                                                                                     NormType metric,
@@ -191,7 +191,7 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_met
 /// @return a new batch of `batch_size` \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument on a negative `kd`, and as random_with_log10_cond_metric()
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue& ctx,
                                                                                   int n,
                                                                                   int kd,
                                                                                   float_t<T> log10_kappa,
@@ -213,7 +213,7 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric
 /// @return a new batch of `batch_size` symmetric/Hermitian \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument on a negative `kd`, and as random_with_log10_cond_metric()
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue& ctx,
                                                                                            int n,
                                                                                            int kd,
                                                                                            float_t<T> log10_kappa,
@@ -235,7 +235,7 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_c
 /// @return a new batch of `batch_size` \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument as random_with_log10_cond_metric()
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue& ctx,
                                                                                       int n,
                                                                                       float_t<T> log10_kappa,
                                                                                       NormType metric,
@@ -257,7 +257,7 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_m
 /// @return a new batch of `batch_size` Hermitian tridiagonal \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument as random_with_log10_cond_metric()
 template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue &ctx,
+BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue& ctx,
                                                                                                 int n,
                                                                                                 float_t<T> log10_kappa,
                                                                                                 NormType metric,
@@ -272,9 +272,9 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_lo
 ///                  receives \f$A_i^T\f$
 /// @return     event of the enqueued kernel
 template <typename T, MatrixFormat MF>
-BATCHLAS_API Event transpose(Queue &ctx,
-                             const MatrixView<T, MF> &A,
-                             const MatrixView<T, MF> &B);
+BATCHLAS_API Event transpose(Queue& ctx,
+                             const MatrixView<T, MF>& A,
+                             const MatrixView<T, MF>& B);
 
 /// @brief Batched plain transpose into a newly allocated matrix.
 /// @param[in] ctx  queue the kernel is enqueued on
@@ -282,8 +282,8 @@ BATCHLAS_API Event transpose(Queue &ctx,
 /// @return a new batch of \f$n \times m\f$ matrices holding \f$A_i^T\f$; valid after the
 ///         queue is waited on
 template <typename T, MatrixFormat MF>
-BATCHLAS_API Matrix<T, MF> transpose(Queue &ctx,
-                                     const MatrixView<T, MF> &A);
+BATCHLAS_API Matrix<T, MF> transpose(Queue& ctx,
+                                     const MatrixView<T, MF>& A);
 
 /// @}
 

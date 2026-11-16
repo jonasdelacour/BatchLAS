@@ -231,18 +231,18 @@ Event ortho(Queue& ctx,
         // Repeat until all vectors are orthogonal
         auto Ymem = wsl.Ymem;
         auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
-        for (int i = 0; i < k; i++){
+        for (int i = 0; i < k; i++) {
             // The first i vectors and vector i, in stored orientation: columns, or rows of A.
             auto A_i = (is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
                                    : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size))
                            .with_batch_mask(mask);
             auto C = VectorView(Ymem.data(), i, batch_size).with_batch_mask(mask);
             auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
-            if (i > 0){ // If it's the first vector we just need to normalize it
+            if (i > 0) { // If it's the first vector we just need to normalize it
                 // Rows: the gemv pair below projects conj(row i) against the rows, so for
                 // complex the row is conjugated around it.
                 if (is_A_trans) (void)conj_vector(A_next);
-                for (int j = 0; j < 2; j++){
+                for (int j = 0; j < 2; j++) {
                     (void)gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
                     (void)gemv<B>(ctx,
                             A_i,
@@ -253,7 +253,7 @@ Event ortho(Queue& ctx,
                 if (is_A_trans) (void)conj_vector(A_next);
             }
             // Normalize A_i
-            ctx -> submit([&](sycl::handler& h){
+            ctx->submit([&](sycl::handler& h) {
                 auto A_stride = A.stride();
                 auto Aptr = A.data_ptr();
                 const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
@@ -261,7 +261,7 @@ Event ortho(Queue& ctx,
 
                 batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
                     sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * normalize_wg_size)}, sycl::range<1>{size_t(normalize_wg_size)}),
-                    [=](sycl::nd_item<1> it){
+                    [=](sycl::nd_item<1> it) {
                         auto bid = it.get_group_linear_id();
                         if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
                         const device::RtGroup<> ex{it};
@@ -276,7 +276,7 @@ Event ortho(Queue& ctx,
         (void)gram_into_C(A);
 
         auto ATA_ptr = C.data_ptr();
-        ctx -> submit([&](sycl::handler& h){
+        ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it) BATCHLAS_DEVICE_BODY {
                 auto bid = it.get_group_linear_id();
                 if (masked && !mk[bid]) return;
@@ -306,9 +306,9 @@ Event ortho(Queue& ctx,
         // Compute A^H * A
         (void)gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
         // Compute D = diag(A^H * A) ^-1/2
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             auto ATA_ptr = C.data_ptr();
-            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
             // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
             // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
@@ -326,10 +326,10 @@ Event ortho(Queue& ctx,
             });
         });
         // Compute StS = D * StS * D
-        ctx -> submit([&](sycl::handler& h){
+        ctx->submit([&](sycl::handler& h) {
             auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
             auto ATA_ptr = C.data_ptr();
-            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
             const device::RtGroup<> ex{it};  // WG = k: one row per item
             const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
@@ -343,10 +343,10 @@ Event ortho(Queue& ctx,
         (void)syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
 
         // First Compute D * EigenVectors * Lambda^-1/2
-        ctx -> submit([&](sycl::handler& h){
+        ctx->submit([&](sycl::handler& h) {
             auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
             auto C_ptr = C.data_ptr();
-            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
             const device::RtGroup<> ex{it};  // WG = k: one row per item
             const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
@@ -365,13 +365,13 @@ Event ortho(Queue& ctx,
     };
     // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
     auto svqb_into_A = [&] {
-        auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
+        auto output_view = MatrixView<T, fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
         svqb_alg(A, output_view);
         auto A_stride = A.stride();
         auto A_ld = A.ld();
         auto Adata = A.data_ptr();
         auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
-        ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> it){
+        ctx->parallel_for<StridedCopyKernel<B, T>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> it) {
             auto batch_idx = it.get_group().get_group_id()[0];
             if (masked && !mk[batch_idx]) return;
             const device::RtGroup<> ex{it};
@@ -413,7 +413,7 @@ Event ortho(Queue& ctx,
                 svqb_into_A();
                 break;
             }
-            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
+            auto output_view = MatrixView<T, fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
             svqb_alg(A, output_view);
             svqb_alg(output_view, A);
             break;
@@ -465,7 +465,7 @@ Event ortho(Queue& ctx,
     auto k = transA == Transpose::NoTrans ? A.rows_ : A.cols_;
 
     // Initialize the matrices if not already done
-    if(nA + nM > k){
+    if (nA + nM > k) {
         throw batchlas::invalid_argument("ortho: The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
     }
     assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
@@ -484,7 +484,7 @@ Event ortho(Queue& ctx,
     auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
     auto is_second_transposed = ((transA == trans) && (transM == no_trans)) ? trans : no_trans;
 
-    for (size_t i = 0; i < iterations; i++){
+    for (size_t i = 0; i < iterations; i++) {
         (void)gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
         (void)gemm<B>(ctx,
                 isAtrans ? descrMA : M,

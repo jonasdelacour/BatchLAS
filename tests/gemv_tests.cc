@@ -780,13 +780,13 @@ TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
     const int64_t kItems = 1 << 20;
     std::vector<std::pair<int, int>> want;
     if constexpr (std::is_same_v<S, float>) {
-        want = {{1,8},{16,8},{24,8},{25,4},{32,4},{33,1},{48,1},{64,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {24, 8}, {25, 4}, {32, 4}, {33, 1}, {48, 1}, {64, 1}, {128, 1}};
     } else if constexpr (std::is_same_v<S, std::complex<float>>) {
-        want = {{1,8},{8,8},{16,8},{17,1},{24,1},{32,1},{48,1},{64,1},{128,1}};
+        want = {{1, 8}, {8, 8}, {16, 8}, {17, 1}, {24, 1}, {32, 1}, {48, 1}, {64, 1}, {128, 1}};
     } else if constexpr (std::is_same_v<S, double>) {
-        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{49,1},{64,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {32, 8}, {33, 4}, {48, 4}, {49, 1}, {64, 1}, {128, 1}};
     } else {
-        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{64,4},{65,1},{96,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {32, 8}, {33, 4}, {48, 4}, {64, 4}, {65, 1}, {96, 1}, {128, 1}};
     }
     for (const auto& [rl, w] : want) {
         const int got = batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);

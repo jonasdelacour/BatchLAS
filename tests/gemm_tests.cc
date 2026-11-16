@@ -250,7 +250,7 @@ protected:
         }
     }
 
-    void print_matrix(UnifiedVector<ScalarType>& matrix_data, int rows, int cols, int ld){
+    void print_matrix(UnifiedVector<ScalarType>& matrix_data, int rows, int cols, int ld) {
         for (int i = 0; i < cols; ++i) {
             for (int j = 0; j < rows; ++j) {
                 std::cout << matrix_data[i * ld + j] << " ";

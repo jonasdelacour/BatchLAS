@@ -35,16 +35,16 @@ using getrs_buffer_size = size_t(Queue&,
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using getrs_vendor = Event(Queue&,
-                           const MatrixView<T,MatrixFormat::Dense>&,
-                           const MatrixView<T,MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
                            Transpose,
                            Span<int64_t>,
                            Span<std::byte>);
 
 template <typename T>
 using getrs_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
                                         Transpose);
 }  // namespace sig
 
@@ -142,8 +142,8 @@ namespace batchlas::backend {
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs_vendor(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
-                                const MatrixView<T,MatrixFormat::Dense>& B,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
                                 Transpose transA,
                                 Span<int64_t> pivots,
                                 Span<std::byte> workspace);
@@ -159,8 +159,8 @@ BATCHLAS_API Event getrs_vendor(Queue& ctx,
 /// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T,MatrixFormat::Dense>& A,
-                                             const MatrixView<T,MatrixFormat::Dense>& B,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& B,
                                              Transpose transA);
 
 }  // namespace batchlas::backend

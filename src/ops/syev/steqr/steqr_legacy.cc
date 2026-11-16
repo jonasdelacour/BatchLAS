@@ -48,8 +48,8 @@ Event steqr_impl(Queue& ctx,
                     const VectorView<T>& e, // Off-diagonal elements
                     JobType jobz, // Eigenvector computation flag
                     const MatrixView<T, MatrixFormat::Dense>& Q, // Eigenvector storage
-                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, // Storage for Givens rotations
-                    const Span<std::array<int32_t,3>>& deflation_indices, // #sub_problems deflation indices i.e. where e is zero
+                    const MatrixView<std::array<T, 2>, MatrixFormat::Dense>& givens_rotations, // Storage for Givens rotations
+                    const Span<std::array<int32_t, 3>>& deflation_indices, // #sub_problems deflation indices i.e. where e is zero
                     const Span<ApplyOrder>& order_view, // Order of application of rotations, has #sub_problems number of entries
                     const Span<int32_t>& sweep_counts, // Number of sweeps actually performed per sub-problem
                     BumpAllocator allocator,
@@ -67,7 +67,7 @@ Event steqr_impl(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for(h, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto ebid = e.batch_item(i);
@@ -103,7 +103,7 @@ Event steqr_impl(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_writeout");
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for(h, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto num_sub_problems = scan_view[i] - (i == 0 ? 0 : scan_view[i - 1]);
@@ -160,7 +160,7 @@ Event steqr_impl(Queue& ctx,
         });
     });
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
         batchlas::impl::parallel_for<SteqrLegacyRotationKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(Q.rows()*Q.batch_size()*2), sycl::range<1>(Q.rows())), [=](sycl::nd_item<1> it) {
@@ -323,7 +323,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
         (void)steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, sweep_counts,
                    BumpAllocator(wsl.scratch), params.max_sweeps);
 
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for(h, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
                 if (!e.active(id[0])) return;  // I3: neutral for the host's convergence read
                 auto ebid = e.batch_item(id[0]);
@@ -364,7 +364,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
         });
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(batch_size* n), sycl::range<1>(n)), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
             auto intra = it.get_local_id(0);
@@ -373,7 +373,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
         });
     });
 
-    if (params.sort){
+    if (params.sort) {
         // The passes are finished, so their scratch is free for sort to take over.
         (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, wsl.scratch);
     }

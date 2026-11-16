@@ -207,36 +207,36 @@ size_t syevx_direct_buffer_size(Queue& ctx,
 
 #define SYEVX_DIRECT_INSTANTIATE(back, fp, fmt) \
     template Event syevx_direct<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        Span<int32_t>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        Span<int32_t>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     /* The m-less forwarder is inline and would not need an instantiation to be \
        CALLED, but instantiating it keeps the symbol this library exported before \
        `m` was added, so an object file built against the old header still links. */\
     template Event syevx_direct<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     template size_t syevx_direct_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const SyevxParams<BATCHLAS_UNPAREN fp>&);
 
 #define SYEVX_DIRECT_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \

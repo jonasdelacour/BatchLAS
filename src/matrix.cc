@@ -518,7 +518,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
 
         // Second kernel: Compute row offsets using work-group scan
-        q -> submit ([&](sycl::handler& h) {
+        q->submit([&](sycl::handler& h) {
             auto row_offsets_acc = result.row_offsets().data();
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_offsets_acc = batch_offsets.data();
@@ -753,7 +753,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
         batch_size, n * n, q.device(), KernelType::ELEMENTWISE);
 
     // Submit a kernel to initialize the identity matrix
-    q -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+    q->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
         size_t global_id = it.get_global_id(0);
         size_t total_work_items = it.get_global_range(0);
 
@@ -802,7 +802,7 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
         batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
     (void)wg_per_matrix; // the grid-stride loop below covers the batch directly
 
-    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
         const size_t global_id = it.get_global_id(0);
         const size_t total_work_items = it.get_global_range(0);
         const size_t elements_per_matrix = static_cast<size_t>(n) * static_cast<size_t>(n);
@@ -1792,7 +1792,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it){
+    ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
         for (size_t flat = it.get_global_id(0); flat < total_elements; flat += it.get_global_range(0)) {
             size_t b = flat / n;
             if (mask && !mask[b]) continue;
@@ -1831,7 +1831,7 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
-    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
         for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             int64_t b = flat_idx / (n * n);          // batch index
@@ -2228,7 +2228,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
     if (src.rows() != dest.rows() || src.cols() != dest.cols() || src.batch_size() != dest.batch_size()) {
         throw batchlas::invalid_argument("MatrixView::copy: Copy called on incompatible matrices");
     }
-    if constexpr(MType == MatrixFormat::Dense) {
+    if constexpr (MType == MatrixFormat::Dense) {
         if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
         // Masked: the memcpy fast paths would write the inactive items, so only the kernel runs.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("copy", dest, src));
@@ -2237,7 +2237,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
             return event;
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
-        } else if (!mask && src.ld() == src.rows() && dest.ld() == dest.rows()){
+        } else if (!mask && src.ld() == src.rows() && dest.ld() == dest.rows()) {
             // If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
             auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
                                                     dest.stride() * sizeof(T),
@@ -2282,7 +2282,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             }));
             return event;
         }
-    } else if constexpr(MType == MatrixFormat::CSR) {
+    } else if constexpr (MType == MatrixFormat::CSR) {
         throw batchlas::unsupported("MatrixView::copy: CSR copy not implemented yet");
     } else {
         throw batchlas::unsupported("MatrixView::copy: Unsupported matrix format in copy");
@@ -2355,7 +2355,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
     // An inactive item compares true without being read.
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("all_close", a, b));
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
         auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(a.size()), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(a.batch_size() * a.size()), sycl::range<1>(a.size())), [=](sycl::nd_item<1> it) {
@@ -2366,7 +2366,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
                 return;
             }
             bool is_close = true;
-            auto compare = [=](const auto& x,const auto& y) {
+            auto compare = [=](const auto& x, const auto& y) {
                 auto max_val = std::max(std::abs(x), std::abs(y));
                 if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                     return true; // Both values are effectively zero
@@ -2396,7 +2396,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
         });
     }).wait();
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(std::min(1024, a.batch_size())), sycl::range<1>(std::min(1024, a.batch_size()))), [=](sycl::nd_item<1> it) {
             auto cta = it.get_group();
@@ -2421,7 +2421,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
         // An inactive item compares true without being read.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("all_close", A, B));
 
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             auto results = batch_results.data();
             auto Aview = A.kernel_view();
             auto Bview = B.kernel_view();
@@ -2431,7 +2431,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                 auto bid = it.get_group(0);
                 auto lid = it.get_local_id(0);
                 bool is_close = true;
-                auto compare = [=](const auto& x,const auto& y) {
+                auto compare = [=](const auto& x, const auto& y) {
                     auto max_val = std::max(std::abs(x), std::abs(y));
                     if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                         return true; // Both values are effectively zero
@@ -2476,7 +2476,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
         throw batchlas::unsupported("MatrixView::all_close: not implemented for this matrix format");
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
         auto Aview = A.kernel_view();
         auto batch_size = A.batch_size();

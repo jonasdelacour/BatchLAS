@@ -23,7 +23,7 @@ using gemv = Event(Queue&,
 // from the public one (trsm's alpha is last).
 template <typename T>
 using gemv_vendor = Event(Queue&,
-                          const MatrixView<T,MatrixFormat::Dense>&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
                           const VectorView<T>&,
                           const VectorView<T>&,
                           T,
@@ -96,7 +96,7 @@ namespace batchlas::backend {
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event gemv_vendor(Queue& ctx,
-                               const MatrixView<T,MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
                                const VectorView<T>& X,
                                const VectorView<T>& Y,
                                T alpha,

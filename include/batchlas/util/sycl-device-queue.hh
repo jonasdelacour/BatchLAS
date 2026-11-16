@@ -213,11 +213,11 @@ struct BATCHLAS_API Device{
             if (devs.empty()) throw batchlas::device_error("Device::Device: No " + name + " device available");
             return devs.at(0);
         };
-        if(type == "cpu") {
+        if (type == "cpu") {
             *this = pick(get_devices(DeviceType::CPU), "cpu");
-        } else if(type == "gpu") {
+        } else if (type == "gpu") {
             *this = pick(get_devices(DeviceType::GPU), "gpu");
-        } else if(type == "accelerator") {
+        } else if (type == "accelerator") {
             *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
             throw batchlas::invalid_argument("Device::Device: Invalid device type: " + type);
@@ -231,9 +231,9 @@ struct BATCHLAS_API Device{
     /// @brief The first GPU, else the first CPU, else the host device.
     /// @return the chosen device
     inline static Device default_device() {
-        if(!get_devices(DeviceType::GPU).empty()) {
+        if (!get_devices(DeviceType::GPU).empty()) {
             return get_devices(DeviceType::GPU).at(0);
-        } else if(!get_devices(DeviceType::CPU).empty()) {
+        } else if (!get_devices(DeviceType::CPU).empty()) {
             return get_devices(DeviceType::CPU).at(0);
         } else {
             return get_devices(DeviceType::HOST).at(0);
@@ -427,8 +427,8 @@ struct BATCHLAS_API Queue{
     /// @tparam EventContainer  a range of Event, iterated by non-const reference
     /// @param[in] events  the Events later work waits for; not modified
     template <typename EventContainer>
-    void enqueue(EventContainer& events){
-        for(auto& event : events){
+    void enqueue(EventContainer& events) {
+        for (auto& event : events) {
             enqueue(event);
         }
     }

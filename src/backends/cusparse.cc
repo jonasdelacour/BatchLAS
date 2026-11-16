@@ -296,7 +296,7 @@ Event spmm_vendor(Queue& ctx,
             *B_mat,
             &beta_h,
             *C,
-            BackendScalar<T,BackendLibrary::CUSPARSE>::type,
+            BackendScalar<T, BackendLibrary::CUSPARSE>::type,
             CUSPARSE_SPMM_ALG_DEFAULT,
             buffer.data()
         ));

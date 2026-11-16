@@ -212,7 +212,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     params.max_sweeps = 10;
     params.sort = true;
 
-    UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx,diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
+    UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
 
     (void)steqr<B, float_type>(*this->ctx, diag, sub_diag, eigenvalues,
         ws.to_span(), JobType::EigenVectors, params, eigvects);

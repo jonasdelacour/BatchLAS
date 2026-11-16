@@ -36,14 +36,14 @@ struct BATCHLAS_API UnifiedVector {
     /// @brief Deep copy of @p other's first `size()` elements into a new allocation.
     /// @param[in] other  vector to copy
     /// @throws std::bad_alloc if the allocation fails
-    UnifiedVector(const UnifiedVector<T> &other);
+    UnifiedVector(const UnifiedVector<T>& other);
     /// @brief Deep copy of @p other's elements; reallocates only when this capacity is smaller.
     ///
     /// Trivially copyable `T` is copied with a device memcpy that is waited on.
     /// @param[in] other  vector to copy
     /// @return `*this`
     /// @throws std::bad_alloc if the allocation fails; this vector is then unchanged
-    UnifiedVector<T> &operator=(const UnifiedVector<T> &other);
+    UnifiedVector<T>& operator=(const UnifiedVector<T>& other);
     /// @brief Frees the allocation; never throws, even if the runtime reports an earlier async error.
     ~UnifiedVector();
 
@@ -81,7 +81,7 @@ struct BATCHLAS_API UnifiedVector {
     UnifiedVector() : size_(0), capacity_(0), data_(nullptr) {}
     /// @brief Takes @p other's allocation and leaves @p other empty.
     /// @param[in,out] other  vector whose allocation is taken; empty on return
-    UnifiedVector(UnifiedVector<T> &&other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
+    UnifiedVector(UnifiedVector<T>&& other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
         other.size_ = 0;
         other.capacity_ = 0;
         other.data_ = nullptr;
@@ -89,7 +89,7 @@ struct BATCHLAS_API UnifiedVector {
     /// @brief Frees this vector's allocation, takes @p other's and leaves @p other empty.
     /// @param[in,out] other  vector whose allocation is taken; empty on return
     /// @return `*this`
-    UnifiedVector<T> &operator=(UnifiedVector<T> &&other) {
+    UnifiedVector<T>& operator=(UnifiedVector<T>&& other) {
         if (this == &other) return *this;
         UnifiedVector<T> previous(std::move(*this));  // its destructor frees the old allocation
         this->data_ = other.data_;
@@ -117,7 +117,7 @@ struct BATCHLAS_API UnifiedVector {
     /// @brief Sets every element to @p data, on the host.
     /// @param[in] data  value every element is set to
     inline constexpr void fill(T data) { std::fill(begin(), end(), data); }
-    inline constexpr T *data() const { return data_; }               ///< Pointer to the first element (null when never allocated).
+    inline constexpr T* data() const { return data_; }               ///< Pointer to the first element (null when never allocated).
     inline constexpr size_t size() const { return size_; }           ///< Number of elements.
     inline constexpr size_t capacity() const { return capacity_; }   ///< Allocated elements.
 
@@ -127,33 +127,33 @@ struct BATCHLAS_API UnifiedVector {
     /// @brief Element @p index; prints and asserts (debug build) when out of range.
     /// @param[in] index  element index
     /// @return reference to the element
-    inline constexpr T &operator[](size_t index) { if(index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
+    inline constexpr T& operator[](size_t index) { if (index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
     /// @brief Element @p index (const); same checks as the non-const overload.
     /// @param[in] index  element index
     /// @return const reference to the element
-    inline constexpr const T &operator[](size_t index) const { if (index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
+    inline constexpr const T& operator[](size_t index) const { if (index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
 
     /// @brief Element @p index. @pre `index < size()` (asserted in debug builds, not thrown)
     /// @param[in] index  element index
     /// @return reference to the element
-    inline constexpr T &at(size_t index) { assert(index < size_); return data_[index]; }
+    inline constexpr T& at(size_t index) { assert(index < size_); return data_[index]; }
     /// @brief Element @p index (const). @pre `index < size()`
     /// @param[in] index  element index
     /// @return const reference to the element
-    inline constexpr const T &at(size_t index) const { assert(index < size_); return data_[index]; }
+    inline constexpr const T& at(size_t index) const { assert(index < size_); return data_[index]; }
 
     /// @brief Element-wise comparison with Span::operator== semantics.
     /// @param[in] other  vector to compare with
     /// @return true when the two compare equal as Spans
-    inline bool operator==(const UnifiedVector<T> &other) const {
+    inline bool operator==(const UnifiedVector<T>& other) const {
         return Span<T>(*this) == Span<T>(other);
     }
 
     /// @brief Appends @p value, doubling the capacity when full (which invalidates earlier Spans).
     /// @param[in] value  element to append
     /// @throws std::bad_alloc if growing the allocation fails
-    inline void push_back(const T &value) {
-        if(size_ == capacity_){
+    inline void push_back(const T& value) {
+        if (size_ == capacity_) {
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
             reserve(new_capacity);
         }
@@ -163,8 +163,8 @@ struct BATCHLAS_API UnifiedVector {
     /// @brief Appends @p value by move; growth as for the copying overload.
     /// @param[in,out] value  element to append; moved from
     /// @throws std::bad_alloc if growing the allocation fails
-    inline void push_back(T &&value) {
-        if(size_ == capacity_){
+    inline void push_back(T&& value) {
+        if (size_ == capacity_) {
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
             reserve(new_capacity);
         }
@@ -180,17 +180,17 @@ struct BATCHLAS_API UnifiedVector {
     /// @param[in]     vec  vector to print
     /// @return @p os
     template <typename U>
-    friend std::ostream &operator<<(std::ostream &os, const UnifiedVector<U> &vec);
+    friend std::ostream& operator<<(std::ostream& os, const UnifiedVector<U>& vec);
 
-    inline constexpr T *begin() const { return data_; }            ///< Iterator to the first element.
-    inline constexpr T *end() const { return data_ + size_; }      ///< Iterator one past the last element.
+    inline constexpr T* begin() const { return data_; }            ///< Iterator to the first element.
+    inline constexpr T* end() const { return data_ + size_; }      ///< Iterator one past the last element.
 
-    inline constexpr T &back() const { return data_[size_ - 1]; }  ///< Last element. @pre `size() > 0`
-    inline constexpr T &front() const { return data_[0]; }         ///< First element. @pre `size() > 0`
+    inline constexpr T& back() const { return data_[size_ - 1]; }  ///< Last element. @pre `size() > 0`
+    inline constexpr T& front() const { return data_[0]; }         ///< First element. @pre `size() > 0`
 
     /// @brief Exchanges storage, size and capacity with @p other; no element is copied.
     /// @param[in,out] other  vector to exchange with; holds this vector's old storage on return
-    inline constexpr void swap(UnifiedVector<T> &other) {
+    inline constexpr void swap(UnifiedVector<T>& other) {
         std::swap(data_, other.data_);
         std::swap(size_, other.size_);
         std::swap(capacity_, other.capacity_);
@@ -214,7 +214,7 @@ private:
 /// @param[in,out] rhs  second vector; holds @p lhs's old storage on return
 /// @ingroup api_matrix_lowlevel
 template <typename T>
-inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
+inline constexpr void swap(UnifiedVector<T>& lhs, UnifiedVector<T>& rhs) {
     lhs.swap(rhs);
 }
 

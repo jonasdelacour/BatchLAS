@@ -130,7 +130,7 @@ inline Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             Span<int64_t> pivots,
             Span<std::byte> workspace) {
-        return getrf<B,T>(ctx, A, pivots, workspace, Span<int32_t>{});
+        return getrf<B, T>(ctx, A, pivots, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that getrf() needs for this shape on this queue.

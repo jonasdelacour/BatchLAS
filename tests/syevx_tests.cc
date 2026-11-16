@@ -207,7 +207,7 @@ protected:
     UnifiedVector<int> csr_col_indices;
     UnifiedVector<int> csr_row_offsets;
 
-    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
+    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld) {
         for (int i = 0; i < cols; ++i) {
             for (int j = 0; j < rows; ++j) {
                 std::cout << matrix_data[i * ld + j] << " ";
@@ -238,7 +238,7 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
 
     auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size(
         *ctx, dense, W_lobpcg, neig, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params));
-    ctx ->wait();
+    ctx->wait();
 
     (void)syevx(
         *ctx, dense, W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);

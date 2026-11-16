@@ -135,7 +135,7 @@ inline Event getri(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots,
             Span<std::byte> workspace) {
-        return getri<B,T>(ctx, A, C, pivots, workspace, Span<int32_t>{});
+        return getri<B, T>(ctx, A, C, pivots, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.

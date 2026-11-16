@@ -30,7 +30,7 @@ template <typename T>
 UnifiedVector<T> make_unified_vector(std::initializer_list<T> values) {
     UnifiedVector<T> out;
     out.reserve(values.size());
-    for (const auto &value : values) {
+    for (const auto& value : values) {
         out.push_back(value);
     }
     return out;
@@ -1336,7 +1336,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
 
 TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
     struct Shape { int n; int batch; float density; };
-    const std::vector<Shape> shapes = {{256,1,0.02f},{1024,1,0.01f},{4096,1,0.003f}};
+    const std::vector<Shape> shapes = {{256, 1, 0.02f}, {1024, 1, 0.01f}, {4096, 1, 0.003f}};
     for (int level : {0, 1, 2}) {
         for (const auto& s : shapes) {
             auto csr = csr_generators::random_sparse_hermitian_csr<float>(s.n, s.density, s.batch, 1234u, 2.0f, true);

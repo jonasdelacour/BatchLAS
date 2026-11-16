@@ -19,9 +19,9 @@ namespace backend {
 
 template <Backend Back, typename T>
 Event gemm_vendor(Queue& ctx,
-           const MatrixView<T,MatrixFormat::Dense>& A,
-           const MatrixView<T,MatrixFormat::Dense>& B,
-           const MatrixView<T,MatrixFormat::Dense>& C,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha,
            T beta,
            Transpose transA,
@@ -87,7 +87,7 @@ namespace backend {
 
 template <Backend B, typename T>
 Event gemv_vendor(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A,
+    const MatrixView<T, MatrixFormat::Dense>& A,
     const VectorView<T>& X,
     const VectorView<T>& Y,
     T alpha,
@@ -122,8 +122,8 @@ namespace backend {
 
 template <Backend B, typename T>
 Event trsm_vendor(Queue& ctx,
-           const MatrixView<T,MatrixFormat::Dense>& A,
-           const MatrixView<T,MatrixFormat::Dense>& Bmat,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& Bmat,
            Side side,
            Uplo uplo,
            Transpose transA,

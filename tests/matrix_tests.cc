@@ -21,7 +21,7 @@ namespace batchlas::detail {
 std::size_t set_fill_local_budget(std::size_t bytes);
 }  // namespace batchlas::detail
 
-TEST (MatrixDenseTest, StridedConstruction) {
+TEST(MatrixDenseTest, StridedConstruction) {
     constexpr int rows = 3;
     constexpr int cols = 2;
     constexpr int batch = 2;
@@ -71,7 +71,7 @@ TEST (MatrixDenseTest, StridedConstruction) {
     }
 }
 
-TEST (MatrixDenseTest, StridedIdentity) {
+TEST(MatrixDenseTest, StridedIdentity) {
     constexpr int n = 4;
     constexpr int batch = 2;
     constexpr int ld = 6;

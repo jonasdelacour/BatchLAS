@@ -53,24 +53,24 @@ template <Backend B>
 struct LinalgHandle;
 
 // Helper type traits to identify our enum types
-template<typename T>
+template <typename T>
 struct is_linalg_enum : std::false_type {};
 
-template<> struct is_linalg_enum<Side> : std::true_type {};
-template<> struct is_linalg_enum<Uplo> : std::true_type {};
-template<> struct is_linalg_enum<Transpose> : std::true_type {};
-template<> struct is_linalg_enum<Diag> : std::true_type {};
-template<> struct is_linalg_enum<Layout> : std::true_type {};
-template<> struct is_linalg_enum<JobType> : std::true_type {};
+template <> struct is_linalg_enum<Side> : std::true_type {};
+template <> struct is_linalg_enum<Uplo> : std::true_type {};
+template <> struct is_linalg_enum<Transpose> : std::true_type {};
+template <> struct is_linalg_enum<Diag> : std::true_type {};
+template <> struct is_linalg_enum<Layout> : std::true_type {};
+template <> struct is_linalg_enum<JobType> : std::true_type {};
 
 template <typename T>
 struct is_complex_or_floating_point : std::bool_constant<FloatingOrComplexScalar<T>> {};
 
-template<auto>
+template <auto>
 struct always_false : std::false_type {};
 
 // Individual enum conversions for CUDA backend
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(Side side) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
@@ -85,7 +85,7 @@ constexpr auto enum_convert(Side side) {
     } else
 #endif
 #if BATCHLAS_HAS_CBLAS
-    if constexpr (B == BackendLibrary::CBLAS){
+    if constexpr (B == BackendLibrary::CBLAS) {
         return static_cast<CBLAS_SIDE>(
             side == Side::Left ? CblasLeft : CblasRight
         );
@@ -103,7 +103,7 @@ constexpr auto enum_convert(Side side) {
     }
 }
 
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(JobType job) {
 #if BATCHLAS_HAS_CUSOLVER
     if constexpr (B == BackendLibrary::CUSOLVER) {
@@ -129,7 +129,7 @@ constexpr auto enum_convert(JobType job) {
     }
 }
 
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(Diag diag) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS) {
@@ -162,7 +162,7 @@ constexpr auto enum_convert(Diag diag) {
     }
 }
 
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(Layout layout) {
 #if BATCHLAS_HAS_CUSPARSE
     if constexpr (B == BackendLibrary::CUSPARSE) {
@@ -195,7 +195,7 @@ constexpr auto enum_convert(Layout layout) {
     }
 }
 
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(Uplo uplo) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
@@ -237,7 +237,7 @@ constexpr auto enum_convert(Uplo uplo) {
     }
 }
 
-template<BackendLibrary B>
+template <BackendLibrary B>
 constexpr auto enum_convert(Transpose trans) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER) {
@@ -267,7 +267,7 @@ constexpr auto enum_convert(Transpose trans) {
         }
     } else if constexpr (B == BackendLibrary::ROCSPARSE) {
         // return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
-        switch (trans){
+        switch (trans) {
             case Transpose::NoTrans: return rocsparse_operation_none;
             case Transpose::Trans: return rocsparse_operation_transpose;
             case Transpose::ConjTrans: return rocsparse_operation_conjugate_transpose;
@@ -293,7 +293,7 @@ constexpr auto enum_convert(Transpose trans) {
     }
 }
 
-template<BackendLibrary B, typename T>
+template <BackendLibrary B, typename T>
 constexpr auto enum_convert(ComputePrecision precision) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
@@ -345,7 +345,7 @@ constexpr auto enum_convert(ComputePrecision precision) {
     }
 }
 
-template<BackendLibrary B, typename T>
+template <BackendLibrary B, typename T>
 constexpr auto ptr_convert(T** ptr) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
@@ -387,7 +387,7 @@ constexpr auto ptr_convert(T** ptr) {
     }
 }
 
-template<BackendLibrary B, typename T>
+template <BackendLibrary B, typename T>
 constexpr auto ptr_convert(T* ptr) {
     static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
 #if BATCHLAS_HAS_CUDA_BACKEND
@@ -444,7 +444,7 @@ constexpr auto ptr_convert(T* ptr) {
 }
 
 // Const pointer version
-template<BackendLibrary B, typename T>
+template <BackendLibrary B, typename T>
 constexpr auto ptr_convert(const T* ptr) {
     static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
 #if BATCHLAS_HAS_CUDA_BACKEND
@@ -474,7 +474,7 @@ constexpr auto ptr_convert(const T* ptr) {
     }
 }
 
-template<BackendLibrary B, typename T>
+template <BackendLibrary B, typename T>
 constexpr auto float_convert(const T& val) {
     using BareT = std::remove_const_t<T>;
     static_assert(is_complex_or_floating_point<BareT>::value, "Type must be floating point or complex");
@@ -600,13 +600,13 @@ inline auto check_status(rocsparse_status status) {
 #if BATCHLAS_HAS_CUDA_BACKEND
 template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
-    if constexpr (std::is_same_v<T,float>) {
+    if constexpr (std::is_same_v<T, float>) {
         return check_status(std::apply(fun1, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,double>) {
+    } else if constexpr (std::is_same_v<T, double>) {
         return check_status(std::apply(fun2, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
         return check_status(std::apply(fun3, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,std::complex<double>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
         return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
     }
 }
@@ -615,13 +615,13 @@ auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fu
 #if BATCHLAS_HAS_ROCM_BACKEND
 template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
-    if constexpr (std::is_same_v<T,float>) {
+    if constexpr (std::is_same_v<T, float>) {
         return check_status(std::apply(fun1, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,double>) {
+    } else if constexpr (std::is_same_v<T, double>) {
         return check_status(std::apply(fun2, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
         return check_status(std::apply(fun3, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T,std::complex<double>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
         return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
     }
 }
@@ -629,13 +629,13 @@ auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fu
 
 template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
-    if constexpr (std::is_same_v<T,float>) {
+    if constexpr (std::is_same_v<T, float>) {
         std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T,double>) {
+    } else if constexpr (std::is_same_v<T, double>) {
         std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
         std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T,std::complex<double>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
         std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));
     }
 }
@@ -645,11 +645,11 @@ void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const
 // evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract
 template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend_nh_r(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
-    if constexpr (std::is_same_v<T,float>) {
+    if constexpr (std::is_same_v<T, float>) {
         return std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T,double>) {
+    } else if constexpr (std::is_same_v<T, double>) {
         return std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T,std::complex<float>>) {
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
         return std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
     } else {
         return std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));
@@ -937,11 +937,11 @@ struct LinalgHandle<Backend::NETLIB>{
 #endif
 
 template <typename KernelName>
-size_t get_kernel_max_wg_size(const Queue& ctx){
+size_t get_kernel_max_wg_size(const Queue& ctx) {
     try {
-        return impl::kernel_max_wg_size<KernelName>(ctx -> get_context(), ctx -> get_device());
+        return impl::kernel_max_wg_size<KernelName>(ctx->get_context(), ctx->get_device());
     } catch (...) {
-        return (ctx -> get_device()).get_info<sycl::info::device::max_work_group_size>();
+        return (ctx->get_device()).get_info<sycl::info::device::max_work_group_size>();
     }
 }
 }  // namespace batchlas

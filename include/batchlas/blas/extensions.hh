@@ -268,7 +268,7 @@ inline Event syevx(Queue& ctx,
             JobType jobz = JobType::NoEigenVectors,
             const SyevxParams<T>& params = SyevxParams<T>(),
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
+    return syevx<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
 }
 
 /// @brief syevx() with a per-batch-item count of eigenpairs actually found.
@@ -331,7 +331,7 @@ inline Event syevx(Queue& ctx,
             JobType jobz = JobType::NoEigenVectors,
             const SyevxParams<T>& params = SyevxParams<T>(),
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
+    return syevx<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
 }
 
 /// @brief Required workspace, in bytes, for syevx(); arguments as for the call minus
@@ -371,7 +371,7 @@ inline size_t syevx_buffer_size(Queue& ctx,
             size_t neigs,
             JobType jobz = JobType::NoEigenVectors,
             const SyevxParams<T>& params = SyevxParams<T>()) {
-    return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    return syevx_buffer_size<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
 }
 
 /// @brief syevx_buffer_size() with the solve's `m` argument, which is ACCEPTED AND
@@ -396,7 +396,7 @@ inline size_t syevx_buffer_size(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
             const SyevxParams<T>& params = SyevxParams<T>()) {
     (void)m;
-    return syevx_buffer_size<B,T,MFormat>(ctx, A, W, neigs, jobz, V, params);
+    return syevx_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
 }
 
 /// @brief The `m`-taking syevx_buffer_size() on an owning `A`; `m` is ignored.
@@ -418,7 +418,7 @@ inline size_t syevx_buffer_size(Queue& ctx,
             JobType jobz = JobType::NoEigenVectors,
             const SyevxParams<T>& params = SyevxParams<T>()) {
     (void)m;
-    return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    return syevx_buffer_size<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
 }
 
 /// @brief Resolved, algorithm-independent description of the caller's request.
@@ -812,7 +812,7 @@ inline Event lanczos(Queue& ctx,
     Span<std::byte> workspace,
     JobType jobz = JobType::NoEigenVectors,
     const LanczosParams<T>& params = LanczosParams<T>()) {
-    return lanczos<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    return lanczos<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
 }
 
 /// @brief Required workspace, in bytes, for lanczos(); arguments as for the call itself.
@@ -2569,12 +2569,12 @@ inline auto ritz_values(Queue& ctx,
     using float_type = typename base_type<T>::type;
     size_t nRitz = V.cols();
     Vector<float_type> ritz_vals(nRitz, V.batch_size());
-    size_t workspace_size = ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
+    size_t workspace_size = ritz_values_buffer_size<B, T, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
     UnifiedVector<std::byte> workspace(workspace_size);
     ctx.wait();
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.
-    (void)ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
+    (void)ritz_values<B, T, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
     ctx.wait();
     return ritz_vals;
 }

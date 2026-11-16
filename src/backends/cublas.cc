@@ -43,9 +43,9 @@ namespace backend {
 
 template <Backend Back, typename T>
 Event gemm_vendor_impl(Queue& ctx,
-                       const MatrixView<T,MatrixFormat::Dense>& A,
-                       const MatrixView<T,MatrixFormat::Dense>& B,
-                       const MatrixView<T,MatrixFormat::Dense>& C,
+                       const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& B,
+                       const MatrixView<T, MatrixFormat::Dense>& C,
                        T alpha,
                        T beta,
                        Transpose transA,
@@ -82,10 +82,10 @@ Event gemm_vendor_impl(Queue& ctx,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha_h,
-                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(),
-                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(),
+                A.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, A.ld(),
+                B.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, B.ld(),
                 &beta_h,
-                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(),
+                C.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, C.ld(),
                 enum_convert<BackendLibrary::CUBLAS, T>(precision),
                 CUBLAS_GEMM_DFALT));
         } else {
@@ -93,10 +93,10 @@ Event gemm_vendor_impl(Queue& ctx,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha_h,
-                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
-                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
+                A.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
+                B.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
                 &beta_h,
-                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
+                C.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
                 A.batch_size(),
                 enum_convert<BackendLibrary::CUBLAS, T>(precision),
                 CUBLAS_GEMM_DFALT));
@@ -107,9 +107,9 @@ Event gemm_vendor_impl(Queue& ctx,
 
 template <Backend Back, typename T>
 Event gemm_vendor(Queue& ctx,
-                  const MatrixView<T,MatrixFormat::Dense>& A,
-                  const MatrixView<T,MatrixFormat::Dense>& B,
-                  const MatrixView<T,MatrixFormat::Dense>& C,
+                  const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<T, MatrixFormat::Dense>& C,
                   T alpha,
                   T beta,
                   Transpose transA,
@@ -427,7 +427,7 @@ Event trmm_vendor(Queue& ctx,
 
 template <Backend B, typename T>
 Event gemv_vendor(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A,
+    const MatrixView<T, MatrixFormat::Dense>& A,
     const VectorView<T>& X,
     const VectorView<T>& Y,
     T alpha,
@@ -455,8 +455,8 @@ Event gemv_vendor(Queue& ctx,
 
 template <Backend Back, typename T>
 Event trsm_vendor(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
+               const MatrixView<T, MatrixFormat::Dense>& A,
+               const MatrixView<T, MatrixFormat::Dense>& B,
                Side side,
                Uplo uplo,
                Transpose transA,
@@ -600,7 +600,7 @@ Event trsm_vendor(Queue& ctx,
 
 template <Backend B, typename T>
 Event geqrf_vendor(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A, // In place reflectors (Lower triangle of A)
+    const MatrixView<T, MatrixFormat::Dense>& A, // In place reflectors (Lower triangle of A)
     Span<T> tau,
     Span<std::byte> workspace) {
     ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
@@ -617,9 +617,9 @@ Event geqrf_vendor(Queue& ctx,
         try {
             size_t device_l_work = 0, host_l_work = 0;
             check_status(cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work));
+                BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
+                BackendScalar<T, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work));
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto d_info = pool.allocate<int>(ctx, 1);
             // bufferOnHost is host memory, not a draw from the (device) workspace.
@@ -628,9 +628,9 @@ Event geqrf_vendor(Queue& ctx,
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 check_status(cusolverDnXgeqrf(handle, params, m, n,
-                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
+                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
+                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, device_work_space.data(),
                     device_l_work, host_ptr, host_l_work, d_info.data()));
             });
             if (host_l_work > 0) ctx.wait();  // host_work_space must outlive the call's stream work
@@ -667,7 +667,7 @@ Event geqrf_vendor(Queue& ctx,
 
 template <Backend B, typename T>
 size_t geqrf_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A,
+    const MatrixView<T, MatrixFormat::Dense>& A,
     Span<T> tau) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
@@ -679,9 +679,9 @@ size_t geqrf_vendor_buffer_size(Queue& ctx,
         cusolverDnParams_t params;
         check_status(cusolverDnCreateParams(&params));
         const cusolverStatus_t st = cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-            BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-            BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-            BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
+            BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+            BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
+            BackendScalar<T, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
         check_status(cusolverDnDestroyParams(params));
         check_status(st);
         // The run path's draws only: its host buffer and geqrfBatched's info live on the host.
@@ -855,8 +855,8 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
 
 template <Backend Back, typename T>
 Event getrs_vendor(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A,
-    const MatrixView<T,MatrixFormat::Dense>& B,
+    const MatrixView<T, MatrixFormat::Dense>& A,
+    const MatrixView<T, MatrixFormat::Dense>& B,
     Transpose transA,
     Span<int64_t> pivots,
     Span<std::byte> workspace) {
@@ -907,8 +907,8 @@ Event getrs_vendor(Queue& ctx,
 
 template <Backend Back, typename T>
 size_t getrs_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T,MatrixFormat::Dense>& A,
-    const MatrixView<T,MatrixFormat::Dense>& B,
+    const MatrixView<T, MatrixFormat::Dense>& A,
+    const MatrixView<T, MatrixFormat::Dense>& B,
     Transpose transA) {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size() == 1 ? 1 : 0); // batched getrs just uses a single host integer.
     }

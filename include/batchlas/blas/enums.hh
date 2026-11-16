@@ -26,19 +26,19 @@ namespace batchlas {
 /// @{
 
 /// @brief Real type underlying a scalar: `T` itself for a real `T`, `R` for `std::complex<R>`.
-template<typename T>
+template <typename T>
 struct base_type {
     using type = T;  ///< The real type.
 };
 
 /// @brief Specialisation that strips `std::complex`.
-template<typename T>
+template <typename T>
 struct base_type<std::complex<T>> {
     using type = T;  ///< The component type `R` of `std::complex<R>`.
 };
 
 /// @brief Shorthand for `base_type<T>::type`: the precision of `T` (tolerances, norms, eigenvalues).
-template<typename T>
+template <typename T>
 using float_t = typename base_type<T>::type;
 
 /// @brief True for `std::complex<R>`, false otherwise.

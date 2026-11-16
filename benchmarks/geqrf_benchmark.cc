@@ -14,7 +14,7 @@ using namespace batchlas;
 namespace {
 
 // Single matrix GEQRF benchmark
-template<typename T, Backend B>
+template <typename T, Backend B>
 void BM_GEQRF(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);

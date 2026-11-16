@@ -146,7 +146,7 @@ void stedc_merge_step(Queue& ctx,
     auto perm_map = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
     auto v = stedc_masked(VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size), mask);
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
         batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
@@ -167,7 +167,7 @@ void stedc_merge_step(Queue& ctx,
     auto keep_indices = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
     // Deflation scheme
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         auto Q = eigvects.kernel_view();
         auto perm_local = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto scan_mem_include = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
@@ -218,7 +218,7 @@ void stedc_merge_step(Queue& ctx,
         int32_t* const info_dev = info;
         const int64_t nodes_per_item = info_nodes_per_item;
         const int32_t max_iter = static_cast<int32_t>(effective_params.max_sec_iter);
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
@@ -245,7 +245,7 @@ void stedc_merge_step(Queue& ctx,
         // Rescale v (secular vector) to avoid bad numerics when an eigenvalue
         // is too close to a pole. This mirrors ROCm's stedc_mergeValues_Rescale_kernel
         // but uses SYCL group collectives for the product reduction.
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcRescaleV<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
@@ -273,7 +273,7 @@ void stedc_merge_step(Queue& ctx,
                             partial *= ratio;
                         });
                         const T valf = device::allreduce(ex, partial, sycl::multiplies<T>());
-                        if(ex.leader()) {
+                        if (ex.leader()) {
                             T mag  = std::sqrt(std::fabs(valf));
                             T sign = v(eid, bid) >= T(0) ? T(1) : T(-1);
                             v(eid, bid) = sign * mag;
@@ -282,7 +282,7 @@ void stedc_merge_step(Queue& ctx,
                 });
         });
 
-        ctx -> submit([&](sycl::handler& h) {
+        ctx->submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             batchlas::impl::parallel_for<StedcMatrixUpdate<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
@@ -293,7 +293,7 @@ void stedc_merge_step(Queue& ctx,
                     const int dd = n_reduced[bid];
                     const auto Q = device::mat(Qview.batch_item(bid)).sub(0, 0, dd, dd);
                     const auto z = device::vec(v.batch_item(bid));
-                    for(int eig = 0; eig < dd; ++eig) {
+                    for (int eig = 0; eig < dd; ++eig) {
                         const auto q = Q.col(eig);
                         device::map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
                         const T nrm = device::nrm2<device::alg::Blue>(ex, q);
@@ -303,7 +303,7 @@ void stedc_merge_step(Queue& ctx,
         });
     }
 
-    ctx -> submit([&](sycl::handler& h) {
+    ctx->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<StedcAssignEigenvalues<B, T>>(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         const device::RtGroup<> ex{item};
@@ -395,7 +395,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto steqr_params = effective_params.leaf_steqr_params;
     steqr_params.sort = true;
     steqr_params.sort_order = SortOrder::Ascending;
-    if (n <= effective_params.recursion_threshold){
+    if (n <= effective_params.recursion_threshold) {
         // steqr_dispatch, not steqr: this leaf must RAISE the caller's `info`, not clear
         // it; the two half-solves below accumulate through info_report's fetch_max.
         // `jobz` is EigenVectors here: stedc_dispatch turns NoEigenVectors into a
@@ -421,7 +421,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto pool = BumpAllocator(ws);
     auto rho = pool.allocate<T>(ctx, batch_size);
 
-    ctx -> parallel_for<StedcModifyDiagonal<B, T>>(sycl::range(batch_size), [=](sycl::id<1> idx) {
+    ctx->parallel_for<StedcModifyDiagonal<B, T>>(sycl::range(batch_size), [=](sycl::id<1> idx) {
         // Modify the two diagonal entries adjacent to the split
         auto ix = idx[0];
         if (!d1.active(ix)) return;  // I3: d is the caller's, and edited in place

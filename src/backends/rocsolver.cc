@@ -19,15 +19,15 @@ namespace backend {
 
 template <Backend B, typename T>
 size_t potrf_vendor_buffer_size(Queue& ctx,
-                        const MatrixView<T,MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
                         Uplo uplo) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     size_t size = 0;
     if (A.batch_size() == 1) {
-        size = BumpAllocator::allocation_size<int>(ctx,1);
+        size = BumpAllocator::allocation_size<int>(ctx, 1);
     } else {
-        size = BumpAllocator::allocation_size<int>(ctx,A.batch_size());
+        size = BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
     return size;
 }

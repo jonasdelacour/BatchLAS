@@ -33,13 +33,13 @@ using geqrf_buffer_size = size_t(Queue&,
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using geqrf_vendor = Event(Queue&,
-                           const MatrixView<T,MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
                            Span<T>,
                            Span<std::byte>);
 
 template <typename T>
 using geqrf_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
                                         Span<T>);
 }  // namespace sig
 
@@ -93,7 +93,7 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @ingroup api_qr
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf(Queue& ctx,
-                         const MatrixView<T,MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau,
                          Span<std::byte> workspace);
 
@@ -107,7 +107,7 @@ BATCHLAS_API Event geqrf(Queue& ctx,
 /// @ingroup api_qr_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
-                                      const MatrixView<T,MatrixFormat::Dense>& A,
+                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                       Span<T> tau);
 
 }  // namespace batchlas
@@ -130,7 +130,7 @@ namespace batchlas::backend {
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
                                 Span<T> tau,
                                 Span<std::byte> workspace);
 
@@ -144,7 +144,7 @@ BATCHLAS_API Event geqrf_vendor(Queue& ctx,
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
                                              Span<T> tau);
 
 }  // namespace batchlas::backend

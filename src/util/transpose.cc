@@ -11,9 +11,9 @@ template <typename T, MatrixFormat MF>
 struct TransposeKernel;
 
 template <typename T, MatrixFormat MF>
-Event transpose_impl(Queue &ctx,
-                     const MatrixView<T, MF> &A,
-                     const MatrixView<T, MF> &B) {
+Event transpose_impl(Queue& ctx,
+                     const MatrixView<T, MF>& A,
+                     const MatrixView<T, MF>& B) {
     detail::require_device_fp64<T>(ctx, "transpose");
     constexpr int TILE = 16;
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("transpose", A, B));
@@ -52,15 +52,15 @@ Event transpose_impl(Queue &ctx,
 }
 
 template <typename T, MatrixFormat MF>
-Event transpose(Queue &ctx,
-                const MatrixView<T, MF> &A,
-                const MatrixView<T, MF> &B) {
+Event transpose(Queue& ctx,
+                const MatrixView<T, MF>& A,
+                const MatrixView<T, MF>& B) {
     return transpose_impl(ctx, A, B);
 }
 
 template <typename T, MatrixFormat MF>
-Matrix<T, MF> transpose(Queue &ctx,
-                        const MatrixView<T, MF> &A) {
+Matrix<T, MF> transpose(Queue& ctx,
+                        const MatrixView<T, MF>& A) {
     Matrix<T, MF> result(A.cols(), A.rows(), A.batch_size());
     // The result keeps A's mask (copied on ctx, after its producer); its inactive items stay uninitialised.
     if (A.has_batch_mask()) ctx->memcpy(result.enable_batch_mask().data(), A.batch_mask().data(), A.batch_mask().size());

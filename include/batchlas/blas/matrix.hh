@@ -339,7 +339,7 @@ struct KernelMatrixView {
 
 /// @cond BATCHLAS_DETAIL
 namespace detail {
-inline std::pair<int64_t,int64_t> normalize_slice_component(Slice s, int64_t dim) {
+inline std::pair<int64_t, int64_t> normalize_slice_component(Slice s, int64_t dim) {
     int64_t len;
     if (s.start == std::numeric_limits<int64_t>::min() && s.end == std::numeric_limits<int64_t>::max()) { s.start = 0; len = dim; }
     else if (s.end == std::numeric_limits<int64_t>::max()) { s.start = s.start < 0 ? dim + s.start : s.start; len = dim - s.start; }
@@ -349,7 +349,7 @@ inline std::pair<int64_t,int64_t> normalize_slice_component(Slice s, int64_t dim
 
 // Host slicing only: KernelMatrixView shares normalize_slice_component() in device code,
 // which cannot throw. An empty in-range slice is left to the caller's invalid_argument.
-inline std::pair<int64_t,int64_t> checked_slice_component(Slice s, int64_t dim) {
+inline std::pair<int64_t, int64_t> checked_slice_component(Slice s, int64_t dim) {
     const auto [start, len] = normalize_slice_component(s, dim);
     if (start < 0 || start > dim || start + std::max<int64_t>(len, 0) > dim) {
         throw batchlas::out_of_range("MatrixView::operator(): Slice [" + std::to_string(start) + ", " +
@@ -428,7 +428,7 @@ T convert_to_fill_value(int64_t value) {
                                         std::tuple_size<T>::value>>
     ) {
         T result{};
-        for (auto &elem : result) {
+        for (auto& elem : result) {
             using Elem = typename T::value_type;
             elem = convert_to_fill_value<Elem>(value);
         }

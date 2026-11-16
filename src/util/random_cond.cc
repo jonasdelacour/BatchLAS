@@ -235,7 +235,7 @@ constexpr OrthoAlgorithm effective_ortho_algo(OrthoAlgorithm algo) {
 
 // Create a batch of random dense matrices with a specified log10 conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue& ctx,
                                                              int n,
                                                              float_t<T> log10_kappa,
                                                              NormType metric,
@@ -290,7 +290,7 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
 
 // Create a batch of random symmetric/Hermitian matrices with a specified conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue& ctx,
                                                                        int n,
                                                                        float_t<T> log10_kappa,
                                                                        NormType metric,
@@ -335,7 +335,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
 
 // Create a batch of random dense banded matrices with a specified log10 conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue& ctx,
                                                                     int n,
                                                                     int kd,
                                                                     float_t<T> log10_kappa,
@@ -382,7 +382,7 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
 
 // Create a batch of random symmetric/Hermitian banded matrices with a specified conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue& ctx,
                                                                               int n,
                                                                               int kd,
                                                                               float_t<T> log10_kappa,
@@ -429,7 +429,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
 
 // Create a batch of random tridiagonal matrices with a specified log10 conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue& ctx,
                                                                          int n,
                                                                          float_t<T> log10_kappa,
                                                                          NormType metric,
@@ -452,7 +452,7 @@ Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &
 
 // Create a batch of random symmetric/Hermitian tridiagonal matrices with a specified conditioning metric.
 template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue &ctx,
+Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue& ctx,
                                                                                    int n,
                                                                                    float_t<T> log10_kappa,
                                                                                    NormType metric,

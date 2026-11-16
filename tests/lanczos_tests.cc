@@ -108,7 +108,7 @@ protected:
     // Known eigenvalues for verification
     std::vector<float> known_eigenvalues;
 
-    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
+    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld) {
         for (int i = 0; i < cols; ++i) {
             for (int j = 0; j < rows; ++j) {
                 std::cout << matrix_data[i * ld + j] << " ";

@@ -15,17 +15,17 @@ struct CondSpectralKernel;
 
 // Sized and run through the same public syev, so the buffer and the call cannot disagree.
 template <Backend B, typename T>
-size_t cond_syev_buffer_size(Queue &ctx, const MatrixView<T, MatrixFormat::Dense> &A,
+size_t cond_syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                              const Span<typename base_type<T>::type> eig) {
     // The public syev, so selection decides vendor vs native (a vendor-free build has no vendor).
     return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
 }
 
 template <Backend B, typename T>
-Event cond_spectral_impl(Queue &ctx,
-                         const MatrixView<T, MatrixFormat::Dense> &A,
+Event cond_spectral_impl(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
                          const Span<T> conds,
-                         const Span<std::byte> workspace){
+                         const Span<std::byte> workspace) {
                     if (A.rows() != A.cols()) {
                         throw batchlas::invalid_argument("cond: Spectral norm requires square symmetric/Hermitian matrices");
                     }
@@ -80,11 +80,11 @@ Event cond_spectral_impl(Queue &ctx,
                 }
 
 template <Backend B, typename T>
-Event cond_impl(Queue &ctx,
-                const MatrixView<T, MatrixFormat::Dense> &A,
+Event cond_impl(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
                 const NormType norm_type,
                 const Span<T> conds,
-                const Span<std::byte> workspace){
+                const Span<std::byte> workspace) {
                     if (norm_type == NormType::Spectral) {
                         return cond_spectral_impl<B>(ctx, A, conds, workspace);
                     }
@@ -107,7 +107,7 @@ Event cond_impl(Queue &ctx,
 
                     (void)norm(ctx, Ainv, norm_type, A_inv_norms);
                     (void)norm(ctx, A, norm_type, A_norms);
-                    ctx -> parallel_for(A.batch_size(), [=](size_t i) {
+                    ctx->parallel_for(A.batch_size(), [=](size_t i) {
                         if (masked && !mk[i]) return;
                         conds[i] = A_inv_norms[i] * A_norms[i];
                     });
@@ -117,8 +117,8 @@ Event cond_impl(Queue &ctx,
 // Memory passed from outside
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-Event cond(Queue &ctx,
-            const MatrixView<T, MF> &A,
+Event cond(Queue& ctx,
+            const MatrixView<T, MF>& A,
             const NormType norm_type,
             const Span<T> conds,
             const Span<std::byte> workspace) {
@@ -128,8 +128,8 @@ Event cond(Queue &ctx,
 
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-size_t cond_buffer_size(Queue &ctx,
-                        const MatrixView<T, MF> &A,
+size_t cond_buffer_size(Queue& ctx,
+                        const MatrixView<T, MF>& A,
                         const NormType norm_type) {
     (void)detail::call_mask("cond", A);
     if (norm_type == NormType::Spectral) {
@@ -156,8 +156,8 @@ size_t cond_buffer_size(Queue &ctx,
 // Convenience function which allocates and returns the results stored in an array.
 template <Backend B, typename T, MatrixFormat MF>
     requires RealScalar<T>
-UnifiedVector<T> cond(Queue &ctx,
-                      const MatrixView<T, MF> &A,
+UnifiedVector<T> cond(Queue& ctx,
+                      const MatrixView<T, MF>& A,
                       const NormType norm_type) {
     (void)detail::call_mask("cond", A);
     UnifiedVector<T> conds(A.batch_size());
@@ -168,18 +168,18 @@ UnifiedVector<T> cond(Queue &ctx,
 
 #define COND_INSTANTIATE(back, fp, fmt) \
 template Event cond<back, fp, fmt>(\
-    Queue&,\
-    const MatrixView<fp, fmt>&,\
-    const NormType,\
-    const Span<fp>,\
+    Queue&, \
+    const MatrixView<fp, fmt>&, \
+    const NormType, \
+    const Span<fp>, \
     const Span<std::byte>);\
 template UnifiedVector<fp> cond<back, fp, fmt>(\
-    Queue&,\
-    const MatrixView<fp, fmt>&,\
+    Queue&, \
+    const MatrixView<fp, fmt>&, \
     const NormType);\
 template size_t cond_buffer_size<back, fp, fmt>(\
-    Queue&,\
-    const MatrixView<fp, fmt>&,\
+    Queue&, \
+    const MatrixView<fp, fmt>&, \
     const NormType);
 
 #define COND_INSTANTIATE_FOR_TYPE(back, fp) \

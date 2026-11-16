@@ -25,8 +25,8 @@ using trsm = Event(Queue&,
 // NOT an alias for sig::trsm: the vendor signature puts alpha last.
 template <typename T>
 using trsm_vendor = Event(Queue&,
-                          const MatrixView<T,MatrixFormat::Dense>&,
-                          const MatrixView<T,MatrixFormat::Dense>&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
+                          const MatrixView<T, MatrixFormat::Dense>&,
                           Side,
                           Uplo,
                           Transpose,
@@ -193,8 +193,8 @@ namespace batchlas::backend {
 /// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,
-                               const MatrixView<T,MatrixFormat::Dense>& A,
-                               const MatrixView<T,MatrixFormat::Dense>& B,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& B,
                                Side side,
                                Uplo uplo,
                                Transpose transA,

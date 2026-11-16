@@ -470,35 +470,35 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
 
 #define SYEVX_SUBSET_INSTANTIATE(back, fp, fmt) \
     template Event syevx_direct_subset<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        Span<int32_t>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        Span<int32_t>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     /* See the note in syevx_direct.cc: instantiating the inline m-less forwarder \
        preserves the symbol this library exported before `m` was added. */\
     template Event syevx_direct_subset<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     template size_t syevx_direct_subset_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const SyevxParams<BATCHLAS_UNPAREN fp>&);
 
 #define SYEVX_SUBSET_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \

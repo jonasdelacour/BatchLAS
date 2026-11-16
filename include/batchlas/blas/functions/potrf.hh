@@ -41,7 +41,7 @@ using potrf_vendor = Event(Queue&,
 
 template <typename T>
 using potrf_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
                                         Uplo);
 }  // namespace sig
 
@@ -151,7 +151,7 @@ inline Event potrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         Uplo uplo,
         Span<std::byte> workspace) {
-        return potrf<B,T>(ctx, descrA, uplo, workspace, Span<int32_t>{});
+        return potrf<B, T>(ctx, descrA, uplo, workspace, Span<int32_t>{});
 }
 
 }  // namespace batchlas
@@ -185,7 +185,7 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
 /// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
                                              Uplo uplo);
 
 }  // namespace batchlas::backend

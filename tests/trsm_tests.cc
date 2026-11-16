@@ -40,7 +40,7 @@ struct TestConfig {
 
 using TrsmTestTypes = typename test_utils::backend_types<TestConfig>::type;
 
-template<typename Config>
+template <typename Config>
 class TrsmOperationsTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
@@ -151,7 +151,7 @@ protected:
                                   B_view,
                                   {.alpha = alpha, .uplo = uplo, .trans = trans});
                 this->ctx->wait();
-            } catch(const std::exception& e) {
+            } catch (const std::exception& e) {
                 FAIL() << "TRSM operation failed with exception: " << e.what();
             }
         } else {
@@ -167,7 +167,7 @@ protected:
                                       A_view,
                                       B_view,
                                       {.alpha = alpha, .uplo = uplo, .trans = trans});
-                } catch(const std::exception& e) {
+                } catch (const std::exception& e) {
                     FAIL() << "TRSM operation failed for batch " << b << " with exception: " << e.what();
                 }
             }
